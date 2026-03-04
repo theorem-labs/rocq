@@ -11,7 +11,7 @@
 open Environ
 
 let env_of_library senv clib =
-  let mb = Safe_typing.module_of_library clib in
+  let retro = Safe_typing.retroknowledge_of_library clib in
   let env = Safe_typing.env_of_safe_env senv in
   let qualities, univs = Safe_typing.univs_of_library clib in
   let check_quality q =
@@ -21,7 +21,7 @@ let env_of_library senv clib =
   let () = assert (Sorts.QVar.Set.for_all check_quality (fst qualities)) in
   let env = push_qualities ~rigid:true qualities env in
   let env = push_context_set ~strict:true univs env in
-  Modops.add_retroknowledge (Mod_declarations.mod_retroknowledge mb) env
+  Modops.add_retroknowledge retro env
 
 (* The checker does not read the [vmlibrary] segment of the file at all: it
    compiles the bytecode of every constant itself, from the declarations it is
