@@ -243,7 +243,7 @@ module NotPrimRecordReason = struct
 end
 
 (* Checks whether the record can have primitive projections, and if so, whether it has eta *)
-let check_record data =
+let check_record ~ignore_elim data =
   let open NotPrimRecordReason in
   List.fold_left (fun res (_, (_, splayed_lc), info, _) ->
       if Result.is_error res then res
@@ -269,14 +269,16 @@ let check_record data =
         match res with
         | Some reason -> Result.Error reason
         | None -> (* Otherwise, we allow primitive projections but check if it has eta *)
-            match info.record_arg_info with
-            | HasRelevantArg -> Result.Ok AlwaysEta
-            | NoRelevantArg ->
-              (* If there is no relevant projection, then we consider the sort of the record to decide if it has eta *)
-              match info.ind_univ with
-              | SProp -> Result.Ok AlwaysEta
-              | Set | Type _ | Prop -> Result.Ok NoEta (* Set, Type and Prop don't have eta *)
-              | QSort _ ->  Result.Ok NoEta (* For sort variables it now defaults to not having eta *)
+            if ignore_elim then Result.Ok AlwaysEta
+            else
+              match info.record_arg_info with
+              | HasRelevantArg -> Result.Ok AlwaysEta
+              | NoRelevantArg ->
+                (* If there is no relevant projection, then we consider the sort of the record to decide if it has eta *)
+                match info.ind_univ with
+                | SProp -> Result.Ok AlwaysEta
+                | Set | Type _ | Prop -> Result.Ok NoEta (* Set, Type and Prop don't have eta *)
+                | QSort _ ->  Result.Ok NoEta (* For sort variables it now defaults to not having eta *)
     )
     (Result.Ok NoEta)
     data
@@ -590,7 +592,7 @@ let typecheck_inductive env ~sec_univs (mie:mutual_inductive_entry) =
     | None | Some None -> data, record, None (* NotRecord or FakeRecord *)
     | Some (Some _) -> (* PrimRecord *)
       (* We check if it can actually have primitive projections & eta *)
-      match check_record data with
+      match check_record ~ignore_elim:(Environ.type_in_type env_ar_par) data with
       | Result.Ok has_eta -> data, record, Some (Result.Ok has_eta)
       | Result.Error _ as reason ->
         (* if someone tried to declare a record as SProp but it can't
