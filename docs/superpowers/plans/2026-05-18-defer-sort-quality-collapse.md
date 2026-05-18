@@ -107,7 +107,7 @@ This preserves the existing `Prop` choice when a dominating quality exists. It a
 Run:
 
 ```bash
-dune build @install
+OPAMROOT=/home/kanghee/.opam-local opam exec --switch=rocq-dev-coqhott-univp -- make world
 ```
 
 Expected: the build succeeds and updates `_build/install/default/bin/rocq`.
@@ -261,6 +261,7 @@ Expected: no unrelated source files are modified. Build artifacts and test logs 
 Include these verification results:
 
 ```text
+OPAMROOT=/home/kanghee/.opam-local opam exec --switch=rocq-dev-coqhott-univp -- make world
 make -C test-suite -B success/defer_sort_quality_collapse.v.log
 make -C test-suite -B success/sort_poly.v.log success/sort_poly_elim_csts.v.log success/sort_poly_elim_rigid_paths.v.log
 make -C test-suite -B output/sort_poly_elab.v.log output/sort_poly_elim_error.v.log
