@@ -2561,9 +2561,10 @@ let vernac_validate_proof ~pstate =
     let ustate = Evd.ustate sigma in
     let ugraph = UState.ugraph ustate in
     let qgraph = UState.elim_graph ustate in
-    let (qs, us), (qcsts, ucsts) = UState.sort_context_set ustate in
+    let (_qs, us), _csts = UState.sort_context_set ustate in
     let ustate' = Evd.ustate sigma' in
-    let (qs', us'), (qcsts', ucsts') = UState.sort_context_set ustate' in
+    let (_qs', us'), csts' = UState.sort_context_set ustate' in
+    let ucsts' = PConstraints.univs csts' in
 
     (* is it actually possible to have new univs or qualities? *)
     let _, ucsts' = UState.restrict_universe_context (us',ucsts') us in
