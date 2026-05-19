@@ -29,6 +29,11 @@ let add_above_prop q (qc, above, lc) = (qc, Quality.Set.add q above, lc)
 
 let add_univ u (qc, above, lc) = (qc, above, UnivConstraints.add u lc)
 
+let check_above_prop_quality ~is_above_prop = function
+  | Quality.QConstant QProp | Quality.QConstant QType -> true
+  | Quality.QVar q -> is_above_prop q
+  | Quality.QConstant QSProp | Quality.QGlobal _ -> false
+
 let of_qualities qc = make qc UnivConstraints.empty
 
 let of_above_prop above = (ElimConstraints.empty, above, UnivConstraints.empty)

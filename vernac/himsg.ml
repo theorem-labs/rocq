@@ -891,12 +891,9 @@ let explain_unsatisfied_poly_constraints env sigma csts =
   let univ_csts = PConstraints.univs csts in
   let univ_csts = Univ.UnivConstraints.filter (fun cst -> not @@ UGraph.check_constraint (Evd.universes sigma) cst) univ_csts in
   let elim_csts = Sorts.ElimConstraints.filter (fun cst -> not @@ QGraph.check_constraint (Evd.elim_graph sigma) cst) elim_csts in
-  let check_above_prop = function
-    | Sorts.Quality.QConstant Sorts.Quality.QProp
-    | Sorts.Quality.QConstant Sorts.Quality.QType -> true
-    | Sorts.Quality.QVar q -> UState.is_above_prop (Evd.ustate sigma) q
-    | Sorts.Quality.QConstant Sorts.Quality.QSProp
-    | Sorts.Quality.QGlobal _ -> false
+  let check_above_prop =
+    PConstraints.check_above_prop_quality
+      ~is_above_prop:(UState.is_above_prop (Evd.ustate sigma))
   in
   let above_prop = Sorts.Quality.Set.filter (fun q -> not @@ check_above_prop q) above_prop in
   let univ_str = if Univ.UnivConstraints.is_empty univ_csts

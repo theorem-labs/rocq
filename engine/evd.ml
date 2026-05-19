@@ -1206,12 +1206,9 @@ let check_univ_constraints evd csts =
 let check_elim_constraints evd csts =
   UState.check_elim_constraints evd.universes csts
 
-let check_above_prop_quality evd = function
-  | Sorts.Quality.QConstant Sorts.Quality.QProp
-  | Sorts.Quality.QConstant Sorts.Quality.QType -> true
-  | Sorts.Quality.QVar q -> UState.is_above_prop evd.universes q
-  | Sorts.Quality.QConstant Sorts.Quality.QSProp
-  | Sorts.Quality.QGlobal _ -> false
+let check_above_prop_quality evd =
+  PConstraints.check_above_prop_quality
+    ~is_above_prop:(UState.is_above_prop evd.universes)
 
 let check_poly_constraints evd csts =
   check_elim_constraints evd (PConstraints.qualities csts) &&

@@ -47,6 +47,8 @@ val add_above_prop : Quality.t -> t -> t
 
 val add_univ : UnivConstraint.t -> t -> t
 
+val check_above_prop_quality : is_above_prop:(QVar.t -> bool) -> Quality.t -> bool
+
 val union : t -> t -> t
 
 val diff : t -> t -> t

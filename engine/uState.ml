@@ -1070,10 +1070,9 @@ let check_eq_quality uctx q1 q2 =
   Sorts.Quality.equal q1 q2 || Sorts.Quality.equal (nf_quality uctx q1) (nf_quality uctx q2)
 
 let check_above_prop_quality uctx q =
-  match nf_quality uctx q with
-  | QConstant QProp | QConstant QType -> true
-  | QVar q -> QState.is_above_prop uctx.sort_variables q
-  | QConstant QSProp | QGlobal _ -> false
+  PConstraints.check_above_prop_quality
+    ~is_above_prop:(QState.is_above_prop uctx.sort_variables)
+    (nf_quality uctx q)
 
 let check_constraint uctx (c:UnivProblem.t) =
   match c with
