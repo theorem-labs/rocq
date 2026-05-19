@@ -126,6 +126,7 @@ sig
   val constraints : t -> PConstraints.t
   val univ_constraints : t -> UnivConstraints.t
   val elim_constraints : t -> ElimConstraints.t
+  val above_prop : t -> QVar.Set.t
 
   val union : t -> t -> t
   (** Keeps the order of the instances *)

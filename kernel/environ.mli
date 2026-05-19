@@ -509,6 +509,8 @@ module Internal : sig
       Do not use outside kernel inductive typechecking. *)
   val push_template_context : UContext.t -> env -> env
 
+  val add_above_prop_qvars : Sorts.QVar.Set.t -> env -> env
+
   val is_above_prop : env -> Sorts.QVar.t -> bool
 
   module View :

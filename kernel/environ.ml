@@ -501,9 +501,13 @@ let map_qualities f env = set_qualities (f env.env_qualities) env
 let check_univ_constraints univ_csts env =
   UGraph.check_constraints univ_csts env.env_universes
 
-let check_constraints (elim_csts,univ_csts) env =
+let check_constraints csts env =
+  let elim_csts = PConstraints.qualities csts in
+  let above_prop = PConstraints.above_prop csts in
+  let univ_csts = PConstraints.univs csts in
   check_univ_constraints univ_csts env &&
-    QGraph.check_constraints elim_csts env.env_qualities
+    QGraph.check_constraints elim_csts env.env_qualities &&
+    Sorts.QVar.Set.for_all (UGraph.Internal.is_above_prop env.env_universes) above_prop
 
 let add_universes ~strict ctx g =
   let _, us = UVars.Instance.to_array (UVars.UContext.instance ctx) in
@@ -511,7 +515,8 @@ let add_universes ~strict ctx g =
       (fun g v -> UGraph.add_universe ~strict v g)
       g us
   in
-  UGraph.merge_constraints (UVars.UContext.univ_constraints ctx) g
+  let g = UGraph.merge_constraints (UVars.UContext.univ_constraints ctx) g in
+  UGraph.Internal.add_above_prop_qvars (UVars.UContext.above_prop ctx) g
 
 let set_qualities g env = {env with env_qualities = g}
 
@@ -1215,6 +1220,9 @@ module Internal = struct
     let (qvars, _), _ = UVars.UContext.to_context_set uctx in
     let env = map_universes (UGraph.Internal.add_template_qvars qvars) env in
     env
+
+  let add_above_prop_qvars qvars env =
+    map_universes (UGraph.Internal.add_above_prop_qvars qvars) env
 
   let is_above_prop env = UGraph.Internal.is_above_prop (universes env)
 

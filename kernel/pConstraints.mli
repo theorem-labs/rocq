@@ -11,7 +11,7 @@
 open Univ
 open Sorts
 
-type t = ElimConstraints.t * UnivConstraints.t
+type t = ElimConstraints.t * QVar.Set.t * UnivConstraints.t
 
 type pconstraints = t
 (** Stands for prenex sort poly constraints *)
@@ -25,17 +25,25 @@ val equal : t -> t -> bool
 
 val qualities : t -> ElimConstraints.t
 
+val above_prop : t -> QVar.Set.t
+
 val univs : t -> UnivConstraints.t
 
 val of_qualities : ElimConstraints.t -> t
+
+val of_above_prop : QVar.Set.t -> t
 
 val of_univs : UnivConstraints.t -> t
 
 val set_qualities : ElimConstraints.t -> t -> t
 
+val set_above_prop : QVar.Set.t -> t -> t
+
 val set_univs : UnivConstraints.t -> t -> t
 
 val add_quality : ElimConstraint.t -> t -> t
+
+val add_above_prop : QVar.t -> t -> t
 
 val add_univ : UnivConstraint.t -> t -> t
 
@@ -43,7 +51,7 @@ val union : t -> t -> t
 
 val diff : t -> t -> t
 
-val elements : t -> ElimConstraint.t list * UnivConstraint.t list
+val elements : t -> ElimConstraint.t list * QVar.t list * UnivConstraint.t list
 
 val filter_qualities : (ElimConstraints.elt -> bool) -> t -> t
 val filter_univs : (UnivConstraints.elt -> bool) -> t -> t

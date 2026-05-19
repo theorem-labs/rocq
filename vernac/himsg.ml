@@ -885,16 +885,23 @@ let explain_non_linear_unification env sigma m t =
   strbrk " which would require to abstract twice on " ++
   pr_leconstr_env env sigma t ++ str "."
 
-let explain_unsatisfied_poly_constraints env sigma (elim_csts,univ_csts) =
+let explain_unsatisfied_poly_constraints env sigma csts =
+  let elim_csts = PConstraints.qualities csts in
+  let above_prop = PConstraints.above_prop csts in
+  let univ_csts = PConstraints.univs csts in
   let univ_csts = Univ.UnivConstraints.filter (fun cst -> not @@ UGraph.check_constraint (Evd.universes sigma) cst) univ_csts in
   let elim_csts = Sorts.ElimConstraints.filter (fun cst -> not @@ QGraph.check_constraint (Evd.elim_graph sigma) cst) elim_csts in
+  let above_prop = Sorts.QVar.Set.filter (fun q -> not @@ UState.is_above_prop (Evd.ustate sigma) q) above_prop in
   let univ_str = if Univ.UnivConstraints.is_empty univ_csts
                  then mt()
                  else spc() ++ Univ.UnivConstraints.pr (Termops.pr_evd_level sigma) univ_csts in
   let elim_str = if Sorts.ElimConstraints.is_empty elim_csts
                  then mt()
                  else spc() ++ Sorts.ElimConstraints.pr (Evd.quality_printer sigma) elim_csts in
-  strbrk "Unsatisfied constraints:" ++ univ_str ++ elim_str ++
+  let above_prop_str = if Sorts.QVar.Set.is_empty above_prop
+                 then mt()
+                 else spc() ++ Sorts.QVar.Set.pr (Termops.pr_evd_qvar sigma) above_prop in
+  strbrk "Unsatisfied constraints:" ++ univ_str ++ elim_str ++ above_prop_str ++
     spc () ++ str "(maybe a bugged tactic)."
 
 let explain_unsatisfied_univ_constraints env sigma cst =

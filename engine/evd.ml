@@ -1206,8 +1206,10 @@ let check_univ_constraints evd csts =
 let check_elim_constraints evd csts =
   UState.check_elim_constraints evd.universes csts
 
-let check_poly_constraints evd (qcsts,ucsts) =
-  check_elim_constraints evd qcsts && check_univ_constraints evd ucsts
+let check_poly_constraints evd csts =
+  check_elim_constraints evd (PConstraints.qualities csts) &&
+  Sorts.QVar.Set.for_all (UState.is_above_prop evd.universes) (PConstraints.above_prop csts) &&
+  check_univ_constraints evd (PConstraints.univs csts)
 
 let check_quality_constraints evd qcst =
   let fold (q1, q2) accu = UnivProblem.Set.add (UnivProblem.QEq (q1, q2)) accu in

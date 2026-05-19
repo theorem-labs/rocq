@@ -283,9 +283,10 @@ let explain_universe_inconsistency default_printer (printer, (o,u,v,p) : univ_in
       pr_rel o ++ spc() ++ pr_uni v ++ reason
 
 module Internal = struct
-  let add_template_qvars qvars g =
-    assert (Sorts.QVar.Set.is_empty g.above_prop_qvars);
-    {g with above_prop_qvars=qvars}
+  let add_above_prop_qvars qvars g =
+    {g with above_prop_qvars=Sorts.QVar.Set.union qvars g.above_prop_qvars}
+
+  let add_template_qvars = add_above_prop_qvars
 
   let is_above_prop = is_above_prop
 end

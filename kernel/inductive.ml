@@ -273,15 +273,16 @@ let template_subst_ctx subst ctx params = template_subst_ctx [] subst ctx params
 
 let instantiate_template_constraints subst templ =
   let cstrs = UVars.UContext.constraints (UVars.AbstractContext.repr templ.template_context) in
+  let substq q = match q with
+    | Quality.QConstant _ | Quality.QGlobal _ -> q
+    | Quality.QVar q' ->
+       begin
+         match QVar.var_index q' with
+         | None -> q
+         | Some q' -> Int.Map.get q' (fst subst)
+       end
+  in
   let foldq (q, cst, q') accq =
-    let substq q = match q with
-      | Quality.QConstant _ | Quality.QGlobal _ -> q
-      | Quality.QVar q' ->
-         begin
-           match QVar.var_index q' with
-           | None -> q
-           | Some q' -> Int.Map.get q' (fst subst)
-         end in
     ElimConstraints.add (substq q, cst, substq q') accq in
   let foldu (u, cst, v) accu =
     (* v is not a local universe by the unbounded from below property *)
@@ -298,7 +299,18 @@ let instantiate_template_constraints subst templ =
     in
     List.fold_left fold accu (Univ.Universe.repr u)
   in
-  PConstraints.fold (foldq, foldu) cstrs PConstraints.empty
+  let qcsts, ucsts =
+    PConstraints.fold (foldq, foldu) cstrs (ElimConstraints.empty, UnivConstraints.empty)
+  in
+  let cstrs' = PConstraints.make qcsts ucsts in
+  let above_prop =
+    QVar.Set.fold (fun q acc ->
+        match substq (Quality.QVar q) with
+        | Quality.QVar q -> QVar.Set.add q acc
+        | Quality.(QConstant _ | QGlobal _) -> acc)
+      (PConstraints.above_prop cstrs) QVar.Set.empty
+  in
+  PConstraints.set_above_prop above_prop cstrs'
 
 let instantiate_template_universes mib args =
   let templ = match mib.mind_template with

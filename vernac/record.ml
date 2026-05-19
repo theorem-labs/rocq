@@ -599,11 +599,12 @@ let check_add_elimination_constraints ~primitive (entry, binders as univs) elim_
         | UState.Polymorphic_entry uctx ->
           let open Sorts in
           let new_elim_cstr = record_quality, ElimConstraint.ElimTo, proj_quality in
-          let (elim_cstrs, univ_cstrs) = UVars.UContext.constraints uctx in
+          let csts = UVars.UContext.constraints uctx in
+          let elim_cstrs = PConstraints.qualities csts in
           let related_elim_cstrs = collect_elim_cstrs elim_cstrs_map proj_typ in
           let elim_cstrs' = ElimConstraints.add new_elim_cstr elim_cstrs in
           let elim_cstrs' = ElimConstraints.union related_elim_cstrs elim_cstrs' in
-          let uctx' = UVars.UContext.make (UVars.UContext.names uctx) (UVars.UContext.instance uctx, (elim_cstrs', univ_cstrs)) in
+          let uctx' = UVars.UContext.make (UVars.UContext.names uctx) (UVars.UContext.instance uctx, PConstraints.set_qualities elim_cstrs' csts) in
           UState.Polymorphic_entry uctx', Some elim_cstrs'
         | _ -> entry, None
       in

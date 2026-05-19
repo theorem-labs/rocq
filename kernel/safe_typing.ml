@@ -774,6 +774,7 @@ let push_section_context uctx senv =
   (* FIXME: marking the section-local sorts as rigid makes little sense *)
   let env = Environ.push_qualities (Sorts.Quality.Set.of_qvars @@ fst qctx) env in
   let env = Environ.merge_elim_constraints ~rigid:true (snd qctx) env in
+  let env = Environ.Internal.add_above_prop_qvars (UVars.UContext.above_prop uctx) env in
   { senv with
     env;
     univ = Univ.ContextSet.union ctx senv.univ;
@@ -1332,8 +1333,9 @@ let add_mind l mie senv =
   | Some { template_context = ctx; template_defaults = u; _ } ->
     let qs, levels = UVars.Instance.levels u in
     let () = assert (Sorts.Quality.Set.for_all (fun q -> Sorts.Quality.equal Sorts.Quality.qtype q) qs) in
-    let (qctx, uctx) = UVars.AbstractContext.instantiate u ctx in
-    let () = assert (Sorts.ElimConstraints.is_empty qctx) in
+    let csts = UVars.AbstractContext.instantiate u ctx in
+    let uctx = PConstraints.univs csts in
+    let () = assert (Sorts.ElimConstraints.is_empty (PConstraints.qualities csts)) in
     (* Eliminiation constraints used to be pushed with QGraph.Static *)
     let senv = push_context_set ~strict:true (levels, uctx) senv in
     senv

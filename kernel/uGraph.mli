@@ -124,5 +124,8 @@ module Internal : sig
       Do not use outside kernel inductive typechecking. *)
   val add_template_qvars : Sorts.QVar.Set.t -> t -> t
 
+  (** Adds persistent above-Prop qvars from ordinary universe contexts. *)
+  val add_above_prop_qvars : Sorts.QVar.Set.t -> t -> t
+
   val is_above_prop : t -> Sorts.QVar.t -> bool
 end

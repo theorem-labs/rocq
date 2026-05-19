@@ -273,8 +273,12 @@ let make_univs_immediate_private_poly ~poly ~uctx ~udecl ~eff ~used_univs body t
   let ubody =
     let uctx = UState.restrict uctx used_univs in
     (* XXX we don't check anything on sort variables *)
-    let (_qs, us), (qcst, ucst) = UState.sort_context_set uctx in
-    let (_qs', us'), (qcst', ucst') = UState.sort_context_set uctx' in
+    let (_qs, us), csts = UState.sort_context_set uctx in
+    let qcst = PConstraints.qualities csts in
+    let ucst = PConstraints.univs csts in
+    let (_qs', us'), csts' = UState.sort_context_set uctx' in
+    let qcst' = PConstraints.qualities csts' in
+    let ucst' = PConstraints.univs csts' in
     let uctx = Univ.ContextSet.diff (us, ucst) (us', ucst') in
     (* XXX we should have a more principled check somewhere *)
     let () = assert (Sorts.ElimConstraints.is_empty @@ Sorts.ElimConstraints.diff qcst qcst') in

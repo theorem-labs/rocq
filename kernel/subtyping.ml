@@ -103,9 +103,10 @@ let check_polymorphic_universes env ctxT ctx =
     let uctxT = AbstractContext.repr ctxT in
     let () = Environ.check_ucontext uctxT env in
     let env = Environ.push_context ~strict:false uctxT env in
-    let qcst, ucst = UContext.constraints (AbstractContext.repr ctx) in
-    UGraph.check_constraints ucst (Environ.universes env) &&
-    QGraph.check_constraints qcst (Environ.qualities env)
+    let csts = UContext.constraints (AbstractContext.repr ctx) in
+    UGraph.check_constraints (PConstraints.univs csts) (Environ.universes env) &&
+    QGraph.check_constraints (PConstraints.qualities csts) (Environ.qualities env) &&
+    Sorts.QVar.Set.for_all (Environ.Internal.is_above_prop env) (PConstraints.above_prop csts)
 
 let check_universes error env u1 u2 =
   match u1, u2 with

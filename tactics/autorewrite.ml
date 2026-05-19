@@ -607,7 +607,8 @@ let add_rewrite_hint ~locality ~poly bases ort t lcsr =
       if PolyFlags.univ_poly poly then ctx
       else (* This is a global universe context that shouldn't be
               refreshed at every use of the hint, declare it globally. *)
-        let ((qs, us), (qcst, ucst)) = ctx in
+        let ((qs, us), csts) = ctx in
+        let ucst = PConstraints.univs csts in
         let () = Global.push_context_set (us, ucst) in
         UnivGen.empty_sort_context
     in

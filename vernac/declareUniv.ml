@@ -270,7 +270,8 @@ let do_constraint ~poly l =
   in
   match poly with
   | false ->
-    let qcst, ucst = constraints in
+    let qcst = PConstraints.qualities constraints in
+    let ucst = PConstraints.univs constraints in
     let () = Global.merge_elim_constraints qcst in
     Global.push_context_set (Univ.Level.Set.empty, ucst)
   | true ->

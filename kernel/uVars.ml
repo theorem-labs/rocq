@@ -279,10 +279,22 @@ let subst_instance_univ_constraint =
   subst_instance_constraint subst_instance_level
 
 let subst_instance_constraints s csts =
-  PConstraints.fold
+  let qcsts, ucsts = PConstraints.fold
     ((fun q csts -> Sorts.ElimConstraints.add (subst_instance_elim_constraint s q) csts),
      (fun u csts -> UnivConstraints.add (subst_instance_univ_constraint s u) csts))
-    csts PConstraints.empty
+    csts (Sorts.ElimConstraints.empty, UnivConstraints.empty)
+  in
+  let csts' = PConstraints.make qcsts ucsts
+  in
+  let above_prop =
+    Sorts.QVar.Set.fold (fun q acc ->
+        match subst_instance_quality s (Sorts.Quality.QVar q) with
+        | Sorts.Quality.QVar q -> Sorts.QVar.Set.add q acc
+        | Sorts.Quality.(QConstant _ | QGlobal _) -> acc)
+      (PConstraints.above_prop csts)
+      Sorts.QVar.Set.empty
+  in
+  PConstraints.set_above_prop above_prop csts'
 
 type 'a puniverses = 'a * Instance.t
 let out_punivs (x, _y) = x
@@ -327,8 +339,9 @@ struct
   let names ((names, _) : t) = names
   let instance (_, (univs, _csts)) = univs
   let constraints (_, (_univs, csts)) = csts
-  let univ_constraints (_, (_, (_,univs))) = univs
-  let elim_constraints (_, (_, (elims,_))) = elims
+  let univ_constraints (_, (_, csts)) = PConstraints.univs csts
+  let elim_constraints (_, (_, csts)) = PConstraints.qualities csts
+  let above_prop (_, (_, csts)) = PConstraints.above_prop csts
 
   let union (names, (univs, csts)) (names', (univs', csts')) =
     append_bound_names names names', (Instance.append univs univs', PConstraints.union csts csts')
@@ -346,7 +359,7 @@ struct
     Array.sort Quality.compare a; a
 
   let of_context_set f ((qctx, qcst), (levels, lcst)) =
-    let csts = (qcst, lcst) in
+    let csts = PConstraints.make qcst lcst in
     let qctx = sort_qualities
         (Array.map_of_list (fun q -> Quality.QVar q)
            (Sorts.QVar.Set.elements qctx))
@@ -355,7 +368,9 @@ struct
     let inst = Instance.of_array (qctx, levels) in
     (f inst, (inst, csts))
 
-  let to_context_set (_, (inst, (qcsts, lcsts))) =
+  let to_context_set (_, (inst, csts)) =
+    let qcsts = PConstraints.qualities csts in
+    let lcsts = PConstraints.univs csts in
     let qs, us = Instance.to_array inst in
     let us = Array.fold_left (fun acc x -> Level.Set.add x acc) Level.Set.empty us in
     let qs = Array.fold_left (fun acc -> function
@@ -480,8 +495,18 @@ let subst_elim_constraints qsubst qctx =
   let fold c accu = Sorts.ElimConstraints.add (subst_univs_elim_constraint qsubst c) accu in
   Sorts.ElimConstraints.fold fold qctx Sorts.ElimConstraints.empty
 
-let subst_poly_constraints (qsubst, usubst) (qctx, uctx) =
-  (subst_elim_constraints qsubst qctx, subst_univs_constraints usubst uctx)
+let subst_poly_constraints (qsubst, usubst) csts =
+  let above_prop =
+    Sorts.QVar.Set.fold (fun q acc ->
+        match subst_sort_level_quality qsubst (Quality.QVar q) with
+        | Quality.QVar q -> Sorts.QVar.Set.add q acc
+        | Quality.(QConstant _ | QGlobal _) -> acc)
+      (PConstraints.above_prop csts) Sorts.QVar.Set.empty
+  in
+  PConstraints.set_above_prop above_prop
+    (PConstraints.make
+       (subst_elim_constraints qsubst (PConstraints.qualities csts))
+       (subst_univs_constraints usubst (PConstraints.univs csts)))
 
 (** Pretty-printing *)
 

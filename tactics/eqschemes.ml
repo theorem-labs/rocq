@@ -830,9 +830,10 @@ let build_congr env (eq,refl,ctx) ind =
   let lvl = UnivGen.fresh_level () in
   let uni = Univ.Universe.make lvl in
   let ctx =
-    let (qs, us), (qcst, ucst) = ctx in
+    let (qs, us), csts = ctx in
+    let ucst = PConstraints.univs csts in
     let us = Univ.Level.Set.add lvl us in
-    ((qs, us), (qcst, UnivSubst.enforce_leq uni (univ_of_eq env eq) ucst)) in
+    ((qs, us), PConstraints.set_univs (UnivSubst.enforce_leq uni (univ_of_eq env eq) ucst) csts) in
   let c =
   my_it_mkLambda_or_LetIn paramsctxt
      (mkNamedLambda (make_annot varB Sorts.Relevant) (mkType uni)

@@ -32,8 +32,8 @@ module PContextSet = struct
   let pr printer (univs, cst) =
     UnivGen.pr_sort_context printer ((Sorts.QVar.Set.empty, univs), cst)
 
-  let univ_context_set (uvars, (_, uctx)) = (uvars, uctx)
-  let univ_constraints (_, (_,csts)) = csts
+  let univ_context_set (uvars, csts) = (uvars, PConstraints.univs csts)
+  let univ_constraints (_, csts) = PConstraints.univs csts
   let levels (univs, _cst) = univs
 
 end
@@ -98,6 +98,8 @@ module QState : sig
   val repr : elt -> t -> Quality.t
   val is_rigid : t -> QVar.t -> bool
   val is_above_prop : t -> QVar.t -> bool
+  val above_prop : t -> QVar.Set.t
+  val add_above_prop_constraints : QVar.Set.t -> t -> t
   val unify_quality : fail:(unit -> t) -> Conversion.conv_pb -> Quality.t -> Quality.t -> t -> t
   val undefined : t -> QVar.Set.t
   val collapse_above_prop : to_prop:bool -> t -> t
@@ -157,6 +159,8 @@ and repr_node q m = match q with
 
 let is_above_prop m q = QSet.mem q m.above_prop
 
+let above_prop m = m.above_prop
+
 let eliminates_to_prop m q =
   QGraph.eliminates_to_prop m.elims (QVar q)
 
@@ -210,6 +214,15 @@ let set_above_prop q m =
   let q, rigid = match q with ReprVar (q, rigid) -> q, rigid | ReprConstant _ | ReprGlobal _ -> assert false in
   if rigid then None
   else Some { m with above_prop = QSet.add q m.above_prop }
+
+let add_above_prop_constraint q m =
+  match repr_node_qvar q m with
+  | ReprVar (q, _) -> { m with above_prop = QSet.add q m.above_prop }
+  | ReprConstant QType | ReprConstant QProp -> m
+  | ReprConstant QSProp | ReprGlobal _ -> sort_inconsistency UnivConstraint.Le Sorts.prop (Sorts.vsort q Universe.type0)
+
+let add_above_prop_constraints qs m =
+  QSet.fold add_above_prop_constraint qs m
 
 let unify_quality ~fail c q1 q2 local = match q1, q2 with
 | QConstant QType, QConstant QType
@@ -567,14 +580,24 @@ let union uctx uctx' =
 let context_set uctx = uctx.local
 
 let universe_context_set uctx =
-  let us, (_, ucst) = uctx.local in
-  us, ucst
+  PContextSet.univ_context_set uctx.local
 
 let sort_context_set uctx =
   let us, csts = uctx.local in
-  (QState.undefined uctx.sort_variables, us), csts
+  let above_prop =
+    QSet.inter (QState.undefined uctx.sort_variables)
+      (QState.above_prop uctx.sort_variables)
+  in
+  (QState.undefined uctx.sort_variables, us), PConstraints.set_above_prop above_prop csts
 
-let constraints uctx = snd uctx.local
+let constraints uctx = snd (sort_context_set uctx)
+
+let above_prop_of_instance sort_variables inst =
+  let qs, _ = Instance.to_array inst in
+  Array.fold_left (fun acc -> function
+      | QVar q when QState.is_above_prop sort_variables q -> QSet.add q acc
+      | QVar _ | QConstant _ | QGlobal _ -> acc)
+    QSet.empty qs
 
 let compute_instance_binders uctx inst =
   let (qrev, urev) = snd uctx.names in
@@ -594,13 +617,22 @@ let compute_instance_binders uctx inst =
 
 let context uctx =
   let qvars = QState.undefined uctx.sort_variables in
-  let (uvars, (qcst, ucst)) = uctx.local in
-  UContext.of_context_set (compute_instance_binders uctx) ((qvars, qcst), (uvars, ucst))
+  let uvars, csts = uctx.local in
+  let above_prop = QSet.inter qvars (QState.above_prop uctx.sort_variables) in
+  let csts = PConstraints.set_above_prop above_prop csts in
+  let ctx =
+    UContext.of_context_set (compute_instance_binders uctx)
+      ((qvars, PConstraints.qualities csts), (uvars, PConstraints.univs csts))
+  in
+  let inst = UContext.instance ctx in
+  UContext.make (UContext.names ctx) (inst, csts)
 
 type named_universes_entry = universes_entry * UnivNames.universe_binders
 
 let check_mono_sort_constraints uctx =
-  let (uvar, (qcst, ucst)) = uctx.local in
+  let (uvar, csts) = uctx.local in
+  let qcst = PConstraints.qualities csts in
+  let ucst = PConstraints.univs csts in
   (* This looks very stringent but it passes nonetheless all the tests? *)
   let () = assert (Sorts.ElimConstraints.is_empty qcst) in
   (uvar, ucst)
@@ -1008,12 +1040,20 @@ let add_univ_constraints uctx cstrs =
   let cstrs = problem_of_univ_constraints cstrs in
   add_constraints ~src:Static uctx cstrs
 
-let add_poly_constraints ?src uctx (qcstrs, ucstrs) =
+let add_poly_constraints ?src uctx cstrs =
+  let qcstrs = PConstraints.qualities cstrs in
+  let above_prop = PConstraints.above_prop cstrs in
+  let ucstrs = PConstraints.univs cstrs in
   let lvl_pbs = problem_of_univ_constraints ucstrs in
   let elim_pbs = problem_of_elim_constraints qcstrs in
   let uctx = add_constraints ?src uctx (UnivProblem.Set.union lvl_pbs elim_pbs) in
-  let local = on_snd (fun cst -> PConstraints.union cst (PConstraints.of_qualities qcstrs)) uctx.local in
+  let persistent_cstrs =
+    PConstraints.union (PConstraints.of_qualities qcstrs)
+      (PConstraints.of_above_prop above_prop)
+  in
+  let local = on_snd (fun cst -> PConstraints.union cst persistent_cstrs) uctx.local in
   let sort_variables = QState.merge_constraints (fun cst -> merge_elim_constraints ?src uctx qcstrs cst) uctx.sort_variables in
+  let sort_variables = QState.add_above_prop_constraints above_prop sort_variables in
   { uctx with local; sort_variables }
 
 let check_elim_constraints uctx csts =
@@ -1056,9 +1096,12 @@ let check_constraints uctx csts =
   UnivProblem.Set.for_all (check_constraint uctx) csts
 
 let constrain_variables diff uctx =
-  let (us, (qcst, ucst)) = uctx.local in
+  let (us, csts) = uctx.local in
+  let qcst = PConstraints.qualities csts in
+  let above_prop = PConstraints.above_prop csts in
+  let ucst = PConstraints.univs csts in
   let (us, ucst), vars = UnivFlex.constrain_variables diff uctx.univ_variables (us, ucst) in
-  { uctx with local = (us, (qcst, ucst)); univ_variables = vars }
+  { uctx with local = (us, PConstraints.set_above_prop above_prop (PConstraints.make qcst ucst)); univ_variables = vars }
 
 type ('a, 'b, 'c, 'd) gen_universe_decl = {
   univdecl_qualities : 'a;
@@ -1198,7 +1241,11 @@ let check_elim_implication uctx cstrs cstrs' =
       Pp.(str "Elimination constraints are not implied by the ones declared: " ++
           ElimConstraints.pr (quality_printer uctx) cstrs')
 
-let check_implication uctx (elim_csts,univ_csts) (elim_csts',univ_csts') =
+let check_implication uctx csts csts' =
+  let elim_csts = PConstraints.qualities csts in
+  let univ_csts = PConstraints.univs csts in
+  let elim_csts' = PConstraints.qualities csts' in
+  let univ_csts' = PConstraints.univs csts' in
   check_univ_implication uctx univ_csts univ_csts';
   check_elim_implication uctx elim_csts elim_csts'
 
@@ -1243,13 +1290,16 @@ let check_mono_univ_decl uctx decl =
   in
   if decl.univdecl_extensible_constraints then check_mono_sort_constraints uctx
   else
-    let () = assert (Sorts.ElimConstraints.is_empty (fst csts)) in
+    let () = assert (Sorts.ElimConstraints.is_empty (PConstraints.qualities csts)) in
     let () = check_implication uctx (univ_decl_csts decl) csts in
     levels, decl.univdecl_univ_constraints
 
 let check_poly_univ_decl uctx decl =
   (* Note: if [decl] is [default_univ_decl], behave like [context uctx] *)
-  let levels, (elim_csts,univ_csts) = uctx.local in
+  let levels, csts = uctx.local in
+  let elim_csts = PConstraints.qualities csts in
+  let above_prop = PConstraints.above_prop csts in
+  let univ_csts = PConstraints.univs csts in
   let qvars = QState.undefined uctx.sort_variables in
   let inst = universe_context_inst decl qvars levels uctx.names in
   let nas = compute_instance_binders uctx inst in
@@ -1269,7 +1319,9 @@ let check_poly_univ_decl uctx decl =
       decl.univdecl_elim_constraints
     end
   in
-  let uctx = UContext.make nas (inst, (elim_csts,univ_csts)) in
+  let csts = PConstraints.set_above_prop above_prop (PConstraints.make elim_csts univ_csts) in
+  let above_prop = QSet.union (above_prop_of_instance uctx.sort_variables inst) (PConstraints.above_prop csts) in
+  let uctx = UContext.make nas (inst, PConstraints.set_above_prop above_prop csts) in
   uctx
 
 let check_univ_decl ~poly uctx decl =
@@ -1295,9 +1347,12 @@ let restrict_universe_context (univs, univ_csts) keep =
   let univ_csts = UnivConstraints.filter (fun (l,d,r) -> not (Level.is_set l && d == Le)) univ_csts in
   (Level.Set.inter univs keep, univ_csts)
 
-let restrict_universe_pcontext (us, (qcst, ucst)) keep =
+let restrict_universe_pcontext (us, csts) keep =
+  let qcst = PConstraints.qualities csts in
+  let above_prop = PConstraints.above_prop csts in
+  let ucst = PConstraints.univs csts in
   let (us, ucst) = restrict_universe_context (us, ucst) keep in
-  (us, (qcst, ucst))
+  (us, PConstraints.set_above_prop above_prop (PConstraints.make qcst ucst))
 
 let restrict uctx vars =
   let vars = Id.Map.fold (fun na l vars -> Level.Set.add l vars)
@@ -1311,17 +1366,20 @@ let restrict_even_binders uctx vars =
   { uctx with local = uctx' }
 
 let restrict_univ_constraints uctx csts =
-  let levels, (elim_csts,univ_csts) = uctx.local in
-  let uctx' = { uctx with local = (levels,(elim_csts,UnivConstraints.empty)); universes = uctx.initial_universes } in
+  let levels, local_csts = uctx.local in
+  let elim_csts = PConstraints.qualities local_csts in
+  let above_prop = PConstraints.above_prop local_csts in
+  let uctx' = { uctx with local = (levels, PConstraints.set_above_prop above_prop (PConstraints.make elim_csts UnivConstraints.empty)); universes = uctx.initial_universes } in
   add_univ_constraints uctx' csts
 
 let restrict_elim_constraints ?src uctx csts =
-  let levels, (elim_csts,univ_csts) = uctx.local in
+  let levels, local_csts = uctx.local in
+  let elim_csts = PConstraints.qualities local_csts in
   let g = initial_elim_graph uctx in
   (* XXX we are wreaking havoc with elimination constraints *)
   let sort_variables = QState.set_elims g uctx.sort_variables in
   let sort_variables = QState.merge_constraints (fun cst -> merge_elim_constraints ?src uctx elim_csts cst) sort_variables in
-  { uctx with local = (levels, (csts, univ_csts)); sort_variables }
+  { uctx with local = (levels, PConstraints.set_qualities csts local_csts); sort_variables }
 
 type rigid =
   | UnivRigid
@@ -1364,8 +1422,9 @@ let merge_universe_context_set ?loc ~sideff rigid uctx (levels, ucst) =
       let uvars' = UnivFlex.add_levels levels ~algebraic:b uctx.univ_variables in
       { uctx with univ_variables = uvars' }
   in
-  let (us, (qcst, ucst0)) = uctx.local in
-  let local = (Univ.Level.Set.union us levels, (qcst, Univ.UnivConstraints.union ucst0 ucst)) in
+  let (us, csts) = uctx.local in
+  let local = (Univ.Level.Set.union us levels,
+               PConstraints.set_univs (Univ.UnivConstraints.union (PConstraints.univs csts) ucst) csts) in
   { uctx with names; local; universes;
               initial_universes = initial }
 
@@ -1389,13 +1448,21 @@ let merge_sort_variables ?loc ?(sort_rigid=false) ?src ~sideff uctx (qvars, csts
     (fst uctx.names, (qrev, snd (snd uctx.names)))
   in
   let sort_variables = QState.merge_constraints (merge_elim_constraints ?src uctx csts) sort_variables in
-  let (us, (qcst, ucst)) = uctx.local in
-  let local = (us, (Sorts.ElimConstraints.union qcst csts, ucst)) in
+  let (us, local_csts) = uctx.local in
+  let local = (us, PConstraints.set_qualities
+                 (Sorts.ElimConstraints.union (PConstraints.qualities local_csts) csts)
+                 local_csts) in
   { uctx with local; sort_variables; names }
 
-let merge_sort_context_set ?loc ?sort_rigid ?src ~sideff rigid uctx ((qvars, levels), (qcst, ucst)) =
+let merge_sort_context_set ?loc ?sort_rigid ?src ~sideff rigid uctx ((qvars, levels), csts) =
+  let qcst = PConstraints.qualities csts in
+  let above_prop = PConstraints.above_prop csts in
+  let ucst = PConstraints.univs csts in
   let uctx = merge_sort_variables ?loc ?sort_rigid ?src ~sideff uctx (qvars, qcst) in
-  merge_universe_context_set ?loc ~sideff rigid uctx (levels, ucst)
+  let uctx = merge_universe_context_set ?loc ~sideff rigid uctx (levels, ucst) in
+  let sort_variables = QState.add_above_prop_constraints above_prop uctx.sort_variables in
+  let local = on_snd (fun csts -> PConstraints.union csts (PConstraints.of_above_prop above_prop)) uctx.local in
+  { uctx with sort_variables; local }
 
 let demote_global_univs (lvl_set, univ_csts) uctx =
   let (local_univs, local_constraints) = uctx.local in
@@ -1531,25 +1598,28 @@ let make_nonalgebraic_variable uctx u =
 let make_flexible_nonalgebraic uctx =
   { uctx with univ_variables = UnivFlex.make_all_undefined_nonalgebraic uctx.univ_variables }
 
-let subst_univs_context_with_def def usubst (uctx, (elim_csts,univ_csts)) =
-  (Level.Set.diff uctx def, PConstraints.make elim_csts @@
-                              UnivSubst.subst_univs_constraints usubst univ_csts)
+let subst_univs_context_with_def def usubst (uctx, csts) =
+  (Level.Set.diff uctx def,
+   PConstraints.set_univs
+     (UnivSubst.subst_univs_constraints usubst (PConstraints.univs csts))
+     csts)
 
 let normalize_univ_variables uctx =
   let normalized_variables, def, subst =
     UnivFlex.normalize_univ_variables uctx.univ_variables
   in
   let uctx_local = subst_univs_context_with_def def subst uctx.local in
-  let univs = UGraph.merge_constraints (snd (snd uctx_local)) uctx.initial_universes in
+  let univs = UGraph.merge_constraints (PConstraints.univs (snd uctx_local)) uctx.initial_universes in
   { uctx with
     local = uctx_local;
     univ_variables = normalized_variables;
     universes = univs }
 
 let normalize_quality_variables uctx =
-  let (lvls, (elim_cstrs, lvl_cstrs)) = uctx.local in
+  let (lvls, csts) = uctx.local in
+  let elim_cstrs = PConstraints.qualities csts in
   let elim_cstrs = QState.normalize_elim_constraints uctx.sort_variables elim_cstrs in
-  { uctx with local = (lvls, (elim_cstrs, lvl_cstrs)) }
+  { uctx with local = (lvls, PConstraints.set_qualities elim_cstrs csts) }
 
 let normalize_variables uctx =
   let uctx = normalize_univ_variables uctx in
@@ -1568,7 +1638,8 @@ let collapse_sort_variables ?except ~only_above_prop uctx =
 
 let minimize uctx =
   let open UnivMinim in
-  let (us, (qcst, ucst)) = uctx.local in
+  let (us, csts) = uctx.local in
+  let ucst = PConstraints.univs csts in
   let (vars', (us', ucst')) =
     normalize_context_set uctx.universes (us, ucst) uctx.univ_variables
       uctx.minim_extra
@@ -1577,7 +1648,7 @@ let minimize uctx =
   else
     let universes = UGraph.merge_constraints ucst' uctx.initial_universes in
       { names = uctx.names;
-        local = (us', (qcst, ucst'));
+        local = (us', PConstraints.set_univs ucst' csts);
         univ_variables = vars';
         sort_variables = uctx.sort_variables;
         universes = universes;
@@ -1599,7 +1670,10 @@ let universe_context_inst_decl decl qvars levels names =
   inst
 
 let check_univ_decl_rev uctx decl =
-  let levels, (elim_csts,univ_csts as csts) = uctx.local in
+  let levels, csts = uctx.local in
+  let elim_csts = PConstraints.qualities csts in
+  let above_prop = PConstraints.above_prop csts in
+  let univ_csts = PConstraints.univs csts in
   let qvars = QState.undefined uctx.sort_variables in
   let inst = universe_context_inst_decl decl qvars levels uctx.names in
   let nas = compute_instance_binders uctx inst in
@@ -1618,11 +1692,16 @@ let check_univ_decl_rev uctx decl =
     else restrict_elim_constraints ~src:Rigid uctx decl.univdecl_elim_constraints,
          elim_csts
   in
-  let uctx' = UContext.make nas (inst, (elim_csts,univ_csts)) in
+  let csts = PConstraints.set_above_prop above_prop (PConstraints.make elim_csts univ_csts) in
+  let above_prop = QSet.union (above_prop_of_instance uctx.sort_variables inst) (PConstraints.above_prop csts) in
+  let uctx' = UContext.make nas (inst, PConstraints.set_above_prop above_prop csts) in
   uctx, uctx'
 
 let check_uctx_impl ~fail uctx uctx' =
-  let levels, (elim_csts,univ_csts) = uctx'.local in
+  let levels, csts = uctx'.local in
+  let elim_csts = PConstraints.qualities csts in
+  let above_prop = PConstraints.above_prop csts in
+  let univ_csts = PConstraints.univs csts in
   let qvars_diff =
     QVar.Set.diff
       (QState.undefined uctx'.sort_variables)
@@ -1643,6 +1722,11 @@ let check_uctx_impl ~fail uctx uctx' =
     let cstrs' = ElimConstraints.filter (fun c -> not (QGraph.check_constraint grext c)) elim_csts in
     if ElimConstraints.is_empty cstrs' then ()
     else fail (ElimConstraints.pr (quality_printer uctx) cstrs')
+  in
+  let () =
+    let cstrs' = QSet.filter (fun q -> not (QState.is_above_prop uctx.sort_variables q)) above_prop in
+    if QSet.is_empty cstrs' then ()
+    else fail (QSet.pr (pr_uctx_qvar uctx) cstrs')
   in
   ()
 

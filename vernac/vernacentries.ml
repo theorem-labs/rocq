@@ -2166,7 +2166,9 @@ let vernac_global_check c =
   let sigma, c = Pretyping.understand_tcc ~flags:Pretyping.all_and_fail_flags env sigma c in
   let sigma = Evd.collapse_sort_variables ~only_above_prop:false sigma in
   let c = EConstr.to_constr sigma c in
-  let (qs, us), (qcst, ucst) as uctx = Evd.sort_context_set sigma in
+  let (qs, us), csts as uctx = Evd.sort_context_set sigma in
+  let qcst = PConstraints.qualities csts in
+  let ucst = PConstraints.univs csts in
    (* always empty due to collapse *)
   let () = assert (Sorts.QContextSet.is_empty (qs, qcst)) in
   let env = Environ.push_context_set ~strict:false (us, ucst) env in
