@@ -501,13 +501,20 @@ let map_qualities f env = set_qualities (f env.env_qualities) env
 let check_univ_constraints univ_csts env =
   UGraph.check_constraints univ_csts env.env_universes
 
+let check_above_prop_quality env = function
+  | Sorts.Quality.QConstant Sorts.Quality.QProp
+  | Sorts.Quality.QConstant Sorts.Quality.QType -> true
+  | Sorts.Quality.QVar q -> UGraph.Internal.is_above_prop env.env_universes q
+  | Sorts.Quality.QConstant Sorts.Quality.QSProp
+  | Sorts.Quality.QGlobal _ -> false
+
 let check_constraints csts env =
   let elim_csts = PConstraints.qualities csts in
   let above_prop = PConstraints.above_prop csts in
   let univ_csts = PConstraints.univs csts in
   check_univ_constraints univ_csts env &&
     QGraph.check_constraints elim_csts env.env_qualities &&
-    Sorts.QVar.Set.for_all (UGraph.Internal.is_above_prop env.env_universes) above_prop
+    Sorts.Quality.Set.for_all (check_above_prop_quality env) above_prop
 
 let add_universes ~strict ctx g =
   let _, us = UVars.Instance.to_array (UVars.UContext.instance ctx) in

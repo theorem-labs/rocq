@@ -304,11 +304,9 @@ let instantiate_template_constraints subst templ =
   in
   let cstrs' = PConstraints.make qcsts ucsts in
   let above_prop =
-    QVar.Set.fold (fun q acc ->
-        match substq (Quality.QVar q) with
-        | Quality.QVar q -> QVar.Set.add q acc
-        | Quality.(QConstant _ | QGlobal _) -> acc)
-      (PConstraints.above_prop cstrs) QVar.Set.empty
+    Quality.Set.fold (fun q acc ->
+        Quality.Set.add (substq q) acc)
+      (PConstraints.above_prop cstrs) Quality.Set.empty
   in
   PConstraints.set_above_prop above_prop cstrs'
 

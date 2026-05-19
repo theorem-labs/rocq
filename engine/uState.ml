@@ -99,7 +99,7 @@ module QState : sig
   val is_rigid : t -> QVar.t -> bool
   val is_above_prop : t -> QVar.t -> bool
   val above_prop : t -> QVar.Set.t
-  val add_above_prop_constraints : QVar.Set.t -> t -> t
+  val add_above_prop_constraints : Quality.Set.t -> t -> t
   val unify_quality : fail:(unit -> t) -> Conversion.conv_pb -> Quality.t -> Quality.t -> t -> t
   val undefined : t -> QVar.Set.t
   val collapse_above_prop : to_prop:bool -> t -> t
@@ -216,13 +216,14 @@ let set_above_prop q m =
   else Some { m with above_prop = QSet.add q m.above_prop }
 
 let add_above_prop_constraint q m =
-  match repr_node_qvar q m with
+  match repr_node q m with
   | ReprVar (q, _) -> { m with above_prop = QSet.add q m.above_prop }
   | ReprConstant QType | ReprConstant QProp -> m
-  | ReprConstant QSProp | ReprGlobal _ -> sort_inconsistency UnivConstraint.Le Sorts.prop (Sorts.vsort q Universe.type0)
+  | ReprConstant QSProp | ReprGlobal _ ->
+    univ_inconsistency UnivConstraint.Le Sorts.prop (Sorts.make q Universe.type0)
 
 let add_above_prop_constraints qs m =
-  QSet.fold add_above_prop_constraint qs m
+  Quality.Set.fold add_above_prop_constraint qs m
 
 let unify_quality ~fail c q1 q2 local = match q1, q2 with
 | QConstant QType, QConstant QType
@@ -588,16 +589,17 @@ let sort_context_set uctx =
     QSet.inter (QState.undefined uctx.sort_variables)
       (QState.above_prop uctx.sort_variables)
   in
-  (QState.undefined uctx.sort_variables, us), PConstraints.set_above_prop above_prop csts
+  (QState.undefined uctx.sort_variables, us),
+  PConstraints.set_above_prop (Quality.Set.of_qvars above_prop) csts
 
 let constraints uctx = snd (sort_context_set uctx)
 
 let above_prop_of_instance sort_variables inst =
   let qs, _ = Instance.to_array inst in
   Array.fold_left (fun acc -> function
-      | QVar q when QState.is_above_prop sort_variables q -> QSet.add q acc
+      | QVar q as qv when QState.is_above_prop sort_variables q -> Quality.Set.add qv acc
       | QVar _ | QConstant _ | QGlobal _ -> acc)
-    QSet.empty qs
+    Quality.Set.empty qs
 
 let compute_instance_binders uctx inst =
   let (qrev, urev) = snd uctx.names in
@@ -619,7 +621,7 @@ let context uctx =
   let qvars = QState.undefined uctx.sort_variables in
   let uvars, csts = uctx.local in
   let above_prop = QSet.inter qvars (QState.above_prop uctx.sort_variables) in
-  let csts = PConstraints.set_above_prop above_prop csts in
+  let csts = PConstraints.set_above_prop (Quality.Set.of_qvars above_prop) csts in
   let ctx =
     UContext.of_context_set (compute_instance_binders uctx)
       ((qvars, PConstraints.qualities csts), (uvars, PConstraints.univs csts))
@@ -1067,6 +1069,12 @@ let check_elim_constraints uctx csts =
 let check_eq_quality uctx q1 q2 =
   Sorts.Quality.equal q1 q2 || Sorts.Quality.equal (nf_quality uctx q1) (nf_quality uctx q2)
 
+let check_above_prop_quality uctx q =
+  match nf_quality uctx q with
+  | QConstant QProp | QConstant QType -> true
+  | QVar q -> QState.is_above_prop uctx.sort_variables q
+  | QConstant QSProp | QGlobal _ -> false
+
 let check_constraint uctx (c:UnivProblem.t) =
   match c with
   | QEq (a,b) ->
@@ -1320,7 +1328,7 @@ let check_poly_univ_decl uctx decl =
     end
   in
   let csts = PConstraints.set_above_prop above_prop (PConstraints.make elim_csts univ_csts) in
-  let above_prop = QSet.union (above_prop_of_instance uctx.sort_variables inst) (PConstraints.above_prop csts) in
+  let above_prop = Quality.Set.union (above_prop_of_instance uctx.sort_variables inst) (PConstraints.above_prop csts) in
   let uctx = UContext.make nas (inst, PConstraints.set_above_prop above_prop csts) in
   uctx
 
@@ -1693,7 +1701,7 @@ let check_univ_decl_rev uctx decl =
          elim_csts
   in
   let csts = PConstraints.set_above_prop above_prop (PConstraints.make elim_csts univ_csts) in
-  let above_prop = QSet.union (above_prop_of_instance uctx.sort_variables inst) (PConstraints.above_prop csts) in
+  let above_prop = Quality.Set.union (above_prop_of_instance uctx.sort_variables inst) (PConstraints.above_prop csts) in
   let uctx' = UContext.make nas (inst, PConstraints.set_above_prop above_prop csts) in
   uctx, uctx'
 
@@ -1724,9 +1732,12 @@ let check_uctx_impl ~fail uctx uctx' =
     else fail (ElimConstraints.pr (quality_printer uctx) cstrs')
   in
   let () =
-    let cstrs' = QSet.filter (fun q -> not (QState.is_above_prop uctx.sort_variables q)) above_prop in
-    if QSet.is_empty cstrs' then ()
-    else fail (QSet.pr (pr_uctx_qvar uctx) cstrs')
+    let cstrs' = Quality.Set.filter (fun q -> not (check_above_prop_quality uctx q)) above_prop in
+    if Quality.Set.is_empty cstrs' then ()
+    else
+      let open Pp in
+      fail (prlist_with_sep spc (fun q -> Quality.pr (quality_printer uctx) q)
+              (Quality.Set.elements cstrs'))
   in
   ()
 

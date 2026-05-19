@@ -891,16 +891,25 @@ let explain_unsatisfied_poly_constraints env sigma csts =
   let univ_csts = PConstraints.univs csts in
   let univ_csts = Univ.UnivConstraints.filter (fun cst -> not @@ UGraph.check_constraint (Evd.universes sigma) cst) univ_csts in
   let elim_csts = Sorts.ElimConstraints.filter (fun cst -> not @@ QGraph.check_constraint (Evd.elim_graph sigma) cst) elim_csts in
-  let above_prop = Sorts.QVar.Set.filter (fun q -> not @@ UState.is_above_prop (Evd.ustate sigma) q) above_prop in
+  let check_above_prop = function
+    | Sorts.Quality.QConstant Sorts.Quality.QProp
+    | Sorts.Quality.QConstant Sorts.Quality.QType -> true
+    | Sorts.Quality.QVar q -> UState.is_above_prop (Evd.ustate sigma) q
+    | Sorts.Quality.QConstant Sorts.Quality.QSProp
+    | Sorts.Quality.QGlobal _ -> false
+  in
+  let above_prop = Sorts.Quality.Set.filter (fun q -> not @@ check_above_prop q) above_prop in
   let univ_str = if Univ.UnivConstraints.is_empty univ_csts
                  then mt()
                  else spc() ++ Univ.UnivConstraints.pr (Termops.pr_evd_level sigma) univ_csts in
   let elim_str = if Sorts.ElimConstraints.is_empty elim_csts
                  then mt()
                  else spc() ++ Sorts.ElimConstraints.pr (Evd.quality_printer sigma) elim_csts in
-  let above_prop_str = if Sorts.QVar.Set.is_empty above_prop
+  let above_prop_str = if Sorts.Quality.Set.is_empty above_prop
                  then mt()
-                 else spc() ++ Sorts.QVar.Set.pr (Termops.pr_evd_qvar sigma) above_prop in
+                 else spc() ++ prlist_with_sep spc
+                     (Sorts.Quality.pr (Evd.quality_printer sigma))
+                     (Sorts.Quality.Set.elements above_prop) in
   strbrk "Unsatisfied constraints:" ++ univ_str ++ elim_str ++ above_prop_str ++
     spc () ++ str "(maybe a bugged tactic)."
 

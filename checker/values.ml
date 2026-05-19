@@ -212,7 +212,7 @@ let v_univ_cstrs =
 let v_cstrs =
   v_tuple
     "PConstraints.t"
-    [|v_elim_cstrs;v_set v_qvar;v_univ_cstrs|]
+    [|v_elim_cstrs;v_set v_quality;v_univ_cstrs|]
 
 let v_variance = v_enum "variance" 3
 

@@ -11,11 +11,11 @@
 open Univ
 open Sorts
 
-type t = ElimConstraints.t * QVar.Set.t * UnivConstraints.t
+type t = ElimConstraints.t * Quality.Set.t * UnivConstraints.t
 
 type pconstraints = t
 
-let make q u = (q, QVar.Set.empty, u)
+let make q u = (q, Quality.Set.empty, u)
 
 let qualities (q, _, _) = q
 
@@ -25,7 +25,7 @@ let univs (_, _, u) = u
 
 let add_quality q (qc, above, lc) = (ElimConstraints.add q qc, above, lc)
 
-let add_above_prop q (qc, above, lc) = (qc, QVar.Set.add q above, lc)
+let add_above_prop q (qc, above, lc) = (qc, Quality.Set.add q above, lc)
 
 let add_univ u (qc, above, lc) = (qc, above, UnivConstraints.add u lc)
 
@@ -41,25 +41,25 @@ let set_above_prop above (qc,_,lc) = (qc, above, lc)
 
 let set_univs lc (qc,above,_) = (qc, above, lc)
 
-let empty = (ElimConstraints.empty, QVar.Set.empty, UnivConstraints.empty)
+let empty = (ElimConstraints.empty, Quality.Set.empty, UnivConstraints.empty)
 
 let is_empty (qc, above, lc) =
-  ElimConstraints.is_empty qc && QVar.Set.is_empty above && UnivConstraints.is_empty lc
+  ElimConstraints.is_empty qc && Quality.Set.is_empty above && UnivConstraints.is_empty lc
 
 let equal (qc, above, lc) (qc', above', lc') =
-  ElimConstraints.equal qc qc' && QVar.Set.equal above above' && UnivConstraints.equal lc lc'
+  ElimConstraints.equal qc qc' && Quality.Set.equal above above' && UnivConstraints.equal lc lc'
 
 let union (qc, above, lc) (qc', above', lc') =
-  (ElimConstraints.union qc qc', QVar.Set.union above above', UnivConstraints.union lc lc')
+  (ElimConstraints.union qc qc', Quality.Set.union above above', UnivConstraints.union lc lc')
 
 let fold (qf, lf) (qc, _, lc) (x, y) =
   (ElimConstraints.fold qf qc x, UnivConstraints.fold lf lc y)
 
 let diff (qc, above, lc) (qc', above', lc') =
-  (ElimConstraints.diff qc qc', QVar.Set.diff above above', UnivConstraints.diff lc lc')
+  (ElimConstraints.diff qc qc', Quality.Set.diff above above', UnivConstraints.diff lc lc')
 
 let elements (qc, above, lc) =
-  (ElimConstraints.elements qc, QVar.Set.elements above, UnivConstraints.elements lc)
+  (ElimConstraints.elements qc, Quality.Set.elements above, UnivConstraints.elements lc)
 
 let filter_qualities f (qc, above, lc) =
   (ElimConstraints.filter f qc, above, lc)
@@ -71,10 +71,10 @@ let pr (printer:Sorts.printer) (qc, above, lc) =
   let open Pp in
   let pieces =
     (if ElimConstraints.is_empty qc then [] else [ElimConstraints.pr printer.prq qc])
-    @ (if QVar.Set.is_empty above then [] else
+    @ (if Quality.Set.is_empty above then [] else
         [prlist_with_sep spc
-           (fun q -> str "Prop <= " ++ Quality.pr printer.prq (Quality.QVar q))
-           (QVar.Set.elements above)])
+           (fun q -> str "Prop <= " ++ Quality.pr printer.prq q)
+           (Quality.Set.elements above)])
     @ (if UnivConstraints.is_empty lc then [] else [UnivConstraints.pr printer.pru lc])
   in
   v 0 (prlist_with_sep pr_comma (fun x -> x) pieces)
@@ -83,17 +83,17 @@ module HPConstraints =
   Hashcons.Make(
     struct
       type t = pconstraints
-      let hash_qvars qvars =
-        QVar.Set.fold
-          (fun q h -> Hashset.Combine.combine h (QVar.hash q))
-          qvars 0
+      let hash_qualities qualities =
+        Quality.Set.fold
+          (fun q h -> Hashset.Combine.combine h (Quality.hash q))
+          qualities 0
 
       let hashcons (qf, above, uf) =
         let hqf, qf = ElimConstraints.hcons qf in
         let huf, uf = UnivConstraints.hcons uf in
-        Hashset.Combine.(combine3 hqf (hash_qvars above) huf), (qf, above, uf)
+        Hashset.Combine.(combine3 hqf (hash_qualities above) huf), (qf, above, uf)
       let eq (qc, above, uc) (qc', above', uc') =
-        qc == qc' && QVar.Set.equal above above' && uc == uc'
+        qc == qc' && Quality.Set.equal above above' && uc == uc'
     end)
 
 let hcons =

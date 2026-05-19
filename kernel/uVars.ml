@@ -287,12 +287,10 @@ let subst_instance_constraints s csts =
   let csts' = PConstraints.make qcsts ucsts
   in
   let above_prop =
-    Sorts.QVar.Set.fold (fun q acc ->
-        match subst_instance_quality s (Sorts.Quality.QVar q) with
-        | Sorts.Quality.QVar q -> Sorts.QVar.Set.add q acc
-        | Sorts.Quality.(QConstant _ | QGlobal _) -> acc)
+    Sorts.Quality.Set.fold (fun q acc ->
+        Sorts.Quality.Set.add (subst_instance_quality s q) acc)
       (PConstraints.above_prop csts)
-      Sorts.QVar.Set.empty
+      Sorts.Quality.Set.empty
   in
   PConstraints.set_above_prop above_prop csts'
 
@@ -341,7 +339,11 @@ struct
   let constraints (_, (_univs, csts)) = csts
   let univ_constraints (_, (_, csts)) = PConstraints.univs csts
   let elim_constraints (_, (_, csts)) = PConstraints.qualities csts
-  let above_prop (_, (_, csts)) = PConstraints.above_prop csts
+  let above_prop (_, (_, csts)) =
+    Sorts.Quality.Set.fold (fun q acc -> match q with
+        | Sorts.Quality.QVar q -> Sorts.QVar.Set.add q acc
+        | Sorts.Quality.(QConstant _ | QGlobal _) -> acc)
+      (PConstraints.above_prop csts) Sorts.QVar.Set.empty
 
   let union (names, (univs, csts)) (names', (univs', csts')) =
     append_bound_names names names', (Instance.append univs univs', PConstraints.union csts csts')
@@ -497,11 +499,9 @@ let subst_elim_constraints qsubst qctx =
 
 let subst_poly_constraints (qsubst, usubst) csts =
   let above_prop =
-    Sorts.QVar.Set.fold (fun q acc ->
-        match subst_sort_level_quality qsubst (Quality.QVar q) with
-        | Quality.QVar q -> Sorts.QVar.Set.add q acc
-        | Quality.(QConstant _ | QGlobal _) -> acc)
-      (PConstraints.above_prop csts) Sorts.QVar.Set.empty
+    Sorts.Quality.Set.fold (fun q acc ->
+        Sorts.Quality.Set.add (subst_sort_level_quality qsubst q) acc)
+      (PConstraints.above_prop csts) Sorts.Quality.Set.empty
   in
   PConstraints.set_above_prop above_prop
     (PConstraints.make
