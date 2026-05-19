@@ -355,6 +355,7 @@ let collapse ?(except=QSet.empty) ~only_above_prop m =
         else if QSet.mem q m.above_prop then
           if QSet.exists (fun q' -> dominates_above_prop q' q) free_qualities then
             Option.get (set q qprop m)
+          else if only_above_prop then m
           else Option.get (set q qtype m)
         else if not only_above_prop then Option.get (set q qtype m) else m)
     m.qmap m
