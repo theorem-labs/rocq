@@ -794,10 +794,10 @@ let () =
       in
       let annot = Context.make_annot id t_rel in
       let sigma, nenv = match body_opt with
-        | None -> sigma, EConstr.push_named (LocalAssum (annot, t)) env
+        | None -> sigma, EConstr.push_named ProofVar (LocalAssum (annot, t)) env
         | Some body ->
           let sigma = Typing.check env sigma body t in
-          sigma, EConstr.push_named (LocalDef (annot, body, t)) env
+          sigma, EConstr.push_named ProofVar (LocalDef (annot, body, t)) env
       in
       let (sigma, (evt, s)) = Evarutil.new_type_evar nenv sigma Evd.univ_flexible in
       let relevance = EConstr.ESorts.relevance_of_sort s in
