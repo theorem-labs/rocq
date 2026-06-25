@@ -1174,9 +1174,9 @@ let pr_assumptionset ?(flags=current_combined()) env sigma theory_info s =
     | Axiom (ax, _) -> not (dominated_by_env ax)
     | _ -> true) s
   in
-  let show_theory_impredicative_set = print_all && theory_info.has_impredicative_set || is_impredicative_set env in
-  let show_theory_rewrite_rules = print_all && theory_info.has_rewrite_rules || rewrite_rules_allowed env in
-  let show_theory_type_in_type = print_all && theory_info.has_type_in_type || type_in_type env in
+  let show_theory_impredicative_set = (print_all && theory_info.has_impredicative_set) || is_impredicative_set env in
+  let show_theory_rewrite_rules = (print_all && theory_info.has_rewrite_rules) || rewrite_rules_allowed env in
+  let show_theory_type_in_type = (print_all && theory_info.has_type_in_type) || type_in_type env in
   if ContextObjectMap.is_empty s &&
        not show_theory_rewrite_rules &&
        not show_theory_impredicative_set then
