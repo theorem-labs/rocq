@@ -66,17 +66,6 @@ type labmap = { objs : namedobject Id.Map.t; mods : namedmodule Id.Map.t }
 
 let empty_labmap = { objs = Id.Map.empty; mods = Id.Map.empty }
 
-let make_labmap mp list =
-  let add_one (l,e) map =
-   match e with
-    | SFBconst cb -> { map with objs = Id.Map.add l (Constant cb) map.objs }
-    | SFBrules _ -> { map with objs = Id.Map.add l Rules map.objs }
-    | SFBmind mib -> { map with objs = add_mib_nameobjects mp l mib map.objs }
-    | SFBmodule mb -> { map with mods = Id.Map.add l (Module mb) map.mods }
-    | SFBmodtype mtb -> { map with mods = Id.Map.add l (Modtype mtb) map.mods }
-  in
-  CList.fold_right add_one list empty_labmap
-
 (** How to look up the fields of the implementation (subtype) side of a
     check.
 
@@ -146,6 +135,73 @@ let get_mod env mp view l =
       | mtb -> Modtype mtb
       | exception Not_found -> get_mod_fallback mp view l
     end
+
+(** Cache of successful constant field checks.
+
+    A successful check of an implementation field [cb1] against an
+    expected field [cb2] is a function of the pair itself whenever both
+    substitutions leave the bodies physically unchanged (checked at run
+    time) and the check did not produce new universe constraints (the
+    returned state is physically the input one; the kernel-side checking
+    mode never produces constraints, and the inference mode returns its
+    input state unchanged when all needed constraints are already
+    entailed). Such a check stays valid later in the same process:
+    - the environment only grows, and a successful conversion is
+      preserved by adding constants, universe constraints or rewrite
+      rules (conversion success is monotone in the environment);
+    - constant bodies are immutable, and rolling back the environment
+      (Undo, Reset) also drops every object that could re-present the
+      cached pair;
+    - conversion compares constant references up to the delta resolver
+      (canonical names), so a successful check is independent of the
+      user-level path under which physically equal bodies are reached.
+
+    The cache is indexed by the label of the field — whose hash is cheap,
+    and which is stable across the module paths under which the same
+    bodies may be rechecked (e.g. re-including a functor in each stage of
+    a chain of module types) — and holds a short list of successfully
+    checked pairs for that label, compared physically. The list is
+    capped, so the cache retains a bounded number of bodies per label
+    ever checked. Failures are not cached (they raise). *)
+module LabTbl = Hashtbl.Make(Id)
+
+let cache_max_gen = 16
+
+let cb_cache : (constant_body * constant_body) list LabTbl.t = LabTbl.create 257
+
+let cache_mem l cb1 cb2 =
+  match LabTbl.find_opt cb_cache l with
+  | None -> false
+  | Some pairs -> List.exists (fun (c1, c2) -> c1 == cb1 && c2 == cb2) pairs
+
+let cache_add l cb1 cb2 =
+  let prev = match LabTbl.find_opt cb_cache l with
+    | None -> []
+    | Some pairs ->
+      if List.length pairs >= cache_max_gen
+      then CList.firstn (cache_max_gen - 1) pairs
+      else pairs
+  in
+  LabTbl.replace cb_cache l ((cb1, cb2) :: prev)
+
+(* Cached verdicts are only valid as long as the ambient environment
+   evolves monotonically (see above). Rolling the global state back in
+   time (Undo, Reset, document navigation) may remove universe
+   constraints that cached verdicts implicitly rely on, so the cache
+   must be flushed then. This is done by the state-handling upper layer
+   ([Vernacstate]). *)
+let flush_cache () = LabTbl.reset cb_cache
+
+let make_labmap mp list =
+  let add_one (l,e) map =
+   match e with
+    | SFBconst cb -> { map with objs = Id.Map.add l (Constant cb) map.objs }
+    | SFBrules _ -> { map with objs = Id.Map.add l Rules map.objs }
+    | SFBmind mib -> { map with objs = add_mib_nameobjects mp l mib map.objs }
+    | SFBmodule mb -> { map with mods = Id.Map.add l (Module mb) map.mods }
+    | SFBmodtype mtb -> { map with mods = Id.Map.add l (Modtype mtb) map.mods }
+  in
+  CList.fold_right add_one list empty_labmap
 
 let check_conv_error error why state poly pb env a1 a2 =
   if poly then match Conversion.default_conv pb env a1 a2 with
@@ -326,6 +382,11 @@ let check_constant (cst, ustate) trace env mp1 l strengthen1 info1 cb2 subst1 su
       let () = assert (Option.is_empty strengthen1 || is_empty_subst subst1) in
       let scb1 = Declareops.subst_const_body subst1 cb1_0 in
       let scb2 = Declareops.subst_const_body subst2 cb2_0 in
+      (* The outcome only depends on the pair of bodies when both
+         substitutions leave them physically unchanged, see [CbPairCache]. *)
+      let context_free = scb1 == cb1_0 && scb2 == cb2_0 in
+      if context_free && cache_mem l cb1_0 cb2_0 then cst
+      else begin
       let cb1 = match strengthen1 with
         | Some reso -> Modops.strengthen_const mp1 l scb1 reso
         | None -> scb1
@@ -360,7 +421,13 @@ let check_constant (cst, ustate) trace env mp1 l strengthen1 info1 cb2 subst1 su
                  Anyway [check_conv] will handle that afterwards. *)
               check_conv (NotConvertibleBodyField (Some (env, c1, c2))) cst' poly CONV env c1 c2))
       in
+      (* Only cache checks that produced no new universe constraints: they
+         are then pure and stay valid in any later state of this process. *)
+      let () =
+        if context_free && cst' == cst then cache_add l cb1_0 cb2_0
+      in
       cst'
+      end
 
 let rec check_modules state trace env mp1 msb1 mp2 msb2 subst1 subst2 =
   let mty1 = module_type_of_module msb1 in
