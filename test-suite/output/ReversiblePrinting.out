@@ -30,5 +30,9 @@ File "./output/ReversiblePrinting.v", line 59, characters 0-11:
 Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to conversion), even with all printing
 options turned on. [reversible-printing,default]
-Type@{ReversiblePrinting.59}
-     : Type@{ReversiblePrinting.59+1}
+Type@{ReversiblePrinting.61}
+     : Type@{ReversiblePrinting.61+1}
+S
+     : Type@{s ; Set}
+S
+     : Type@{s ; _}

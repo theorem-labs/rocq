@@ -57,3 +57,13 @@ Abort.
    names are not declared), so a warning is emitted and the most
    explicit form is printed. *)
 Check Type.
+
+(* Sort variables (sorts rung variant): under strict conversion the
+   anonymized universe levels of the sort-structure display do not
+   check, so full universes get printed; the laxer modes accept the
+   default display. *)
+Sort s.
+Axiom S : Type@{s;Set}.
+Check S.
+Set Printing Reversible Up To Conversion Modulo Universes.
+Check S.
