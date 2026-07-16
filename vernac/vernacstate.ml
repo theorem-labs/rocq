@@ -51,6 +51,9 @@ end = struct
     (Lib.Interp.freeze (), Summary.Interp.freeze_summaries ())
 
   let unfreeze (fl,fs) =
+    (* Restoring an earlier state may remove universe constraints that
+       cached subtyping verdicts rely on. *)
+    Subtyping.flush_cache ();
     Lib.Interp.unfreeze fl;
     Summary.Interp.unfreeze_summaries fs
 

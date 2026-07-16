@@ -30,3 +30,9 @@ val check_polymorphic_universes :
   UVars.AbstractContext.t -> UVars.AbstractContext.t ->
   bool
 
+(** Successful field checks are cached; cached verdicts remain valid as
+    long as the global environment evolves monotonically. This function
+    must be called whenever the global state is rolled back in time
+    (e.g. Undo, Reset, document navigation), as rolling back may remove
+    universe constraints that cached verdicts rely on. *)
+val flush_cache : unit -> unit
