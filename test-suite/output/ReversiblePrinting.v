@@ -1,6 +1,7 @@
 (* Printing Reversible Up To Unification / Conversion Modulo Universes /
-   Conversion: printing options get progressively turned on until the
-   printed form re-parses and re-elaborates to an equal term. *)
+   Conversion Modulo Universe Unification / Conversion: printing options
+   get progressively turned on until the printed form re-parses and
+   re-elaborates to an equal term. *)
 
 (* Baseline: no check, hidden arguments are not re-inferable from the
    printed form alone. *)
@@ -16,8 +17,9 @@ Check @eq_refl nat 0.
 Set Printing Reversible Up To Conversion.
 Check @eq_refl nat 0.
 
-(* The three flags behave like a radio button. *)
+(* The four flags behave like a radio button. *)
 Test Printing Reversible Up To Unification.
+Test Printing Reversible Up To Conversion Modulo Universe Unification.
 Test Printing Reversible Up To Conversion.
 
 (* Universe instances: re-elaboration introduces a fresh flexible
@@ -34,8 +36,34 @@ Check pid@{u}.
    modulo universes these are equal, so [Type] prints with no annotation
    and no warning (contrast with the strict conversion case below). *)
 Check Type.
+
+(* Conversion Modulo Universe Unification: universes introduced by the
+   reparse may be unified against the original ones, but a level cannot
+   be unified with an algebraic universe. So [pid@{u}] still prints
+   plainly (fresh level unifies with [u])... *)
+Set Printing Reversible Up To Conversion Modulo Universe Unification.
+Check pid@{u}.
+(* ...but [Check Type] does not check (fresh level vs algebraic [u+1]),
+   so it warns and escalates, unlike modulo universes above. *)
+Check Type.
+
 Set Printing Reversible Up To Unification.
 Check pid@{u}.
+
+(* Sort qualities must elaborate the same under modulo universes, even
+   though universe levels need not. [idT] is polymorphic over a sort
+   quality [s]; used at [Prop], its printed form must keep the sort
+   instance, because dropping it re-elaborates [idT] at a fresh quality
+   (defaulting to [Type], quality [QType]) which differs from [Prop]. *)
+Set Universe Polymorphism.
+Definition idT@{s;u} (A : Type@{s;u}) (a : A) := a.
+Set Printing Reversible Up To Conversion Modulo Universes.
+Check idT@{Prop;Set}.
+(* Modulo universe unification is laxer on sorts: the fresh sort quality
+   is unified with [Prop], so the instance drops to plain [idT]. *)
+Set Printing Reversible Up To Conversion Modulo Universe Unification.
+Check idT@{Prop;Set}.
+Unset Universe Polymorphism.
 
 (* Unsetting the active flag turns the check off entirely. *)
 Unset Printing Reversible Up To Unification.

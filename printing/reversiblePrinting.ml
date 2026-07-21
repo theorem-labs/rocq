@@ -17,9 +17,17 @@ type mode =
   | UpToConversionModuloUniverses
   (** The reparsed term must elaborate on its own (no hole may need the
       original term to be resolved) to a term convertible with the
-      original one when universe levels, instances and sorts are
-      ignored, i.e. the two may only differ in the universes introduced
-      by the reparsing. *)
+      original one when universe levels (and the level components of
+      universe instances) are ignored but sort qualities must agree.
+      Thus [Set] and [Type@{u}] are accepted, but [Prop], [SProp] and
+      [Type] are pairwise distinguished. *)
+  | UpToConversionModuloUniverseUnification
+  (** The reparsed term must elaborate on its own to a term convertible
+      with the original one, allowing new universe (in)equations to be
+      enforced on the universes introduced by the reparsing (universe
+      unification through the evar map). Stricter than
+      [UpToConversionModuloUniverses] (a universe level cannot be set
+      equal to an algebraic universe), laxer than [UpToConversion]. *)
   | UpToConversion
   (** The reparsed term must elaborate on its own to a term convertible
       with the original one, with universe (in)equations valid in the
@@ -28,8 +36,10 @@ type mode =
 let mode_eq m1 m2 = match m1, m2 with
   | UpToUnification, UpToUnification
   | UpToConversionModuloUniverses, UpToConversionModuloUniverses
+  | UpToConversionModuloUniverseUnification, UpToConversionModuloUniverseUnification
   | UpToConversion, UpToConversion -> true
-  | (UpToUnification | UpToConversionModuloUniverses | UpToConversion), _ -> false
+  | (UpToUnification | UpToConversionModuloUniverses
+    | UpToConversionModuloUniverseUnification | UpToConversion), _ -> false
 
 let current_mode : mode option ref = ref None
 
@@ -57,11 +67,16 @@ let () = declare_mode_option
     ["Printing";"Reversible";"Up";"To";"Conversion";"Modulo";"Universes"]
     UpToConversionModuloUniverses
 let () = declare_mode_option
+    ["Printing";"Reversible";"Up";"To";"Conversion";"Modulo";"Universe";"Unification"]
+    UpToConversionModuloUniverseUnification
+let () = declare_mode_option
     ["Printing";"Reversible";"Up";"To";"Conversion"] UpToConversion
 
 let pr_mode = function
   | UpToUnification -> Pp.str "unification"
   | UpToConversionModuloUniverses -> Pp.str "conversion modulo universes"
+  | UpToConversionModuloUniverseUnification ->
+    Pp.str "conversion modulo universe unification"
   | UpToConversion -> Pp.str "conversion"
 
 let warn_not_reversible =
@@ -74,24 +89,22 @@ let warn_not_reversible =
 let lconstr_eoi = Procq.eoi_entry Procq.Constr.lconstr
 
 (* Successively more explicit printing flags: coercions, implicit
-   arguments, sorts, no notations, universes (first with, then without
+   arguments, no notations, universes (first with, then without
    notations), parentheses, ending with the equivalent of
    [Printing All] plus [Printing Universes] and [Printing
-   Parentheses]. Printing sorts is tried after implicit arguments and
-   before unsetting notations; unsetting notations is tried before
-   universes; neither is kept when escalating further (universes
-   subsume sorts): configurations are ordered by explicitness, not
-   included in each other. Only extern/detype-level flags and the
-   [parentheses] flag may vary along the ladder: the rendering of the
-   returned [constr_expr] must be fully determined by the returned
-   flags (see [Ppconstr.of_printing_flags]). *)
+   Parentheses]. Unsetting notations is tried after implicit arguments
+   and before universes, but is not kept when escalating to universes:
+   configurations are ordered by explicitness, not included in each
+   other. Only extern/detype-level flags and the [parentheses] flag may
+   vary along the ladder: the rendering of the returned [constr_expr]
+   must be fully determined by the returned flags (see
+   [Ppconstr.of_printing_flags]). *)
 let ladder flags =
   let open PrintingFlags in
   let e0 = flags.extern in
   let e1 = { e0 with Extern.coercions = true } in
   let e2 = { e1 with Extern.implicits = true; Extern.implicits_defensive = true } in
   let e3 = { e2 with Extern.notations = false } in
-  let ds = { flags.detype with Detype.sorts = true } in
   let d4 = { flags.detype with Detype.universes = true } in
   let e5 = { e3 with Extern.parentheses = true } in
   let raw = make_raw flags in
@@ -100,7 +113,6 @@ let ladder flags =
   [ flags;
     { flags with extern = e1 };
     { flags with extern = e2 };
-    { detype = ds; extern = e2 };
     { flags with extern = e3 };
     { detype = d4; extern = e2 };
     { detype = d4; extern = e3 };
@@ -118,27 +130,42 @@ let no_warnings f =
     CWarnings.set_flags saved;
     Exninfo.iraise e
 
-(* Full conversion ignoring all universe levels, instances and sorts.
-   This is [Reductionops.is_conv_nounivs] in later versions; it is
-   inlined here for compatibility with this branch's kernel API. *)
-let is_conv_nounivs env sigma t1 t2 =
-  if EConstr.eq_constr_nounivs sigma t1 t2 then true
-  else
-    let evars = Evd.evar_handler sigma in
-    let t1 = EConstr.Unsafe.to_constr t1 in
-    let t2 = EConstr.Unsafe.to_constr t2 in
-    let env = Environ.set_universes (Evd.universes sigma) env in
-    let ignore_univs = let open Conversion in {
-      compare_sorts = (fun _ _ _ () -> Result.Ok ());
-      compare_instances = (fun ~flex:_ _ _ () -> Result.Ok ());
-      compare_cumul_instances = (fun _ _ _ _ () -> Result.Ok ());
-    }
-    in
-    match Conversion.generic_conv ~l2r:false Conversion.CONV ~evars
-            TransparentState.full env ((), ignore_univs) t1 t2 with
-    | Result.Ok () -> true
-    | Result.Error None -> false
-    | Result.Error (Some e) -> Util.Empty.abort e
+(* Conversion for the [UpToConversionModuloUniverses] mode: universe
+   levels (and the level components of universe instances) are ignored,
+   but sort qualities must agree. So [Set] and [Type@{u}] (both of
+   [QType] quality) are accepted, and [Type@{u}] vs [Type@{v}] is
+   accepted, but [Prop], [SProp] and [Type] are pairwise rejected; the
+   quality components of instances (for sort-polymorphic constants) must
+   also agree. This lets [Check Type] print plain [Type] while still
+   catching a reparse whose sort quality differs from the original. *)
+let modulo_universes_compare =
+  let open Conversion in
+  let compare_sorts _pb s1 s2 () =
+    if Sorts.Quality.equal (Sorts.quality s1) (Sorts.quality s2)
+    then Result.Ok () else Result.Error None
+  in
+  let compare_instances ~flex:_ i1 i2 () =
+    let (q1, _), (q2, _) = UVars.Instance.to_array i1, UVars.Instance.to_array i2 in
+    if CArray.equal Sorts.Quality.equal q1 q2
+    then Result.Ok () else Result.Error None
+  in
+  let compare_cumul_instances _pb _variance i1 i2 () =
+    compare_instances ~flex:false i1 i2 ()
+  in
+  { compare_sorts; compare_instances; compare_cumul_instances }
+
+(* No [eq_constr_nounivs] fast-path here: it would treat sorts of
+   different qualities as equal, defeating the sort-sensitivity we want. *)
+let is_conv_modulo_universes env sigma t1 t2 =
+  let evars = Evd.evar_handler sigma in
+  let t1 = EConstr.Unsafe.to_constr t1 in
+  let t2 = EConstr.Unsafe.to_constr t2 in
+  let env = Environ.set_universes (Evd.universes sigma) env in
+  match Conversion.generic_conv ~l2r:false Conversion.CONV ~evars
+          TransparentState.full env ((), modulo_universes_compare) t1 t2 with
+  | Result.Ok () -> true
+  | Result.Error None -> false
+  | Result.Error (Some e) -> Util.Empty.abort e
 
 let reparses ~mode ~kind ~flags env sigma t expr =
   try
@@ -175,14 +202,30 @@ let reparses ~mode ~kind ~flags env sigma t expr =
         let (_ : Evd.evar_map) = Evarconv.solve_unif_constraints_with_heuristics env sigma' in
         true
       | UpToConversionModuloUniverses ->
-        (* Convertibility ignoring universe levels, instances and sorts
-           entirely: the reparsed term may only differ from the original
-           in the universes it introduces. Unlike a conversion enforcing
-           universe equalities, this accepts e.g. a freshly elaborated
-           [Type@{v}] against the original [Type@{u+1}], where [v] is a
-           plain level that cannot be set equal to the algebraic [u+1]. *)
+        (* Convertibility ignoring universe levels (and the level
+           components of instances) but requiring sort qualities to
+           agree. Unlike a conversion enforcing universe equalities,
+           this accepts e.g. a freshly elaborated [Type@{v}] against the
+           original [Type@{u+1}], where [v] is a plain level that cannot
+           be set equal to the algebraic [u+1]; but it still rejects a
+           reparse whose sort quality differs (e.g. [Prop] vs [Type]). *)
         no_new_undefined () &&
-        List.for_all (fun (t', t) -> is_conv_nounivs env sigma' t' t) pairs
+        List.for_all (fun (t', t) -> is_conv_modulo_universes env sigma' t' t) pairs
+      | UpToConversionModuloUniverseUnification ->
+        (* Convertibility enforcing universe unification: the universes
+           introduced by the reparsing may be unified against the
+           original ones through the evar map, but a universe level
+           cannot be set equal to an algebraic universe, so e.g. [Check
+           Type] does not check under this mode. *)
+        no_new_undefined () &&
+        (let rec conv sigma' = function
+           | [] -> true
+           | (t', t) :: pairs ->
+             match Reductionops.infer_conv ~pb:Conversion.CONV env sigma' t' t with
+             | Some sigma' -> conv sigma' pairs
+             | None -> false
+         in
+         conv sigma' pairs)
       | UpToConversion ->
         no_new_undefined () &&
         List.for_all (fun (t', t) -> Reductionops.is_conv env sigma' t' t) pairs
