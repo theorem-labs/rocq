@@ -1180,8 +1180,8 @@ gallina_ext: [
 | "End" identref
 | "Collection" identref ":=" section_subset_expr
 | "From" global "Extra" "Dependency" ne_string OPT [ "as" IDENT ]
-| "Require" "(" "safe" ")" LIST1 qualid
-| "From" global "Require" "(" "safe" ")" LIST1 qualid
+| "Require" "(" "safe" ")" safe_export_token LIST1 qualid
+| "From" global "Require" "(" "safe" ")" safe_export_token LIST1 qualid
 | "Require" test_unsafe_require export_token LIST1 filtered_import
 | "From" global "Require" test_unsafe_require export_token LIST1 filtered_import
 | "Import" OPT import_categories LIST1 filtered_import
@@ -1226,6 +1226,12 @@ one_import_filter_name: [
 export_token: [
 | "Import" OPT import_categories
 | "Export" OPT import_categories
+|
+]
+
+safe_export_token: [
+| "Import"
+| "Export"
 |
 ]
 

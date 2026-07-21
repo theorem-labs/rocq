@@ -730,7 +730,7 @@ file is a particular case of a module called a *library file*.
 
       .. seealso:: Chapter :ref:`therocqcommands`
 
-.. cmd:: {? From @dirpath } Require ( safe ) {+ @qualid }
+.. cmd:: {? From @dirpath } Require ( safe ) {? @safe_export_token } {+ @qualid }
    :name: Require (safe); From … Require (safe)
 
    Loads a compiled file and all the files it depends on (recursively),
@@ -747,13 +747,22 @@ file is a particular case of a module called a *library file*.
    library (for instance abusive notations or flag changes) cannot affect the
    current document, while its definitions can still be type-checked and used.
 
-   The loaded objects are only accessible through their *fully-qualified*
-   names; short names are not registered.  For example, after
+   By default the loaded objects are only accessible through their
+   *fully-qualified* names; short names are not registered.  For example, after
    `Require (safe) Corelib.Classes.CRelationClasses.` the constant is available
    as :n:`Corelib.Classes.CRelationClasses.flip` (and, since local loadpaths
    are searched, typically also as the shorter qualified prefixes) but not as
-   the bare `flip`.  There is no way to shorten these names with this command,
-   as :cmd:`Import` and :cmd:`Export` are not (yet) supported in this form.
+   the bare `flip`.
+
+   As with plain :cmd:`Require`, an optional ``Import`` or ``Export`` clause may
+   be given.  ``Require (safe) Import`` additionally makes the short names of
+   the safe-loaded libraries available in the current scope, and
+   ``Require (safe) Export`` also re-exports them to modules that later import
+   the current one.  Only the short names are exposed this way; no other
+   :term:`libobject` (notation, coercion, hint, and so on) is imported, so the
+   library remains safe-loaded.  A safe-loaded library may also be brought into
+   scope afterwards with a standalone :cmd:`Import`, which likewise registers
+   only its short names.
 
    Constants and inductive types loaded this way can be printed with
    :cmd:`Print`, inspected with :cmd:`About` and :cmd:`Check`, located with
