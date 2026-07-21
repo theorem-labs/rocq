@@ -3,4 +3,6 @@
   rebuilds delta-resolver maps while composing substitutions.  Sequential
   compositions are recorded in a bounded persistent representation and
   normalized only after a bounded number of components, substantially reducing
-  the time and memory needed for large module signatures.
+  the time and memory needed for large module signatures
+  (`#2 <https://github.com/theorem-labs/rocq/pull/2>`_,
+  by Kanghee Park).
