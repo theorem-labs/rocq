@@ -17,7 +17,7 @@ CRelationClasses.flip
 CRelationClasses.arrow
      : Type -> Type -> Type
 CRelationClasses.arrow nat nat
-     : Type
+     : Set
 Closed under the global context
 File "./output/SafeRequire.v", line 24, characters 11-19:
 The command has indeed failed with message:
