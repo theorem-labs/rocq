@@ -29,6 +29,11 @@ Universe u.
 Check pid@{u}.
 Set Printing Reversible Up To Conversion Modulo Universes.
 Check pid@{u}.
+(* [Check Type] prints its type as [Type@{u+1}] (an algebraic universe);
+   re-elaborating the plain [Type] yields a fresh level. Up to conversion
+   modulo universes these are equal, so [Type] prints with no annotation
+   and no warning (contrast with the strict conversion case below). *)
+Check Type.
 Set Printing Reversible Up To Unification.
 Check pid@{u}.
 
