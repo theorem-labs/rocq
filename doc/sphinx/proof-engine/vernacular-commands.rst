@@ -1183,8 +1183,8 @@ then :flag:`Printing Universes` (first with, then without notations),
 then :flag:`Printing Parentheses` and finally all the options implied by
 :flag:`Printing All` — until the printed form passes the check.
 
-These three flags are mutually exclusive: setting one of them unsets the
-other two, and unsetting the currently set one turns the checks off
+These four flags are mutually exclusive: setting one of them unsets the
+other three, and unsetting the currently set one turns the checks off
 entirely. All are off by default. Since every displayed term is re-parsed
 and re-elaborated (possibly several times), printing can become
 noticeably more expensive when one of these flags is set.
@@ -1194,7 +1194,7 @@ noticeably more expensive when one of these flags is set.
    The re-parsed form must unify with the original term: holes standing
    for arguments that are not printed and universes introduced by the
    re-elaboration may be instantiated by unifying against the original
-   term. This is the most permissive of the three checks; it accepts any
+   term. This is the most permissive of the four checks; it accepts any
    printed form that can denote the original term, even if only in a
    context where the expected type is known.
 
@@ -1209,24 +1209,40 @@ noticeably more expensive when one of these flags is set.
 
    The printed form must re-elaborate on its own (without help from the
    original term) to a term with no unresolved holes, and that term must
-   be convertible to the original one when universe levels, instances and
-   sorts are ignored, i.e. the two may differ only in the universes
-   introduced by the re-elaboration. With this flag, implicit arguments
-   that can only be inferred from the type of the original term get
-   printed, but universe instances of polymorphic constants and the
-   levels of sorts (such as the sort of ``Check Type``) generally do not.
+   be convertible to the original one when universe levels (and the level
+   components of universe instances) are ignored, but *sort qualities
+   must agree*: ``Set`` and ``Type@{u}`` are accepted, but ``Prop``,
+   ``SProp`` and ``Type`` are pairwise distinguished. With this flag,
+   implicit arguments that can only be inferred from the type of the
+   original term get printed, and the universe levels of sorts (such as
+   the sort of ``Check Type``) generally do not, but the *sort quality*
+   part of a polymorphic instance is kept when it would otherwise
+   re-elaborate to a different quality.
+
+.. flag:: Printing Reversible Up To Conversion Modulo Universe Unification
+
+   Like :flag:`Printing Reversible Up To Conversion Modulo Universes`,
+   but instead of ignoring universe levels it lets the universes (and
+   sort qualities) introduced by the re-elaboration be unified against
+   the original ones, enforcing new universe (in)equalities as needed.
+   This is stricter than
+   :flag:`Printing Reversible Up To Conversion Modulo Universes` on
+   universe levels — a universe level cannot be unified with an
+   algebraic universe, so the sort of ``Check Type`` is printed
+   explicitly — but laxer on sort qualities, which get unified rather
+   than required to match syntactically.
 
 .. flag:: Printing Reversible Up To Conversion
 
-   Like :flag:`Printing Reversible Up To Conversion Modulo Universes`,
-   but universe levels are not ignored: the universe (in)equalities
-   needed for convertibility must already be valid in the current
-   universe graph, without enforcing new constraints. With this flag,
-   universe instances of polymorphic constants generally need to be
-   printed (turning on :flag:`Printing Universes` for the terms where
-   they matter).
+   Like :flag:`Printing Reversible Up To Conversion Modulo Universe
+   Unification`, but no new universe constraints are enforced: the
+   universe (in)equalities needed for convertibility must already be
+   valid in the current universe graph. With this flag, universe
+   instances of polymorphic constants generally need to be printed
+   (turning on :flag:`Printing Universes` for the terms where they
+   matter).
 
-For all three flags, when the printed expression stands for a term (as
+For all four flags, when the printed expression stands for a term (as
 opposed to a type), the types of the original and re-elaborated terms
 are compared as well, so that, e.g., a printed form whose re-elaboration
 lives at a different universe instance is not considered reversible.
