@@ -762,9 +762,9 @@ gallina_ext: [
 | REPLACE "From" global "Require" export_token LIST1 filtered_import
 | WITH OPT [ "From" dirpath ] "Require" export_token LIST1 filtered_import
 
-| DELETE "Require" "(" "safe" ")" LIST1 qualid
-| REPLACE "From" global "Require" "(" "safe" ")" LIST1 qualid
-| WITH OPT [ "From" dirpath ] "Require" "(" "safe" ")" LIST1 qualid
+| DELETE "Require" "(" "safe" ")" safe_export_token LIST1 qualid
+| REPLACE "From" global "Require" "(" "safe" ")" safe_export_token LIST1 qualid
+| WITH OPT [ "From" dirpath ] "Require" "(" "safe" ")" safe_export_token LIST1 qualid
 
 | REPLACE "From" global "Extra" "Dependency" ne_string OPT [ "as" IDENT ]
 | WITH "From" dirpath "Extra" "Dependency" ne_string OPT [ "as" IDENT ]
