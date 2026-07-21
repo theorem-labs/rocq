@@ -1162,20 +1162,22 @@ noticeably more expensive when one of these flags is set.
 
    The printed form must re-elaborate on its own (without help from the
    original term) to a term with no unresolved holes, and that term must
-   be convertible to the original one, possibly by enforcing new
-   constraints on the universes introduced by the re-elaboration. With
-   this flag, implicit arguments that can only be inferred from the type
-   of the original term get printed, but universe instances of
-   polymorphic constants generally do not.
+   be convertible to the original one when universe levels, instances and
+   sorts are ignored, i.e. the two may differ only in the universes
+   introduced by the re-elaboration. With this flag, implicit arguments
+   that can only be inferred from the type of the original term get
+   printed, but universe instances of polymorphic constants and the
+   levels of sorts (such as the sort of ``Check Type``) generally do not.
 
 .. flag:: Printing Reversible Up To Conversion
 
    Like :flag:`Printing Reversible Up To Conversion Modulo Universes`,
-   but the universe (in)equalities needed for convertibility must
-   already be valid in the current universe graph, without enforcing new
-   constraints. With this flag, universe instances of polymorphic
-   constants generally need to be printed (turning on
-   :flag:`Printing Universes` for the terms where they matter).
+   but universe levels are not ignored: the universe (in)equalities
+   needed for convertibility must already be valid in the current
+   universe graph, without enforcing new constraints. With this flag,
+   universe instances of polymorphic constants generally need to be
+   printed (turning on :flag:`Printing Universes` for the terms where
+   they matter).
 
 For all three flags, when the printed expression stands for a term (as
 opposed to a type), the types of the original and re-elaborated terms

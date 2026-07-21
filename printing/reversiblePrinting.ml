@@ -17,8 +17,9 @@ type mode =
   | UpToConversionModuloUniverses
   (** The reparsed term must elaborate on its own (no hole may need the
       original term to be resolved) to a term convertible with the
-      original one, possibly enforcing new universe constraints on the
-      universes introduced by the reparsing. *)
+      original one when universe levels, instances and sorts are
+      ignored, i.e. the two may only differ in the universes introduced
+      by the reparsing. *)
   | UpToConversion
   (** The reparsed term must elaborate on its own to a term convertible
       with the original one, with universe (in)equations valid in the
@@ -117,6 +118,28 @@ let no_warnings f =
     CWarnings.set_flags saved;
     Exninfo.iraise e
 
+(* Full conversion ignoring all universe levels, instances and sorts.
+   This is [Reductionops.is_conv_nounivs] in later versions; it is
+   inlined here for compatibility with this branch's kernel API. *)
+let is_conv_nounivs env sigma t1 t2 =
+  if EConstr.eq_constr_nounivs sigma t1 t2 then true
+  else
+    let evars = Evd.evar_handler sigma in
+    let t1 = EConstr.Unsafe.to_constr t1 in
+    let t2 = EConstr.Unsafe.to_constr t2 in
+    let env = Environ.set_universes (Evd.universes sigma) env in
+    let ignore_univs = let open Conversion in {
+      compare_sorts = (fun _ _ _ () -> Result.Ok ());
+      compare_instances = (fun ~flex:_ _ _ () -> Result.Ok ());
+      compare_cumul_instances = (fun _ _ _ _ () -> Result.Ok ());
+    }
+    in
+    match Conversion.generic_conv ~l2r:false Conversion.CONV ~evars
+            TransparentState.full env ((), ignore_univs) t1 t2 with
+    | Result.Ok () -> true
+    | Result.Error None -> false
+    | Result.Error (Some e) -> Util.Empty.abort e
+
 let reparses ~mode ~kind ~flags env sigma t expr =
   try
     no_warnings begin fun () ->
@@ -152,15 +175,14 @@ let reparses ~mode ~kind ~flags env sigma t expr =
         let (_ : Evd.evar_map) = Evarconv.solve_unif_constraints_with_heuristics env sigma' in
         true
       | UpToConversionModuloUniverses ->
+        (* Convertibility ignoring universe levels, instances and sorts
+           entirely: the reparsed term may only differ from the original
+           in the universes it introduces. Unlike a conversion enforcing
+           universe equalities, this accepts e.g. a freshly elaborated
+           [Type@{v}] against the original [Type@{u+1}], where [v] is a
+           plain level that cannot be set equal to the algebraic [u+1]. *)
         no_new_undefined () &&
-        (let rec conv sigma' = function
-           | [] -> true
-           | (t', t) :: pairs ->
-             match Reductionops.infer_conv ~pb:Conversion.CONV env sigma' t' t with
-             | Some sigma' -> conv sigma' pairs
-             | None -> false
-         in
-         conv sigma' pairs)
+        List.for_all (fun (t', t) -> is_conv_nounivs env sigma' t' t) pairs
       | UpToConversion ->
         no_new_undefined () &&
         List.for_all (fun (t', t) -> Reductionops.is_conv env sigma' t' t) pairs
