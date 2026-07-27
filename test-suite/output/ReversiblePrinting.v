@@ -76,6 +76,16 @@ Check Type.
 (* ...but re-elaboration is still standalone, so hidden arguments that
    cannot be re-inferred from the printed form alone get printed. *)
 Check @eq_refl nat 0.
+
+(* With sort printing in the base flags, the fresh quality variable of
+   a sort-polymorphic constant prints as a raw α-name, which cannot be
+   re-parsed; the ladder escalates to printing quality variables
+   anonymously as _, which re-parses to fresh variables that
+   unification can match. *)
+Set Printing Sorts.
+Set Printing Reversible Up To Unification.
+Check idT.
+Unset Printing Sorts.
 Unset Universe Polymorphism.
 
 (* Unsetting the active flag turns the check off entirely. *)

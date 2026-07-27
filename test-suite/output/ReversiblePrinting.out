@@ -26,8 +26,8 @@ Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to
 conversion modulo universe unification), even with all printing options
 turned on. [reversible-printing,default]
-Type@{ReversiblePrinting.49}
-     : Type@{ReversiblePrinting.49+1}
+Type@{ReversiblePrinting.51}
+     : Type@{ReversiblePrinting.51+1}
 pid
      : forall A : Type, A -> A
 idT@{Prop ; _}
@@ -40,7 +40,9 @@ Type
      : Type
 @eq_refl nat 0
      : 0 = 0
-@eq_refl nat 0
+idT@{_ ; _}
+     : forall A : Type@{_ ; _}, A -> A
+eq_refl
      : 0 = 0
 2 * 3
      : nat
@@ -50,16 +52,16 @@ Nat.add 2 3
   
   ============================
   @eq_refl nat 0 = @eq_refl nat 0
-File "./output/ReversiblePrinting.v", line 105, characters 0-11:
+File "./output/ReversiblePrinting.v", line 115, characters 0-11:
 Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to conversion), even with all printing
 options turned on. [reversible-printing,default]
-File "./output/ReversiblePrinting.v", line 105, characters 0-11:
+File "./output/ReversiblePrinting.v", line 115, characters 0-11:
 Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to conversion), even with all printing
 options turned on. [reversible-printing,default]
-Type@{ReversiblePrinting.96}
-     : Type@{ReversiblePrinting.96+1}
+Type@{ReversiblePrinting.99}
+     : Type@{ReversiblePrinting.99+1}
 S
      : Type@{s ; Set}
 S
