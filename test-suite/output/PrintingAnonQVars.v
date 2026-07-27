@@ -5,9 +5,10 @@ Set Universe Polymorphism.
 Definition idT@{s;u} (A : Type@{s;u}) (a : A) := a.
 
 (* On this branch [Check] collapses an undetermined sort quality to
-   [Type], so the flag is exercised through a type-error message, where
-   the fresh, unnameable sort quality variable of the instance is kept.
-   It prints as a raw α-name by default... *)
+   [Type] before printing ([Evd.collapse_sort_variables], called from
+   [vernac_global_check]), so the flag is exercised through a type-error
+   message, where the fresh, unnameable sort quality variable of the
+   instance is kept. It prints as a raw α-name by default... *)
 Set Printing Universes.
 Fail Definition bad := (idT : nat).
 (* ...and as _ under the flag. *)

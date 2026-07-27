@@ -40,7 +40,7 @@ Type
      : Type
 @eq_refl nat 0
      : 0 = 0
-@eq_refl nat 0
+eq_refl
      : 0 = 0
 2 * 3
      : nat
@@ -50,34 +50,34 @@ Nat.add 2 3
   
   ============================
   @eq_refl nat 0 = @eq_refl nat 0
-File "./output/ReversiblePrinting.v", line 105, characters 0-11:
+File "./output/ReversiblePrinting.v", line 106, characters 0-11:
 Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to conversion), even with all printing
 options turned on. [reversible-printing,default]
-File "./output/ReversiblePrinting.v", line 105, characters 0-11:
+File "./output/ReversiblePrinting.v", line 106, characters 0-11:
 Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to conversion), even with all printing
 options turned on. [reversible-printing,default]
-Type@{ReversiblePrinting.100}
-     : Type@{ReversiblePrinting.100+1}
+Type@{ReversiblePrinting.96}
+     : Type@{ReversiblePrinting.96+1}
 S
      : Type@{s ; Set}
 S
      : Type@{s ; _}
-File "./output/ReversiblePrinting.v", line 129, characters 24-27:
+File "./output/ReversiblePrinting.v", line 130, characters 24-27:
 The command has indeed failed with message:
 The term "idT@{_ ; _}" has type "forall A : Type@{α9 ; _}, A -> A"
 while it is expected to have type "nat".
-File "./output/ReversiblePrinting.v", line 135, characters 0-35:
+File "./output/ReversiblePrinting.v", line 136, characters 0-35:
 Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to conversion modulo universes), even with
 all printing options turned on. [reversible-printing,default]
-File "./output/ReversiblePrinting.v", line 135, characters 0-35:
+File "./output/ReversiblePrinting.v", line 136, characters 0-35:
 Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to conversion modulo universes), even with
 all printing options turned on. [reversible-printing,default]
-File "./output/ReversiblePrinting.v", line 135, characters 24-27:
+File "./output/ReversiblePrinting.v", line 136, characters 24-27:
 The command has indeed failed with message:
-The term "idT@{α12 ; ReversiblePrinting.123}" has type
+The term "idT@{α12 ; ReversiblePrinting.119}" has type
  "forall A : Type@{α12 ; _}, A -> A"
 while it is expected to have type "nat".

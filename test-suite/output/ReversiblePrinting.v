@@ -78,8 +78,9 @@ Check Type.
 Check @eq_refl nat 0.
 Unset Universe Polymorphism.
 
-(* Unsetting the active flag turns the check off entirely. *)
-Unset Printing Reversible Up To Unification.
+(* Unsetting the active flag turns the check off entirely (unsetting a
+   flag other than the active one would be a no-op). *)
+Unset Printing Reversible Up To Conversion Modulo Sorts And Universes.
 Check @eq_refl nat 0.
 
 (* A printing-only notation that does not print what it parses is
