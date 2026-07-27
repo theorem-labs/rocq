@@ -1,7 +1,8 @@
-(* Printing Reversible Up To Unification / Conversion Modulo Universes /
-   Conversion Modulo Universe Unification / Conversion: printing options
-   get progressively turned on until the printed form re-parses and
-   re-elaborates to an equal term. *)
+(* Printing Reversible Up To Unification / Conversion Modulo Sorts And
+   Universes / Conversion Modulo Universes / Conversion Modulo Universe
+   Unification / Conversion: printing options get progressively turned
+   on until the printed form re-parses and re-elaborates to an equal
+   term. *)
 
 (* Baseline: no check, hidden arguments are not re-inferable from the
    printed form alone. *)
@@ -17,8 +18,9 @@ Check @eq_refl nat 0.
 Set Printing Reversible Up To Conversion.
 Check @eq_refl nat 0.
 
-(* The four flags behave like a radio button. *)
+(* The five flags behave like a radio button. *)
 Test Printing Reversible Up To Unification.
+Test Printing Reversible Up To Conversion Modulo Sorts And Universes.
 Test Printing Reversible Up To Conversion Modulo Universe Unification.
 Test Printing Reversible Up To Conversion.
 
@@ -63,6 +65,17 @@ Check idT@{Prop;Set}.
    is unified with [Prop], so the instance drops to plain [idT]. *)
 Set Printing Reversible Up To Conversion Modulo Universe Unification.
 Check idT@{Prop;Set}.
+(* Modulo sorts and universes ignores sort qualities as well as
+   universe levels, so the instance also drops, even though the
+   re-elaboration of plain [idT] lives at quality Type rather than
+   Prop... *)
+Set Printing Reversible Up To Conversion Modulo Sorts And Universes.
+Check idT@{Prop;Set}.
+(* ...and [Check Type] prints plainly, as with modulo universes... *)
+Check Type.
+(* ...but re-elaboration is still standalone, so hidden arguments that
+   cannot be re-inferred from the printed form alone get printed. *)
+Check @eq_refl nat 0.
 Unset Universe Polymorphism.
 
 (* Unsetting the active flag turns the check off entirely. *)
