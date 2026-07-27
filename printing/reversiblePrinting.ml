@@ -102,15 +102,20 @@ let warn_not_reversible =
 let lconstr_eoi = Procq.eoi_entry Procq.Constr.lconstr
 
 (* Successively more explicit printing flags: coercions, implicit
-   arguments, no notations, universes (first with, then without
-   notations), parentheses, ending with the equivalent of
-   [Printing All] plus [Printing Universes] and [Printing
-   Parentheses]. Unsetting notations is tried after implicit arguments
-   and before universes, but is not kept when escalating to universes:
-   configurations are ordered by explicitness, not included in each
-   other. Only extern/detype-level flags and the [parentheses] flag may
-   vary along the ladder: the rendering of the returned [constr_expr]
-   must be fully determined by the returned flags (see
+   arguments, sorts, no notations, universes (first with, then without
+   notations), parentheses, ending with the equivalent of [Printing
+   All] plus [Printing Universes] and [Printing Parentheses]. Printing
+   sorts is tried after implicit arguments and before unsetting
+   notations; unsetting notations is tried before universes; neither is
+   kept when escalating further (universes subsume sorts). At the sorts
+   and universes rungs the anonymized-sort-quality-variable variant
+   ([anonymous_qvars]) is tried first, so an unnameable sort quality
+   variable prints as [_] (which re-parses to a fresh quality variable)
+   before falling back to its raw, unparsable form. Configurations are
+   ordered by explicitness, not included in each other. Only
+   extern/detype-level flags and the [parentheses] flag may vary along
+   the ladder: the rendering of the returned [constr_expr] must be
+   fully determined by the returned flags (see
    [Ppconstr.of_printing_flags]). *)
 let ladder flags =
   let open PrintingFlags in
@@ -118,6 +123,9 @@ let ladder flags =
   let e1 = { e0 with Extern.coercions = true } in
   let e2 = { e1 with Extern.implicits = true; Extern.implicits_defensive = true } in
   let e3 = { e2 with Extern.notations = false } in
+  let e2a = { e2 with Extern.anonymous_qvars = true } in
+  let e3a = { e3 with Extern.anonymous_qvars = true } in
+  let ds = { flags.detype with Detype.sorts = true } in
   let d4 = { flags.detype with Detype.universes = true } in
   let e5 = { e3 with Extern.parentheses = true } in
   let raw = make_raw flags in
@@ -126,8 +134,12 @@ let ladder flags =
   [ flags;
     { flags with extern = e1 };
     { flags with extern = e2 };
+    { detype = ds; extern = e2 };
+    { detype = ds; extern = e2a };
     { flags with extern = e3 };
+    { detype = d4; extern = e2a };
     { detype = d4; extern = e2 };
+    { detype = d4; extern = e3a };
     { detype = d4; extern = e3 };
     { detype = d4; extern = e5 };
     raw ]

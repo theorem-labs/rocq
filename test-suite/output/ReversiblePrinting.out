@@ -26,11 +26,11 @@ Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to
 conversion modulo universe unification), even with all printing options
 turned on. [reversible-printing,default]
-Type@{ReversiblePrinting.47}
-     : Type@{ReversiblePrinting.47+1}
+Type@{ReversiblePrinting.51}
+     : Type@{ReversiblePrinting.51+1}
 pid
      : forall A : Type, A -> A
-idT@{Prop ; Set}
+idT@{Prop ; _}
      : forall A : Prop, A -> A
 idT
      : forall A : Prop, A -> A
@@ -58,9 +58,26 @@ File "./output/ReversiblePrinting.v", line 105, characters 0-11:
 Warning: The printed form of this term could not be re-parsed and
 re-elaborated to an equal term (up to conversion), even with all printing
 options turned on. [reversible-printing,default]
-Type@{ReversiblePrinting.92}
-     : Type@{ReversiblePrinting.92+1}
+Type@{ReversiblePrinting.100}
+     : Type@{ReversiblePrinting.100+1}
 S
      : Type@{s ; Set}
 S
      : Type@{s ; _}
+File "./output/ReversiblePrinting.v", line 129, characters 24-27:
+The command has indeed failed with message:
+The term "idT@{_ ; _}" has type "forall A : Type@{α9 ; _}, A -> A"
+while it is expected to have type "nat".
+File "./output/ReversiblePrinting.v", line 135, characters 0-35:
+Warning: The printed form of this term could not be re-parsed and
+re-elaborated to an equal term (up to conversion modulo universes), even with
+all printing options turned on. [reversible-printing,default]
+File "./output/ReversiblePrinting.v", line 135, characters 0-35:
+Warning: The printed form of this term could not be re-parsed and
+re-elaborated to an equal term (up to conversion modulo universes), even with
+all printing options turned on. [reversible-printing,default]
+File "./output/ReversiblePrinting.v", line 135, characters 24-27:
+The command has indeed failed with message:
+The term "idT@{α12 ; ReversiblePrinting.123}" has type
+ "forall A : Type@{α12 ; _}, A -> A"
+while it is expected to have type "nat".

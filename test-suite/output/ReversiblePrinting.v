@@ -113,3 +113,25 @@ Axiom S : Type@{s;Set}.
 Check S.
 Set Printing Reversible Up To Conversion Modulo Universes.
 Check S.
+
+(* Anonymized sort quality variables (sorts+anon rung). A
+   sort-polymorphic constant used with no sort instance elaborates that
+   instance to an unnameable, fresh sort quality variable, shown in a
+   type-error message (which, unlike [Check], does not collapse it to
+   [Type]) under [Set Printing Sorts]. Up to unification the sorts+anon
+   rung wins: the quality prints as [_] (which re-parses to a fresh
+   quality variable, see PrintingAnonQVars), the printed subject term
+   re-parses, and no reversible-printing warning is emitted. The
+   displayed type keeps the raw name: type-error types are shown
+   without the reversible check. *)
+Set Printing Sorts.
+Set Printing Reversible Up To Unification.
+Fail Definition bad := (idT : nat).
+(* Up to conversion modulo universes the anon rung cannot win: that
+   mode compares sort qualities structurally, and a freshly re-parsed
+   [_] is a different variable from the original, so the check fails and
+   the raw name is printed with a warning. *)
+Set Printing Reversible Up To Conversion Modulo Universes.
+Fail Definition bad := (idT : nat).
+Unset Printing Reversible Up To Conversion Modulo Universes.
+Unset Printing Sorts.
