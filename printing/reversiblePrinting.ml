@@ -14,6 +14,12 @@ type mode =
   | UpToUnification
   (** The reparsed term, with its holes, must unify with the original
       term (holes and universes get instantiated by unification). *)
+  | UpToConversionModuloSortsAndUniverses
+  (** The reparsed term must elaborate on its own (no hole may need the
+      original term to be resolved) to a term convertible with the
+      original one when sorts and universes are ignored entirely: sort
+      qualities, universe levels and universe instances may all differ.
+      The laxest of the conversion-based checks. *)
   | UpToConversionModuloUniverses
   (** The reparsed term must elaborate on its own (no hole may need the
       original term to be resolved) to a term convertible with the
@@ -35,15 +41,17 @@ type mode =
 
 let mode_eq m1 m2 = match m1, m2 with
   | UpToUnification, UpToUnification
+  | UpToConversionModuloSortsAndUniverses, UpToConversionModuloSortsAndUniverses
   | UpToConversionModuloUniverses, UpToConversionModuloUniverses
   | UpToConversionModuloUniverseUnification, UpToConversionModuloUniverseUnification
   | UpToConversion, UpToConversion -> true
-  | (UpToUnification | UpToConversionModuloUniverses
+  | (UpToUnification | UpToConversionModuloSortsAndUniverses
+    | UpToConversionModuloUniverses
     | UpToConversionModuloUniverseUnification | UpToConversion), _ -> false
 
 let current_mode : mode option ref = ref None
 
-(* The three flags behave like a radio button: setting one unsets the
+(* These flags behave like a radio button: setting one unsets the
    others; unsetting the one currently set disables the check. *)
 let declare_mode_option key mode =
   let open Goptions in
@@ -64,6 +72,9 @@ let declare_mode_option key mode =
 let () = declare_mode_option
     ["Printing";"Reversible";"Up";"To";"Unification"] UpToUnification
 let () = declare_mode_option
+    ["Printing";"Reversible";"Up";"To";"Conversion";"Modulo";"Sorts";"And";"Universes"]
+    UpToConversionModuloSortsAndUniverses
+let () = declare_mode_option
     ["Printing";"Reversible";"Up";"To";"Conversion";"Modulo";"Universes"]
     UpToConversionModuloUniverses
 let () = declare_mode_option
@@ -74,6 +85,8 @@ let () = declare_mode_option
 
 let pr_mode = function
   | UpToUnification -> Pp.str "unification"
+  | UpToConversionModuloSortsAndUniverses ->
+    Pp.str "conversion modulo sorts and universes"
   | UpToConversionModuloUniverses -> Pp.str "conversion modulo universes"
   | UpToConversionModuloUniverseUnification ->
     Pp.str "conversion modulo universe unification"
@@ -204,6 +217,14 @@ let reparses ~mode ~kind ~flags env sigma t expr =
             Evarconv.unify_delay env sigma' t' t) sigma' pairs in
         let (_ : Evd.evar_map) = Evarconv.solve_unif_constraints_with_heuristics env sigma' in
         true
+      | UpToConversionModuloSortsAndUniverses ->
+        (* Convertibility ignoring sorts and universes entirely
+           ([Reductionops.is_conv_nounivs]): unlike modulo universes
+           below, even sort qualities need not agree, so e.g. dropping a
+           sort-polymorphic instance whose omission changes the
+           elaborated quality is accepted. *)
+        no_new_undefined () &&
+        List.for_all (fun (t', t) -> Reductionops.is_conv_nounivs env sigma' t' t) pairs
       | UpToConversionModuloUniverses ->
         (* Convertibility ignoring universe levels (and the level
            components of instances) but requiring sort qualities to
