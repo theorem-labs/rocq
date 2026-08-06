@@ -1,0 +1,6 @@
+(library
+ (name restricted_model_plugin)
+ (public_name rocq-runtime.plugins.restricted_model)
+ (synopsis "Pre-effect policy for restricted model compilation")
+ (modules restricted_model)
+ (libraries rocq-runtime.stm))
