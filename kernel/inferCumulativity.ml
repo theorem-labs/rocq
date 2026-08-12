@@ -281,7 +281,7 @@ let rec infer_fterm cv_pb infos variances hd stk =
         let variances = infer_constant (info_env (fst infos)) variances con in
         let variances = infer_stack infos variances stk in
         set_infer_mode infer_mode variances
-      with BadVariance _ | NotInferring as e ->
+      with BadVariance _ | BadVarianceQ _ | NotInferring as e ->
       match def with
       | None -> raise e
       | Some (hd,stk) -> infer_fterm cv_pb infos variances hd stk
@@ -409,3 +409,5 @@ let infer_inductive ~env_params ~env_ar_par ~arities ~ctors quals univs =
     Array.make (Array.length quals) Invariant, Array.make (Array.length univs) Invariant
   | BadVariance (lev, expected, actual) ->
     Type_errors.error_bad_variance env_params ~lev ~expected ~actual
+  | BadVarianceQ (qvar, expected, actual) ->
+    Type_errors.error_bad_qvariance env_params ~qvar ~expected ~actual
