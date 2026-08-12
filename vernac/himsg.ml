@@ -970,6 +970,12 @@ let explain_bad_variance env sigma ~lev ~expected ~actual =
     (fun () -> UVars.Variance.pr expected)
     (fun () -> UVars.Variance.pr actual)
 
+let explain_bad_qvariance env sigma ~qvar ~expected ~actual =
+  fmt "Incorrect variance for sort quality %t:@ expected %t@ but cannot be less restrictive than %t."
+    (fun () -> Termops.pr_evd_qvar sigma qvar)
+    (fun () -> UVars.Variance.pr expected)
+    (fun () -> UVars.Variance.pr actual)
+
 let explain_undeclared_used_variables env sigma ~declared_vars ~inferred_vars =
   let l = Id.Set.elements (Id.Set.diff inferred_vars declared_vars) in
   let n = List.length l in
@@ -1050,6 +1056,7 @@ let explain_type_error env sigma err =
   | BadCaseRelevance (rlv, case) -> explain_bad_case_relevance env sigma rlv case
   | BadInvert -> explain_bad_invert env
   | BadVariance {lev;expected;actual} -> explain_bad_variance env sigma ~lev ~expected ~actual
+  | BadQVariance {qvar;expected;actual} -> explain_bad_qvariance env sigma ~qvar ~expected ~actual
   | UndeclaredUsedVariables {declared_vars;inferred_vars} ->
       explain_undeclared_used_variables env sigma ~declared_vars ~inferred_vars
   | IllFormedConstant (cst, kn) ->
