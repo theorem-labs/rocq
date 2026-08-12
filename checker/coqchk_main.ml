@@ -317,6 +317,7 @@ let explain_exn = function
       | UndeclaredQualities _ -> str"UndeclaredQualities"
       | UndeclaredUniverses _ -> str"UndeclaredUniverse"
       | BadVariance _ -> str "BadVariance"
+      | BadQVariance _ -> str "BadQVariance"
       | UndeclaredUsedVariables _ -> str "UndeclaredUsedVariables"
       | IllFormedConstant _ -> str "IllFormedConstant"
       | IllFormedInductive _ -> str "IllFormedInductive"

@@ -63,6 +63,11 @@ Inductive E@{s;} : Prop := .
 Fail Check fun x:E@{SProp;} => x:E@{Prop;}.
 Check fun x:E@{Prop;} => x:E@{Type;}.
 
+(* quality variance is checked like universe variance: analogues of
+   not_irrelevant and check_covariant above *)
+Fail Inductive not_irrelevant_qual@{*s;u} : Prop := nirrq (_ : Type@{s;u}).
+Inductive check_covariant_qual@{+s;u} : Prop := covq (_ : Type@{s;u}).
+
 Module Type Covariant.
   Inductive foo@{+s;+u} : Set := .
 End Covariant.

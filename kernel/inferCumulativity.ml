@@ -409,3 +409,5 @@ let infer_inductive ~env_params ~env_ar_par ~arities ~ctors quals univs =
     Array.make (Array.length quals) Invariant, Array.make (Array.length univs) Invariant
   | BadVariance (lev, expected, actual) ->
     Type_errors.error_bad_variance env_params ~lev ~expected ~actual
+  | BadVarianceQ (qvar, expected, actual) ->
+    Type_errors.error_bad_qvariance env_params ~qvar ~expected ~actual

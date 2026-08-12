@@ -80,6 +80,7 @@ type ('constr, 'types, 'r) ptype_error =
   | BadCaseRelevance of 'r * 'constr
   | BadInvert
   | BadVariance of { lev : Level.t; expected : Variance.t; actual : Variance.t }
+  | BadQVariance of { qvar : Sorts.QVar.t; expected : Variance.t; actual : Variance.t }
   | UndeclaredUsedVariables of { declared_vars : Id.Set.t; inferred_vars : Id.Set.t }
   | IllFormedConstant of Constant.t * KerName.t
   | IllFormedInductive of MutInd.t * KerName.t
@@ -184,6 +185,9 @@ let error_bad_invert env =
 let error_bad_variance env ~lev ~expected ~actual =
   raise (TypeError (env, BadVariance {lev;expected;actual}))
 
+let error_bad_qvariance env ~qvar ~expected ~actual =
+  raise (TypeError (env, BadQVariance {qvar;expected;actual}))
+
 let error_undeclared_used_variables env ~declared_vars ~inferred_vars =
   raise (TypeError (env, UndeclaredUsedVariables {declared_vars; inferred_vars}))
 
@@ -221,7 +225,7 @@ let map_ptype_error fr f = function
 | UndeclaredQualities _ | UndeclaredUniverses _ | NotAllowedSProp
 | UnsatisfiedUnivConstraints _
 | UnsatisfiedPConstraints _
-| ReferenceVariables _ | BadInvert | BadVariance _ | UndeclaredUsedVariables _ | IllFormedConstant _ | IllFormedInductive _ as e -> e
+| ReferenceVariables _ | BadInvert | BadVariance _ | BadQVariance _ | UndeclaredUsedVariables _ | IllFormedConstant _ | IllFormedInductive _ as e -> e
 | NotAType j -> NotAType (on_judgment f j)
 | BadAssumption j -> BadAssumption (on_judgment f j)
 | ElimArity (pi, c, ar) -> ElimArity (pi, f c, ar)
