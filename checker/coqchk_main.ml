@@ -201,6 +201,10 @@ let print_usage_channel co command =
 \n  -where                      print coqchk's standard library location and exit\
 \n  -v, --version               print coqchk version and exit\
 \n  -o, --output-context        print the list of assumptions\
+\n  --proof-assumptions name    attest the assumptions of one checked constant\
+\n                              (repeatable; exact fully-qualified name)\
+\n  --proof-assumptions-output file\
+\n                              write versioned JSON attestations (dash for stdout)\
 \n  -m, --memory                print the maximum heap size\
 \n  -silent                     disable trace of constants being checked\
 \n\
@@ -397,6 +401,16 @@ let parse_args argv =
     | ("-m" | "--memory") :: rem -> Check_stat.memory_stat := true; parse rem
     | ("-o" | "--output-context") :: rem ->
         Check_stat.output_context := true; parse rem
+
+    | "--proof-assumptions" :: s :: rem ->
+        Check_stat.proof_assumption_targets := s :: !Check_stat.proof_assumption_targets;
+        parse rem
+    | "--proof-assumptions" :: [] -> usage 1
+
+    | "--proof-assumptions-output" :: s :: rem ->
+        Check_stat.proof_assumptions_output := Some s;
+        parse rem
+    | "--proof-assumptions-output" :: [] -> usage 1
 
     | "-admit" :: s :: rem -> add_admit s; parse rem
     | "-admit" :: [] -> usage 1

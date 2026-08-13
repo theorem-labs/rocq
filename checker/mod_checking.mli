@@ -12,4 +12,10 @@ val set_indirect_accessor : (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm)
 
 val check_module : Environ.env -> Names.Cset.t Names.Cmap.t -> Names.ModPath.t -> Mod_declarations.module_body -> Names.Cset.t Names.Cmap.t
 
+(** The exact constant assumptions reachable from one checked declaration's
+    body and type.  The result is computed from coqchk's checked terms, not
+    from vernacular printer output. *)
+val assumptions_of_constant :
+  Environ.env -> Names.Cset.t Names.Cmap.t -> Names.Constant.t -> Names.Cset.t
+
 exception BadConstant of Names.Constant.t * Pp.t

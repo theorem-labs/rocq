@@ -727,6 +727,13 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   unless explicitly required.
 :-o: At exit, print a summary about the context. List the names of all
   assumptions and variables (constants without a :term:`body`).
+:--proof-assumptions *constant*: Compute the exact transitive assumptions of
+  the fully qualified *constant* from its checked declaration. This option is
+  repeatable and must be used with ``--proof-assumptions-output``.
+:--proof-assumptions-output *file*: Write the requested proof-local assumption
+  attestations as versioned JSON to *file*. Use ``-`` as *file* to write the
+  JSON to standard output. The output is written only after all requested
+  constants have been found and all selected modules have been checked.
 :-silent: Do not write progress information to the standard output.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of

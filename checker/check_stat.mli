@@ -9,5 +9,7 @@
 (************************************************************************)
 val memory_stat : bool ref
 val output_context : bool ref
+val proof_assumption_targets : string list ref
+val proof_assumptions_output : string option ref
 
 val stats : Environ.env -> Names.Cset.t Names.Cmap.t -> unit

@@ -13,23 +13,76 @@ let indirect_accessor : (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) ref
 
 let set_indirect_accessor f = indirect_accessor := f
 
-let register_opacified_constant env opac kn cb =
-  let rec gather_consts s c =
-    match Constr.kind c with
-    | Constr.Const (c, _) -> Cset.add c s
-    | _ -> Constr.fold gather_consts s c
-  in
-  let wo_body =
-    Cset.fold
-      (fun kn s ->
-        if Declareops.constant_has_body (lookup_constant kn env) then s else
-          match Cmap.find_opt kn opac with
-          | None -> Cset.add kn s
-          | Some s' -> Cset.union s' s)
-      (gather_consts Cset.empty cb)
-      Cset.empty
-  in
-  Cmap.add kn wo_body opac
+type dependency_state = {
+  constants : Cset.t;
+  inductives : Mindmap_env.Set.t;
+  assumptions : Cset.t;
+}
+
+let empty_dependency_state = {
+  constants = Cset.empty;
+  inductives = Mindmap_env.Set.empty;
+  assumptions = Cset.empty;
+}
+
+(* Keep this traversal in the standalone checker rather than importing the
+   vernacular [Print Assumptions] implementation.  Besides keeping coqchk's
+   dependency cone small, that is the point of the attestation: the names are
+   derived independently from the declarations whose terms coqchk just
+   checked.  Types are traversed as well as bodies, matching the logical
+   dependency closure of a global declaration. *)
+let rec gather_term_dependencies env opac state term =
+  match Constr.kind term with
+  | Constr.Const (c, _) -> gather_constant_dependencies env opac state c
+  | Constr.Ind ((mind, _), _) | Constr.Construct (((mind, _), _), _) ->
+    gather_inductive_dependencies env opac state mind
+  | _ -> Constr.fold (gather_term_dependencies env opac) state term
+
+and gather_constant_dependencies env opac state kn =
+  if Cset.mem kn state.constants then state
+  else
+    let state = { state with constants = Cset.add kn state.constants } in
+    match Cmap.find_opt kn opac with
+    | Some assumptions ->
+      { state with assumptions = Cset.union assumptions state.assumptions }
+    | None ->
+      let cb = lookup_constant kn env in
+      let state = gather_term_dependencies env opac state cb.const_type in
+      match cb.const_body with
+      | Undef _ ->
+        { state with assumptions = Cset.add kn state.assumptions }
+      | Primitive _ | Symbol _ -> state
+      | Def body -> gather_term_dependencies env opac state body
+      | OpaqueDef opaque ->
+        let body, _ = !indirect_accessor opaque in
+        gather_term_dependencies env opac state body
+
+and gather_inductive_dependencies env opac state mind =
+  if Mindmap_env.Set.mem mind state.inductives then state
+  else
+    let state = { state with inductives = Mindmap_env.Set.add mind state.inductives } in
+    let mib = lookup_mind mind env in
+    let gather_decl state = function
+      | Context.Rel.Declaration.LocalAssum (_, typ) ->
+        gather_term_dependencies env opac state typ
+      | Context.Rel.Declaration.LocalDef (_, body, typ) ->
+        let state = gather_term_dependencies env opac state typ in
+        gather_term_dependencies env opac state body
+    in
+    let state = List.fold_left gather_decl state mib.mind_params_ctxt in
+    Array.fold_left (fun state packet ->
+      let state = List.fold_left gather_decl state packet.mind_arity_ctxt in
+      Array.fold_left (gather_term_dependencies env opac) state packet.mind_user_lc)
+      state mib.mind_packets
+
+let register_opacified_constant env opac kn cb typ =
+  let state = gather_term_dependencies env opac empty_dependency_state typ in
+  let state = gather_term_dependencies env opac state cb in
+  Cmap.add kn state.assumptions opac
+
+let assumptions_of_constant env opac kn =
+  let state = gather_constant_dependencies env opac empty_dependency_state kn in
+  state.assumptions
 
 exception BadConstant of Constant.t * Pp.t
 
@@ -77,7 +130,7 @@ let check_constant_declaration env opac kn cb opacify =
     | None -> ()
   in
   match body with
-  | Some body when opacify -> register_opacified_constant env opac kn body
+  | Some body when opacify -> register_opacified_constant env opac kn body ty
   | Some _ | None -> opac
 
 let check_constant_declaration env opac kn cb opacify =

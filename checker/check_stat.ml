@@ -24,6 +24,82 @@ let print_memory_stat () =
 
 let output_context = ref false
 
+let proof_assumption_targets = ref []
+let proof_assumptions_output = ref None
+
+let json_string value =
+  let out = Buffer.create (String.length value + 2) in
+  Buffer.add_char out '"';
+  String.iter (function
+    | '"' -> Buffer.add_string out "\\\""
+    | '\\' -> Buffer.add_string out "\\\\"
+    | '\b' -> Buffer.add_string out "\\b"
+    | '\012' -> Buffer.add_string out "\\f"
+    | '\n' -> Buffer.add_string out "\\n"
+    | '\r' -> Buffer.add_string out "\\r"
+    | '\t' -> Buffer.add_string out "\\t"
+    | c when Char.code c < 0x20 ->
+      Buffer.add_string out (Printf.sprintf "\\u%04x" (Char.code c))
+    | c -> Buffer.add_char out c)
+    value;
+  Buffer.add_char out '"';
+  Buffer.contents out
+
+let find_constant constants target =
+  match CString.Map.find_opt target constants with
+  | Some kn -> kn
+  | None ->
+    CErrors.user_err
+      Pp.(str "coqchk proof-assumptions target was not found: " ++ str target)
+
+let proof_assumptions_json env opac targets =
+  let constants =
+    fold_constants
+      (fun kn _ constants -> CString.Map.add (Constant.to_string kn) kn constants)
+      env CString.Map.empty
+  in
+  let constants =
+    Cmap.fold
+      (fun kn _ constants -> CString.Map.add (Constant.to_string kn) kn constants)
+      opac constants
+  in
+  let target_json target =
+    let kn = find_constant constants target in
+    let assumptions = Mod_checking.assumptions_of_constant env opac kn in
+    let assumptions = Cset.fold (fun c acc -> Constant.to_string c :: acc) assumptions [] in
+    let assumptions = List.sort String.compare assumptions in
+    Printf.sprintf
+      "{\"constant\":%s,\"assumptions\":[%s]}"
+      (json_string target)
+      (String.concat "," (List.map json_string assumptions))
+  in
+  let targets = List.sort_uniq String.compare targets in
+  Printf.sprintf
+    "{\"schema_version\":1,\"targets\":[%s]}\n"
+    (String.concat "," (List.map target_json targets))
+
+let write_proof_assumptions env opac =
+  match !proof_assumption_targets, !proof_assumptions_output with
+  | [], None -> ()
+  | [], Some _ ->
+    CErrors.user_err
+      Pp.(str "--proof-assumptions-output requires at least one --proof-assumptions target")
+  | _ :: _, None ->
+    CErrors.user_err
+      Pp.(str "--proof-assumptions requires --proof-assumptions-output")
+  | targets, Some "-" ->
+    output_string stdout (proof_assumptions_json env opac targets);
+    flush stdout
+  | targets, Some path ->
+    let output = proof_assumptions_json env opac targets in
+    let channel = open_out_bin path in
+    try
+      output_string channel output;
+      close_out channel
+    with error ->
+      close_out_noerr channel;
+      raise error
+
 let pr_impredicative_set env =
   if is_impredicative_set env then str "Theory: Set is impredicative"
   else str "Theory: Set is predicative"
@@ -97,4 +173,5 @@ let print_context env opac =
 
 let stats env opac =
   print_context env opac;
+  write_proof_assumptions env opac;
   print_memory_stat ()
