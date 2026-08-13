@@ -7,12 +7,13 @@ missing="$test_dir/missing.json"
 
 rm -f "$actual" "$missing"
 
-$coqc -Q "$test_dir" ProofAssumptions "$test_dir/input.v"
+$coqc -allow-rewrite-rules -Q "$test_dir" ProofAssumptions "$test_dir/input.v"
 
 "$BIN/rocqchk" -silent \
   -Q "$test_dir" ProofAssumptions \
   -norec ProofAssumptions.input \
   --proof-assumptions ProofAssumptions.input.through_sealed \
+  --proof-assumptions ProofAssumptions.input.through_symbol \
   --proof-assumptions ProofAssumptions.input.through_transparent \
   --proof-assumptions ProofAssumptions.input.closed \
   --proof-assumptions ProofAssumptions.input.transparent_witness \

@@ -2,6 +2,8 @@ Axiom premise : Prop.
 Axiom witness : premise.
 Axiom unused : Prop.
 
+Symbol rewrite_symbol : premise.
+
 Definition transparent_witness : premise := witness.
 
 Inductive wrapper : Type := wrap : premise -> wrapper.
@@ -25,3 +27,6 @@ Proof. exact (fun value => value). Qed.
 
 Theorem through_sealed : premise.
 Proof. exact SealedImplementation.hidden. Qed.
+
+Theorem through_symbol : premise.
+Proof. exact rewrite_symbol. Qed.

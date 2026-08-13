@@ -49,9 +49,8 @@ and gather_constant_dependencies env opac state kn =
       let cb = lookup_constant kn env in
       let state = gather_term_dependencies env opac state cb.const_type in
       match cb.const_body with
-      | Undef _ ->
+      | Undef _ | Primitive _ | Symbol _ ->
         { state with assumptions = Cset.add kn state.assumptions }
-      | Primitive _ | Symbol _ -> state
       | Def body -> gather_term_dependencies env opac state body
       | OpaqueDef opaque ->
         let body, _ = !indirect_accessor opaque in
