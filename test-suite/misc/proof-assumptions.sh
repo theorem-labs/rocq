@@ -12,6 +12,7 @@ $coqc -Q "$test_dir" ProofAssumptions "$test_dir/input.v"
 "$BIN/rocqchk" -silent \
   -Q "$test_dir" ProofAssumptions \
   -norec ProofAssumptions.input \
+  --proof-assumptions ProofAssumptions.input.through_sealed \
   --proof-assumptions ProofAssumptions.input.through_transparent \
   --proof-assumptions ProofAssumptions.input.closed \
   --proof-assumptions ProofAssumptions.input.transparent_witness \
