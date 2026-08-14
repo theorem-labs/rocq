@@ -55,6 +55,13 @@ jobs:
           ocaml-compiler: ${{ matrix.ocaml }}
           dune-cache: true
 
+      # Dune 3.24.2 regresses the generated install layout on Windows: the
+      # Corelib rules see rocqworker.exe and plugin .cmxs paths as unavailable.
+      # Keep the last known-good release until the regression is fixed.
+      - name: Pin Dune
+        if: matrix.os == 'windows-latest'
+        run: opam install dune=3.24.1
+
       - name: 🐫🐪🐫 Get Rocq dependencies
         run: opam install --deps-only ${{ matrix.packages }}
 
