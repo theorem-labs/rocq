@@ -33,6 +33,9 @@ HIDE := $(if $(VERBOSE),,@)
 # use DUNEOPT=--display=short for a more verbose build
 # DUNEOPT=--display=short
 
+# unset to disable jobserver integration (-j argument of make will be ignored)
+WITHJOBS:=dev/tools/with-jobs.sh
+
 help:
 	@echo ""
 	@echo "Welcome to Rocq's Dune-based build system. If you are final user type"
@@ -161,7 +164,7 @@ MAIN_TARGETS:=rocq-runtime.install coq-core.install rocq-core.install \
   coqide-server.install rocq-devtools.install
 
 world: dunestrap
-	dune build $(DUNEOPT) $(MAIN_TARGETS)
+	+$(WITHJOBS) dune build $(DUNEOPT) $(MAIN_TARGETS)
 
 rocqide:
 	dune build $(DUNEOPT) rocqide.install

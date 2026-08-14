@@ -62,6 +62,14 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: opam install dune=3.24.1
 
+      # Cygwin's pkgconf 3.0.4-1 searches the wrong personality directory,
+      # which can make mingw dependency probes use the native personality.
+      # pkgconf also searches $XDG_DATA_DIRS/pkgconfig/personality.d.
+      - name: Work around Cygwin pkgconf personality path
+        if: matrix.os == 'windows-latest'
+        run: |
+          "XDG_DATA_DIRS=/etc:/usr/local/share:/usr/share" >> $env:GITHUB_ENV
+
       - name: 🐫🐪🐫 Get Rocq dependencies
         run: opam install --deps-only ${{ matrix.packages }}
 
