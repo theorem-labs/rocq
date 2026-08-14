@@ -50,7 +50,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 🐫 Setup OCaml
-        uses: ocaml/setup-ocaml@v3
+        # v3.7.1 changed local pins to relative filesystem paths.  On Cygwin,
+        # that makes Dune's generated install-tree artifacts unavailable.
+        # Pin the last known-good release, and pin by SHA for reproducibility.
+        uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3.7.0
         with:
           ocaml-compiler: ${{ matrix.ocaml }}
           dune-cache: true
