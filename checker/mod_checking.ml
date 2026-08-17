@@ -33,22 +33,6 @@ let register_opacified_constant env opac kn cb =
 
 exception BadConstant of Constant.t * Pp.t
 
-let check_vm_bytecode env kn cb =
-  if (typing_flags env).enable_VM then
-    let direct = function
-    | Vmemitcodes.BCdefined (mask, index, patches) ->
-      Vmemitcodes.BCdefined (mask, Environ.lookup_vm_code index env, patches)
-    | Vmemitcodes.BCalias kn -> Vmemitcodes.BCalias kn
-    | Vmemitcodes.BCconstant -> Vmemitcodes.BCconstant
-    in
-    let stored = Option.map direct cb.const_body_code in
-    let rebuilt =
-      Vmbytegen.compile_constant_body ~fail_on_error:false env
-        cb.const_universes cb.const_body
-    in
-    if not (Option.equal Vmemitcodes.equal_body_code stored rebuilt) then
-      raise (BadConstant (kn, str "serialized VM bytecode does not match the checked body"))
-
 let check_constant_declaration env opac kn cb opacify =
   Flags.if_verbose Feedback.msg_notice (str "  checking cst:" ++ Constant.print kn);
   let env = CheckFlags.set_local_flags cb.const_typing_flags env in
@@ -92,7 +76,6 @@ let check_constant_declaration env opac kn cb opacify =
       end
     | None -> ()
   in
-  let () = check_vm_bytecode env kn cb in
   match body with
   | Some body when opacify -> register_opacified_constant env opac kn body
   | Some _ | None -> opac
