@@ -59,6 +59,7 @@ sig
   type t
   val of_list : int list -> t
   val iter : (int -> unit) -> t -> unit
+  val equal : t -> t -> bool
 end =
 struct
 
@@ -110,6 +111,8 @@ let iter f s =
     let () = cur := n + !cur in
     f !cur
   done
+
+let equal = String.equal
 
 end
 
@@ -247,6 +250,24 @@ type to_patch = {
   tp_pos : Positions.t;
   tp_reloc : NonSubstReloc.t array;
 }
+
+let equal_fv_elem x y = match x, y with
+| FVnamed x, FVnamed y -> Id.equal x y
+| FVrel x, FVrel y -> Int.equal x y
+| (FVnamed _ | FVrel _), _ -> false
+
+let equal_to_patch_and_patches (tp1, p1) (tp2, p2) =
+  let equal_non_subst_reloc x y =
+    eq_reloc_info (NonSubstReloc.to_reloc x) (NonSubstReloc.to_reloc y)
+  in
+  let equal_reloc x y =
+    eq_reloc_info (Reloc.to_reloc tp1.tp_reloc x) (Reloc.to_reloc tp2.tp_reloc y)
+  in
+  String.equal tp1.tp_code tp2.tp_code &&
+  CArray.equal equal_fv_elem tp1.tp_fv tp2.tp_fv &&
+  Positions.equal tp1.tp_pos tp2.tp_pos &&
+  CArray.equal equal_non_subst_reloc tp1.tp_reloc tp2.tp_reloc &&
+  CArray.equal equal_reloc p1.reloc_infos p2.reloc_infos
 
 let patch_int tp reloc =
   let buff = decompress_code tp.tp_code in
@@ -634,6 +655,14 @@ type 'a pbody_code =
   | BCconstant
 
 type body_code = to_patch pbody_code
+
+let equal_body_code x y = match x, y with
+| BCdefined (mask1, code1, patches1), BCdefined (mask2, code2, patches2) ->
+  CArray.equal Bool.equal mask1 mask2 &&
+  equal_to_patch_and_patches (code1, patches1) (code2, patches2)
+| BCalias kn1, BCalias kn2 -> Constant.CanOrd.equal kn1 kn2
+| BCconstant, BCconstant -> true
+| (BCdefined _ | BCalias _ | BCconstant), _ -> false
 
 let subst_body_code s = function
 | BCdefined (m, x, tp) -> BCdefined (m, x, subst_patches s tp)
