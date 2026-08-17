@@ -1201,8 +1201,8 @@ then :flag:`Printing Universes` (first with, then without notations),
 then :flag:`Printing Parentheses` and finally all the options implied by
 :flag:`Printing All` — until the printed form passes the check.
 
-These four flags are mutually exclusive: setting one of them unsets the
-other three, and unsetting the currently set one turns the checks off
+These five flags are mutually exclusive: setting one of them unsets the
+others, and unsetting the currently set one turns the checks off
 entirely. All are off by default. Since every displayed term is re-parsed
 and re-elaborated (possibly several times), printing can become
 noticeably more expensive when one of these flags is set.
@@ -1212,7 +1212,7 @@ noticeably more expensive when one of these flags is set.
    The re-parsed form must unify with the original term: holes standing
    for arguments that are not printed and universes introduced by the
    re-elaboration may be instantiated by unifying against the original
-   term. This is the most permissive of the four checks; it accepts any
+   term. This is the most permissive of the five checks; it accepts any
    printed form that can denote the original term, even if only in a
    context where the expected type is known.
 
@@ -1222,6 +1222,18 @@ noticeably more expensive when one of these flags is set.
       explicit one is printed anyway and this warning is emitted. This
       happens for instance for terms mentioning universes that cannot be
       referred to by name, such as the sort of ``Check Type``.
+
+.. flag:: Printing Reversible Up To Conversion Modulo Sorts And Universes
+
+   The printed form must re-elaborate on its own (without help from the
+   original term) to a term with no unresolved holes, and that term must
+   be convertible to the original one when sorts and universes are
+   ignored entirely: sort qualities (``SProp``, ``Prop``, ``Type``),
+   universe levels and universe instances may all differ. This is the
+   laxest of the conversion-based checks; in particular, unlike
+   :flag:`Printing Reversible Up To Conversion Modulo Universes` below,
+   it accepts a printed form whose re-elaboration lives at a different
+   sort quality than the original term.
 
 .. flag:: Printing Reversible Up To Conversion Modulo Universes
 
@@ -1260,7 +1272,7 @@ noticeably more expensive when one of these flags is set.
    (turning on :flag:`Printing Universes` for the terms where they
    matter).
 
-For all four flags, when the printed expression stands for a term (as
+For all five flags, when the printed expression stands for a term (as
 opposed to a type), the types of the original and re-elaborated terms
 are compared as well, so that, e.g., a printed form whose re-elaboration
 lives at a different universe instance is not considered reversible.

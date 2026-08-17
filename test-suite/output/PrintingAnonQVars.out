@@ -1,0 +1,26 @@
+File "./output/PrintingAnonQVars.v", line 13, characters 24-27:
+The command has indeed failed with message:
+The term "idT@{α2 ; PrintingAnonQVars.22}" has type
+ "forall A : Type@{α2 ; PrintingAnonQVars.22}, A -> A"
+while it is expected to have type "nat".
+File "./output/PrintingAnonQVars.v", line 16, characters 24-27:
+The command has indeed failed with message:
+The term "idT@{_ ; PrintingAnonQVars.23}" has type
+ "forall A : Type@{_ ; PrintingAnonQVars.23}, A -> A"
+while it is expected to have type "nat".
+idT@{s ; u} =
+fun (A : Type@{s ; _}) (a : A) => a
+     : forall A : Type@{s ; _}, A -> A
+
+Arguments idT A%_type_scope a
+idT@{s ; u} : forall A : Type@{s ; _}, A -> A
+
+idT is universe polymorphic
+Arguments idT A%_type_scope a
+idT is transparent
+Expands to: Constant PrintingAnonQVars.idT
+Declared in library PrintingAnonQVars, line 5, characters 11-14
+Set
+     : Type
+idT
+     : forall A : Set, A -> A

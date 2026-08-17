@@ -14,6 +14,12 @@ type mode =
   | UpToUnification
   (** The reparsed term, with its holes, must unify with the original
       term (holes and universes get instantiated by unification). *)
+  | UpToConversionModuloSortsAndUniverses
+  (** The reparsed term must elaborate on its own (no hole may need the
+      original term to be resolved) to a term convertible with the
+      original one when sorts and universes are ignored entirely: sort
+      qualities, universe levels and universe instances may all differ.
+      The laxest of the conversion-based checks. *)
   | UpToConversionModuloUniverses
   (** The reparsed term must elaborate on its own (no hole may need the
       original term to be resolved) to a term convertible with the
@@ -35,15 +41,17 @@ type mode =
 
 let mode_eq m1 m2 = match m1, m2 with
   | UpToUnification, UpToUnification
+  | UpToConversionModuloSortsAndUniverses, UpToConversionModuloSortsAndUniverses
   | UpToConversionModuloUniverses, UpToConversionModuloUniverses
   | UpToConversionModuloUniverseUnification, UpToConversionModuloUniverseUnification
   | UpToConversion, UpToConversion -> true
-  | (UpToUnification | UpToConversionModuloUniverses
+  | (UpToUnification | UpToConversionModuloSortsAndUniverses
+    | UpToConversionModuloUniverses
     | UpToConversionModuloUniverseUnification | UpToConversion), _ -> false
 
 let current_mode : mode option ref = ref None
 
-(* The three flags behave like a radio button: setting one unsets the
+(* These flags behave like a radio button: setting one unsets the
    others; unsetting the one currently set disables the check. *)
 let declare_mode_option key mode =
   let open Goptions in
@@ -64,6 +72,9 @@ let declare_mode_option key mode =
 let () = declare_mode_option
     ["Printing";"Reversible";"Up";"To";"Unification"] UpToUnification
 let () = declare_mode_option
+    ["Printing";"Reversible";"Up";"To";"Conversion";"Modulo";"Sorts";"And";"Universes"]
+    UpToConversionModuloSortsAndUniverses
+let () = declare_mode_option
     ["Printing";"Reversible";"Up";"To";"Conversion";"Modulo";"Universes"]
     UpToConversionModuloUniverses
 let () = declare_mode_option
@@ -74,6 +85,8 @@ let () = declare_mode_option
 
 let pr_mode = function
   | UpToUnification -> Pp.str "unification"
+  | UpToConversionModuloSortsAndUniverses ->
+    Pp.str "conversion modulo sorts and universes"
   | UpToConversionModuloUniverses -> Pp.str "conversion modulo universes"
   | UpToConversionModuloUniverseUnification ->
     Pp.str "conversion modulo universe unification"
@@ -89,15 +102,20 @@ let warn_not_reversible =
 let lconstr_eoi = Procq.eoi_entry Procq.Constr.lconstr
 
 (* Successively more explicit printing flags: coercions, implicit
-   arguments, no notations, universes (first with, then without
-   notations), parentheses, ending with the equivalent of
-   [Printing All] plus [Printing Universes] and [Printing
-   Parentheses]. Unsetting notations is tried after implicit arguments
-   and before universes, but is not kept when escalating to universes:
-   configurations are ordered by explicitness, not included in each
-   other. Only extern/detype-level flags and the [parentheses] flag may
-   vary along the ladder: the rendering of the returned [constr_expr]
-   must be fully determined by the returned flags (see
+   arguments, sorts, no notations, universes (first with, then without
+   notations), parentheses, ending with the equivalent of [Printing
+   All] plus [Printing Universes] and [Printing Parentheses]. Printing
+   sorts is tried after implicit arguments and before unsetting
+   notations; unsetting notations is tried before universes; neither is
+   kept when escalating further (universes subsume sorts). At the sorts
+   and universes rungs the anonymized-sort-quality-variable variant
+   ([anonymous_qvars]) is tried first, so an unnameable sort quality
+   variable prints as [_] (which re-parses to a fresh quality variable)
+   before falling back to its raw, unparsable form. Configurations are
+   ordered by explicitness, not included in each other. Only
+   extern/detype-level flags and the [parentheses] flag may vary along
+   the ladder: the rendering of the returned [constr_expr] must be
+   fully determined by the returned flags (see
    [Ppconstr.of_printing_flags]). *)
 let ladder flags =
   let open PrintingFlags in
@@ -105,6 +123,9 @@ let ladder flags =
   let e1 = { e0 with Extern.coercions = true } in
   let e2 = { e1 with Extern.implicits = true; Extern.implicits_defensive = true } in
   let e3 = { e2 with Extern.notations = false } in
+  let e2a = { e2 with Extern.anonymous_qvars = true } in
+  let e3a = { e3 with Extern.anonymous_qvars = true } in
+  let ds = { flags.detype with Detype.sorts = true } in
   let d4 = { flags.detype with Detype.universes = true } in
   let e5 = { e3 with Extern.parentheses = true } in
   let raw = make_raw flags in
@@ -113,8 +134,12 @@ let ladder flags =
   [ flags;
     { flags with extern = e1 };
     { flags with extern = e2 };
+    { detype = ds; extern = e2 };
+    { detype = ds; extern = e2a };
     { flags with extern = e3 };
+    { detype = d4; extern = e2a };
     { detype = d4; extern = e2 };
+    { detype = d4; extern = e3a };
     { detype = d4; extern = e3 };
     { detype = d4; extern = e5 };
     raw ]
@@ -167,6 +192,36 @@ let is_conv_modulo_universes env sigma t1 t2 =
   | Result.Error None -> false
   | Result.Error (Some e) -> Util.Empty.abort e
 
+(* Conversion for the [UpToConversionModuloSortsAndUniverses] mode: sorts
+   and universes are ignored entirely. Sort qualities ([SProp], [Prop],
+   [Type]), universe levels and both components (quality and level) of
+   universe instances may all differ. This is the laxest of the
+   conversion-based checks, standing in for the [Reductionops.is_conv_nounivs]
+   used upstream (which 9.2 lacks). *)
+let modulo_sorts_and_universes_compare =
+  let open Conversion in
+  let compare_sorts _pb _s1 _s2 () = Result.Ok () in
+  let compare_instances ~flex:_ _i1 _i2 () = Result.Ok () in
+  let compare_cumul_instances _pb _variance i1 i2 () =
+    compare_instances ~flex:false i1 i2 ()
+  in
+  { compare_sorts; compare_instances; compare_cumul_instances }
+
+(* An [eq_constr_nounivs] fast-path is fine here (and mirrors upstream's
+   [Reductionops.is_conv_nounivs]): this mode ignores sorts entirely, so
+   treating sorts of different qualities as equal is exactly what we want. *)
+let is_conv_modulo_sorts_and_universes env sigma t1 t2 =
+  EConstr.eq_constr_nounivs sigma t1 t2 ||
+  let evars = Evd.evar_handler sigma in
+  let t1 = EConstr.Unsafe.to_constr t1 in
+  let t2 = EConstr.Unsafe.to_constr t2 in
+  let env = Environ.set_universes (Evd.universes sigma) env in
+  match Conversion.generic_conv ~l2r:false Conversion.CONV ~evars
+          TransparentState.full env ((), modulo_sorts_and_universes_compare) t1 t2 with
+  | Result.Ok () -> true
+  | Result.Error None -> false
+  | Result.Error (Some e) -> Util.Empty.abort e
+
 let reparses ~mode ~kind ~flags env sigma t expr =
   try
     no_warnings begin fun () ->
@@ -201,6 +256,13 @@ let reparses ~mode ~kind ~flags env sigma t expr =
             Evarconv.unify_delay env sigma' t' t) sigma' pairs in
         let (_ : Evd.evar_map) = Evarconv.solve_unif_constraints_with_heuristics env sigma' in
         true
+      | UpToConversionModuloSortsAndUniverses ->
+        (* Convertibility ignoring sorts and universes entirely: unlike
+           modulo universes below, even sort qualities need not agree, so
+           e.g. dropping a sort-polymorphic instance whose omission
+           changes the elaborated quality is accepted. *)
+        no_new_undefined () &&
+        List.for_all (fun (t', t) -> is_conv_modulo_sorts_and_universes env sigma' t' t) pairs
       | UpToConversionModuloUniverses ->
         (* Convertibility ignoring universe levels (and the level
            components of instances) but requiring sort qualities to

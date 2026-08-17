@@ -1,7 +1,8 @@
-(* Printing Reversible Up To Unification / Conversion Modulo Universes /
-   Conversion Modulo Universe Unification / Conversion: printing options
-   get progressively turned on until the printed form re-parses and
-   re-elaborates to an equal term. *)
+(* Printing Reversible Up To Unification / Conversion Modulo Sorts And
+   Universes / Conversion Modulo Universes / Conversion Modulo Universe
+   Unification / Conversion: printing options get progressively turned
+   on until the printed form re-parses and re-elaborates to an equal
+   term. *)
 
 (* Baseline: no check, hidden arguments are not re-inferable from the
    printed form alone. *)
@@ -17,8 +18,9 @@ Check @eq_refl nat 0.
 Set Printing Reversible Up To Conversion.
 Check @eq_refl nat 0.
 
-(* The four flags behave like a radio button. *)
+(* The five flags behave like a radio button. *)
 Test Printing Reversible Up To Unification.
+Test Printing Reversible Up To Conversion Modulo Sorts And Universes.
 Test Printing Reversible Up To Conversion Modulo Universe Unification.
 Test Printing Reversible Up To Conversion.
 
@@ -63,10 +65,22 @@ Check idT@{Prop;Set}.
    is unified with [Prop], so the instance drops to plain [idT]. *)
 Set Printing Reversible Up To Conversion Modulo Universe Unification.
 Check idT@{Prop;Set}.
+(* Modulo sorts and universes ignores sort qualities as well as
+   universe levels, so the instance also drops, even though the
+   re-elaboration of plain [idT] lives at quality Type rather than
+   Prop... *)
+Set Printing Reversible Up To Conversion Modulo Sorts And Universes.
+Check idT@{Prop;Set}.
+(* ...and [Check Type] prints plainly, as with modulo universes... *)
+Check Type.
+(* ...but re-elaboration is still standalone, so hidden arguments that
+   cannot be re-inferred from the printed form alone get printed. *)
+Check @eq_refl nat 0.
 Unset Universe Polymorphism.
 
-(* Unsetting the active flag turns the check off entirely. *)
-Unset Printing Reversible Up To Unification.
+(* Unsetting the active flag turns the check off entirely (unsetting a
+   flag other than the active one would be a no-op). *)
+Unset Printing Reversible Up To Conversion Modulo Sorts And Universes.
 Check @eq_refl nat 0.
 
 (* A printing-only notation that does not print what it parses is
@@ -100,3 +114,25 @@ Axiom S : Type@{s;Set}.
 Check S.
 Set Printing Reversible Up To Conversion Modulo Universes.
 Check S.
+
+(* Anonymized sort quality variables (sorts+anon rung). A
+   sort-polymorphic constant used with no sort instance elaborates that
+   instance to an unnameable, fresh sort quality variable, shown in a
+   type-error message (which, unlike [Check], does not collapse it to
+   [Type]) under [Set Printing Sorts]. Up to unification the sorts+anon
+   rung wins: the quality prints as [_] (which re-parses to a fresh
+   quality variable, see PrintingAnonQVars), the printed subject term
+   re-parses, and no reversible-printing warning is emitted. The
+   displayed type keeps the raw name: type-error types are shown
+   without the reversible check. *)
+Set Printing Sorts.
+Set Printing Reversible Up To Unification.
+Fail Definition bad := (idT : nat).
+(* Up to conversion modulo universes the anon rung cannot win: that
+   mode compares sort qualities structurally, and a freshly re-parsed
+   [_] is a different variable from the original, so the check fails and
+   the raw name is printed with a warning. *)
+Set Printing Reversible Up To Conversion Modulo Universes.
+Fail Definition bad := (idT : nat).
+Unset Printing Reversible Up To Conversion Modulo Universes.
+Unset Printing Sorts.

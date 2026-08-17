@@ -1,5 +1,6 @@
 - **Added:**
   flags ``Printing Reversible Up To Unification``,
+  ``Printing Reversible Up To Conversion Modulo Sorts And Universes``,
   ``Printing Reversible Up To Conversion Modulo Universes``,
   ``Printing Reversible Up To Conversion Modulo Universe Unification`` and
   ``Printing Reversible Up To Conversion``, which check, each time a term
