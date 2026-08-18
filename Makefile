@@ -33,6 +33,9 @@ HIDE := $(if $(VERBOSE),,@)
 # use DUNEOPT=--display=short for a more verbose build
 # DUNEOPT=--display=short
 
+# unset to disable jobserver integration (-j argument of make will be ignored)
+WITHJOBS:=dev/tools/with-jobs.sh
+
 help:
 	@echo ""
 	@echo "Welcome to Rocq's Dune-based build system. If you are final user type"
@@ -137,8 +140,12 @@ theories/Corelib/dune: .dune-stamp
 theories/Ltac2/dune: .dune-stamp
 	cp -a _build/default/ltac2_dune_split $@ && chmod +w $@
 else
+# The generated rules refer to files throughout the runtime install tree.
+# Materialize that tree before copying the rules into the source tree: an
+# absolute dependency which does not exist yet is unavailable to Dune on
+# Windows, even when another target in the next build would create it.
 _build/default/corelib_dune _build/default/ltac2_dune .dune-stamp: FORCE
-	dune build $(DUNEOPT) $(DUNESTRAPOPT) corelib_dune ltac2_dune
+	dune build $(DUNEOPT) $(DUNESTRAPOPT) rocq-runtime.install corelib_dune ltac2_dune
 	touch .dune-stamp
 
 theories/Corelib/dune: .dune-stamp
@@ -161,7 +168,7 @@ MAIN_TARGETS:=rocq-runtime.install coq-core.install rocq-core.install \
   coqide-server.install rocq-devtools.install
 
 world: dunestrap
-	dune build $(DUNEOPT) $(MAIN_TARGETS)
+	+$(WITHJOBS) dune build $(DUNEOPT) $(MAIN_TARGETS)
 
 rocqide:
 	dune build $(DUNEOPT) rocqide.install
