@@ -22,6 +22,11 @@ type patches
 
 val patch : (to_patch * patches) -> (reloc_info -> int) -> Vmvalues.tcode * fv
 
+val delayed_patches : (unit -> patches) -> patches
+(** [delayed_patches f] behaves as [f ()] but only calls it when the relocation
+    table is actually needed. Used by the checker, which compiles the bytecode of
+    a library lazily. The result must not be marshalled. *)
+
 type 'a pbody_code =
   | BCdefined of bool array * 'a * patches
   | BCalias of Constant.t

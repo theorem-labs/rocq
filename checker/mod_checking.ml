@@ -42,64 +42,184 @@ let empty_state = {
     either: both are attacker-controlled data that the typechecker has no way to
     validate. Instead it recompiles the bytecode of every constant from the body
     it is about to check, and records it in a table of its own, so that the code
-    the VM runs agrees with the checked body by construction. *)
+    the VM runs agrees with the checked body by construction.
 
-let push_bytecode vmtab code =
-  let open Vmemitcodes in
-  match code with
-  | BCdefined (mask, code, patches) ->
-    let vmtab, index = Vmlibrary.add code vmtab in
-    vmtab, BCdefined (mask, index, patches)
-  | (BCalias _ | BCconstant | BCuncompiled) as code -> vmtab, code
+    The compilation is deferred, at the granularity of a whole library: walking
+    the declarations only classifies each constant and reserves its slot, which
+    is what fixes the indices stored in [const_body_code]; the compilation of
+    every reserved slot runs at once, the first time the VM asks for any of them.
+    A library whose bytecode is never needed is thus never compiled.
 
-let compile_constant_bytecode env vmtab cb =
-  let code =
-    Vmbytegen.compile_constant_body ~fail_on_error:false env
-      cb.const_universes cb.const_body
+    Two consequences of deferring:
+
+    - The unused-argument mask of [BCdefined] is part of the declaration and is
+      read by ordinary conversion, before any VM evaluation. Making it lazy would
+      force the library on the first conversion that unfolds any of its
+      constants, i.e. always. We store the empty mask instead: it claims nothing,
+      which is what a checker that has not compiled the body yet knows, and it is
+      the conservative value (arguments are then compared, not skipped). The
+      stored mask is exactly one of the things the eager version had to replace,
+      so nothing is trusted here either.
+
+    - The relocation table of [BCdefined] is also part of the declaration, but it
+      is only read when the code is actually run, so it is deferred with
+      [Vmemitcodes.delayed_patches], pointing at the same per-library table. *)
+
+type vm_table = {
+  vt_dp : DirPath.t;
+  (* Compilation tasks in reverse index order, until the table is forced. *)
+  vt_tasks : (unit -> Vmemitcodes.to_patch * Vmemitcodes.patches) list ref;
+  vt_size : int ref;
+  vt_data : ((Vmemitcodes.to_patch * Vmemitcodes.patches) array, Exninfo.iexn) result option ref;
+}
+
+(* Bytecode of a module implementation is local to the check of that module and
+   never exported, but it still has to live in a library of its own so that its
+   indices do not collide with the ones of the library being checked. The [%] is
+   not a valid module identifier, so these paths cannot clash with a real one. *)
+let local_vm_counter = ref 0
+let fresh_local_vm_path () =
+  let () = incr local_vm_counter in
+  DirPath.make [Id.of_string_soft (Printf.sprintf "%%vm%d" !local_vm_counter)]
+
+let new_vm_table dp = {
+  vt_dp = dp;
+  vt_tasks = ref [];
+  vt_size = ref 0;
+  vt_data = ref None;
+}
+
+let vm_reserve vt task =
+  let i = !(vt.vt_size) in
+  let () = assert (Option.is_empty !(vt.vt_data)) in
+  let () = vt.vt_size := i + 1 in
+  let () = vt.vt_tasks := task :: !(vt.vt_tasks) in
+  i
+
+(* Compiling a constant never forces another library: [Genlambda.get_alias]
+   only reads the code descriptors of the constants it meets and drops their
+   indices, and the only consumer of [Environ.lookup_vm_code] is the thunk that
+   [CClosure] hands to the VM. So this is not re-entrant. *)
+let vm_force vt = match !(vt.vt_data) with
+| Some (Ok data) -> data
+| Some (Error e) -> Exninfo.iraise e
+| None ->
+  let tasks = CArray.rev_of_list !(vt.vt_tasks) in
+  let () = assert (Array.length tasks = !(vt.vt_size)) in
+  (* A constant the VM cannot compile aborts the whole table; the failure is
+     remembered so that it is not recomputed at every conversion. [Vconv] turns
+     a [CompileError] into a fallback on standard conversion, as in the eager
+     version, except that the fallback is then taken by every constant of the
+     library rather than by that one. *)
+  let ans =
+    try Ok (Array.map (fun task -> task ()) tasks)
+    with Vmerrors.CompileError _ as e -> Error (Exninfo.capture e)
   in
-  let vmtab, code = push_bytecode vmtab code in
-  vmtab, { cb with const_body_code = code }
+  let () = vt.vt_data := Some ans in
+  (* Drop the closures, and with them the environments they captured. *)
+  let () = vt.vt_tasks := [] in
+  match ans with Ok data -> data | Error e -> Exninfo.iraise e
 
-(* The environment is threaded exactly as in [Modops.add_structure], so that
-   each constant is compiled in the environment it is declared in. *)
-let rec compile_structure env vmtab mp res struc =
-  let fold (env, vmtab, accu) (lab, sfb) = match sfb with
+(* The eager version reports a constant the VM cannot compile at that constant,
+   through [Vmbytegen]'s own warning, and falls back to [BCuncompiled]. Here the
+   failure only shows up inside a conversion, and [Vconv] then reports it as the
+   generic "bytecode compiler failed" warning, which names nothing; so name the
+   culprit ourselves. *)
+let warn_vm_compile_failed =
+  CWarnings.create ~name:"checker-bytecode-compiler-failed-compilation"
+    ~category:CWarnings.CoreCategories.bytecode_compiler
+    (fun (kn, e) ->
+       str "Could not compile the VM bytecode of " ++ Constant.print kn ++
+       str ": " ++ Vmerrors.pr_error e)
+
+let vm_on_disk vt =
+  Vmlibrary.of_thunk vt.vt_dp (fun () -> Array.map fst (vm_force vt))
+
+let compile_constant_bytecode envref vt kn cb =
+  let code = match
+    Vmbytegen.classify_constant_body ~fail_on_error:true !envref
+      cb.const_universes cb.const_body
+  with
+  | Vmbytegen.LBCconstant -> Vmemitcodes.BCconstant
+  | Vmbytegen.LBCuncompiled -> Vmemitcodes.BCuncompiled
+  | Vmbytegen.LBCalias kn' -> Vmemitcodes.BCalias kn'
+  | Vmbytegen.LBCdefined compile ->
+    (* [fail_on_error:true]: once the slot is reserved we cannot fall back to
+       [BCuncompiled] as the eager version does, so a compilation failure is
+       reported as the [CompileError] that [Vconv] already recovers from. *)
+    let task () = match compile !envref with
+    | Some (_mask, code, patches) -> (code, patches)
+    | None ->
+      CErrors.anomaly
+        (str "Bytecode compilation of " ++ Constant.print kn ++ str " returned nothing.")
+    | exception (Vmerrors.CompileError e as exn) ->
+      let info = Exninfo.capture exn in
+      let () = warn_vm_compile_failed (kn, e) in
+      Exninfo.iraise info
+    in
+    let i = vm_reserve vt task in
+    let patches = Vmemitcodes.delayed_patches (fun () -> snd (vm_force vt).(i)) in
+    Vmemitcodes.BCdefined ([||], Vmlibrary.foreign_index vt.vt_dp i, patches)
+  in
+  { cb with const_body_code = code }
+
+(* The environment is threaded exactly as in [Modops.add_structure]. All the
+   constants of one structure share the environment the structure ends in, so
+   that a library retains one environment per structure rather than one per
+   constant: a constant only looks up what its own body mentions, which is
+   already in scope where it is declared, so the extra declarations are never
+   observed. *)
+let rec compile_structure env vt mp res struc =
+  (* [envref] holds the environment the declarations seen so far live in, and
+     ends up holding the one of the whole structure; the deferred compilations
+     read it then. *)
+  let envref = ref env in
+  let fold accu (lab, sfb) = match sfb with
   | SFBconst cb ->
     let c = Mod_subst.constant_of_delta_kn res (KerName.make mp lab) in
-    let vmtab, cb = compile_constant_bytecode env vmtab cb in
-    Environ.add_constant c cb env, vmtab, (lab, SFBconst cb) :: accu
+    let cb = compile_constant_bytecode envref vt c cb in
+    let () = envref := Environ.add_constant c cb !envref in
+    (lab, SFBconst cb) :: accu
   | SFBmind mib ->
     let mind = Mod_subst.mind_of_delta_kn res (KerName.make mp lab) in
-    Environ.add_mind mind mib env, vmtab, (lab, sfb) :: accu
+    let () = envref := Environ.add_mind mind mib !envref in
+    (lab, sfb) :: accu
   | SFBmodule mb ->
     let mp = MPdot (mp, lab) in
-    let vmtab, mb = compile_module_bytecode env vmtab mp mb in
-    Modops.add_module mp mb env, vmtab, (lab, SFBmodule mb) :: accu
+    let mb = compile_module_bytecode !envref vt mp mb in
+    let () = envref := Modops.add_module mp mb !envref in
+    (lab, SFBmodule mb) :: accu
   | SFBmodtype mtb ->
     let mp = MPdot (mp, lab) in
-    let vmtab, mtb = compile_module_bytecode env vmtab mp mtb in
-    add_modtype mp mtb env, vmtab, (lab, SFBmodtype mtb) :: accu
+    let mtb = compile_module_bytecode !envref vt mp mtb in
+    let () = envref := add_modtype mp mtb !envref in
+    (lab, SFBmodtype mtb) :: accu
   | SFBrules rrb ->
-    Environ.add_rewrite_rules rrb.rewrules_rules env, vmtab, (lab, sfb) :: accu
+    let () = envref := Environ.add_rewrite_rules rrb.rewrules_rules !envref in
+    (lab, sfb) :: accu
   in
-  let (_ : env), vmtab, accu = List.fold_left fold (env, vmtab, []) struc in
-  vmtab, List.rev accu
+  let accu = List.fold_left fold [] struc in
+  List.rev accu
 
-and compile_signature env vmtab mp res = function
+and compile_signature env vt mp res = function
   | MoreFunctor (arg_id, mtb, body) ->
-    let vmtab, mtb = compile_module_bytecode env vmtab (MPbound arg_id) mtb in
+    let mtb = compile_module_bytecode env vt (MPbound arg_id) mtb in
     let env = Modops.add_module_parameter arg_id mtb env in
-    let vmtab, body = compile_signature env vmtab mp res body in
-    vmtab, MoreFunctor (arg_id, mtb, body)
+    let body = compile_signature env vt mp res body in
+    MoreFunctor (arg_id, mtb, body)
   | NoFunctor struc ->
-    let vmtab, struc = compile_structure env vmtab mp res struc in
-    vmtab, NoFunctor struc
+    NoFunctor (compile_structure env vt mp res struc)
 
-and compile_module_bytecode : 'a. env -> Vmlibrary.t -> ModPath.t ->
-  'a generic_module_body -> Vmlibrary.t * 'a generic_module_body =
-  fun env vmtab mp mb ->
-  let vmtab, sign = compile_signature env vmtab mp (mod_delta mb) (mod_type mb) in
-  vmtab, Mod_declarations.set_signature sign mb
+and compile_module_bytecode : 'a. env -> vm_table -> ModPath.t ->
+  'a generic_module_body -> 'a generic_module_body =
+  fun env vt mp mb ->
+  let sign = compile_signature env vt mp (mod_delta mb) (mod_type mb) in
+  Mod_declarations.set_signature sign mb
+
+let compile_library_bytecode env dp mp mb =
+  let vt = new_vm_table dp in
+  let mb = compile_module_bytecode env vt mp mb in
+  vm_on_disk vt, mb
 
 let indirect_accessor : (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) ref =
   ref (fun _ -> assert false)
@@ -357,10 +477,11 @@ let rec check_module env opac mp mb opacify =
       (* TODO: a bit wasteful, we recheck the types of parameters twice *)
       let sign_struct = Modops.annotate_struct_body sign_struct (mod_type mb) in
       (* The implementation is checked in its own right, hence its bytecode is
-         compiled too; it is local to this check and never exported. *)
-      let vmtab, sign_struct =
-        compile_signature env (Environ.vm_library env) mp reso sign_struct in
-      let env = Environ.set_vm_library vmtab env in
+         compiled too; it is local to this check and never exported, so it gets
+         a code table of its own. *)
+      let vt = new_vm_table (fresh_local_vm_path ()) in
+      let sign_struct = compile_signature env vt mp reso sign_struct in
+      let env = Environ.link_vm_library (vm_on_disk vt) env in
       let opac = check_signature env opac sign_struct mp reso opacify in
       Some (sign_struct, reso), opac
     | Algebraic me -> Some (check_mexpression env me (mod_type mb) mp delta_mb), opac

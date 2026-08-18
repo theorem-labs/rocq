@@ -12,12 +12,13 @@ type opaques
 
 val set_indirect_accessor : (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) -> unit
 
-val compile_module_bytecode : Environ.env -> Vmlibrary.t -> Names.ModPath.t ->
+val compile_library_bytecode : Environ.env -> Names.DirPath.t -> Names.ModPath.t ->
   'a Mod_declarations.generic_module_body ->
-  Vmlibrary.t * 'a Mod_declarations.generic_module_body
-(** Recompile the VM bytecode of every constant of a module (type) body from its
-    body, discarding whatever code the [.vo] file claims, and add it to the given
-    table. *)
+  Vmlibrary.on_disk * 'a Mod_declarations.generic_module_body
+(** Reserve a VM slot for every constant of a library that has bytecode,
+    discarding whatever code descriptor the [.vo] file claims, and return the
+    corresponding code table. The bytecode itself is only compiled, for the whole
+    library at once, the first time one of its slots is resolved. *)
 
 val check_module : Environ.env -> opaques -> Retroknowledge.action list -> Names.ModPath.t -> Mod_declarations.module_body -> opaques
 

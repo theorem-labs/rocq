@@ -28,8 +28,7 @@ let env_of_library senv clib =
 let compile_vm_library env clib =
   let dp = Safe_typing.dirpath_of_library clib in
   let mb = Safe_typing.module_of_library clib in
-  let vmtab = Vmlibrary.set_path dp (Environ.vm_library env) in
-  let vmtab, mb = Mod_checking.compile_module_bytecode env vmtab (Names.ModPath.MPfile dp) mb in
+  let vmtab, mb = Mod_checking.compile_library_bytecode env dp (Names.ModPath.MPfile dp) mb in
   vmtab, Safe_typing.replace_module_of_library clib mb
 
 let import senv opac clib digest =
@@ -38,10 +37,9 @@ let import senv opac clib digest =
   let retro = Safe_typing.retroknowledge_of_library clib in
   let env = env_of_library senv clib in
   let vmtab, clib = compile_vm_library env clib in
-  let env = Environ.set_vm_library vmtab env in
+  let env = Environ.link_vm_library vmtab env in
   let mb = Safe_typing.module_of_library clib in
   let opac = Mod_checking.check_module env opac retro (Names.ModPath.MPfile dp) mb in
-  let vmtab = Vmlibrary.inject (Vmlibrary.export vmtab) in
   let (_,senv) = Safe_typing.import clib vmtab digest senv in senv, opac
 
 let import senv opac clib digest : _ * _ =
@@ -57,5 +55,4 @@ let unsafe_import senv clib digest =
      recompiled all the same, so that the trusted surface is exactly the same. *)
   let env = env_of_library senv clib in
   let vmtab, clib = compile_vm_library env clib in
-  let vmtab = Vmlibrary.inject (Vmlibrary.export vmtab) in
   let (_,senv) = Safe_typing.import clib vmtab digest senv in senv

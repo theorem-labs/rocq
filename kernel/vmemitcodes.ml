@@ -238,8 +238,14 @@ let decompress_code src =
 (** This data type is stored in vo files. *)
 
 type patches = {
-  reloc_infos : Reloc.t array;
+  reloc_infos : Reloc.t array Lazy.t;
+  (** Lazy so that the checker, which recompiles the bytecode of a library on
+      demand, can hand out the patches of a constant before the library has been
+      compiled. Everything produced by [to_memory] is already forced, so the
+      marshalled representation is unchanged. *)
 }
+
+let delayed_patches f = { reloc_infos = lazy (Lazy.force (f ()).reloc_infos) }
 
 type to_patch = {
   tp_code : emitcodes;
@@ -260,7 +266,7 @@ let patch_int tp reloc =
 
 let patch (tp, pl) f =
   let f r = f (Reloc.to_reloc tp.tp_reloc r) in
-  let reloc = CArray.map_left f pl.reloc_infos in
+  let reloc = CArray.map_left f (Lazy.force pl.reloc_infos) in
   let buff = patch_int tp reloc in
   tcode_of_code buff, tp.tp_fv
 
@@ -625,8 +631,15 @@ let rec emit env insns remaining = match insns with
 (* Substitution *)
 
 let subst_patches subst p =
-  let infos = CArray.Smart.map (fun r -> Reloc.subst subst r) p.reloc_infos in
-  { reloc_infos = infos }
+  let map infos = CArray.Smart.map (fun r -> Reloc.subst subst r) infos in
+  (* Substituting must not force a delayed relocation table: the checker
+     substitutes the declarations of a library it has not compiled yet. Already
+     forced tables stay forced, so that the ones written to a [.vo] can still be
+     marshalled. *)
+  if Lazy.is_val p.reloc_infos then
+    { reloc_infos = Lazy.from_val (map (Lazy.force p.reloc_infos)) }
+  else
+    { reloc_infos = lazy (map (Lazy.force p.reloc_infos)) }
 
 type 'a pbody_code =
   | BCdefined of bool array * 'a * patches
@@ -683,7 +696,7 @@ let to_memory fv code =
   in
   let reloc_infos = CArray.map_of_list map reloc in
   let positions = Positions.of_list (List.rev env.reloc_pos) in
-  let reloc = { reloc_infos } in
+  let reloc = { reloc_infos = Lazy.from_val reloc_infos } in
   let to_patch = {
     tp_code = code;
     tp_fv = fv;

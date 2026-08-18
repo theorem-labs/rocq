@@ -21,6 +21,7 @@ sig
 type 'a t
 val make : file:string -> ObjFile.in_handle -> segment:'a ObjFile.id -> 'a t
 val return : 'a -> 'a t
+val delay : (unit -> 'a) -> 'a t
 val eval : 'a t -> 'a
 
 end =
@@ -32,7 +33,7 @@ type 'a delayed = {
   del_digest : Digest.t;
 }
 
-type 'a node = ToFetch of 'a delayed | Fetched of 'a
+type 'a node = ToFetch of 'a delayed | ToCompute of (unit -> 'a) | Fetched of 'a
 
 type 'a t = 'a node ref
 
@@ -69,8 +70,14 @@ let eval r = match !r with
   let v = fetch_delayed del in
   let () = r := Fetched v in
   v
+| ToCompute f ->
+  let v = f () in
+  let () = r := Fetched v in
+  v
 
 let return v = ref (Fetched v)
+
+let delay f = ref (ToCompute f)
 
 end
 
@@ -142,6 +149,11 @@ let vm_segment : compiled_library ObjFile.id = ObjFile.make_id "vmlibrary"
 
 let load dp ~file ch =
   (dp, Delayed.make ~file ~segment:vm_segment ch : on_disk)
+
+let of_thunk dp f =
+  (dp, Delayed.delay (fun () -> { lib_dp = dp; lib_data = f () }) : on_disk)
+
+let foreign_index dp i = (dp, i)
 
 let link (dp, m) libs =
   let () = assert (not @@ DirPath.Map.mem dp libs.foreign) in

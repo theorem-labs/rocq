@@ -983,10 +983,20 @@ let compile ~fail_on_error ~uinstance env sigma c =
       None
     end
 
-let compile_constant_body ~fail_on_error env univs = function
-  | Undef _ | OpaqueDef _ | Primitive _ -> BCconstant
-  | Symbol _ -> BCuncompiled
+type lazy_body_code =
+  | LBCdefined of (env -> (bool array * to_patch * patches) option)
+  | LBCalias of Constant.t
+  | LBCconstant
+  | LBCuncompiled
+
+let classify_constant_body ~fail_on_error env univs = function
+  | Undef _ | OpaqueDef _ | Primitive _ -> LBCconstant
+  | Symbol _ -> LBCuncompiled
   | Def body ->
+      (* [compile] below would return [None] anyway, but we must know here so
+         that a caller deferring the compilation does not reserve a slot for a
+         constant that will never have any code. *)
+      if not (typing_flags env).enable_VM then LBCuncompiled else
       let instance_size = UVars.AbstractContext.size (Declareops.universes_context univs) in
       let alias =
         match kind body with
@@ -1001,12 +1011,20 @@ let compile_constant_body ~fail_on_error env univs = function
             end
         | _ -> None in
       match alias with
-      | Some kn -> BCalias kn
+      | Some kn -> LBCalias kn
       | None ->
         let uinstance = Bound instance_size in
-        match compile ~fail_on_error ~uinstance env (empty_evars env) body with
-        | None -> BCuncompiled
-        | Some (mask, code, patch) -> BCdefined (mask, code, patch)
+        LBCdefined (fun env -> compile ~fail_on_error ~uinstance env (empty_evars env) body)
+
+let compile_constant_body ~fail_on_error env univs def =
+  match classify_constant_body ~fail_on_error env univs def with
+  | LBCconstant -> BCconstant
+  | LBCuncompiled -> BCuncompiled
+  | LBCalias kn -> BCalias kn
+  | LBCdefined compile ->
+    match compile env with
+    | None -> BCuncompiled
+    | Some (mask, code, patch) -> BCdefined (mask, code, patch)
 
 let compile ~fail_on_error env sigma c =
   compile ~fail_on_error ~uinstance:Global env sigma c
