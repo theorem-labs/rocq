@@ -10,6 +10,13 @@
 
 val set_indirect_accessor : (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) -> unit
 
+val compile_module_bytecode : Environ.env -> Vmlibrary.t -> Names.ModPath.t ->
+  'a Mod_declarations.generic_module_body ->
+  Vmlibrary.t * 'a Mod_declarations.generic_module_body
+(** Recompile the VM bytecode of every constant of a module (type) body from its
+    body, discarding whatever code the [.vo] file claims, and add it to the given
+    table. *)
+
 val check_module : Environ.env -> Names.Cset.t Names.Cmap.t -> Names.ModPath.t -> Mod_declarations.module_body -> Names.Cset.t Names.Cmap.t
 
 exception BadConstant of Names.Constant.t * Pp.t
