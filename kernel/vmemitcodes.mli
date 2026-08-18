@@ -29,9 +29,6 @@ type 'a pbody_code =
 
 type body_code = to_patch pbody_code
 
-(** Structural equality of compiled constant bodies before relocation. *)
-val equal_body_code : body_code -> body_code -> bool
-
 val subst_body_code : Mod_subst.substitution -> 'a pbody_code -> 'a pbody_code
 
 val to_memory : fv -> bytecodes -> to_patch * patches
