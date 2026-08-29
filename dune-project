@@ -100,7 +100,7 @@ through previous Coq commands like coqc coqtop,..."))
  (depends
   (coq-core (= :version))
   coq-stdlib
-  (coqide-server (= :version)))
+  (rocqide-server (= :version)))
  (synopsis "Compatibility metapackage for Coq after the Rocq renaming"))
 
 (package
