@@ -457,13 +457,13 @@ let recheck_library senv ~norec ~admit ~check =
   Flags.if_verbose Feedback.msg_notice (fnl()++hv 2 (str "Ordered list:" ++ fnl() ++
     prlist
       (fun (dir,_) -> pr_dirpath dir ++ fnl()) needed));
-  let use_async = true in
+  let use_async = CDomain.available in
   let () = Mod_checking.use_async := use_async in
   let () = Exninfo.record_backtrace true in
   let domains =
     let is_prof = NewProfile.is_profiling() in
     Array.init (if use_async then 8 else 0) (fun _ ->
-      Domain.spawn (fun () ->
+      CDomain.spawn (fun () ->
             if is_prof then Some (NewProfile.with_profiling parallel_check)
             else begin parallel_check(); None end))
   in
@@ -475,7 +475,7 @@ let recheck_library senv ~norec ~admit ~check =
   let () = Mod_checking.(set_done await) in
   let () = parallel_check() in
   let () = Array.iter (fun dom ->
-      match Domain.join dom with
+      match CDomain.join dom with
       | None -> ()
       | Some (events, sums, ()) ->
         NewProfile.profile "insert_results" (fun () ->
