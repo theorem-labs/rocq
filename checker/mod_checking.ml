@@ -101,6 +101,42 @@ let register_opacified_constant env opac kn cb =
 
 exception BadConstant of Constant.t * Pp.t
 
+let use_async = ref false
+
+type 'a safe_queue =
+  { queue : 'a Queue.t; mutable is_done : bool; mutex : Mutex.t; nonempty_or_done : Condition.t }
+
+let create () =
+  { queue = Queue.create(); mutex = Mutex.create();
+    is_done = false;
+    nonempty_or_done = Condition.create() }
+
+let set_done q =
+  Mutex.lock q.mutex;
+  q.is_done <- true;
+  if Queue.is_empty q.queue then Condition.broadcast q.nonempty_or_done;
+  Mutex.unlock q.mutex
+
+let add v q =
+  Mutex.lock q.mutex;
+  assert (not q.is_done);
+  let was_empty = Queue.is_empty q.queue in
+  Queue.add v q.queue;
+  if was_empty then Condition.broadcast q.nonempty_or_done;
+  Mutex.unlock q.mutex
+
+let take q =
+  Mutex.lock q.mutex;
+  while not q.is_done && Queue.is_empty q.queue do
+    Condition.wait q.nonempty_or_done q.mutex
+  done;
+  let v = Queue.take_opt q.queue in
+  assert (q.is_done || Option.has_some v);
+  Mutex.unlock q.mutex;
+  v
+
+let await = create ()
+
 let check_constant_declaration env opac kn cb opacify =
   Flags.if_verbose Feedback.msg_notice (str "  checking cst:" ++ Constant.print kn);
   let env = CheckFlags.set_local_flags cb.const_typing_flags env in
@@ -123,7 +159,7 @@ let check_constant_declaration env opac kn cb opacify =
   then raise Pp.(BadConstant (kn, str "incorrect const_relevance"));
   let body, env = match cb.const_body with
     | Undef _ | Primitive _ | Symbol _ -> None, env
-    | Def c -> Some c, env
+    | Def c -> Some (false,c), env
     | OpaqueDef o ->
       let c, u = !indirect_accessor o in
       let env = match u, cb.const_universes with
@@ -132,20 +168,27 @@ let check_constant_declaration env opac kn cb opacify =
           push_subgraph local env
         | _ -> assert false
       in
-      Some c, env
+      Some (true,c), env
   in
   let () =
     match body with
-    | Some bd ->
+    | Some (opaque,bd) ->
+      let async = match opaque && !use_async with
+        | false -> fun f -> f ()
+        | true -> fun f -> add f await
+      in
+      async @@ fun () ->
+      NewProfile.profile "check_body" ~args:(fun () ->
+          [("name", `String (Constant.to_string kn))]) (fun () ->
       let j = Typeops.infer env bd in
       begin match conv_leq env j.uj_type ty with
       | Result.Ok () -> ()
       | Result.Error () -> Type_errors.error_actual_type env j ty
-      end
+      end) ()
     | None -> ()
   in
   match body with
-  | Some body when opacify -> register_opacified_constant env opac kn body
+  | Some (_,body) when opacify -> register_opacified_constant env opac kn body
   | Some _ | None -> opac
 
 let check_constant_declaration env opac kn cb opacify =

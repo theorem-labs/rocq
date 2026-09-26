@@ -20,3 +20,9 @@ val compile_module_bytecode : Environ.env -> Vmlibrary.t -> Names.ModPath.t ->
 val check_module : Environ.env -> Names.Cset.t Names.Cmap.t -> Names.ModPath.t -> Mod_declarations.module_body -> Names.Cset.t Names.Cmap.t
 
 exception BadConstant of Names.Constant.t * Pp.t
+
+val use_async : bool ref
+type 'a safe_queue
+val await : (unit -> unit) safe_queue
+val take : 'a safe_queue -> 'a option
+val set_done : _ safe_queue -> unit
