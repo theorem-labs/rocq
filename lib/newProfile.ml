@@ -62,7 +62,7 @@ module MiniJson = struct
   let base = [("pid", `Intlit pids)]
 
   let duration ~name ~ph ~ts ?args () =
-    let l = ("name", `String name) :: ("ph", `String ph) :: ("ts", `Intlit ts) :: ("tid", `Intlit (string_of_int (Domain.self() :> int))) :: base in
+    let l = ("name", `String name) :: ("ph", `String ph) :: ("ts", `Intlit ts) :: ("tid", `Intlit (string_of_int (CDomain.self_index ()))) :: base in
     let l = match args with
       | None -> l
       | Some args -> ("args", `Assoc args) :: l
@@ -85,11 +85,11 @@ type accu = {
   mutable sums : (float * sums) list;
 }
 
-let accu = Domain.DLS.new_key (fun () -> None)
+let accu = CDomain.DLS.new_key (fun () -> None)
 
-let get_accu () = Option.get @@ Domain.DLS.get accu
+let get_accu () = Option.get @@ CDomain.DLS.get accu
 
-let is_profiling () = Option.has_some (Domain.DLS.get accu)
+let is_profiling () = Option.has_some (CDomain.DLS.get accu)
 
 let gettime = Unix.gettimeofday
 
@@ -248,11 +248,11 @@ let leave ?time name ?(args=[]) ?last () =
 
 (* NB: "process" and "init" are unconditional because they don't go
    through [profile] and I'm too lazy to make them conditional *)
-let components = Domain.DLS.new_key (fun () -> CString.Pred.empty)
+let components = CDomain.DLS.new_key (fun () -> CString.Pred.empty)
 
 let profile name ?args f () =
   if not (is_profiling ()) then f ()
-  else if CString.Pred.mem name (Domain.DLS.get components) then begin
+  else if CString.Pred.mem name (CDomain.DLS.get components) then begin
     let args = Option.map (fun f -> f()) args in
     enter name ?args ();
     let start = Counters.get () in
@@ -303,12 +303,12 @@ let init_components () =
       CString.Pred.empty
       (String.split_on_char ',' s)
   in
-  Domain.DLS.set components v
+  CDomain.DLS.set components v
 
 let init { output; fname; } =
   let () = assert (not (is_profiling())) in
   init_components();
-  Domain.DLS.set accu @@ Some { output = Some output; accumulate = None; sums = []; };
+  CDomain.DLS.set accu @@ Some { output = Some output; accumulate = None; sums = []; };
   format_header output;
   enter ~time:global_start_time ~args:["fname", `String fname] "process" ();
   enter ~time:global_start_time "init" ();
@@ -316,21 +316,21 @@ let init { output; fname; } =
   leave "init" ~args ()
 
 let pause () =
-  let v = Domain.DLS.get accu in
-  Domain.DLS.set accu None;
+  let v = CDomain.DLS.get accu in
+  CDomain.DLS.set accu None;
   v
 
 let resume v =
   assert (not (is_profiling()));
-  Domain.DLS.set accu @@ Some v
+  CDomain.DLS.set accu @@ Some v
 
-let finish () = match Domain.DLS.get accu with
+let finish () = match CDomain.DLS.get accu with
   | None | Some { output = None } -> assert false
   | Some { output = Some ch } ->
     let args = Counters.(make_diffs ~start:global_start ~stop:(get())) in
     leave "process" ~last:"" ~args ();
     format_footer ch;
-    Domain.DLS.set accu None
+    CDomain.DLS.set accu None
 
 let insert_sums sums =
   let accu = get_accu () in
@@ -346,7 +346,7 @@ let insert_results events sums =
 
 let with_profiling f =
   let out = ref [] in
-  let this_accu, old_accu = match Domain.DLS.get accu with
+  let this_accu, old_accu = match CDomain.DLS.get accu with
     | None ->
       init_components();
       { output = None;
@@ -367,7 +367,7 @@ let with_profiling f =
       | [_, x] -> x
       | _ -> assert false
     in
-    Domain.DLS.set accu old_accu;
+    CDomain.DLS.set accu old_accu;
     let () = match old_accu with
       | None -> ()
       | Some accu ->
@@ -378,7 +378,7 @@ let with_profiling f =
     in
     out, sums
   in
-  Domain.DLS.set accu @@ Some this_accu;
+  CDomain.DLS.set accu @@ Some this_accu;
   let v = try f () with e ->
     let e = Exninfo.capture e in
     ignore (finally() : _ * _);
