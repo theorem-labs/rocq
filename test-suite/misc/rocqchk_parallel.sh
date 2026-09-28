@@ -79,42 +79,22 @@ spliced["opaques"] = sb["opaques"]
 write(d + "/Lib.vo", vg, spliced)
 PY
 
-for j in 1 2 4; do
-  if ! rocqchk -j $j -R "$d/good" "" -norec Lib > "$d/good$j.log" 2>&1; then
-    >&2 echo "FAILURE: rocqchk -j $j rejected a correct library"
-    cat "$d/good$j.log" >&2
-    exit 1
-  fi
-  grep -q "Modules were successfully checked" "$d/good$j.log"
-done
-
-# The first opaque proof is the ill-typed one, and it always goes to the first
-# worker: the error is reported by that worker, then by the main process, which
-# exits with the same code as with -j 1.
-for j in 1 2 4; do
+# Expected output in misc/rocqchk_parallel.out. The error of the bad library
+# is found in the first opaque proof, which always goes to the first worker, so
+# the output is deterministic except for the worker's process id.
+run() {
+  echo "== $1"
+  shift
   R=0
-  rocqchk -j $j -R "$d" "" -norec Lib > "$d/bad$j.log" 2>&1 || R=$?
-  if [ $R = 0 ]; then
-    >&2 echo "FAILURE: rocqchk -j $j accepted an ill-typed opaque proof"
-    cat "$d/bad$j.log" >&2
-    exit 1
-  fi
-  if [ $j = 1 ]; then R1=$R; fi
-  if [ $R != $R1 ] ||
-     grep -q "Modules were successfully checked" "$d/bad$j.log" ||
-     ! grep -q "Type error" "$d/bad$j.log" ||
-     { [ $j != 1 ] &&
-       ! { grep -q "while checking the opaque proof of Lib.l1\.$" "$d/bad$j.log" &&
-           grep -q "Worker process [0-9]* exited with code $R" "$d/bad$j.log"; }; }; then
-    >&2 echo "FAILURE: rocqchk -j $j rejected the ill-typed proof, but not as expected"
-    cat "$d/bad$j.log" >&2
-    exit 1
-  fi
-done
+  rocqchk -silent "$@" > "$d/run.log" 2>&1 || R=$?
+  sed -e 's/Worker process [0-9]*/Worker process PID/' "$d/run.log"
+  echo "exit code: $R"
+}
+{
+  for j in 1 2 4; do run "correct library, -j $j" -j $j -R "$d/good" "" -norec Lib; done
+  for j in 1 2 4; do run "ill-typed proof, -j $j" -j $j -R "$d" "" -norec Lib; done
+  # Profiling is sequential only.
+  run "-j 2 with -profile" -j 2 -profile "$d/prof.json" -R "$d/good" "" -norec Lib
+} > "$d/actual.out"
 
-# Profiling is sequential only.
-rocqchk -j 2 -profile "$d/prof.json" -R "$d/good" "" -norec Lib > "$d/prof.log" 2>&1
-grep -q "Option -j is ignored when profiling" "$d/prof.log" ||
-  { >&2 echo "FAILURE: no warning about -j and -profile"; cat "$d/prof.log" >&2; exit 1; }
-
-exit 0
+diff -u misc/rocqchk_parallel.out "$d/actual.out"
