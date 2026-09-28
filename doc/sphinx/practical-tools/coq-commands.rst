@@ -728,6 +728,13 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
 :-o: At exit, print a summary about the context. List the names of all
   assumptions and variables (constants without a :term:`body`).
 :-silent: Do not write progress information to the standard output.
+:-j *n*: Check opaque proofs in parallel, using up to *n* processes at the
+  same time (the default is 1). The bodies of opaque constants are checked by
+  up to *n*-1 worker processes, created with ``fork``, while the main process
+  checks everything else, then helps with the opaque proofs that are left. A
+  library is accepted only if every worker exits normally. More processes use
+  more memory. This option is not available on Windows, and is ignored with
+  ``-profile``.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
