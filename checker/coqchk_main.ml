@@ -455,7 +455,7 @@ let run senv =
     let senv = compile_files senv in
     flush_all(); senv
   with e ->
-    Printexc.print_backtrace stderr;
+    if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
     fatal_error (explain_exn e) (CErrors.exit_code e)
 
 let main () =
