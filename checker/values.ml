@@ -604,10 +604,14 @@ let [_v_sfb;_v_struc;_v_sign;_v_mexpr;_v_impl;v_module;_v_modtype] : _ Vector.t 
 (** kernel/safe_typing *)
 
 let v_vodigest = v_sum_c ("module_impl",0, [| [|v_string|]; [|v_string;v_string|] |])
-let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest|])
+(* kernel/safe_typing's iface_table: a per-declaration (Id.t * Digest.t)
+   array, see [Safe_typing.iface_table] / [iface_table_of_struct]. *)
+let v_iface = v_array (v_pair v_id v_string)
+let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest;v_opt v_iface|])
 let v_flags = v_tuple "flags" [|v_bool|] (* Allow Rewrite Rules *)
 let v_compiled_lib =
-  v_tuple "compiled" [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps; v_flags|]
+  v_tuple "compiled"
+    [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps; v_flags; v_opt v_iface|]
 
 (** Toplevel structures in a vo (see Cic.mli) *)
 
