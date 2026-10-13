@@ -88,7 +88,7 @@ type library_disk = {
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option) array;
   md_ocaml : string;
   md_info : Library_info.t;
   (* Subset of the direct dependencies (i.e. of the dirpaths appearing in
@@ -103,7 +103,7 @@ type summary_disk = {
 type library_t = {
   library_name : compilation_unit_name;
   library_data : library_disk;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option) array;
   library_safe_deps : DirPath.Set.t;
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
@@ -343,10 +343,21 @@ and intern_library_deps ~intern (needed, contents) dir m =
       (needed, contents) m.library_deps in
   ((false, dir) :: needed, contents)
 
-and intern_mandatory_library ~intern caller (needed, contents) (dir,d) =
+and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface) =
   let needed, contents = intern_library ~intern (needed, contents) dir in
-  let digest = digest_of_dep ~contents dir in
-  let () = if not (Safe_typing.digest_match ~actual:digest ~required:d) then
+  let digest, live_iface = digest_of_dep ~contents dir in
+  (* Fast path: byte-identical to what [caller] was compiled against.
+     Fallback: [dir] changed, but every declaration [caller] actually
+     recorded seeing from it ([d_iface]) still has the same interface
+     digest in [dir]'s current state ([live_iface]) -- see
+     [Safe_typing.iface_subset_ok] for the soundness argument. *)
+  let ok =
+    Safe_typing.digest_match ~actual:digest ~required:d
+    || (match d_iface, live_iface with
+        | Some recorded, Some live -> Safe_typing.iface_subset_ok ~recorded ~live
+        | _ -> false)
+  in
+  let () = if not ok then
     let from = library_full_filename caller in
     user_err
       (str "Compiled library " ++ DirPath.print caller ++
@@ -358,10 +369,10 @@ and intern_mandatory_library ~intern caller (needed, contents) (dir,d) =
 
 and digest_of_dep ~contents dir =
   match DirPath.Map.find_opt dir contents with
-  | Some m -> m.library_digests
+  | Some m -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled
   | None ->
     match find_library dir with
-    | Some (_, m) -> m.library_digests
+    | Some (_, m) -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled
     | None ->
       anomaly Pp.(str "Missing library " ++ DirPath.print dir ++
                   str " while interning dependencies.")
@@ -403,7 +414,7 @@ let compute_modes ~cmd_safe ~roots contents =
   while not (Queue.is_empty queue) do
     let dir = Queue.pop queue in
     let m = DirPath.Map.find dir contents in
-    Array.iter (fun (d, _) ->
+    Array.iter (fun (d, _, _) ->
         if not (DirPath.Set.mem d m.library_safe_deps) then mark d)
       m.library_deps
   done;
@@ -432,7 +443,7 @@ let check_closure_conflicts ~cmd_safe ~roots contents =
       if not (DirPath.Set.mem dir !visited) then begin
         visited := DirPath.Set.add dir !visited;
         let m = DirPath.Map.find dir contents in
-        Array.iter (fun (d, _) ->
+        Array.iter (fun (d, _, _) ->
             if not (DirPath.Set.mem d m.library_safe_deps) then visit d)
           m.library_deps
       end
@@ -614,7 +625,7 @@ let current_deps () =
   let map (root, m) =
     if root then
       let _, m = try_find_library m in
-      Some (m.library_name, m.library_digests)
+      Some (m.library_name, m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled)
     else None
   in
   List.map_filter map !libraries_loaded_list
@@ -683,7 +694,7 @@ let save_library_struct ~output_native_objects dir =
     ; md_syntax_objects
     ; md_objects
     } in
-  if Array.exists (fun (d,_) -> DirPath.equal d dir) sd.md_deps then
+  if Array.exists (fun (d,_,_) -> DirPath.equal d dir) sd.md_deps then
     error_recursively_dependent_library dir;
   sd, md, vmlib, ast
 

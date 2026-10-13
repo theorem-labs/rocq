@@ -15,6 +15,18 @@ type vodigest =
 
 val digest_match : actual:vodigest -> required:vodigest -> bool
 
+(** Per-declaration interface digest of a compiled library's exported
+    constants/inductives: see the doc comment on this type in
+    safe_typing.ml for the full definition and the soundness argument
+    for excluding opaque bodies and the Admitted/Qed distinction. *)
+type iface_table = (Id.t * Digest.t) array
+
+(** [recorded] is what a dependent saw of a library at its own compile
+    time; [live] is that library's current table. True iff every
+    recorded entry is still present in [live] with the same digest. *)
+val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
+
+
 (** {6 Safe environments } *)
 
 (** Since we are now able to type terms, we can define an abstract type
@@ -243,6 +255,7 @@ val replace_module_of_library : compiled_library -> Mod_declarations.module_body
     instead of trusting the one serialized in the file. *)
 val univs_of_library : compiled_library -> Sorts.QContextSet.t * Univ.ContextSet.t
 val check_flags_for_library : compiled_library -> safe_transformer0
+val iface_of_library : compiled_library -> iface_table option
 
 val start_library : DirPath.t -> ModPath.t safe_transformer
 

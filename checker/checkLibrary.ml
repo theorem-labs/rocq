@@ -56,7 +56,15 @@ type library_t = {
   library_filename : CUnix.physical_path;
   library_compiled : Safe_typing.compiled_library;
   library_opaques : seg_proofs;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+  (* Structural mirror of vernac/library.ml's on-disk format (Marshal is
+     unchecked across producer/consumer, so the tuple arity here must
+     match exactly what coqc wrote): dirpath, whole-library digest, and
+     the per-declaration interface-digest table coqc also recorded. The
+     checker never reads the third component -- it fully re-type-checks
+     every object regardless (see Mod_checking), so it has no use for
+     the interface-digest fallback itself; it only needs its record
+     shape to match. *)
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option) array;
   library_digest : Safe_typing.vodigest;
 }
 
@@ -279,7 +287,7 @@ type library_info
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option) array;
   md_ocaml : string;
   md_info : library_info;
   md_safe_deps : DirPath.Set.t;
@@ -394,7 +402,7 @@ let rec intern_library ~intern_mode ~validated seen (dir, f) needed =
     let m = intern_from_file ~intern_mode ~validated (dir,f) in
     let seen' = LibrarySet.add dir seen in
     let deps =
-      Array.map (fun (d,_) -> try_locate_absolute_library d) m.library_deps
+      Array.map (fun (d,_,_) -> try_locate_absolute_library d) m.library_deps
     in
     let intern_mode = match intern_mode with Rec -> Rec | Root | Dep -> Dep in
     (dir,m) :: Array.fold_right (intern_library ~intern_mode ~validated seen') deps needed
@@ -409,7 +417,7 @@ let rec fold_deps seen ff (dir,f) (s,acc) =
       | None ->
         CErrors.anomaly Pp.(str "missing dep when computing closure (" ++ DirPath.print dir ++ str ")")
     in
-    let deps = Array.map (fun (d,_) -> try_locate_absolute_library d) deps in
+    let deps = Array.map (fun (d,_,_) -> try_locate_absolute_library d) deps in
     let seen' = LibrarySet.add dir seen in
     let (s',acc') = Array.fold_right (fold_deps seen' ff) deps (s,acc) in
     (LibrarySet.add dir s', ff dir acc')
