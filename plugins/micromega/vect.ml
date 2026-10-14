@@ -141,6 +141,17 @@ let rec add (ve1 : t) (ve2 : t) =
     else if cmp < 0 then {var = v1; coe = c1} :: add l1 ve2
     else {var = v2; coe = c2} :: add l2 ve1
 
+(** [smul n c] is [n */ c], except that it avoids the multiplication
+    (and the GMP call + allocation it costs) when [n] is syntactically
+    [Q.one], since [1 */ c = c] exactly for every rational [c]. This is
+    an exact identity, not an approximation: the returned value is
+    bit-for-bit the same [Q.t] the unshortened multiplication would
+    have produced. [pivot_row] in simplex.ml (the hot path exercising
+    this function during every Simplex pivot step) always calls
+    [mul_add]/[xmul_add] with one side's multiplier literally equal to
+    [Q.one], so this is not a hypothetical case. *)
+let smul n c = if Q.one =/ n then c else n */ c
+
 let rec xmul_add (n1 : Q.t) (ve1 : t) (n2 : Q.t) (ve2 : t) =
   match (ve1, ve2) with
   | [], _ -> mul n2 ve2
@@ -148,11 +159,11 @@ let rec xmul_add (n1 : Q.t) (ve1 : t) (n2 : Q.t) (ve2 : t) =
   | {var = v1; coe = c1} :: l1, {var = v2; coe = c2} :: l2 ->
     let cmp = Int.compare v1 v2 in
     if cmp == 0 then
-      let s = (n1 */ c1) +/ (n2 */ c2) in
+      let s = smul n1 c1 +/ smul n2 c2 in
       if Q.zero =/ s then xmul_add n1 l1 n2 l2
       else {var = v1; coe = s} :: xmul_add n1 l1 n2 l2
-    else if cmp < 0 then {var = v1; coe = n1 */ c1} :: xmul_add n1 l1 n2 ve2
-    else {var = v2; coe = n2 */ c2} :: xmul_add n1 ve1 n2 l2
+    else if cmp < 0 then {var = v1; coe = smul n1 c1} :: xmul_add n1 l1 n2 ve2
+    else {var = v2; coe = smul n2 c2} :: xmul_add n1 ve1 n2 l2
 
 let mul_add n1 ve1 n2 ve2 =
   if n1 =/ Q.one && n2 =/ Q.one then add ve1 ve2 else xmul_add n1 ve1 n2 ve2
