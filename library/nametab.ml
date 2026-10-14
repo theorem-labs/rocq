@@ -806,13 +806,34 @@ module CustomEntries = EasyNoWarn(CustomEntriesV)()
    reproduce, even though the GlobRef itself belongs to Nat, not BinNums.
    Depth-based scoping captures it correctly because it is emitted directly
    by BinNums's own object stream, at depth 0, not inside a nested
-   [register_library] call for Nat. *)
+   [register_library] call for Nat.
+
+   [push_log] MUST be a [Summary.ref] at the SAME stage as [XRefs.the_tab]
+   ([Summary.Stage.Interp]), not a plain [ref]. [XRefs] is itself
+   summary-managed: opening a [Section] freezes the live table and closing
+   it restores that frozen snapshot, silently undoing every push a section
+   made (e.g. [Variables S S' : Set.]'s section-local [VarRef]s) so they
+   never leak past [End]. A plain-ref [push_log] does not participate in
+   that freeze/restore at all -- it keeps every push ever logged,
+   including ones the live table itself later discarded, so the exported
+   cache replays names the real, equivalent build never actually exposed.
+   This is exactly the masking-absolute-name bug (ROCQ-INTERNALS.md §17d's
+   open bug, root-caused in §18): Specif.v opens a section binding a LOCAL
+   "S" (`Variables S S' : Set.`), which gets logged at depth 0 same as any
+   other push; the section closes and restores the live [XRefs] table,
+   erasing that "S" from it, but the plain-ref log still carries it; later,
+   replaying Specif's exported fragment bulk-applies that stale "S" as an
+   absolute binding, and the file that actually requires both Datatypes and
+   Specif then fails trying to import the real [Datatypes.S] over it. A
+   [Summary.ref] rolls [push_log] back in lockstep with [XRefs] itself, so
+   it only ever contains what the live table still holds. *)
 let loading_from_cache = ref false
 let register_depth = ref 0
 
 type cache_entry = visibility * full_path * extended_global_reference
 
-let push_log : cache_entry list ref = ref []
+let push_log : cache_entry list ref =
+  Summary.ref ~stage:Summary.Stage.Interp ~name:"nametab-cache-pushlog" []
 
 (* Debugging aid for the masking-absolute-name bug (ROCQ-INTERNALS.md §18):
    dumps every real [push]/[push_abbreviation] call and every [apply_cache]

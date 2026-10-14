@@ -361,6 +361,8 @@ unit-tests/%.ml.log: unit-tests/%.ml unit-tests/src/$(UNIT_LINK)
 
 prerequisite/requires_deprecated_library.v.log: prerequisite/deprecated_library.v.log
 
+prerequisite/nametab_mask_require.v.log: prerequisite/nametab_mask_decl.v.log prerequisite/nametab_mask_section.v.log
+
 $(addsuffix .log,$(wildcard prerequisite/*.v)): %.v.log: %.v
 	$(SHOW) "TEST      $< $(call get_coq_prog_args_in_parens,"$<")"
 	$(HIDE){ \
