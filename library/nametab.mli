@@ -237,6 +237,40 @@ val apply_cache : ?lib:string -> cache_entry list -> unit
     decision on the same trace. *)
 val dbg_cache : (unit -> Pp.t) -> unit
 
+(** {6 perf-nametab-cache verify mode (ROCQ-INTERNALS.md §19) } *)
+
+(** True under [-d nametab-cache-verify]. *)
+val verify_mode : unit -> bool
+
+(** Start/stop capturing every [push]/[push_abbreviation] call made in
+    between, regardless of [register_depth] (unlike [export_cache], which
+    only sees depth-0 pushes). [verify_register_library] in [library.ml]
+    brackets exactly one [Declaremods.Interp.register_library] call with
+    these to record a genuine full replay's own push sequence. *)
+val verify_capture_start : unit -> cache_entry list ref
+val verify_capture_stop : cache_entry list ref -> cache_entry list
+
+(** A single entry's live resolution (full_path lookup + shortest
+    qualid), opaque to callers outside nametab.ml. *)
+type verify_observation
+
+val observe : cache_entry -> verify_observation
+
+(** Compare a cached fragment's own push sequence (already applied to
+    the live table) against a genuine full replay's push sequence
+    (captured while the live table was restored to the identical ambient
+    state), plus each list's own [observe] snapshot taken in its own live
+    state. Fails loudly ([CErrors.user_err]) at the first differing
+    entry. *)
+val verify_cache_equivalence :
+  lib:string ->
+  cached:cache_entry list ->
+  replayed:cache_entry list ->
+  cached_obs:(cache_entry * verify_observation) list ->
+  replayed_obs:(cache_entry * verify_observation) list ->
+  unit
+
+
 val locate : qualid -> GlobRef.t
 
 val locate_all : qualid -> GlobRef.t list
