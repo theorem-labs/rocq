@@ -783,13 +783,68 @@ module CustomEntries = EasyNoWarn(CustomEntriesV)()
 
 (* Push functions *********************************************************)
 
+(* perf-nametab-cache: a central interception point for replaying a
+   library's own Nametab contribution from a precomputed .vo fragment
+   instead of via N individual [push] calls during object replay (see
+   ROCQ-INTERNALS.md Section 17). When [loading_from_cache] is set, the two
+   functions below (the sole funnel for [XRefs], the GlobRef/abbreviation
+   table) become no-ops: the caller is expected to bulk-apply a previously
+   captured fragment via [apply_cache] once the object replay completes.
+   [push_log] independently accumulates every real push this process makes,
+   in order, so that whichever library is being compiled right now can
+   later export exactly its own contribution via [export_cache]. *)
+let loading_from_cache = ref false
+
+type cache_entry = visibility * full_path * extended_global_reference
+
+let push_log : cache_entry list ref = ref []
+
 let push_abbreviation ?user_warns visibility sp kn =
-  XRefs.push ?wdata:user_warns visibility sp (Abbrev kn)
+  if not !loading_from_cache then begin
+    push_log := (visibility, sp, Abbrev kn) :: !push_log;
+    XRefs.push ?wdata:user_warns visibility sp (Abbrev kn)
+  end
 
 let remove_abbreviation sp kn =
   XRefs.remove sp (Abbrev kn)
 
-let push ?user_warns vis sp kn = XRefs.push ?wdata:user_warns vis sp (TrueGlobal kn)
+let push ?user_warns vis sp kn =
+  if not !loading_from_cache then begin
+    push_log := (vis, sp, TrueGlobal kn) :: !push_log;
+    XRefs.push ?wdata:user_warns vis sp (TrueGlobal kn)
+  end
+
+(* The module path a [GlobRef.t] was declared under, or [None] for a
+   section variable (never library-owned). *)
+let modpath_of_gref = function
+  | GlobRef.VarRef _ -> None
+  | GlobRef.ConstRef c -> Some (Constant.modpath c)
+  | GlobRef.IndRef (mind, _) -> Some (MutInd.modpath mind)
+  | GlobRef.ConstructRef ((mind, _), _) -> Some (MutInd.modpath mind)
+
+(* The subset of this process's push log whose target was declared in
+   library [dir], in original push order -- the exact, already-correctly-
+   ordered result of a real replay, ready to be stored as the .vo's
+   [seg_nametab] segment and later replayed verbatim by [apply_cache].
+   Scoped to [TrueGlobal] entries only (abbreviations are a separate,
+   much lower-volume namespace, out of scope for this cache). *)
+let export_cache dir =
+  let target_mp = ModPath.MPfile dir in
+  let owned = function
+    | TrueGlobal gr ->
+      (match modpath_of_gref gr with
+       | Some mp -> ModPath.equal mp target_mp
+       | None -> false)
+    | Abbrev _ -> false
+  in
+  List.rev (List.filter (fun (_, _, xref) -> owned xref) !push_log)
+
+(* Bulk-apply a previously captured fragment, in the order it was captured
+   in. Bypasses [loading_from_cache] and [push_log] entirely -- this is the
+   direct [XRefs.push] funnel, used once after a library's object replay
+   (with pushes silenced) has finished. *)
+let apply_cache entries =
+  List.iter (fun (vis, sp, xref) -> XRefs.push vis sp xref) entries
 
 let push_modtype vis sp kn = ModTypes.push vis sp kn
 

@@ -108,6 +108,11 @@ type library_t = {
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
   library_vm : Vmlibrary.on_disk;
+  (* perf-nametab-cache (ROCQ-INTERNALS.md §17): this library's own
+     Nametab contribution, captured at compile time and stored as the .vo's
+     [seg_nametab] segment (empty for an in-memory library never written to
+     disk, or a .vo predating this cache). *)
+  library_nametab : Nametab.cache_entry list;
 }
 
 type load_status = FullLoaded | SafeLoaded
@@ -237,8 +242,9 @@ type seg_sum = summary_disk
 type seg_lib = library_disk
 type seg_proofs = Opaques.opaque_disk
 type seg_vm = Vmlibrary.compiled_library
+type seg_nametab = Nametab.cache_entry list
 
-let mk_library sd md digests vm =
+let mk_library sd md digests vm nametab =
   {
     library_name     = sd.md_name;
     library_data     = md;
@@ -247,17 +253,24 @@ let mk_library sd md digests vm =
     library_digests  = digests;
     library_info     = sd.md_info;
     library_vm = vm;
+    library_nametab = nametab;
   }
 
-let mk_intern_library sum lib digest_lib proofs vm =
+let mk_intern_library sum lib digest_lib proofs vm nametab =
   add_opaque_table sum.md_name (ToFetch proofs);
   let open Safe_typing in
-  mk_library sum lib (Dvo_or_vi digest_lib) vm
+  mk_library sum lib (Dvo_or_vi digest_lib) vm nametab
 
 let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 let vm_seg : seg_vm ObjFile.id = Vmlibrary.vm_segment
+(* perf-nametab-cache (ROCQ-INTERNALS.md §17): a standalone segment, never
+   read by the checker or the kernel -- absent entirely from a .vo predating
+   this cache, in which case [intern_from_file] below falls back to [[]]
+   (no cache for that library, full replay always, exactly today's
+   behavior). *)
+let nametab_seg : seg_nametab ObjFile.id = ObjFile.make_id "nametab"
 
 module Intern = struct
   module Provenance = struct
@@ -275,11 +288,16 @@ let intern_from_file file =
   let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
   let del_opaque, _ = in_delayed file ch ~segment:opaques_seg in
   let vmlib = Vmlibrary.load lsd.md_name ~file ch in
+  let nametab =
+    if CString.Map.mem nametab_seg.ObjFile.id (ObjFile.segments ch) then
+      fst (ObjFile.marshal_in_segment ch ~segment:nametab_seg)
+    else []
+  in
   ObjFile.close_in ch;
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
   register_library_filename lsd.md_name file;
   Library_info.warn_library_info ~transitive:true lsd.md_name lsd.md_info;
-  mk_intern_library lsd lmd digest_lmd del_opaque vmlib
+  mk_intern_library lsd lmd digest_lmd del_opaque vmlib nametab
 
 let intern_from_file file =
   let provenance = ("file", file) in
@@ -496,15 +514,37 @@ let native_name_from_filename f =
 
 (* Full-mode registration (object replay). *)
 
+(* perf-nametab-cache (ROCQ-INTERNALS.md §17): [m]'s cached fragment is
+   trusted only if every one of [m]'s OWN recorded dependencies is, right
+   now, byte-identical to what [m] was compiled against (the same exact-
+   digest fast path [intern_mandatory_library] already computes during
+   interning, re-derived here independently rather than threaded through,
+   since by registration time -- [needed] is dependencies-first -- every
+   dependency is already in [libraries_table]). If any dependency instead
+   needed usage-cutoff's interface-digest fallback (i.e. actually changed,
+   even if compatibly), the cached fragment isn't trusted: fall back to
+   today's full replay, unconditionally, for this library. *)
+let nametab_cache_trusted m =
+  not (CList.is_empty m.library_nametab) &&
+  Array.for_all
+    (fun (dep, required, _iface) -> match find_library dep with
+       | Some (_, dm) -> Safe_typing.digest_match ~actual:dm.library_digests ~required
+       | None -> false)
+    m.library_deps
+
 let register_library m =
   let l = m.library_data in
-  Declaremods.Interp.register_library
-    m.library_name
-    l.md_compiled
-    l.md_objects
-    m.library_digests
-    m.library_vm
-  ;
+  let use_cache = nametab_cache_trusted m in
+  if use_cache then Nametab.loading_from_cache := true;
+  Fun.protect ~finally:(fun () -> Nametab.loading_from_cache := false)
+    (fun () ->
+       Declaremods.Interp.register_library
+         m.library_name
+         l.md_compiled
+         l.md_objects
+         m.library_digests
+         m.library_vm);
+  if use_cache then Nametab.apply_cache m.library_nametab;
   register_native_library m.library_name
 
 let register_library_syntax ~root m =
@@ -665,14 +705,15 @@ type 'doc todo_proofs =
 
 (* EJGA: would be nice maybe to have a version that performs extra
    cleanup in the case the computation raises? *)
-let save_library_base f sum lib proofs vmlib =
+let save_library_base f sum lib proofs vmlib nametab =
   try
     let open Memprof_coq.Resource_bind in
     let& ch = Memprof_coq.Masking.with_resource ~acquire:raw_extern_library ~release:ObjFile.close_out f in
     ObjFile.marshal_out_segment ch ~segment:summary_seg sum;
     ObjFile.marshal_out_segment ch ~segment:library_seg lib;
     ObjFile.marshal_out_segment ch ~segment:opaques_seg proofs;
-    ObjFile.marshal_out_segment ch ~segment:vm_seg vmlib
+    ObjFile.marshal_out_segment ch ~segment:vm_seg vmlib;
+    ObjFile.marshal_out_segment ch ~segment:nametab_seg nametab
   with exn ->
     let iexn = Exninfo.capture exn in
     Sys.remove f;
@@ -696,15 +737,18 @@ let save_library_struct ~output_native_objects dir =
     } in
   if Array.exists (fun (d,_,_) -> DirPath.equal d dir) sd.md_deps then
     error_recursively_dependent_library dir;
-  sd, md, vmlib, ast
+  (* perf-nametab-cache (ROCQ-INTERNALS.md §17): this library's own
+     Nametab contribution, in the order a real replay produced it. *)
+  let nametab = Nametab.export_cache dir in
+  sd, md, vmlib, ast, nametab
 
 let save_library dir : library_t =
-  let sd, md, vmlib, _ast = save_library_struct ~output_native_objects:false dir in
+  let sd, md, vmlib, _ast, nametab = save_library_struct ~output_native_objects:false dir in
   (* Digest for .vo files is on the md part, for now we also play it
      safe when we work on-memory and compute the digest for the lib
      part, even if that's slow. Better safe than sorry. *)
   let digest = Marshal.to_string md [] |> Digest.string in
-  mk_library sd md (Dvo_or_vi digest) (Vmlibrary.inject vmlib)
+  mk_library sd md (Dvo_or_vi digest) (Vmlibrary.inject vmlib) nametab
 
 let save_library_to todo_proofs ~output_native_objects dir f =
   assert(
@@ -723,9 +767,9 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   let () = assert (not (Future.UUIDSet.is_empty except) ||
     Safe_typing.is_joined_environment (Global.safe_env ()))
   in
-  let sd, md, vmlib, ast = save_library_struct ~output_native_objects dir in
+  let sd, md, vmlib, ast, nametab = save_library_struct ~output_native_objects dir in
   (* Writing vo payload *)
-  save_library_base f sd md opaque_table vmlib;
+  save_library_base f sd md opaque_table vmlib nametab;
   (* Writing native code files *)
   if output_native_objects then
     let fn = Filename.dirname f ^"/"^ Nativecode.mod_uid_of_dirpath dir in
