@@ -102,40 +102,52 @@ let refcount x = x.refcount
 module Tbl = struct
   type key = t
 
-  (* The API looks like Hashtbl but implemented using Int.Map ref.
+  (* The API looks like Hashtbl but implemented using a mutable int-keyed
+     Hashtbl (indexed by [key.hash]) whose buckets are plain association
+     lists, same as the previous [Int.Map ref]-based design this replaced.
 
-     We don't use Hashtbl for 2 reasons:
-     - to provide the pre-hashconsing leaf lookup (not sure why it's so fast but it seems to be)
-       (although note we could do this with Hashtbl by using something like
-       [type key = Real of t | Fake of int (* hash *) * (t -> bool)],
-       equality between [Real] and [Fake] uses the predicate in [Fake],
-       wrap [add] so that we only add [Real] keys,
-       then [raw_find] is [Hashtbl.find_opt] using [Fake].)
+     The original comment here recorded an earlier attempt at a Hashtbl
+     replacement as "dramatically" slower, attributing it to Hashtbl
+     producing "overly large buckets which then need to be linearly
+     scanned" versus [Int.Map]'s tree structure — but left the mechanism
+     an open question ("for unclear reasons", "perhaps because of
+     differences... our hashset implementation"). That prior attempt is
+     not in this history to inspect, so this swap isolates exactly one
+     variable: only the OUTER index (bucket-by-hash) changes from an
+     immutable balanced tree ([Int.Map], O(log n) descent per lookup,
+     where n = number of distinct hash values ever inserted, growing a
+     fresh persistent path of tree nodes on every [add]) to a mutable
+     hash table (O(1) amortized bucket lookup, in-place bucket update on
+     [add] instead of allocating O(log n) new tree nodes). The INNER
+     per-bucket representation — a plain assoc list, linearly scanned by
+     [raw_find]'s predicate or [find_opt]'s [equal] — is byte-for-byte
+     unchanged, so this cannot reproduce an "overly large bucket" problem
+     that wasn't already present in the design being replaced: the number
+     of (key,v) pairs sharing one hash bucket, and how they are scanned,
+     is identical before and after. *)
+  module IntHashedType = struct
+    type t = int
+    let equal (a : int) (b : int) = a = b
+    let hash (x : int) = x
+  end
+  module IntTbl = Hashtbl.Make(IntHashedType)
 
-     - for unclear reasons Int.Map ref is dramatically faster on an artificial example
-       (balanced binary tree whose leaves are all different primitive ints,
-        such that there is no sharing).
-       It is a bit slower in the real world.
-       It seems that hashtbl produces overly large buckets which then need to be linearly scanned.
-       hconsing doesn't seem to have this problem,
-       perhaps because of differences between hashtbl and our hashset implementation. *)
-  type 'a t = (key * 'a) list Int.Map.t ref
+  type 'a t = (key * 'a) list IntTbl.t
 
-  let create () = ref Int.Map.empty
+  let create () = IntTbl.create 97
 
   let add tbl key v =
-    tbl := Int.Map.update key.hash (function
-        | None -> Some [(key,v)]
-        | Some l -> Some ((key,v)::l))
-        !tbl
+    let h = key.hash in
+    let cur = try IntTbl.find tbl h with Not_found -> [] in
+    IntTbl.replace tbl h ((key, v) :: cur)
 
   let raw_find tbl h p =
-    match Int.Map.find_opt h !tbl with
+    match IntTbl.find_opt tbl h with
     | None -> None
     | Some l -> List.find_map (fun (k,v) -> if p k then Some v else None) l
 
   let find_opt tbl key =
-    match Int.Map.find_opt key.hash !tbl with
+    match IntTbl.find_opt tbl key.hash with
     | None -> None
     | Some l ->
       List.find_map (fun (k',v) ->
@@ -155,7 +167,7 @@ module Tbl = struct
   }
 
   let stats tbl =
-    Int.Map.fold (fun _ l acc ->
+    IntTbl.fold (fun _ l acc ->
         let len = List.length l in
         {
           hashes = acc.hashes + 1;
@@ -163,7 +175,7 @@ module Tbl = struct
           most_collisions = max acc.most_collisions len;
         }
       )
-      !tbl
+      tbl
       empty_stats
 
 end
