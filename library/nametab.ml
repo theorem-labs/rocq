@@ -829,16 +829,18 @@ let libdir_of_gref = function
 (* The subset of this process's push log whose target was declared in
    library [dir], in original push order -- the exact, already-correctly-
    ordered result of a real replay, ready to be stored as the .vo's
-   [seg_nametab] segment and later replayed verbatim by [apply_cache].
-   Scoped to [TrueGlobal] entries only (abbreviations are a separate,
-   much lower-volume namespace, out of scope for this cache). *)
+   [seg_nametab] segment and later replayed verbatim by [apply_cache]. Both
+   [TrueGlobal] (via [push]) and [Abbrev] (via [push_abbreviation], e.g.
+   [Abbreviation int := signed_int] in Corelib's Decimal.v) are in scope:
+   both share the one [XRefs] table and the one interception point, so both
+   must be exported or a suppressed-but-never-replayed name results. *)
 let export_cache dir =
   let owned = function
     | TrueGlobal gr ->
       (match libdir_of_gref gr with
        | Some d -> DirPath.equal d dir
        | None -> false)
-    | Abbrev _ -> false
+    | Abbrev kn -> DirPath.equal (ModPath.dp (KerName.modpath kn)) dir
   in
   List.rev (List.filter (fun (_, _, xref) -> owned xref) !push_log)
 
