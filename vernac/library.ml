@@ -810,7 +810,7 @@ let capture_nametab_via_replay dir md_compiled md_objects vmlib =
        Summary.Interp.unfreeze_summaries pre)
     (fun () ->
        Declaremods.Interp.register_library
-         dir md_compiled md_objects (Digest.string "") vmlib);
+         dir md_compiled md_objects (Safe_typing.Dvo_or_vi (Digest.string "")) vmlib);
   Nametab.verify_capture_stop capture
 
 (* This is the basic vo save structure *)
