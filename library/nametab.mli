@@ -199,7 +199,7 @@ val push : ?user_warns:Globnames.extended_global_reference UserWarn.with_qf -> v
 
 val push_abbreviation : ?user_warns:Globnames.extended_global_reference UserWarn.with_qf -> visibility -> full_path -> Globnames.abbreviation -> unit
 
-(** {6 perf-nametab-cache: per-library cached replay (ROCQ-INTERNALS.md §17) } *)
+(** {6 perf-nametab-cache: per-library cached replay (ROCQ-INTERNALS.md §19) } *)
 
 (** A single [XRefs] (GlobRef/abbreviation table) push, as captured during a
     real object replay: the information needed to replay it verbatim later. *)
@@ -213,23 +213,15 @@ val loading_from_cache : bool ref
 
 (** Incremented for the exact duration of a nested
     [Declaremods.Interp.register_library] call (replaying an already-
-    compiled dependency pulled in by [Require]); 0 at every other moment,
-    including while the file currently compiling processes its own
-    [Import]/[Export] statements. [push]/[push_abbreviation] only record
-    into the exported log while this is 0, so a dependency's own pushes are
-    never attributed to the file currently compiling. *)
+    compiled dependency pulled in by [Require], or [library.ml]'s own
+    post-compile [capture_nametab_via_replay]); 0 at every other moment. *)
 val register_depth : int ref
 
-(** This process's entire depth-0 push log (see [register_depth]), in
-    original order -- the file currently compiling's own, exact,
-    correctly-ordered contribution to [XRefs], suitable for storing as a
-    .vo's [seg_nametab] segment and replaying later via [apply_cache]. *)
-val export_cache : DirPath.t -> cache_entry list
-
-(** Replay a previously captured [export_cache] result, in order, directly
-    into [XRefs] -- independent of [loading_from_cache]. [lib] is a
-    debug-only label (identifying which dependency this fragment came
-    from) threaded through to the [-d nametab-cache] trace. *)
+(** Replay a previously captured fragment (see [verify_capture_start]/
+    [verify_capture_stop] and [library.ml]'s [capture_nametab_via_replay]),
+    in order, directly into [XRefs] -- independent of [loading_from_cache].
+    [lib] is a debug-only label (identifying which dependency this
+    fragment came from) threaded through to the [-d nametab-cache] trace. *)
 val apply_cache : ?lib:string -> cache_entry list -> unit
 
 (** The [-d nametab-cache] debug printer (see nametab.ml), exposed so
