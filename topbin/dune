@@ -41,6 +41,12 @@
  (libraries rocqshim))
 
 (executable
+ (name zygote)
+ (modules zygote)
+ (modes exe)
+ (libraries rocq-runtime.toplevel unix))
+
+(executable
  (name rocqnative)
  (modules rocqnative)
  (libraries rocq-runtime.kernel)
