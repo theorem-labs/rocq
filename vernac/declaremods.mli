@@ -142,13 +142,6 @@ val register_library :
   Vmlibrary.on_disk ->
   unit
 
-(** perf-nametab-cache (ROCQ-INTERNALS.md Section 19): replay ONLY the
-    Nametab-pushing half of [register_library] above -- no
-    Global.lookup_module/Global.import kernel-environment step at all.
-    Safe to call in the SAME process that just compiled [dir] (unlike
-    [register_library], whose kernel-import step rejects self-import). *)
-val register_library_nametab_only : library_name -> library_objects -> unit
-
 (** Register a [Require (safe)] library: push its fully-qualified-only
     names by walking the kernel module structure (no libobject replay) and
     record it as safe-loaded so a later [Import]/[Export] can find it. The
