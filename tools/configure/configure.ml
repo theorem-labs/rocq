@@ -25,7 +25,18 @@ let (/) = Filename.concat
 let coq_version = "9.2+rc2"
 (* format: "%d%02d%d" major minor patch
    for pre-release version (eg 9.2+alpha), use the previous minor, and patch = 99 *)
-let vo_magic = 90199
+(* sami/usage-cutoff: +1 over upstream's 90199. This fork widens the on-disk
+   dependency/interface-table format (kernel/safe_typing.ml's library_info,
+   vernac/library.ml's md_deps/library_deps: 2-tuple -> 3-tuple, see
+   ROCQ-USAGE-CUTOFF.md Sec3/Sec6). Loading a pre-fork (or any other
+   mismatched) .vo under this fork must fail the version check in
+   lib/objFile.ml and raise the existing, cleanly-handled Bad_version_number
+   (lib/system.ml's with_magic_number_check) -- not silently unmarshal a
+   2-tuple record as a 3-tuple and dereference whatever bytes follow it as
+   the phantom third field. Without this bump, a tree that mixes a
+   pre-fork-built dependency .vo with fork-built dependents segfaults instead
+   of erroring (reproduced: dev/usage-cutoff/test_stale_vo_version.sh). *)
+let vo_magic = 90200
 let is_a_released_version = false
 
 (** Default OCaml binaries *)
