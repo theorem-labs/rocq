@@ -199,6 +199,28 @@ val push : ?user_warns:Globnames.extended_global_reference UserWarn.with_qf -> v
 
 val push_abbreviation : ?user_warns:Globnames.extended_global_reference UserWarn.with_qf -> visibility -> full_path -> Globnames.abbreviation -> unit
 
+(** {6 perf-nametab-cache: per-library cached replay (ROCQ-INTERNALS.md §17) } *)
+
+(** A single [XRefs] (GlobRef/abbreviation table) push, as captured during a
+    real object replay: the information needed to replay it verbatim later. *)
+type cache_entry = visibility * full_path * Globnames.extended_global_reference
+
+(** When set, [push] and [push_abbreviation] above become no-ops instead of
+    registering into [XRefs]. Set for the duration of a cached library's
+    object replay so its (redundant) pushes are skipped; the caller is
+    responsible for resetting it and then calling [apply_cache]. *)
+val loading_from_cache : bool ref
+
+(** The subset of this process's pushes (in original order) whose target was
+    declared in library [dir] -- the exact, correctly-ordered contribution a
+    real replay of [dir] made, suitable for storing as a .vo's [seg_nametab]
+    segment and replaying later via [apply_cache]. *)
+val export_cache : DirPath.t -> cache_entry list
+
+(** Replay a previously captured [export_cache] result, in order, directly
+    into [XRefs] -- independent of [loading_from_cache]. *)
+val apply_cache : cache_entry list -> unit
+
 val locate : qualid -> GlobRef.t
 
 val locate_all : qualid -> GlobRef.t list
