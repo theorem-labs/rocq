@@ -532,16 +532,19 @@ let nametab_cache_trusted m =
        | None -> false)
     m.library_deps
 
-let register_library m =
+(* ROCQ-INTERNALS.md Section 19: under [-d nametab-cache-verify], for
+   every cached-eligible Require, run the production cache-apply AND a
+   genuine, from-scratch full replay -- both starting from the IDENTICAL
+   ambient [Summary] state -- and hand both the push sequence and a
+   per-entry Nametab resolution snapshot to
+   [Nametab.verify_cache_equivalence]. The live table ends up exactly
+   where the production run alone would have left it; this is purely an
+   observational check, it never changes what gets compiled. *)
+let verify_register_library m =
   let l = m.library_data in
-  let use_cache = nametab_cache_trusted m in
   let lib = DirPath.to_string m.library_name in
-  Nametab.dbg_cache Pp.(fun () ->
-      str "register_library lib=" ++ str lib
-      ++ str " use_cache=" ++ str (string_of_bool use_cache)
-      ++ str " caller_depth=" ++ int !Nametab.register_depth
-      ++ str " nametab_entries=" ++ int (List.length m.library_nametab));
-  if use_cache then Nametab.loading_from_cache := true;
+  let pre = Summary.Interp.freeze_summaries () in
+  Nametab.loading_from_cache := true;
   incr Nametab.register_depth;
   Fun.protect
     ~finally:(fun () ->
@@ -554,7 +557,54 @@ let register_library m =
          l.md_objects
          m.library_digests
          m.library_vm);
-  if use_cache then Nametab.apply_cache ~lib m.library_nametab;
+  Nametab.apply_cache ~lib m.library_nametab;
+  let cached_obs = List.map (fun e -> (e, Nametab.observe e)) m.library_nametab in
+  let post_real = Summary.Interp.freeze_summaries () in
+  Summary.Interp.unfreeze_summaries pre;
+  let capture = Nametab.verify_capture_start () in
+  incr Nametab.register_depth;
+  Fun.protect
+    ~finally:(fun () -> decr Nametab.register_depth)
+    (fun () ->
+       Declaremods.Interp.register_library
+         m.library_name
+         l.md_compiled
+         l.md_objects
+         m.library_digests
+         m.library_vm);
+  let replayed = Nametab.verify_capture_stop capture in
+  let replayed_obs = List.map (fun e -> (e, Nametab.observe e)) replayed in
+  Summary.Interp.unfreeze_summaries post_real;
+  Nametab.verify_cache_equivalence ~lib
+    ~cached:m.library_nametab ~replayed ~cached_obs ~replayed_obs
+
+let register_library m =
+  let l = m.library_data in
+  let use_cache = nametab_cache_trusted m in
+  let lib = DirPath.to_string m.library_name in
+  Nametab.dbg_cache Pp.(fun () ->
+      str "register_library lib=" ++ str lib
+      ++ str " use_cache=" ++ str (string_of_bool use_cache)
+      ++ str " caller_depth=" ++ int !Nametab.register_depth
+      ++ str " nametab_entries=" ++ int (List.length m.library_nametab));
+  if use_cache && Nametab.verify_mode () then
+    verify_register_library m
+  else begin
+    if use_cache then Nametab.loading_from_cache := true;
+    incr Nametab.register_depth;
+    Fun.protect
+      ~finally:(fun () ->
+         Nametab.loading_from_cache := false;
+         decr Nametab.register_depth)
+      (fun () ->
+         Declaremods.Interp.register_library
+           m.library_name
+           l.md_compiled
+           l.md_objects
+           m.library_digests
+           m.library_vm);
+    if use_cache then Nametab.apply_cache ~lib m.library_nametab
+  end;
   register_native_library m.library_name
 
 let register_library_syntax ~root m =

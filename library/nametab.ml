@@ -843,6 +843,37 @@ let push_log : cache_entry list ref =
    and which loses at a given trie node. Enable with [-d nametab-cache]. *)
 let dbg = CDebug.create ~name:"nametab-cache" ()
 let dbg_cache = dbg
+(* perf-nametab-cache verify mode (ROCQ-INTERNALS.md Section 19): an
+   instrument that checks, at EVERY cached Require, whether bulk-applying
+   the captured fragment produces an XRefs table equivalent to a genuine
+   full replay run in the identical ambient context -- not a sample of
+   Locate/About queries (the methodology that caught bugs 2 and 3 by
+   hand, on a handful of names) but an exhaustive, automated check of
+   every entry a Require's cache touches. Enable with
+   [-d nametab-cache-verify]. See [library.ml]'s [verify_register_library]
+   for the orchestration (it needs [Summary]/[Declaremods], not available
+   here) and [verify_cache_equivalence] below for the comparison itself. *)
+let verify_enabled, dbg_verify = CDebug.create_full ~name:"nametab-cache-verify" ()
+let verify_mode () = CDebug.get_flag verify_enabled
+
+(* Captures every [push]/[push_abbreviation] call made during one
+   bracketed interval, regardless of [register_depth] (unlike [push_log],
+   which only logs at depth 0 -- exactly wrong for this purpose, since a
+   verify-mode re-replay of a dependency runs at register_depth > 0). *)
+let verify_capture : cache_entry list ref option ref = ref None
+
+let verify_capture_start () =
+  (match !verify_capture with
+   | None -> ()
+   | Some _ -> CErrors.anomaly Pp.(str "Nametab.verify_capture_start: nested capture"));
+  let r = ref [] in
+  verify_capture := Some r;
+  r
+
+let verify_capture_stop (r : cache_entry list ref) =
+  verify_capture := None;
+  List.rev !r
+
 
 let pr_visibility = function
   | Until i -> Pp.(str "Until " ++ int i)
@@ -856,6 +887,9 @@ let push_abbreviation ?user_warns visibility sp kn =
   if not !loading_from_cache then begin
     if Int.equal !register_depth 0 then
       push_log := (visibility, sp, Abbrev kn) :: !push_log;
+    (match !verify_capture with
+     | Some r -> r := (visibility, sp, Abbrev kn) :: !r
+     | None -> ());
     dbg Pp.(fun () ->
         str "push depth=" ++ int !register_depth
         ++ str " cache=" ++ str (string_of_bool !loading_from_cache)
@@ -872,6 +906,9 @@ let push ?user_warns vis sp kn =
   if not !loading_from_cache then begin
     if Int.equal !register_depth 0 then
       push_log := (vis, sp, TrueGlobal kn) :: !push_log;
+    (match !verify_capture with
+     | Some r -> r := (vis, sp, TrueGlobal kn) :: !r
+     | None -> ());
     dbg Pp.(fun () ->
         str "push depth=" ++ int !register_depth
         ++ str " cache=" ++ str (string_of_bool !loading_from_cache)
@@ -909,6 +946,130 @@ let apply_cache ?(lib = "?") entries =
           ++ str " -> " ++ pr_xref xref);
       XRefs.push vis sp xref)
     entries
+
+let compare_visibility a b = match a, b with
+  | Until i, Until j -> Int.compare i j
+  | Exactly i, Exactly j -> Int.compare i j
+  | Until _, Exactly _ -> -1
+  | Exactly _, Until _ -> 1
+
+let compare_cache_entry (v1, sp1, x1) (v2, sp2, x2) =
+  let c = compare_full_path sp1 sp2 in
+  if c <> 0 then c else
+  let c = compare_visibility v1 v2 in
+  if c <> 0 then c else
+  ExtRefOrdered.compare x1 x2
+
+let cache_entry_equal a b = Int.equal 0 (compare_cache_entry a b)
+
+let string_option_equal a b = match a, b with
+  | None, None -> true
+  | Some x, Some y -> String.equal x y
+  | _, _ -> false
+
+(* One entry's CURRENT, live resolution: does its own exact [full_path]
+   still resolve to its own [xref], and what does [shortest_qualid]
+   currently say for that [xref]? Bug 18d's symptom (Nat.even printed as
+   even) is a divergence in the SECOND field only -- the full_path lookup
+   still succeeds while the shortest qualid differs -- which is why both
+   are checked, not just one. *)
+type verify_observation = {
+  vo_at_path : extended_global_reference option;
+  vo_shortest : string option;
+}
+
+let observe (_, sp, xref) =
+  let vo_at_path = try Some (XRefs.of_path sp) with Not_found -> None in
+  let vo_shortest =
+    try Some (Pp.string_of_ppcmds (pr_qualid (XRefs.shortest_qualid Id.Set.empty xref)))
+    with Not_found -> None
+  in
+  { vo_at_path; vo_shortest }
+
+let observation_equal o1 o2 =
+  (match o1.vo_at_path, o2.vo_at_path with
+   | None, None -> true
+   | Some x, Some y -> ExtRefOrdered.equal x y
+   | _, _ -> false)
+  && string_option_equal o1.vo_shortest o2.vo_shortest
+
+module VerifyKeyMap = Map.Make(struct
+    type t = full_path * extended_global_reference
+    let compare (p1, x1) (p2, x2) =
+      let c = compare_full_path p1 p2 in
+      if c <> 0 then c else ExtRefOrdered.compare x1 x2
+  end)
+
+(* The soundness check itself. [cached] is the fragment that was just
+   bulk-applied to the live table ([apply_cache]'s own argument,
+   unchanged -- this IS what production just did); [replayed] is a
+   genuine full replay's own push sequence, captured via
+   [verify_capture_start]/[verify_capture_stop] while the live table was
+   restored to the EXACT ambient state both replays started from.
+   [cached_obs]/[replayed_obs] pair each list's own entries with an
+   [observe] taken in that list's OWN live state (cached: right after
+   [apply_cache]; replayed: right after the scratch replay, before either
+   is torn down -- see [library.ml]'s [verify_register_library]). Fails
+   loudly with the FIRST differing entry -- the contract a size-N
+   Locate/About sample can never give. *)
+let verify_cache_equivalence ~lib ~cached ~replayed ~cached_obs ~replayed_obs =
+  dbg_verify Pp.(fun () ->
+      str "verify lib=" ++ str lib
+      ++ str " cached=" ++ int (List.length cached)
+      ++ str " replayed=" ++ int (List.length replayed));
+  let fail_entry what (vis, sp, xref) =
+    CErrors.user_err
+      Pp.(str "nametab-cache-verify: " ++ str lib ++ str ": " ++ str what
+          ++ str " -- " ++ pr_visibility vis ++ str " " ++ pr_path sp
+          ++ str " -> " ++ pr_xref xref)
+  in
+  let sorted_cached = List.sort compare_cache_entry cached in
+  let sorted_replayed = List.sort compare_cache_entry replayed in
+  let rec diff_sorted l1 l2 = match l1, l2 with
+    | [], [] -> ()
+    | e :: _, [] ->
+      fail_entry "the cached fragment applies an entry a genuine full replay never produces" e
+    | [], e :: _ ->
+      fail_entry "a genuine full replay produces an entry the cached fragment omits" e
+    | e1 :: r1, e2 :: r2 ->
+      let c = compare_cache_entry e1 e2 in
+      if Int.equal c 0 then diff_sorted r1 r2
+      else if c < 0 then
+        fail_entry "the cached fragment applies an entry a genuine full replay never produces" e1
+      else
+        fail_entry "a genuine full replay produces an entry the cached fragment omits" e2
+  in
+  diff_sorted sorted_cached sorted_replayed;
+  let rec list_eq = function
+    | [], [] -> true
+    | a :: ra, b :: rb -> cache_entry_equal a b && list_eq (ra, rb)
+    | _, _ -> false
+  in
+  if not (list_eq (cached, replayed)) then
+    dbg_verify Pp.(fun () ->
+        str "verify lib=" ++ str lib
+        ++ str ": same entries, different relative order"
+        ++ str " (not excluded as order-sensitive; content matches)");
+  let to_map obs =
+    List.fold_left (fun m ((_, sp, xref), o) -> VerifyKeyMap.add (sp, xref) o m)
+      VerifyKeyMap.empty obs
+  in
+  let cm = to_map cached_obs and rm = to_map replayed_obs in
+  VerifyKeyMap.iter (fun (sp, xref) o1 ->
+      match VerifyKeyMap.find_opt (sp, xref) rm with
+      | None -> ()
+      | Some o2 ->
+        if not (observation_equal o1 o2) then
+          CErrors.user_err
+            Pp.(str "nametab-cache-verify: " ++ str lib
+                ++ str ": " ++ pr_path sp ++ str " -> " ++ pr_xref xref
+                ++ str " resolves differently after the cache was applied than"
+                ++ str " after a genuine full replay (cached shortest-qualid: "
+                ++ str (match o1.vo_shortest with Some s -> s | None -> "<not found>")
+                ++ str "; full-replay shortest-qualid: "
+                ++ str (match o2.vo_shortest with Some s -> s | None -> "<not found>")
+                ++ str ")"))
+    cm
 
 
 let push_modtype vis sp kn = ModTypes.push vis sp kn
