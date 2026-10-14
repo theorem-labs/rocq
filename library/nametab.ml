@@ -814,10 +814,33 @@ type cache_entry = visibility * full_path * extended_global_reference
 
 let push_log : cache_entry list ref = ref []
 
+(* Debugging aid for the masking-absolute-name bug (ROCQ-INTERNALS.md §18):
+   dumps every real [push]/[push_abbreviation] call and every [apply_cache]
+   bulk-replay, in order, with enough context (register depth, whether
+   [loading_from_cache] was set, visibility, target path, and the
+   GlobRef/abbreviation being bound) to reconstruct exactly which push wins
+   and which loses at a given trie node. Enable with [-d nametab-cache]. *)
+let dbg = CDebug.create ~name:"nametab-cache" ()
+let dbg_cache = dbg
+
+let pr_visibility = function
+  | Until i -> Pp.(str "Until " ++ int i)
+  | Exactly i -> Pp.(str "Exactly " ++ int i)
+
+let pr_xref = function
+  | TrueGlobal gr -> Pp.(str "TrueGlobal(" ++ GlobRef.print gr ++ str ")")
+  | Abbrev kn -> Pp.(str "Abbrev(" ++ KerName.print kn ++ str ")")
+
 let push_abbreviation ?user_warns visibility sp kn =
   if not !loading_from_cache then begin
     if Int.equal !register_depth 0 then
       push_log := (visibility, sp, Abbrev kn) :: !push_log;
+    dbg Pp.(fun () ->
+        str "push depth=" ++ int !register_depth
+        ++ str " cache=" ++ str (string_of_bool !loading_from_cache)
+        ++ str " " ++ pr_visibility visibility
+        ++ str " " ++ pr_path sp
+        ++ str " -> " ++ pr_xref (Abbrev kn));
     XRefs.push ?wdata:user_warns visibility sp (Abbrev kn)
   end
 
@@ -828,27 +851,43 @@ let push ?user_warns vis sp kn =
   if not !loading_from_cache then begin
     if Int.equal !register_depth 0 then
       push_log := (vis, sp, TrueGlobal kn) :: !push_log;
+    dbg Pp.(fun () ->
+        str "push depth=" ++ int !register_depth
+        ++ str " cache=" ++ str (string_of_bool !loading_from_cache)
+        ++ str " " ++ pr_visibility vis
+        ++ str " " ++ pr_path sp
+        ++ str " -> " ++ pr_xref (TrueGlobal kn));
     XRefs.push ?wdata:user_warns vis sp (TrueGlobal kn)
   end
 
-(* This process's entire depth-0 push log, in original order -- the exact,
-   already-correctly-ordered contribution the file currently compiling made
-   to [XRefs] (a coqc process compiles exactly one top-level library, so
-   this is unambiguously that library's own, not a dependency's: every
-   dependency's pushes happened at depth > 0 and were never recorded here).
-   Ready to be stored as the .vo's [seg_nametab] segment and replayed
-   verbatim later by [apply_cache]. The [dir] parameter is unused -- kept so
-   a future multi-library-per-process caller (there is none today) has an
-   explicit hook to scope by, rather than silently relying on the
-   one-library-per-process invariant. *)
+(* This process's entire depth-0 push log (see [register_depth]), in
+   original order -- the file currently compiling's own, exact,
+   correctly-ordered contribution to [XRefs], suitable for storing as a
+   .vo's [seg_nametab] segment and replaying later via [apply_cache]. The
+   [dir] parameter is unused -- kept so a future multi-library-per-process
+   caller (there is none today) has an explicit hook to scope by, rather
+   than silently relying on the one-library-per-process invariant. *)
 let export_cache (_dir : DirPath.t) = List.rev !push_log
 
 (* Bulk-apply a previously captured fragment, in the order it was captured
    in. Bypasses [loading_from_cache] and [push_log] entirely -- this is the
    direct [XRefs.push] funnel, used once after a library's object replay
-   (with pushes silenced) has finished. *)
-let apply_cache entries =
-  List.iter (fun (vis, sp, xref) -> XRefs.push vis sp xref) entries
+   (with pushes silenced) has finished. [lib] is a debug-only label (the
+   dependency this fragment was captured from) threaded through so the
+   [-d nametab-cache] trace can tell two libraries' entries apart. *)
+let apply_cache ?(lib = "?") entries =
+  dbg Pp.(fun () ->
+      str "apply_cache lib=" ++ str lib
+      ++ str " depth=" ++ int !register_depth
+      ++ str " count=" ++ int (List.length entries));
+  List.iter (fun (vis, sp, xref) ->
+      dbg Pp.(fun () ->
+          str "  apply lib=" ++ str lib
+          ++ str " " ++ pr_visibility vis
+          ++ str " " ++ pr_path sp
+          ++ str " -> " ++ pr_xref xref);
+      XRefs.push vis sp xref)
+    entries
 
 
 let push_modtype vis sp kn = ModTypes.push vis sp kn

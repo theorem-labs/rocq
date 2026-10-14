@@ -535,6 +535,12 @@ let nametab_cache_trusted m =
 let register_library m =
   let l = m.library_data in
   let use_cache = nametab_cache_trusted m in
+  let lib = DirPath.to_string m.library_name in
+  Nametab.dbg_cache Pp.(fun () ->
+      str "register_library lib=" ++ str lib
+      ++ str " use_cache=" ++ str (string_of_bool use_cache)
+      ++ str " caller_depth=" ++ int !Nametab.register_depth
+      ++ str " nametab_entries=" ++ int (List.length m.library_nametab));
   if use_cache then Nametab.loading_from_cache := true;
   incr Nametab.register_depth;
   Fun.protect
@@ -548,7 +554,7 @@ let register_library m =
          l.md_objects
          m.library_digests
          m.library_vm);
-  if use_cache then Nametab.apply_cache m.library_nametab;
+  if use_cache then Nametab.apply_cache ~lib m.library_nametab;
   register_native_library m.library_name
 
 let register_library_syntax ~root m =

@@ -227,8 +227,15 @@ val register_depth : int ref
 val export_cache : DirPath.t -> cache_entry list
 
 (** Replay a previously captured [export_cache] result, in order, directly
-    into [XRefs] -- independent of [loading_from_cache]. *)
-val apply_cache : cache_entry list -> unit
+    into [XRefs] -- independent of [loading_from_cache]. [lib] is a
+    debug-only label (identifying which dependency this fragment came
+    from) threaded through to the [-d nametab-cache] trace. *)
+val apply_cache : ?lib:string -> cache_entry list -> unit
+
+(** The [-d nametab-cache] debug printer (see nametab.ml), exposed so
+    [library.ml]'s [register_library] can log its own cache-or-not
+    decision on the same trace. *)
+val dbg_cache : (unit -> Pp.t) -> unit
 
 val locate : qualid -> GlobRef.t
 
