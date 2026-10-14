@@ -1778,6 +1778,24 @@ let register_library dir cenv (objs:library_objects) digest vmtab =
   InterpVisitor.load_escape 1 sp mp escapeobjs;
   InterpVisitor.load_keep 1 sp mp keepobjs
 
+(* perf-nametab-cache (ROCQ-INTERNALS.md Section 19): replay ONLY the
+   Nametab-pushing half of [register_library] -- skips the
+   Global.lookup_module/Global.import kernel-environment step entirely
+   (Nametab and the kernel environment are separate subsystems; see
+   ROCQ-INTERNALS.md Section 17b.4). Used to capture a library's own
+   Nametab contribution via a genuine replay of its own freshly-compiled
+   data, in the SAME process that just compiled it -- impossible via the
+   normal [register_library] above, whose Global.import step rejects
+   self-import ("Cannot load a library with the same name as the current
+   one") since this process's own environment is still that library. *)
+let register_library_nametab_only dir (objs:library_objects) =
+  let mp = MPfile dir in
+  let sp = path_of_file dir in
+  let sobjs,keepobjs,escapeobjs = objs in
+  InterpVisitor.load_module 1 sp mp ([],Objs sobjs);
+  InterpVisitor.load_escape 1 sp mp escapeobjs;
+  InterpVisitor.load_keep 1 sp mp keepobjs
+
 let register_safe_library dir mb =
   InterpVisitor.load_safe_library dir mb
 

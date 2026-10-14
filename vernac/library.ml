@@ -794,13 +794,21 @@ let save_library_base f sum lib proofs vmlib nametab =
    requiring caller -- so capturing the delta via an ACTUAL post-compile
    replay, instead of trusting interpretation-time logging, is
    context-independent by construction; ROCQ-INTERNALS.md Section 19 adds
-   the cross-context check that confirms this empirically too. The kernel
-   module is already present in this same process (this library just
-   finished compiling), so [register_library]'s own "already loaded"
-   branch skips [Global.import] -- the digest argument is therefore inert
-   here and a placeholder is used. The live state is frozen and restored
-   around the replay so this diagnostic pass leaves no trace. *)
-let capture_nametab_via_replay dir md_compiled md_objects vmlib =
+   the cross-context check that confirms this empirically too.
+
+   [Declaremods.Interp.register_library_nametab_only] (not the full
+   [register_library]) is used deliberately: the full version's
+   Global.lookup_module/Global.import step rejects replaying a library
+   into the SAME process that just compiled it ("Cannot load a library
+   with the same name as the current one" -- confirmed by hitting this
+   exact error on the first attempt), since that process's kernel
+   environment is still, by construction, the library being saved. The
+   Nametab-only half skips the kernel-import step entirely -- Nametab and
+   the kernel environment are separate subsystems (ROCQ-INTERNALS.md
+   Section 17b.4) -- sidestepping the guard rather than fighting it. The
+   live Nametab/Interp summary state is frozen and restored around the
+   replay so this diagnostic pass leaves no trace. *)
+let capture_nametab_via_replay dir md_objects =
   let pre = Summary.Interp.freeze_summaries () in
   let capture = Nametab.verify_capture_start () in
   incr Nametab.register_depth;
@@ -808,10 +816,7 @@ let capture_nametab_via_replay dir md_compiled md_objects vmlib =
     ~finally:(fun () ->
        decr Nametab.register_depth;
        Summary.Interp.unfreeze_summaries pre)
-    (fun () ->
-       Declaremods.Interp.register_library
-         dir md_compiled md_objects (Safe_typing.Dvo_or_vi (Digest.string ""))
-         (Vmlibrary.inject vmlib));
+    (fun () -> Declaremods.Interp.register_library_nametab_only dir md_objects);
   Nametab.verify_capture_stop capture
 
 (* This is the basic vo save structure *)
@@ -832,7 +837,7 @@ let save_library_struct ~output_native_objects dir =
     } in
   if Array.exists (fun (d,_,_) -> DirPath.equal d dir) sd.md_deps then
     error_recursively_dependent_library dir;
-  let nametab = capture_nametab_via_replay dir md_compiled md_objects vmlib in
+  let nametab = capture_nametab_via_replay dir md_objects in
   sd, md, vmlib, ast, nametab
 
 let save_library dir : library_t =
