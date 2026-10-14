@@ -71,13 +71,15 @@ def ensure_zygote(group, prefix_file, sock_path):
                 except OSError:
                     pass
             log_path = os.path.join(SOCKDIR, f"{group}.log")
-            coqlibs = os.environ.get("ROCQ_ZYGOTE_COQLIBS", "").split()
+            coqlibs_raw = os.environ.get("ROCQ_ZYGOTE_COQLIBS", "")
+            coqlibs = coqlibs_raw.split()
             with open(log_path, "ab") as log:
                 subprocess.Popen(
                     [ZYGOTE_EXE, "-q"] + coqlibs + [
                         "--rocq-zygote-prefix", prefix_file,
                         "--rocq-zygote-socket", sock_path,
                         "--rocq-zygote-idle-timeout", IDLE_TIMEOUT,
+                        "--rocq-zygote-coqlibs", coqlibs_raw,
                     ],
                     stdout=log, stderr=log, stdin=subprocess.DEVNULL,
                     start_new_session=True,
@@ -109,7 +111,12 @@ def try_zygote(group, prefix_file, file_v, output_v, echo, tmp_base):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(600)
         s.connect(sock_path)
-        req = f"COMPILE\t{file_v}\t{output_v}\t{1 if echo else 0}\t{stdout_tmp}\t{stderr_tmp}\n"
+        cwd = os.getcwd()
+        coqlibs_raw = os.environ.get("ROCQ_ZYGOTE_COQLIBS", "")
+        # cwd+coqlibs let the daemon chdir to match the client's own cwd before
+        # resolving file_v/output_v (relative, 20d/21) and verify its own -Q/-R
+        # flags still match this client's, rather than assuming both forever.
+        req = f"COMPILE\t{cwd}\t{coqlibs_raw}\t{file_v}\t{output_v}\t{1 if echo else 0}\t{stdout_tmp}\t{stderr_tmp}\n"
         s.sendall(req.encode("utf-8"))
         buf = b""
         while not buf.endswith(b"\n"):

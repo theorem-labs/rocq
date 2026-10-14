@@ -51,13 +51,22 @@
 
    Wire protocol (one line in, one line out, tab-separated, over a Unix
    domain socket):
-     client -> server: "COMPILE\t<abs file>\t<abs .vo output>\t<echo:0|1>\t<stdout path>\t<stderr path>\n"
-     server -> client: "MISMATCH\n"      -- the file's own leading sentences differ from the
+     client -> server: "COMPILE\t<cwd>\t<coqlibs>\t<file>\t<.vo output>\t<echo:0|1>\t<stdout path>\t<stderr path>\n"
+     server -> client: "MISMATCH\n"      -- either the client's <coqlibs> string didn't match this
+                                             daemon's own -Q/-R flags, or chdir to <cwd> failed, or
+                                             the file's own leading sentences differ from the
                                              zygote's recorded prefix; caller must fall back
                                              to an ordinary, non-zygote compile.
                         "EXIT\t<code>\n" -- the file was compiled (or failed) under the
                                              zygote; stdout/stderr were written to the paths
                                              given in the request; caller exits with <code>.
+   <file>/<.vo output> are given exactly as coq_makefile would pass them to a real `rocq
+   compile` invocation (relative, matching the client's own <cwd>) -- Rocq embeds the literal
+   path string it was given in every stored Loc.t, so an absolute path, or a relative path
+   resolved against the wrong cwd, makes the .vo diverge from a stock compile byte-for-byte.
+   The forked child chdirs to <cwd> before resolving <file>/<.vo output> (20d/21): a daemon is
+   spawned lazily by whichever client wins the race, so its own post-fork cwd is NOT guaranteed
+   to already equal every later client's cwd without this step.
 
    A second, independent mode (--rocq-zygote-dump-sentences, used by the
    offline prefix-structure analysis, not by the server) parses a file's
@@ -111,6 +120,14 @@ type zygote_args = {
   socket_path : string option;
   idle_timeout : float; (* seconds; <= 0.0 means no idle timeout *)
   dump_sentences : int option; (* Some max_n: dump mode instead of serving *)
+  (* The exact -Q/-R load-path flag string this daemon was launched with
+     (set by the wrapper from its own ROCQ_ZYGOTE_COQLIBS, the same string
+     for every file in the group by construction). Every COMPILE request
+     now carries the client's own copy of that string; the server rejects
+     (MISMATCH, safe fallback) any request whose string doesn't match
+     byte-for-byte, so a daemon can never compile a file under load-path
+     flags other than the ones its own warm-up used. *)
+  coqlibs : string;
 }
 
 let parse_zygote_extra extras =
@@ -118,11 +135,13 @@ let parse_zygote_extra extras =
   let socket_path = ref None in
   let idle_timeout = ref 0.0 in
   let dump_sentences = ref None in
+  let coqlibs = ref "" in
   let rec go = function
     | "--rocq-zygote-prefix" :: v :: rest -> prefix_file := Some v; go rest
     | "--rocq-zygote-socket" :: v :: rest -> socket_path := Some v; go rest
     | "--rocq-zygote-idle-timeout" :: v :: rest -> idle_timeout := float_of_string v; go rest
     | "--rocq-zygote-dump-sentences" :: v :: rest -> dump_sentences := Some (int_of_string v); go rest
+    | "--rocq-zygote-coqlibs" :: v :: rest -> coqlibs := v; go rest
     | x :: rest -> x :: go rest
     | [] -> []
   in
@@ -130,7 +149,8 @@ let parse_zygote_extra extras =
   { prefix_file = !prefix_file;
     socket_path = !socket_path;
     idle_timeout = !idle_timeout;
-    dump_sentences = !dump_sentences },
+    dump_sentences = !dump_sentences;
+    coqlibs = !coqlibs },
   remaining
 
 let zygote_specific_usage = Boot.Usage.{
@@ -141,6 +161,8 @@ rocq-zygote specific options (consumed before coqc's own flags):\
 \n  --rocq-zygote-prefix FILE          server mode: the shared Require-only prefix, verbatim\
 \n  --rocq-zygote-socket PATH          server mode: Unix socket to listen on\
 \n  --rocq-zygote-idle-timeout S       server mode: exit after S idle seconds (default: never)\
+\n  --rocq-zygote-coqlibs STRING       server mode: this daemon's own -Q/-R flag string, for the\
+\n                                     per-request guard (see handle_connection)\
 \n  --rocq-zygote-dump-sentences N     dump mode: print the file's first N sentences, NUL-separated\
 \n"
 }
@@ -198,8 +220,29 @@ let reopen_std fd path =
   Unix.close newfd
 
 (* Handle exactly one already-accepted connection, in a process forked
-   fresh from the warmed-up zygote. Never returns -- always exits. *)
-let handle_connection opts stm_opts injections ~prefix_sentences conn =
+   fresh from the warmed-up zygote. Never returns -- always exits.
+
+   The request now carries the client's own cwd and its own copy of the
+   load-path flag string (ROCQ_ZYGOTE_COQLIBS on the wrapper side, this
+   daemon's ~coqlibs on the server side). Two checks before any file I/O:
+   (1) the coqlibs strings must match byte-for-byte -- a daemon never
+   compiles a file under -Q/-R bindings other than the ones its own
+   warm-up used, which is the soundness precondition this design has
+   always relied on, now actually verified per request instead of merely
+   assumed from the group manifest. (2) Unix.chdir to the client's cwd,
+   BEFORE resolving the (relative) file/output paths -- a forked child
+   inherits the zygote's cwd at the moment it was spawned, which need not
+   be the cwd of the client sending THIS request (the daemon is spawned
+   lazily, once, by whichever client happened to win the race; nothing
+   before this fix kept every later client's cwd in sync with that one).
+   Without the chdir, a relative file/output argument is resolved against
+   the wrong directory -- at best a clean ENOENT (caught below, safely
+   falls back to MISMATCH), at worst a same-named file that happens to
+   exist under the stale cwd too, compiled and embedding the wrong
+   relative path string in its own Loc.t metadata (the divergence
+   documented in 20d). The chdir runs in the forked child only, so it
+   never perturbs the parent zygote's own cwd for later forks. *)
+let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn =
   Unix.set_close_on_exec conn;
   (* Always move onto a fresh descriptor before we repoint fd 0/1/2 for the
      compile's own stdout/stderr -- stdin/stdout/stderr are already open in
@@ -209,7 +252,18 @@ let handle_connection opts stm_opts injections ~prefix_sentences conn =
   let conn = moved in
   let line = recv_line conn in
   match String.split_on_char '\t' line with
-  | ["COMPILE"; file; output; echo; stdout_path; stderr_path] ->
+  | ["COMPILE"; client_cwd; client_coqlibs; file; output; echo; stdout_path; stderr_path] ->
+    if not (String.equal client_coqlibs coqlibs) then begin
+      send_line conn "MISMATCH";
+      Unix.close conn;
+      exit 0
+    end;
+    let chdir_ok = try Unix.chdir client_cwd; true with Unix.Unix_error _ -> false in
+    if not chdir_ok then begin
+      send_line conn "MISMATCH";
+      Unix.close conn;
+      exit 0
+    end;
     let n = Array.length prefix_sentences in
     let matches =
       try
@@ -239,7 +293,6 @@ let handle_connection opts stm_opts injections ~prefix_sentences conn =
     send_line conn "MISMATCH";
     Unix.close conn;
     exit 0
-
 let reap_finished_children () =
   try
     let continue = ref true in
@@ -250,7 +303,7 @@ let reap_finished_children () =
     done
   with Unix.Unix_error ((Unix.ECHILD | Unix.EINTR), _, _) -> ()
 
-let serve_forever opts stm_opts injections ~prefix_sentences ~socket_path ~idle_timeout =
+let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~socket_path ~idle_timeout =
   (try Unix.unlink socket_path with Sys_error _ | Unix.Unix_error _ -> ());
   let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.bind sock (Unix.ADDR_UNIX socket_path);
@@ -276,7 +329,7 @@ let serve_forever opts stm_opts injections ~prefix_sentences ~socket_path ~idle_
          (match Unix.fork () with
           | 0 ->
             Unix.close sock;
-            handle_connection opts stm_opts injections ~prefix_sentences conn
+            handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn
           | _pid ->
             Unix.close conn;
             loop ())
@@ -314,7 +367,7 @@ let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
     Printf.eprintf "rocq-zygote: prefix warm-up failed (exit %d), refusing to serve\n%!" code;
     exit code
   end;
-  serve_forever opts stm_opts injections ~prefix_sentences
+  serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs:zargs.coqlibs
     ~socket_path ~idle_timeout:zargs.idle_timeout
 
 let custom_zygote
