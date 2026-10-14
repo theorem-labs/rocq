@@ -21,13 +21,17 @@
 let set_gc_policy () =
   Gc.set { (Gc.get ()) with
            Gc.minor_heap_size = 32*1024*1024 (* 32Mwords x 8 bytes/word = 256Mb *)
-         ; Gc.space_overhead = 120
+         ; Gc.space_overhead = 400 (* measured production-shape optimum on the
+             theorem-labs vendor-proof workload: -13.7% coqc build wall / -18.4%
+             CPU at o=400 vs the previous 120/200 split, -j16, 368-file tree.
+             See docs/build/ROCQ-INTERNALS.md in binary-equivalence-taiga for
+             the measurement. Purely a GC heuristic: cannot affect soundness. *)
          }
 
 let set_gc_best_fit () =
   Gc.set { (Gc.get ()) with
            Gc.allocation_policy = 2      (* best-fit *)
-         ; Gc.space_overhead = 200
+         ; Gc.space_overhead = 400
          }
 
 let init_gc () =
