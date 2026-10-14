@@ -50,12 +50,24 @@ let parse_args () : args =
   | _ :: tname :: base_dir :: args ->
     let tname = String.split_on_char '.' tname in
     let _backtrace = [Arg.A "-d"; Arg.A "backtrace"] in
+    (* Testing-only hook for ROCQ-INTERNALS.md §19: NAMETAB_CACHE_VERIFY=1
+       bakes [-d nametab-cache-verify] into every generated coqc rule, so a
+       whole-tree (Corelib/Ltac2) build exercises the soundness instrument
+       on every cached Require, not just one hand-picked file. Not part of
+       the lever itself -- COQ_DUNE_EXTRA_OPT has no generic flag
+       passthrough (unknown args make [parse_args] raise), so this is a
+       dedicated, narrowly-scoped env var instead. *)
+    let verify_flags =
+      match Sys.getenv_opt "NAMETAB_CACHE_VERIFY" with
+      | Some "1" -> Arg.[A "-d"; A "nametab-cache-verify"]
+      | _ -> []
+    in
     let default = { base_dir; tname;
                     async = false;
                     split = false;
                     noinit = false;
                     rule = Coq_module.Rule_type.Regular { native };
-                    user_flags = [];
+                    user_flags = verify_flags;
                     dependencies = [];
                   }
     in
