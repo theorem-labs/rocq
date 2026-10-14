@@ -786,22 +786,54 @@ module CustomEntries = EasyNoWarn(CustomEntriesV)()
 (* perf-nametab-cache: a central interception point for replaying a
    library's own Nametab contribution from a precomputed .vo fragment
    instead of via N individual [push] calls during object replay (see
-   ROCQ-INTERNALS.md Section 19). When [loading_from_cache] is set, the two
+   ROCQ-INTERNALS.md Section 17). When [loading_from_cache] is set, the two
    functions below (the sole funnel for [XRefs], the GlobRef/abbreviation
    table) become no-ops: the caller is expected to bulk-apply a previously
    captured fragment via [apply_cache] once the object replay completes.
 
-   [register_depth] is incremented for the exact duration of a nested
-   [Declaremods.Interp.register_library] call (replaying an already-
-   compiled dependency pulled in by a [Require]) and is 0 at every other
-   moment. [library.ml]'s [capture_nametab_via_replay] uses it (alongside
-   [verify_capture]) to keep its own post-compile capture replay from
-   being misattributed as a nested dependency's pushes. *)
+   [push_log] accumulates every real push made while [register_depth] is 0,
+   in order. [register_depth] is incremented for the exact duration of a
+   nested [Declaremods.Interp.register_library] call (i.e. while replaying
+   some OTHER, already-compiled library Y being pulled in by a [Require]
+   inside the file currently compiling) and is 0 at every other moment --
+   including while processing the current file's OWN [Import]/[Export]
+   statements, which call [push] directly (not through [register_library])
+   to re-expose an already-loaded module's names at a shorter visibility.
+   Filtering by "whose GlobRef was declared in this library" (an earlier,
+   wrong version of this cache) drops exactly those re-push entries: an
+   [Export Nat.] inside, say, BinNums.v pushes [Nat.t]'s *existing* GlobRef
+   at a new, shorter visibility -- a real push this library's replay must
+   reproduce, even though the GlobRef itself belongs to Nat, not BinNums.
+   Depth-based scoping captures it correctly because it is emitted directly
+   by BinNums's own object stream, at depth 0, not inside a nested
+   [register_library] call for Nat.
+
+   [push_log] MUST be a [Summary.ref] at the SAME stage as [XRefs.the_tab]
+   ([Summary.Stage.Interp]), not a plain [ref]. [XRefs] is itself
+   summary-managed: opening a [Section] freezes the live table and closing
+   it restores that frozen snapshot, silently undoing every push a section
+   made (e.g. [Variables S S' : Set.]'s section-local [VarRef]s) so they
+   never leak past [End]. A plain-ref [push_log] does not participate in
+   that freeze/restore at all -- it keeps every push ever logged,
+   including ones the live table itself later discarded, so the exported
+   cache replays names the real, equivalent build never actually exposed.
+   This is exactly the masking-absolute-name bug (ROCQ-INTERNALS.md §17d's
+   open bug, root-caused in §18): Specif.v opens a section binding a LOCAL
+   "S" (`Variables S S' : Set.`), which gets logged at depth 0 same as any
+   other push; the section closes and restores the live [XRefs] table,
+   erasing that "S" from it, but the plain-ref log still carries it; later,
+   replaying Specif's exported fragment bulk-applies that stale "S" as an
+   absolute binding, and the file that actually requires both Datatypes and
+   Specif then fails trying to import the real [Datatypes.S] over it. A
+   [Summary.ref] rolls [push_log] back in lockstep with [XRefs] itself, so
+   it only ever contains what the live table still holds. *)
 let loading_from_cache = ref false
 let register_depth = ref 0
 
 type cache_entry = visibility * full_path * extended_global_reference
 
+let push_log : cache_entry list ref =
+  Summary.ref ~stage:Summary.Stage.Interp ~name:"nametab-cache-pushlog" []
 
 (* Debugging aid for the masking-absolute-name bug (ROCQ-INTERNALS.md §18):
    dumps every real [push]/[push_abbreviation] call and every [apply_cache]
@@ -825,9 +857,9 @@ let verify_enabled, dbg_verify = CDebug.create_full ~name:"nametab-cache-verify"
 let verify_mode () = CDebug.get_flag verify_enabled
 
 (* Captures every [push]/[push_abbreviation] call made during one
-   bracketed interval, regardless of [register_depth] -- used both by
-   [verify_cache_equivalence]'s scratch replay and by [library.ml]'s
-   [capture_nametab_via_replay] (the fragment's actual source). *)
+   bracketed interval, regardless of [register_depth] (unlike [push_log],
+   which only logs at depth 0 -- exactly wrong for this purpose, since a
+   verify-mode re-replay of a dependency runs at register_depth > 0). *)
 let verify_capture : cache_entry list ref option ref = ref None
 
 let verify_capture_start () =
@@ -853,6 +885,8 @@ let pr_xref = function
 
 let push_abbreviation ?user_warns visibility sp kn =
   if not !loading_from_cache then begin
+    if Int.equal !register_depth 0 then
+      push_log := (visibility, sp, Abbrev kn) :: !push_log;
     (match !verify_capture with
      | Some r -> r := (visibility, sp, Abbrev kn) :: !r
      | None -> ());
@@ -870,6 +904,8 @@ let remove_abbreviation sp kn =
 
 let push ?user_warns vis sp kn =
   if not !loading_from_cache then begin
+    if Int.equal !register_depth 0 then
+      push_log := (vis, sp, TrueGlobal kn) :: !push_log;
     (match !verify_capture with
      | Some r -> r := (vis, sp, TrueGlobal kn) :: !r
      | None -> ());
@@ -882,6 +918,14 @@ let push ?user_warns vis sp kn =
     XRefs.push ?wdata:user_warns vis sp (TrueGlobal kn)
   end
 
+(* This process's entire depth-0 push log (see [register_depth]), in
+   original order -- the file currently compiling's own, exact,
+   correctly-ordered contribution to [XRefs], suitable for storing as a
+   .vo's [seg_nametab] segment and replaying later via [apply_cache]. The
+   [dir] parameter is unused -- kept so a future multi-library-per-process
+   caller (there is none today) has an explicit hook to scope by, rather
+   than silently relying on the one-library-per-process invariant. *)
+let export_cache (_dir : DirPath.t) = List.rev !push_log
 
 (* Bulk-apply a previously captured fragment, in the order it was captured
    in. Bypasses [loading_from_cache] and [push_log] entirely -- this is the
