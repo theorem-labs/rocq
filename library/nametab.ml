@@ -814,13 +814,17 @@ let push ?user_warns vis sp kn =
     XRefs.push ?wdata:user_warns vis sp (TrueGlobal kn)
   end
 
-(* The module path a [GlobRef.t] was declared under, or [None] for a
+(* The DirPath of the library a [GlobRef.t] was declared under -- using
+   [ModPath.dp] rather than a literal [MPfile] match so that a declaration
+   nested inside a [Module ... End] block within the compiled file (e.g.
+   Corelib's [Decimal.v] wrapping its contents in [Module Decimal]) is still
+   correctly attributed to the file's own library, not dropped. [None] for a
    section variable (never library-owned). *)
-let modpath_of_gref = function
+let libdir_of_gref = function
   | GlobRef.VarRef _ -> None
-  | GlobRef.ConstRef c -> Some (Constant.modpath c)
-  | GlobRef.IndRef (mind, _) -> Some (MutInd.modpath mind)
-  | GlobRef.ConstructRef ((mind, _), _) -> Some (MutInd.modpath mind)
+  | GlobRef.ConstRef c -> Some (ModPath.dp (Constant.modpath c))
+  | GlobRef.IndRef (mind, _) -> Some (ModPath.dp (MutInd.modpath mind))
+  | GlobRef.ConstructRef ((mind, _), _) -> Some (ModPath.dp (MutInd.modpath mind))
 
 (* The subset of this process's push log whose target was declared in
    library [dir], in original push order -- the exact, already-correctly-
@@ -829,11 +833,10 @@ let modpath_of_gref = function
    Scoped to [TrueGlobal] entries only (abbreviations are a separate,
    much lower-volume namespace, out of scope for this cache). *)
 let export_cache dir =
-  let target_mp = ModPath.MPfile dir in
   let owned = function
     | TrueGlobal gr ->
-      (match modpath_of_gref gr with
-       | Some mp -> ModPath.equal mp target_mp
+      (match libdir_of_gref gr with
+       | Some d -> DirPath.equal d dir
        | None -> false)
     | Abbrev _ -> false
   in
