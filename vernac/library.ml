@@ -779,6 +779,40 @@ let save_library_base f sum lib proofs vmlib nametab =
     Sys.remove f;
     Exninfo.iraise iexn
 
+(* ROCQ-INTERNALS.md Section 19: the original design (Section 17) captured
+   this library's Nametab fragment from [push_log] -- the pushes its OWN
+   compile-time INTERPRETATION made. The verify-mode instrument
+   (-d nametab-cache-verify) proved that fragment wrong on the very first
+   cached Require in a from-scratch Corelib build: compile-time
+   interpretation and [Declaremods.Interp.register_library]'s own object
+   REPLAY compute DIFFERENT, systematically different visibility levels
+   for the exact same declarations (observed: "Until 1" vs "Until 2" for
+   virtually every entry in Corelib.Init.Logic) -- two different code
+   paths that were never guaranteed to agree. [register_library]'s own
+   visibility computation (declaremods.ml, [load_module 1 ...]) is a PURE
+   function of [dir]/[md_objects] alone -- no parameter names the
+   requiring caller -- so capturing the delta via an ACTUAL post-compile
+   replay, instead of trusting interpretation-time logging, is
+   context-independent by construction; ROCQ-INTERNALS.md Section 19 adds
+   the cross-context check that confirms this empirically too. The kernel
+   module is already present in this same process (this library just
+   finished compiling), so [register_library]'s own "already loaded"
+   branch skips [Global.import] -- the digest argument is therefore inert
+   here and a placeholder is used. The live state is frozen and restored
+   around the replay so this diagnostic pass leaves no trace. *)
+let capture_nametab_via_replay dir md_compiled md_objects vmlib =
+  let pre = Summary.Interp.freeze_summaries () in
+  let capture = Nametab.verify_capture_start () in
+  incr Nametab.register_depth;
+  Fun.protect
+    ~finally:(fun () ->
+       decr Nametab.register_depth;
+       Summary.Interp.unfreeze_summaries pre)
+    (fun () ->
+       Declaremods.Interp.register_library
+         dir md_compiled md_objects (Digest.string "") vmlib);
+  Nametab.verify_capture_stop capture
+
 (* This is the basic vo save structure *)
 let save_library_struct ~output_native_objects dir =
   let md_compiled, md_objects, md_syntax_objects, vmlib, ast, info =
@@ -797,9 +831,7 @@ let save_library_struct ~output_native_objects dir =
     } in
   if Array.exists (fun (d,_,_) -> DirPath.equal d dir) sd.md_deps then
     error_recursively_dependent_library dir;
-  (* perf-nametab-cache (ROCQ-INTERNALS.md §17): this library's own
-     Nametab contribution, in the order a real replay produced it. *)
-  let nametab = Nametab.export_cache dir in
+  let nametab = capture_nametab_via_replay dir md_compiled md_objects vmlib in
   sd, md, vmlib, ast, nametab
 
 let save_library dir : library_t =
