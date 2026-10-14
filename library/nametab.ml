@@ -1030,6 +1030,10 @@ let verify_cache_equivalence ~lib ~cached ~replayed ~cached_obs ~replayed_obs =
       else diff_sorted (("replay-only", e2) :: acc) (e1 :: r1) r2
   in
   let diffs = diff_sorted [] sorted_cached sorted_replayed in
+  let survey = match Sys.getenv_opt "NAMETAB_CACHE_VERIFY_SURVEY" with
+    | Some "1" -> true
+    | _ -> false
+  in
   (match diffs with
    | [] -> ()
    | _ ->
@@ -1037,13 +1041,15 @@ let verify_cache_equivalence ~lib ~cached ~replayed ~cached_obs ~replayed_obs =
        Pp.(str "  [" ++ str kind ++ str "] " ++ pr_visibility vis ++ str " "
            ++ pr_path sp ++ str " -> " ++ pr_xref xref)
      in
-     CErrors.user_err
+     let msg =
        Pp.(str "nametab-cache-verify: " ++ str lib ++ str ": "
            ++ int (List.length diffs)
            ++ str " entries differ between the cached fragment and a genuine full replay"
            ++ str " (cache-only = applied by the cache but a replay never produces it;"
            ++ str " replay-only = a replay produces it but the cache omits it):" ++ fnl ()
-           ++ prlist_with_sep fnl pr_one diffs));
+           ++ prlist_with_sep fnl pr_one diffs)
+     in
+     if survey then Feedback.msg_warning msg else CErrors.user_err msg);
   let rec list_eq = function
     | [], [] -> true
     | a :: ra, b :: rb -> cache_entry_equal a b && list_eq (ra, rb)
@@ -1064,7 +1070,7 @@ let verify_cache_equivalence ~lib ~cached ~replayed ~cached_obs ~replayed_obs =
       | None -> ()
       | Some o2 ->
         if not (observation_equal o1 o2) then
-          CErrors.user_err
+          let msg =
             Pp.(str "nametab-cache-verify: " ++ str lib
                 ++ str ": " ++ pr_path sp ++ str " -> " ++ pr_xref xref
                 ++ str " resolves differently after the cache was applied than"
@@ -1072,7 +1078,9 @@ let verify_cache_equivalence ~lib ~cached ~replayed ~cached_obs ~replayed_obs =
                 ++ str (match o1.vo_shortest with Some s -> s | None -> "<not found>")
                 ++ str "; full-replay shortest-qualid: "
                 ++ str (match o2.vo_shortest with Some s -> s | None -> "<not found>")
-                ++ str ")"))
+                ++ str ")")
+          in
+          if survey then Feedback.msg_warning msg else CErrors.user_err msg)
     cm
 
 
