@@ -1017,29 +1017,33 @@ let verify_cache_equivalence ~lib ~cached ~replayed ~cached_obs ~replayed_obs =
       str "verify lib=" ++ str lib
       ++ str " cached=" ++ int (List.length cached)
       ++ str " replayed=" ++ int (List.length replayed));
-  let fail_entry what (vis, sp, xref) =
-    CErrors.user_err
-      Pp.(str "nametab-cache-verify: " ++ str lib ++ str ": " ++ str what
-          ++ str " -- " ++ pr_visibility vis ++ str " " ++ pr_path sp
-          ++ str " -> " ++ pr_xref xref)
-  in
   let sorted_cached = List.sort compare_cache_entry cached in
   let sorted_replayed = List.sort compare_cache_entry replayed in
-  let rec diff_sorted l1 l2 = match l1, l2 with
-    | [], [] -> ()
-    | e :: _, [] ->
-      fail_entry "the cached fragment applies an entry a genuine full replay never produces" e
-    | [], e :: _ ->
-      fail_entry "a genuine full replay produces an entry the cached fragment omits" e
+  let rec diff_sorted acc l1 l2 = match l1, l2 with
+    | [], [] -> List.rev acc
+    | e :: r1, [] -> diff_sorted (("cache-only", e) :: acc) r1 []
+    | [], e :: r2 -> diff_sorted (("replay-only", e) :: acc) [] r2
     | e1 :: r1, e2 :: r2 ->
       let c = compare_cache_entry e1 e2 in
-      if Int.equal c 0 then diff_sorted r1 r2
-      else if c < 0 then
-        fail_entry "the cached fragment applies an entry a genuine full replay never produces" e1
-      else
-        fail_entry "a genuine full replay produces an entry the cached fragment omits" e2
+      if Int.equal c 0 then diff_sorted acc r1 r2
+      else if c < 0 then diff_sorted (("cache-only", e1) :: acc) r1 (e2 :: r2)
+      else diff_sorted (("replay-only", e2) :: acc) (e1 :: r1) r2
   in
-  diff_sorted sorted_cached sorted_replayed;
+  let diffs = diff_sorted [] sorted_cached sorted_replayed in
+  (match diffs with
+   | [] -> ()
+   | _ ->
+     let pr_one (kind, (vis, sp, xref)) =
+       Pp.(str "  [" ++ str kind ++ str "] " ++ pr_visibility vis ++ str " "
+           ++ pr_path sp ++ str " -> " ++ pr_xref xref)
+     in
+     CErrors.user_err
+       Pp.(str "nametab-cache-verify: " ++ str lib ++ str ": "
+           ++ int (List.length diffs)
+           ++ str " entries differ between the cached fragment and a genuine full replay"
+           ++ str " (cache-only = applied by the cache but a replay never produces it;"
+           ++ str " replay-only = a replay produces it but the cache omits it):" ++ fnl ()
+           ++ prlist_with_sep fnl pr_one diffs));
   let rec list_eq = function
     | [], [] -> true
     | a :: ra, b :: rb -> cache_entry_equal a b && list_eq (ra, rb)
