@@ -211,10 +211,19 @@ type cache_entry = visibility * full_path * Globnames.extended_global_reference
     responsible for resetting it and then calling [apply_cache]. *)
 val loading_from_cache : bool ref
 
-(** The subset of this process's pushes (in original order) whose target was
-    declared in library [dir] -- the exact, correctly-ordered contribution a
-    real replay of [dir] made, suitable for storing as a .vo's [seg_nametab]
-    segment and replaying later via [apply_cache]. *)
+(** Incremented for the exact duration of a nested
+    [Declaremods.Interp.register_library] call (replaying an already-
+    compiled dependency pulled in by [Require]); 0 at every other moment,
+    including while the file currently compiling processes its own
+    [Import]/[Export] statements. [push]/[push_abbreviation] only record
+    into the exported log while this is 0, so a dependency's own pushes are
+    never attributed to the file currently compiling. *)
+val register_depth : int ref
+
+(** This process's entire depth-0 push log (see [register_depth]), in
+    original order -- the file currently compiling's own, exact,
+    correctly-ordered contribution to [XRefs], suitable for storing as a
+    .vo's [seg_nametab] segment and replaying later via [apply_cache]. *)
 val export_cache : DirPath.t -> cache_entry list
 
 (** Replay a previously captured [export_cache] result, in order, directly

@@ -536,7 +536,11 @@ let register_library m =
   let l = m.library_data in
   let use_cache = nametab_cache_trusted m in
   if use_cache then Nametab.loading_from_cache := true;
-  Fun.protect ~finally:(fun () -> Nametab.loading_from_cache := false)
+  incr Nametab.register_depth;
+  Fun.protect
+    ~finally:(fun () ->
+       Nametab.loading_from_cache := false;
+       decr Nametab.register_depth)
     (fun () ->
        Declaremods.Interp.register_library
          m.library_name
