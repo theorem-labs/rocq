@@ -790,10 +790,25 @@ module CustomEntries = EasyNoWarn(CustomEntriesV)()
    functions below (the sole funnel for [XRefs], the GlobRef/abbreviation
    table) become no-ops: the caller is expected to bulk-apply a previously
    captured fragment via [apply_cache] once the object replay completes.
-   [push_log] independently accumulates every real push this process makes,
-   in order, so that whichever library is being compiled right now can
-   later export exactly its own contribution via [export_cache]. *)
+
+   [push_log] accumulates every real push made while [register_depth] is 0,
+   in order. [register_depth] is incremented for the exact duration of a
+   nested [Declaremods.Interp.register_library] call (i.e. while replaying
+   some OTHER, already-compiled library Y being pulled in by a [Require]
+   inside the file currently compiling) and is 0 at every other moment --
+   including while processing the current file's OWN [Import]/[Export]
+   statements, which call [push] directly (not through [register_library])
+   to re-expose an already-loaded module's names at a shorter visibility.
+   Filtering by "whose GlobRef was declared in this library" (an earlier,
+   wrong version of this cache) drops exactly those re-push entries: an
+   [Export Nat.] inside, say, BinNums.v pushes [Nat.t]'s *existing* GlobRef
+   at a new, shorter visibility -- a real push this library's replay must
+   reproduce, even though the GlobRef itself belongs to Nat, not BinNums.
+   Depth-based scoping captures it correctly because it is emitted directly
+   by BinNums's own object stream, at depth 0, not inside a nested
+   [register_library] call for Nat. *)
 let loading_from_cache = ref false
+let register_depth = ref 0
 
 type cache_entry = visibility * full_path * extended_global_reference
 
@@ -801,7 +816,8 @@ let push_log : cache_entry list ref = ref []
 
 let push_abbreviation ?user_warns visibility sp kn =
   if not !loading_from_cache then begin
-    push_log := (visibility, sp, Abbrev kn) :: !push_log;
+    if Int.equal !register_depth 0 then
+      push_log := (visibility, sp, Abbrev kn) :: !push_log;
     XRefs.push ?wdata:user_warns visibility sp (Abbrev kn)
   end
 
@@ -810,39 +826,22 @@ let remove_abbreviation sp kn =
 
 let push ?user_warns vis sp kn =
   if not !loading_from_cache then begin
-    push_log := (vis, sp, TrueGlobal kn) :: !push_log;
+    if Int.equal !register_depth 0 then
+      push_log := (vis, sp, TrueGlobal kn) :: !push_log;
     XRefs.push ?wdata:user_warns vis sp (TrueGlobal kn)
   end
 
-(* The DirPath of the library a [GlobRef.t] was declared under -- using
-   [ModPath.dp] rather than a literal [MPfile] match so that a declaration
-   nested inside a [Module ... End] block within the compiled file (e.g.
-   Corelib's [Decimal.v] wrapping its contents in [Module Decimal]) is still
-   correctly attributed to the file's own library, not dropped. [None] for a
-   section variable (never library-owned). *)
-let libdir_of_gref = function
-  | GlobRef.VarRef _ -> None
-  | GlobRef.ConstRef c -> Some (ModPath.dp (Constant.modpath c))
-  | GlobRef.IndRef (mind, _) -> Some (ModPath.dp (MutInd.modpath mind))
-  | GlobRef.ConstructRef ((mind, _), _) -> Some (ModPath.dp (MutInd.modpath mind))
-
-(* The subset of this process's push log whose target was declared in
-   library [dir], in original push order -- the exact, already-correctly-
-   ordered result of a real replay, ready to be stored as the .vo's
-   [seg_nametab] segment and later replayed verbatim by [apply_cache]. Both
-   [TrueGlobal] (via [push]) and [Abbrev] (via [push_abbreviation], e.g.
-   [Abbreviation int := signed_int] in Corelib's Decimal.v) are in scope:
-   both share the one [XRefs] table and the one interception point, so both
-   must be exported or a suppressed-but-never-replayed name results. *)
-let export_cache dir =
-  let owned = function
-    | TrueGlobal gr ->
-      (match libdir_of_gref gr with
-       | Some d -> DirPath.equal d dir
-       | None -> false)
-    | Abbrev kn -> DirPath.equal (ModPath.dp (KerName.modpath kn)) dir
-  in
-  List.rev (List.filter (fun (_, _, xref) -> owned xref) !push_log)
+(* This process's entire depth-0 push log, in original order -- the exact,
+   already-correctly-ordered contribution the file currently compiling made
+   to [XRefs] (a coqc process compiles exactly one top-level library, so
+   this is unambiguously that library's own, not a dependency's: every
+   dependency's pushes happened at depth > 0 and were never recorded here).
+   Ready to be stored as the .vo's [seg_nametab] segment and replayed
+   verbatim later by [apply_cache]. The [dir] parameter is unused -- kept so
+   a future multi-library-per-process caller (there is none today) has an
+   explicit hook to scope by, rather than silently relying on the
+   one-library-per-process invariant. *)
+let export_cache (_dir : DirPath.t) = List.rev !push_log
 
 (* Bulk-apply a previously captured fragment, in the order it was captured
    in. Bypasses [loading_from_cache] and [push_log] entirely -- this is the
@@ -850,6 +849,7 @@ let export_cache dir =
    (with pushes silenced) has finished. *)
 let apply_cache entries =
   List.iter (fun (vis, sp, xref) -> XRefs.push vis sp xref) entries
+
 
 let push_modtype vis sp kn = ModTypes.push vis sp kn
 
