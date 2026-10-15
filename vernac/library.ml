@@ -88,7 +88,7 @@ type library_disk = {
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t) array;
   md_ocaml : string;
   md_info : Library_info.t;
   (* Subset of the direct dependencies (i.e. of the dirpaths appearing in
@@ -103,7 +103,7 @@ type summary_disk = {
 type library_t = {
   library_name : compilation_unit_name;
   library_data : library_disk;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t) array;
   library_safe_deps : DirPath.Set.t;
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
@@ -343,9 +343,11 @@ and intern_library_deps ~intern (needed, contents) dir m =
       (needed, contents) m.library_deps in
   ((false, dir) :: needed, contents)
 
-and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_objects_digest) =
+and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_objects_digest,d_univs_digest) =
   let needed, contents = intern_library ~intern (needed, contents) dir in
-  let digest, live_iface, live_objects_digest = digest_of_dep ~contents dir in
+  let digest, live_iface, live_objects_digest, live_univs_digest =
+    digest_of_dep ~contents dir
+  in
   (* Shared predicate (binary-equivalence-taiga#841 D3): identical
      acceptance rule to kernel/safe_typing.ml's own [check_required] and
      topbin/rocqnative.ml's [intern_mandatory_library], never reimplemented
@@ -354,6 +356,7 @@ and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_
     Safe_typing.dep_ok ~actual:digest ~required:d
       ~actual_iface:live_iface ~required_iface:d_iface
       ~actual_objects_digest:live_objects_digest ~required_objects_digest:d_objects_digest
+      ~actual_univs_digest:live_univs_digest ~required_univs_digest:d_univs_digest
   in
   let () = if not ok then
     let from = library_full_filename caller in
@@ -368,14 +371,25 @@ and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_
 and digest_of_dep ~contents dir =
   match DirPath.Map.find_opt dir contents with
   | Some m -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled,
-              Safe_typing.objects_digest_of_library m.library_data.md_compiled
+              Safe_typing.objects_digest_of_library m.library_data.md_compiled,
+              Safe_typing.univs_digest_of_library m.library_data.md_compiled
   | None ->
     match find_library dir with
     | Some (_, m) -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled,
-                     Safe_typing.objects_digest_of_library m.library_data.md_compiled
+                     Safe_typing.objects_digest_of_library m.library_data.md_compiled,
+                     Safe_typing.univs_digest_of_library m.library_data.md_compiled
     | None ->
-      anomaly Pp.(str "Missing library " ++ DirPath.print dir ++
-                  str " while interning dependencies.")
+      (* binary-equivalence-taiga#841 Review841 G8: a recorded dependency
+         absent from the live closure is a legitimate "refuse this reuse"
+         outcome (today only reachable through state corruption since
+         [comp_deps]/[md_deps] are root-only; once D1's full transitive
+         closure lands, a transitively recorded dependency genuinely can be
+         missing from the session's live set), never an internal-invariant
+         violation -- so this is a plain, catchable [user_err], not an
+         [anomaly], using the same "Reference to unknown module" phrasing
+         kernel/safe_typing.ml's own [check_required] uses for the
+         identical not-found case. *)
+      user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string dir; "."])
 
 let rec_intern_library ~intern (needed, contents) (_loc, dir) =
   intern_library ~intern (needed, contents) dir
@@ -414,7 +428,7 @@ let compute_modes ~cmd_safe ~roots contents =
   while not (Queue.is_empty queue) do
     let dir = Queue.pop queue in
     let m = DirPath.Map.find dir contents in
-    Array.iter (fun (d, _, _, _) ->
+    Array.iter (fun (d, _, _, _, _) ->
         if not (DirPath.Set.mem d m.library_safe_deps) then mark d)
       m.library_deps
   done;
@@ -443,7 +457,7 @@ let check_closure_conflicts ~cmd_safe ~roots contents =
       if not (DirPath.Set.mem dir !visited) then begin
         visited := DirPath.Set.add dir !visited;
         let m = DirPath.Map.find dir contents in
-        Array.iter (fun (d, _, _, _) ->
+        Array.iter (fun (d, _, _, _, _) ->
             if not (DirPath.Set.mem d m.library_safe_deps) then visit d)
           m.library_deps
       end
@@ -631,7 +645,8 @@ let current_deps () =
       let _, m = try_find_library m in
       Some (m.library_name, m.library_digests,
             Safe_typing.iface_of_library m.library_data.md_compiled,
-            Safe_typing.objects_digest_of_library m.library_data.md_compiled)
+            Safe_typing.objects_digest_of_library m.library_data.md_compiled,
+            Safe_typing.univs_digest_of_library m.library_data.md_compiled)
     else None
   in
   List.map_filter map !libraries_loaded_list
@@ -700,7 +715,7 @@ let save_library_struct ~output_native_objects dir =
     ; md_syntax_objects
     ; md_objects
     } in
-  if Array.exists (fun (d,_,_,_) -> DirPath.equal d dir) sd.md_deps then
+  if Array.exists (fun (d,_,_,_,_) -> DirPath.equal d dir) sd.md_deps then
     error_recursively_dependent_library dir;
   sd, md, vmlib, ast
 

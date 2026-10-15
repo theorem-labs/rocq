@@ -30,7 +30,8 @@ val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
 val dep_ok :
   actual:vodigest -> required:vodigest ->
   actual_iface:iface_table option -> required_iface:iface_table option ->
-  actual_objects_digest:Digest.t -> required_objects_digest:Digest.t -> bool
+  actual_objects_digest:Digest.t -> required_objects_digest:Digest.t ->
+  actual_univs_digest:Digest.t -> required_univs_digest:Digest.t -> bool
 
 (** {6 Safe environments } *)
 
@@ -258,6 +259,9 @@ val module_of_library : compiled_library -> Mod_declarations.module_body
 val replace_module_of_library : compiled_library -> Mod_declarations.module_body -> compiled_library
 val iface_of_library : compiled_library -> iface_table option
 val objects_digest_of_library : compiled_library -> Digest.t
+val univs_digest_of_library : compiled_library -> Digest.t
+(** Digest of this library's OWN [(comp_univs, comp_sorts)] pair
+    (binary-equivalence-taiga#841 Review841 G2). *)
 (** Used by the checker, which recompiles the VM bytecode of every constant
     instead of trusting the one serialized in the file. *)
 val univs_of_library : compiled_library -> Sorts.QContextSet.t * Univ.ContextSet.t

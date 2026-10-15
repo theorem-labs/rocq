@@ -37,7 +37,20 @@ let coq_version = "9.2+rc2"
    version check with a plain "bad version number" error instead of
    silently misreading bytes under a wider static type (the original v1
    bug this value's predecessor, 90200, was introduced to fix). *)
-let vo_magic = 91199
+(* binary-equivalence-taiga#841 Review841 G2: +1 again over 91199. The
+   format widens a second time -- [library_info] goes from a 4-tuple to a
+   5-tuple, and [compiled_library] itself from an 8-field to a 9-field
+   record, adding the digest of each dependency's own
+   (comp_univs, comp_sorts) pair (closes the universe-constraint blind spot
+   where neither the per-declaration iface_table nor the exported-objects
+   digest ever covered a library's own global universe constraints, so a
+   dropped/added Universe/Constraint command could pass the relaxed
+   dep_ok fallback unnoticed). Same reasoning as the 91199 bump above: a
+   widened on-disk tuple/record is silently misread by code still expecting
+   the narrower shape (Marshal performs no cross-version structural check),
+   so this format change must force a hard version mismatch at load time,
+   not a quiet misinterpretation. *)
+let vo_magic = 91200
 let is_a_released_version = false
 
 (** Default OCaml binaries *)
