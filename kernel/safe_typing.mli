@@ -28,12 +28,26 @@ val digest_match : actual:vodigest -> required:vodigest -> bool
 type iface_table = (Id.t * Digest.t) array
 val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
 val decl_objects_subset_ok : recorded:Digest.t array -> live:Digest.t array -> bool
+(** binary-equivalence-taiga#841 Review841 G7: see the doc comment on
+    [Safe_typing.used_names_of_needed]/[added_label_collision] in the
+    implementation for the full argument. [needed] here is structurally
+    the same per-dependency tuple array as a library's own [comp_deps]/
+    [md_deps] (not named [library_info], which stays internal) -- every
+    one of [dep_ok]'s three call sites (the kernel's own [check_required],
+    [vernac/library.ml]'s and [topbin/rocqnative.ml]'s own
+    [intern_mandatory_library]) must compute this ONCE from its own full
+    dependency array and pass the SAME value into every [dep_ok] call for
+    that array, not recompute it per entry. *)
+val used_names_of_needed :
+  (DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * Digest.t array) array ->
+  Id.Set.t
 val dep_ok :
   actual:vodigest -> required:vodigest ->
   actual_iface:iface_table option -> required_iface:iface_table option ->
   actual_objects_digest:Digest.t -> required_objects_digest:Digest.t ->
   actual_univs_digest:Digest.t -> required_univs_digest:Digest.t ->
-  actual_decl_objects:Digest.t array -> required_decl_objects:Digest.t array -> bool
+  actual_decl_objects:Digest.t array -> required_decl_objects:Digest.t array ->
+  used_names:Id.Set.t -> bool
 
 (** {6 Safe environments } *)
 

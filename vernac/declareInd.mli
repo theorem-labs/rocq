@@ -45,6 +45,12 @@ sig
 
 type inductive_obj
 val objInductive : (Names.Id.t * inductive_obj) Libobject.Dyn.tag
+val objPrimProj : (Names.Projection.Repr.t * Names.Constant.t) Libobject.Dyn.tag
+(** binary-equivalence-taiga#841 Review841 G1: exposed only so
+    [Declaremods.G1Partition] can structurally verify an atomic object
+    before excluding it by tag name -- see the implementation's doc
+    comment on [Internal.objPrimProj] for why a bare tag-string match is
+    not enough. *)
 
 end
 

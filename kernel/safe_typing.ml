@@ -170,6 +170,55 @@ let decl_objects_subset_ok ~recorded ~live =
 type library_info =
   DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * Digest.t array
 
+(** binary-equivalence-taiga#841 Review841 G7. Once G1 lets an ADDED
+    declaration skip invalidating existing dependents, a dependency that
+    adds a declaration whose short name collides with a name already
+    resolved (through an absolute kernel reference) somewhere in the
+    dependent's own closure must refuse reuse: a FRESH compile would
+    resolve the now-ambiguous/shadowed name differently (or fail), so
+    keeping the old [.vo] would silently diverge from what a fresh
+    compile produces -- not a kernel soundness hole (the kept [.vo]'s own
+    term stays well-typed, since its absolute references are unaffected),
+    but exactly the kind of "the fast signal lies about what a fresh
+    compile would do" gap G1 exists to avoid without reopening.
+
+    No separate name-keyed table is needed for this: the existing kernel
+    [iface_table] (G1 left it untouched -- CONSTANT/INDUCTIVE are only
+    excluded from the VERNAC objects digest, never from this table) is
+    already keyed by every top-level declaration's [Id.t], for every
+    dependency a library recorded. [used_names_of_needed] below unions
+    those keys across a FULL [needed] array (one library's own recorded
+    dependency set) into the set of every short name that library's own
+    source could have resolved absolutely through one of its direct
+    dependencies -- limited, like everything else keyed off root-only
+    [comp_deps]/[md_deps] pre-D1, to DIRECT dependencies; full transitive
+    coverage needs D1's [comp_transitive_deps]. [added_label_collision]
+    then checks one dependency's [recorded]/[live] [iface_table] snapshot:
+    a LIVE key absent from [recorded] is an addition; if that addition's
+    name is also in [used_names], refuse. *)
+let used_names_of_needed (needed : library_info array) =
+  Array.fold_left (fun acc (_, _, iface, _, _, _) ->
+      match iface with
+      | Some tbl -> Array.fold_left (fun acc (id, _) -> Id.Set.add id acc) acc tbl
+      | None -> acc)
+    Id.Set.empty needed
+
+let added_label_collision ~required_iface ~actual_iface ~used_names =
+  match required_iface, actual_iface with
+  | Some recorded, Some live ->
+    let recorded_ids =
+      Array.fold_left (fun acc (id, _) -> Id.Set.add id acc) Id.Set.empty recorded
+    in
+    Array.exists (fun (id, _) ->
+        not (Id.Set.mem id recorded_ids) && Id.Set.mem id used_names)
+      live
+  (* No representable [iface_table] on one side or the other: [dep_ok]'s
+     own [iface_subset_ok] conjunct below already forces the whole
+     relaxed path to [false] in that case, so this function's answer is
+     moot -- [false] (no collision reported) rather than vacuously
+     refusing for an unrelated reason. *)
+  | _ -> false
+
 (** The relaxed acceptance predicate, shared by every loader that is
     allowed to use it (the kernel's own [check_required] below, and
     vernac/library.ml's and topbin/rocqnative.ml's own
@@ -181,23 +230,27 @@ type library_info =
     Structures/Coercions/univ-constraint-source objects -- any change
     anywhere in that remainder forces a rebuild, deliberately
     conservative), (c) the live library's [(comp_univs, comp_sorts)]
-    digest is EXACTLY what the dependent recorded (G2), AND (d) every
+    digest is EXACTLY what the dependent recorded (G2), (d) every
     decl-objects digest (IMPLICITS/ARGUMENTS-SCOPE, G1) the dependent
     recorded is still present among the live ones (subset, extras
-    ignored, same shape as (a)). [coqchk] must NEVER call this: see
-    [check_required_strict] below, which is the original digest-only
-    check with nothing else reachable from it. *)
+    ignored, same shape as (a)), AND (e) no name this dependency's live
+    [iface_table] adds collides with a name in [used_names] (G7).
+    [coqchk] must NEVER call this: see [check_required_strict] below,
+    which is the original digest-only check with nothing else reachable
+    from it. *)
 let dep_ok ~actual ~required ~actual_iface ~required_iface
     ~actual_objects_digest ~required_objects_digest
     ~actual_univs_digest ~required_univs_digest
-    ~actual_decl_objects ~required_decl_objects =
+    ~actual_decl_objects ~required_decl_objects
+    ~used_names =
   digest_match ~actual ~required ||
   ((match required_iface, actual_iface with
     | Some recorded, Some live -> iface_subset_ok ~recorded ~live
     | _ -> false) &&
    Digest.equal required_objects_digest actual_objects_digest &&
    Digest.equal required_univs_digest actual_univs_digest &&
-   decl_objects_subset_ok ~recorded:required_decl_objects ~live:actual_decl_objects)
+   decl_objects_subset_ok ~recorded:required_decl_objects ~live:actual_decl_objects &&
+   not (added_label_collision ~required_iface ~actual_iface ~used_names))
 
 (** Functor and funsig parameters, most recent first *)
 type module_parameters = (MBId.t * module_type_body) list
@@ -746,6 +799,9 @@ let check_empty_struct senv =
     with the correct digests. *)
 
 let check_required current_libs needed =
+  (* G7: computed once for the whole [needed] array, see
+     [used_names_of_needed]'s doc comment above. *)
+  let used_names = used_names_of_needed needed in
   let check current (id, required, required_iface, required_objects_digest,
                       required_univs_digest, required_decl_objects) =
     match DirPath.Map.find_opt id current with
@@ -759,15 +815,16 @@ let check_required current_libs needed =
        compiled against. Fallback (see [dep_ok]): the dependency changed,
        but everything this dependent could have observed through it --
        its recorded [iface_table] subset, its exact-equality objects
-       digest, its [(comp_univs, comp_sorts)] digest, and its
-       decl-objects subset -- still matches the dependency's current
-       state, so the dependent's own precompiled terms remain well-typed
-       in the new environment. NEVER used by coqchk: see
-       [check_required_strict]. *)
+       digest, its [(comp_univs, comp_sorts)] digest, its decl-objects
+       subset, and the absence of a G7 name collision -- still matches
+       the dependency's current state, so the dependent's own precompiled
+       terms remain well-typed in the new environment. NEVER used by
+       coqchk: see [check_required_strict]. *)
     if not (dep_ok ~actual ~required ~actual_iface ~required_iface
               ~actual_objects_digest ~required_objects_digest
               ~actual_univs_digest ~required_univs_digest
-              ~actual_decl_objects ~required_decl_objects) then
+              ~actual_decl_objects ~required_decl_objects
+              ~used_names) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
     else if req_root then

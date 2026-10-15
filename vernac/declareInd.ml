@@ -84,9 +84,9 @@ let subst_prim (subst,(p,c)) = Mod_subst.subst_proj_repr subst p, Mod_subst.subs
 
 let discharge_prim (p,c) = Some (Global.discharge_proj_repr p, c)
 
-let inPrim : (Projection.Repr.t * Constant.t) -> Libobject.obj =
+let objPrimProj : (Projection.Repr.t * Constant.t) Libobject.Dyn.tag =
   let open Libobject in
-  declare_object {
+  declare_object_full {
     (default_object "PRIMPROJS") with
     cache_function = cache_prim ;
     load_function = load_prim;
@@ -94,7 +94,33 @@ let inPrim : (Projection.Repr.t * Constant.t) -> Libobject.obj =
     classify_function = (fun x -> Substitute);
     discharge_function = discharge_prim }
 
+let inPrim (v : Projection.Repr.t * Constant.t) : Libobject.obj =
+  Libobject.Dyn.Easy.inj v objPrimProj
+
 let declare_primitive_projection p c = Lib.add_leaf (inPrim (p,c))
+
+(** binary-equivalence-taiga#841 Review841 G1: register INDUCTIVE's and
+    PRIMPROJS's cutoff classifiers (see
+    [Libobject.register_cutoff_classifier]'s doc comment for why this is
+    a registry rather than [Declaremods] referencing this module
+    directly). Both are EXCLUDED wholesale: a declaration's semantically
+    load-bearing identity (type, universe context, transparent body, and
+    for inductives the WHOLE [mutual_inductive_body] including
+    primitive-record/projection structure) is ALREADY independently
+    covered by [Safe_typing.comp_iface]'s kernel-level per-declaration
+    digest (subset-checked, extras ignored); these libobjects carry
+    nothing beyond that except [ind_names]'s declaration-site [Loc.t]s,
+    read only by [Nametab.set_cci_src_loc] ("Declared in" messages) --
+    presentation only, never typechecking or [Print Assumptions]. *)
+let () =
+  Libobject.register_cutoff_classifier "INDUCTIVE" (fun obj ->
+      match Libobject.Dyn.Easy.prj obj objInductive with
+      | Some _ -> Some Libobject.CutoffExcluded
+      | None -> None);
+  Libobject.register_cutoff_classifier "PRIMPROJS" (fun obj ->
+      match Libobject.Dyn.Easy.prj obj objPrimProj with
+      | Some _ -> Some Libobject.CutoffExcluded
+      | None -> None)
 
 let feedback_axiom () = Feedback.(feedback AddedAxiom)
 
@@ -276,4 +302,14 @@ module Internal =
 struct
   type nonrec inductive_obj = inductive_obj
   let objInductive = objInductive
+  (** binary-equivalence-taiga#841 Review841 G1 self-audit (Lean attack
+      shape (b), a skip-guard that matches by registered TAG NAME alone):
+      exposed so [Declaremods.G1Partition] can structurally confirm, via
+      [Libobject.Dyn.Easy.prj], that an atomic object whose registered tag
+      string happens to read "PRIMPROJS" really IS one of these before
+      excluding it from every digest -- a string match alone can never
+      distinguish "really is this kind" from "merely registered under the
+      same display name," and [Dyn.tag] identity (assigned fresh per
+      [declare_object_full] call, not derived from the display string) can. *)
+  let objPrimProj = objPrimProj
 end

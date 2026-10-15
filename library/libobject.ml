@@ -252,6 +252,47 @@ let object_name (Dyn.Dyn (tag, v)) =
 
 let dump = Dyn.dump
 
+(** binary-equivalence-taiga#841 Review841 G1. A registry, NOT a direct
+    module reference: [vernac/declaremods.ml]'s objects-digest partition
+    needs to ask "is this atomic object one of the kinds whose semantic
+    identity is independently covered elsewhere (so it can be EXCLUDED
+    from every digest here), or one whose non-presentational fields need
+    a narrower SUBSET-checked digest" for objects declared in
+    [vernac/declare.ml] (CONSTANT) and [vernac/declareInd.ml]
+    (INDUCTIVE/PRIMPROJS) -- but [vernac/declaremods.ml] cannot reference
+    those modules directly (a real `dune build` dependency-cycle error,
+    confirmed empirically: `declare.ml`/`declareInd.ml` already sit on a
+    path back to `declaremods.ml` through other vernac modules). Each
+    declaring module instead registers, at its OWN top-level
+    initialization (guaranteed to run before any vernacular command is
+    processed, since every one of these modules is linked into the final
+    binary regardless), a classifier KEYED BY ITS OWN REGISTERED TAG
+    STRING; [cutoff_classify] below dispatches to at most one registered
+    classifier per object, by that same tag. The classifier itself still
+    does its OWN typed [Dyn.Easy.prj] check before answering (Lean attack
+    shape (b), binary-equivalence-taiga#841 Review841 G1 self-audit): a
+    tag string match alone only decides WHICH classifier to try, never
+    the answer, so an object that merely shares a display name with a
+    registered tag but isn't structurally that kind (impossible for
+    today's declaration sites, future-proofing only) correctly gets
+    [None] here and falls through to the EXACT-equality bucket in the
+    caller, never silently dropped from every digest. *)
+type cutoff_classification =
+  | CutoffExcluded
+  | CutoffSubset of Digest.t
+
+let cutoff_classifiers : (string, obj -> cutoff_classification option) Hashtbl.t =
+  Hashtbl.create 8
+
+let register_cutoff_classifier tag f =
+  Hashtbl.replace cutoff_classifiers tag f
+
+let cutoff_classify (obj : obj) : cutoff_classification option =
+  match Hashtbl.find_opt cutoff_classifiers (object_name obj) with
+  | Some f -> f obj
+  | None -> None
+
+
 let local_object_nodischarge ?stage s ~cache =
   { (default_object ?stage s) with
     cache_function = cache;

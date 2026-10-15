@@ -315,3 +315,24 @@ val superglobal_object_nodischarge : ?stage:Summary.Stage.t -> string ->
 (** {6 Debug} *)
 
 val dump : unit -> (int * string) list
+
+(** {6 binary-equivalence-taiga#841 Review841 G1 cutoff-classifier registry}
+
+    See the implementation's doc comment for why this is a registry
+    (keyed by each declaring module's own registered tag string) rather
+    than [vernac/declaremods.ml] referencing [vernac/declare.ml]/
+    [vernac/declareInd.ml] directly -- that direct reference is a real
+    `dune build` dependency cycle. *)
+type cutoff_classification =
+  | CutoffExcluded
+  | CutoffSubset of Digest.t
+
+val register_cutoff_classifier : string -> (obj -> cutoff_classification option) -> unit
+(** [register_cutoff_classifier tag f] registers [f] to be tried on every
+    atomic object whose registered tag ([object_name]) is [tag]. [f]
+    itself must verify the object is structurally what it claims (e.g.
+    via [Dyn.Easy.prj] against its own tag) before answering [Some _];
+    [None] means "not actually mine despite the tag string," which falls
+    through to the caller's default (exact-equality) treatment. *)
+
+val cutoff_classify : obj -> cutoff_classification option

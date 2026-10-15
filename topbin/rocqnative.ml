@@ -157,9 +157,12 @@ let rec intern_library (needed, contents) dir =
   m.library_digests, (dir :: needed, DirPath.Map.add dir m contents)
 
 and intern_library_deps libs dir m from =
-  Array.fold_left (intern_mandatory_library dir from) libs m.library_deps
+  (* G7: computed once per library from its own full recorded dependency
+     array, matching kernel/safe_typing.ml's own [check_required]. *)
+  let used_names = Safe_typing.used_names_of_needed m.library_deps in
+  Array.fold_left (intern_mandatory_library ~used_names dir from) libs m.library_deps
 
-and intern_mandatory_library caller from libs (dir,d,d_iface,d_objects_digest,d_univs_digest,d_decl_objects) =
+and intern_mandatory_library ~used_names caller from libs (dir,d,d_iface,d_objects_digest,d_univs_digest,d_decl_objects) =
   let digest, (_, contents as libs) = intern_library libs dir in
   let live_iface, live_objects_digest, live_univs_digest, live_decl_objects =
     match DirPath.Map.find_opt dir contents with
@@ -180,6 +183,7 @@ and intern_mandatory_library caller from libs (dir,d,d_iface,d_objects_digest,d_
       ~actual_objects_digest:live_objects_digest ~required_objects_digest:d_objects_digest
       ~actual_univs_digest:live_univs_digest ~required_univs_digest:d_univs_digest
       ~actual_decl_objects:live_decl_objects ~required_decl_objects:d_decl_objects
+      ~used_names
   in
   if not ok then
     user_err (str "Compiled library " ++ DirPath.print caller ++

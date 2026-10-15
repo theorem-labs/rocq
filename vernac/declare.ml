@@ -2368,6 +2368,27 @@ module Internal = struct
     type t = constant_obj
     let tag = objConstant
     let kind obj = obj.cst_kind
+    (** binary-equivalence-taiga#841 Review841 G1 self-audit (and the
+        hash/Lean-attack-shape round): the cutoff-classifier registry
+        (`Libobject.register_cutoff_classifier`, registered below at this
+        module's top level) excludes the CONSTANT libobject from every
+        digest for [cst_kind] (read only by [Dumpglob.add_constant_kind],
+        never by typechecking or by [Print Assumptions]) and [cst_loc]
+        (read only by [Nametab.set_cci_src_loc] for "Declared in"
+        messages) -- but [cst_locl] (whether the name needs qualification
+        when [Import]ed) and [cst_warn] (a deprecation/warning annotation
+        on USES of this name) are NOT presentation-only: a FRESH compile
+        of a dependent could resolve an unqualified reference
+        differently, or fail under [-w +deprecated...-warn-error], if
+        either of these changes on a dependency's declaration -- wholesale
+        exclusion would silently miss that. [locl_warn_digest] feeds these
+        two fields into the registry's SUBSET-checked bucket (the same
+        mechanism already used for IMPLICITS/ARGUMENTS-SCOPE: a changed or
+        removed entry won't be found live and refuses; an added one is
+        ignored), so CONSTANT keeps everything G1 needs AND the two fields
+        that remain load-bearing for what a fresh compile would do. *)
+    let locl_warn_digest obj =
+      Digest.string (Marshal.to_string (obj.cst_locl, obj.cst_warn) [])
   end
 
   let objVariable = objVariable
@@ -2380,6 +2401,20 @@ module Internal = struct
     { pf with proof; sideff }
 
 end
+
+(** binary-equivalence-taiga#841 Review841 G1: register CONSTANT's cutoff
+    classifier (see [Libobject.register_cutoff_classifier]'s doc comment
+    for why this is a registry rather than [Declaremods] referencing this
+    module directly). Runs at program startup, well before any vernacular
+    command (this module is linked into the final binary regardless of
+    whether [Declaremods] ever refers to it). *)
+let () =
+  Libobject.register_cutoff_classifier "CONSTANT" (fun obj ->
+      match Libobject.Dyn.Easy.prj obj objConstant with
+      | Some (_, cobj) ->
+        Some (Libobject.CutoffSubset (Internal.Constant.locl_warn_digest cobj))
+      | None -> None)
+
 
 (* This module could be merged with Obl, and placed before [Proof],
    however there is a single dependency on [Proof.start] for the interactive case *)

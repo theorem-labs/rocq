@@ -627,6 +627,11 @@ module Internal : sig
     type t
     val tag : (Id.t * t) Libobject.Dyn.tag
     val kind : t -> Decls.logical_kind
+    val locl_warn_digest : t -> Digest.t
+    (** binary-equivalence-taiga#841 Review841 G1: digest of the two
+        fields of [t] that remain load-bearing for what a FRESH compile of
+        a dependent would do ([cst_locl]/[cst_warn]) once [cst_kind]/
+        [cst_loc] are excluded -- see the implementation's doc comment. *)
   end
 
   val objVariable : Id.t Libobject.Dyn.tag
