@@ -2497,9 +2497,33 @@ let export ~output_native_objects ~objects_digest ~vernac_iface ~extra_closure_n
      redundantly per entry avoids a second signature on [check_required]/
      [check_required_strict] for a single extra argument). See
      [flatten_closure]'s doc comment. *)
+  (* binary-equivalence-taiga#841 round 14 (ik7/ik8, Main/reviewer): a
+     library can Include a Module Type it declares ITSELF, and ModAny
+     tries a module lookup first regardless of declaration order/locality
+     -- a module of the same bare name appearing ANYWHERE in scope
+     (including an EXTERNAL one reached only transitively) can still win
+     over this library's OWN, textually-local Module Type. Folding this
+     library's OWN [comp_iface] (dp = [dir], the library's own path) into
+     [own_closure_list] gives its own module-type labels the SAME
+     cross-kind shadow coverage [closure_subset_ok] already gives an
+     external library's -- a brand-new external MODULE of the same
+     basename is now checked against them too, covering nested self
+     module types (ik8) for free, since [comp_iface] already recurses to
+     any depth. The placeholder digest is never compared against
+     anything meaningful ([Some comp_iface] is the branch flatten_closure
+     reads; [None]'s [none_entries] never sees this entry). *)
+  let self_modtype_iface =
+    Option.map (fun tbl ->
+        Array.of_list
+          (List.filter (fun (k, _) ->
+               Option.has_some (strip_prefix modtype_label_marker (Id.to_string (basename_of_qualified_path k))))
+              (Array.to_list tbl)))
+      comp_iface
+  in
   let own_closure_list =
-    DirPath.Map.bindings senv.required
-    |> List.map (fun (dp, { req_digest; req_iface; _ }) -> (dp, req_digest, req_iface))
+    (dir, Dvo_or_vi (Digest.string "self"), self_modtype_iface) ::
+    (DirPath.Map.bindings senv.required
+     |> List.map (fun (dp, { req_digest; req_iface; _ }) -> (dp, req_digest, req_iface)))
   in
   let comp_closure_names, comp_closure_none_digest = flatten_closure own_closure_list in
   (* v2's D1 (full transitive closure, [comp_transitive_deps]/
