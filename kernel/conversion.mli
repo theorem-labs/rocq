@@ -65,3 +65,16 @@ val default_conv     : conv_pb -> types kernel_conversion_function
 val default_conv_leq : types kernel_conversion_function
 
 type graph_inconsistency = Univ of UGraph.univ_inconsistency | Qual of QGraph.elimination_error
+
+(** Diagnostic cross-declaration conversion cache COUNTING, binary-
+    equivalence-taiga issue #874 version 3. Never consulted by [ccnv]; pure
+    measurement, gated by ROCQ_CONV_XDECL_STATS=1. [set_current_library]
+    and [mark_library_done] must be called by the library-checking driver
+    (checker/checkLibrary.ml's [check_one_lib]) so the shareability test
+    knows which library is presently being checked and which libraries
+    already finished loading (checked or admitted) before it. Both are
+    no-ops when the stats env var is unset, aside from the ref writes. *)
+module XDeclCache : sig
+  val set_current_library : Names.DirPath.t -> unit
+  val mark_library_done : Names.DirPath.t -> unit
+end

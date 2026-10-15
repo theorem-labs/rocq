@@ -115,6 +115,12 @@ let () = Mod_checking.set_indirect_accessor indirect_accessor
 let check_one_lib admit senv (dir,m) =
   let md = m.library_compiled in
   let dig = m.library_digest in
+  (* Diagnostic cross-declaration conversion cache counting
+     (binary-equivalence-taiga#874 v3, ROCQ_CONV_XDECL_STATS=1): record
+     which library is about to be (re)checked so Conversion.XDeclCache's
+     shareability test can tell a reference into this library (not yet
+     "already imported") from a reference into an earlier one. *)
+  Conversion.XDeclCache.set_current_library dir;
   (* Look up if the library is to be admitted correct. We could
      also check if it carries a validation certificate (yet to
      be implemented). *)
@@ -129,6 +135,7 @@ let check_one_lib admit senv (dir,m) =
          (str "Checking library: " ++ pr_dirpath dir);
        Safe_checking.import (fst senv) (snd senv) md dig)
   in
+    Conversion.XDeclCache.mark_library_done dir;
     register_loaded_library m; senv
 
 (*************************************************************************)

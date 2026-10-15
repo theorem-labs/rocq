@@ -116,6 +116,10 @@ val fterm_of : fconstr -> fterm
     updates. Used only by the conversion cache in [Conversion]. *)
 val get_fid : fconstr -> int
 val term_of_fconstr : fconstr -> constr
+(** Like [term_of_fconstr] but materializes under an explicit [lift] rather
+    than [el_id]. Used only by the diagnostic cross-declaration conversion
+    counter in [Conversion.XDeclCache] (binary-equivalence-taiga#874 v3). *)
+val to_constr : lift -> fconstr -> constr
 val term_of_process : fconstr -> stack -> constr
 val destFLambda :
   (usubs -> constr -> fconstr) -> fconstr -> Name.t binder_annot * fconstr * fconstr

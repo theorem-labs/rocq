@@ -313,6 +313,195 @@ module ConvCache = struct
       Printf.eprintf "ROCQ_CONV_CACHE_STATS probes=%d hits=%d\n%!" !probes !hits)
 end
 
+(* Cross-declaration conversion cache COUNTING ONLY (binary-equivalence-taiga
+   issue #874, version 3). This never changes any verdict and is not
+   consulted by [ccnv]: it is a diagnostic side-table, hooked at the exact
+   same point [ConvCache] probes (just above), that answers "how many of
+   these conversion problems would a cache keyed on the closed term pair,
+   surviving ACROSS top-level clos_gen_conv calls, have hit, and how many
+   of those hits are safe to share" (closed term, no bound universe/quality
+   variable, every constant already imported from a library other than the
+   one currently being checked). Gated by ROCQ_CONV_XDECL_STATS=1; wired
+   only into the checked-conversion path (see [cnv_xdecl] below), never
+   into [generic_conv] or the [CClosure.set_conv] callback. *)
+module XDeclCache = struct
+  let enabled =
+    match Sys.getenv "ROCQ_CONV_XDECL_STATS" with
+    | "1" -> true | _ -> false | exception Not_found -> false
+
+  (* One id per top-level clos_gen_conv call. A table entry remembers the
+     call id it was first recorded under, so [record] can tell a same-call
+     repeat (already ConvCache's own territory, within one declaration's
+     check) from a cross-call repeat (what a process-lifetime cache would
+     actually save). *)
+  let call_id = ref 0
+  let new_call () = incr call_id
+
+  (* The library currently being checked (DirPath.t of the .vo file whose
+     declarations are presently going through Mod_checking.check_module),
+     and the set of libraries that finished being loaded (checked OR
+     admitted) strictly before it. Set from checker/checkLibrary.ml. *)
+  let current_library : DirPath.t option ref = ref None
+  let imported : DirPath.Set.t ref = ref DirPath.Set.empty
+  let set_current_library dp = current_library := Some dp
+  let mark_library_done dp = imported := DirPath.Set.add dp !imported
+
+  exception Not_shareable
+
+  (* Root DirPath.t of a ModPath.t, or None for a bound (functor-parameter)
+     module path: that never denotes a sealed, already-imported library. *)
+  let rec root_dirpath = function
+    | ModPath.MPfile dp -> Some dp
+    | ModPath.MPdot (mp, _) -> root_dirpath mp
+    | ModPath.MPbound _ -> None
+
+  (* Raises Not_shareable if [t] has a free Rel, a Var, a Meta or an Evar
+     anywhere; otherwise returns every Const/Ind/Construct/Proj ModPath.t it
+     mentions. Same [iter_with_binders]-based depth tracking as
+     [Vars.closedn]. *)
+  let scan t =
+    let refs = ref [] in
+    let rec walk depth c =
+      (match kind c with
+       | Rel m -> if m > depth then raise Not_shareable
+       | Var _ | Meta _ | Evar _ -> raise Not_shareable
+       | Const (cst, _) -> refs := Constant.modpath cst :: !refs
+       | Ind (ind, _) -> refs := Ind.modpath ind :: !refs
+       | Construct (ctor, _) -> refs := Construct.modpath ctor :: !refs
+       | Proj (p, _, _) -> refs := MutInd.modpath (Projection.mind p) :: !refs
+       | _ -> ());
+      Constr.iter_with_binders succ walk depth c
+    in
+    walk 0 t;
+    !refs
+
+  let has_bound_univs t =
+    let qs, us = Vars.sort_and_universes_of_constr t in
+    Sorts.QVar.Set.exists (fun q -> Sorts.QVar.var_index q <> None) qs
+    || Univ.Level.Set.exists (fun l -> Univ.Level.var_index l <> None) us
+
+  (* None: not even keyable (open term, or carries a bound universe/sort-
+     quality variable) -- it can't mean the same thing in two different
+     declarations, so it is excluded from the repeat-counting table
+     entirely, not just from the shareable subset.
+     Some refs: keyable; [refs] is every Const/Ind/Construct/Proj ModPath.t
+     the term mentions, still to be checked against the library-import
+     criterion by [refs_shareable]. *)
+  let keyable t =
+    match scan t with
+    | refs -> if has_bound_univs t then None else Some refs
+    | exception Not_shareable -> None
+
+  (* Every mentioned name is rooted at a library other than the one
+     currently being checked, and that library already finished loading. *)
+  let refs_shareable refs =
+    List.for_all (fun mp ->
+        match root_dirpath mp with
+        | None -> false
+        | Some dp ->
+          (match !current_library with
+           | Some cur when DirPath.equal dp cur -> false
+           | _ -> DirPath.Set.mem dp !imported))
+      refs
+
+  type entry = { verdict : bool; call : int }
+
+  module Key = struct
+    type t = Constr.t * Constr.t * bool
+    let equal (a1,b1,c1) (a2,b2,c2) =
+      Bool.equal c1 c2 && Constr.equal a1 a2 && Constr.equal b1 b2
+    let hash (a,b,c) =
+      let h = Constr.hash a * 0x3B9ACA07 + Constr.hash b in
+      let h = h lxor (h lsr 16) in
+      if c then h lxor 0x5BF03635 else h
+  end
+  module Tbl = Hashtbl.Make(Key)
+
+  let table : entry Tbl.t = Tbl.create 65536
+
+  let probes = ref 0
+  let repeats = ref 0
+  let repeats_success = ref 0
+  let shareable_repeats_success = ref 0
+
+  (* Top-10-by-shareable-repeats report: bucketed by the library currently
+     being checked when the repeat was observed (the only library-grained
+     fact a probe carries about where the saving would land; not the
+     library that originally supplied the cached content). *)
+  module DPTbl = Hashtbl.Make(struct
+    type t = DirPath.t
+    let equal = DirPath.equal
+    let hash = DirPath.hash
+  end)
+  let per_library : int DPTbl.t = DPTbl.create 256
+  let bump_library dp =
+    match DPTbl.find_opt per_library dp with
+    | Some n -> DPTbl.replace per_library dp (n + 1)
+    | None -> DPTbl.add per_library dp 1
+
+  (* [to_constr] walks the WHOLE term, including subterms the comparison
+     algorithm has not forced to whnf (ccnv only peeks at heads before
+     recursing); on such an unforced closure it can hit an internal
+     esubst.ml invariant (lift/subst depth) that only holds for the
+     already-whnf-reduced forms [to_constr] is normally applied to
+     elsewhere (kl/norm_head). This is a diagnostic side-table, never
+     consulted by the real check, so it fails open: an unreifiable probe
+     still counts toward [probes] but is excluded from repeat tracking,
+     same as an open term or one with a bound universe variable. *)
+  let safe_to_constr lft t =
+    match CClosure.to_constr lft t with
+    | v -> Some v
+    | exception _ -> None
+
+  let record ~cumul lft1 term1 lft2 term2 verdict =
+    incr probes;
+    match safe_to_constr lft1 term1, safe_to_constr lft2 term2 with
+    | None, _ | _, None -> ()
+    | Some t1, Some t2 ->
+    match keyable t1, keyable t2 with
+    | None, _ | _, None -> ()
+    | Some refs1, Some refs2 ->
+      let key = (t1, t2, cumul) in
+      (match Tbl.find_opt table key with
+       | Some old when old.call <> !call_id ->
+         incr repeats;
+         if old.verdict then begin
+           incr repeats_success;
+           if refs_shareable refs1 && refs_shareable refs2 then begin
+             incr shareable_repeats_success;
+             (match !current_library with
+              | Some dp -> bump_library dp
+              | None -> ())
+           end
+         end
+       | Some _ -> ()
+       | None -> Tbl.add table key { verdict; call = !call_id })
+
+  let approx_table_words () =
+    (* One Hashtbl bucket entry (3-word block: key, data, next) plus the Key
+       tuple (3 words incl. header) plus the entry record (3 words incl.
+       header); Constr.t nodes are shared with the live term graph via
+       hash-consing misses aside, so this counts only the table's own
+       bookkeeping allocation, not the (already-allocated) terms it points
+       to. *)
+    Tbl.length table * (3 + 3 + 3)
+
+  let () =
+    if enabled then at_exit (fun () ->
+      let top =
+        DPTbl.fold (fun dp n acc -> (DirPath.to_string dp, n) :: acc) per_library []
+        |> List.sort (fun (_,a) (_,b) -> Int.compare b a)
+      in
+      let top10 = List.filteri (fun i _ -> i < 10) top in
+      Printf.eprintf
+        "ROCQ_CONV_XDECL_STATS probes=%d repeats=%d repeats_success=%d shareable_repeats_success=%d table_entries=%d table_words=%d\n%!"
+        !probes !repeats !repeats_success !shareable_repeats_success
+        (Tbl.length table) (approx_table_words ());
+      List.iter (fun (name, n) ->
+          Printf.eprintf "ROCQ_CONV_XDECL_STATS top_library %s %d\n%!" name n)
+        top10)
+end
+
 type 'e conv_tab = {
   cnv_inf : clos_infos;
   cnv_typ : bool; (* true if the input terms were well-typed *)
@@ -320,6 +509,11 @@ type 'e conv_tab = {
   rgt_tab : clos_tab;
   err_ret : 'e -> payload;
   cnv_cache : ConvCache.t option;
+  (* true only for the checked-conversion ([gen_conv]) top-level call that
+     created this conv_tab, and only when ROCQ_CONV_XDECL_STATS=1; gates
+     the XDeclCache hook in [ccnv]'s cache-disabled branch. Never true for
+     [generic_conv] or the [CClosure.set_conv] callback. *)
+  cnv_xdecl : bool;
 }
 (** Invariant: for any tl ∈ lft_tab and tr ∈ rgt_tab, there is no mutable memory
     location contained both in tl and in tr. *)
@@ -500,7 +694,15 @@ let rec ccnv cv_pb l2r infos lft1 lft2 term1 term2 cuniv =
   else
     match infos.cnv_cache with
     | None ->
-      eqappr cv_pb l2r infos (lft1, (term1,[])) (lft2, (term2,[])) cuniv
+      if not infos.cnv_xdecl then
+        eqappr cv_pb l2r infos (lft1, (term1,[])) (lft2, (term2,[])) cuniv
+      else begin
+        let cumul = match cv_pb with CONV -> false | CUMUL -> true in
+        match eqappr cv_pb l2r infos (lft1, (term1,[])) (lft2, (term2,[])) cuniv with
+        | cuniv -> XDeclCache.record ~cumul lft1 term1 lft2 term2 true; cuniv
+        | exception NotConvertible ->
+          XDeclCache.record ~cumul lft1 term1 lft2 term2 false; raise NotConvertible
+      end
     | Some cache ->
       let cumul = match cv_pb with CONV -> false | CUMUL -> true in
       match ConvCache.probe cache ~cumul lft1 term1 lft2 term2 with
@@ -1075,6 +1277,8 @@ let clos_gen_conv (type err) ~typed ~use_cache trans cv_pb l2r evars env graph u
       let module Error = struct type payload += Error of err end in
       let box e = Error.Error e in
       let cache = if use_cache then ConvCache.create () else None in
+      let xdecl = use_cache && XDeclCache.enabled in
+      if xdecl then XDeclCache.new_call ();
       let infos = {
         cnv_inf = infos;
         cnv_typ = typed;
@@ -1082,6 +1286,7 @@ let clos_gen_conv (type err) ~typed ~use_cache trans cv_pb l2r evars env graph u
         rgt_tab = create_tab ();
         err_ret = box;
         cnv_cache = cache;
+        cnv_xdecl = xdecl;
       } in
       try Result.Ok (ccnv cv_pb l2r infos el_id el_id (inject t1) (inject t2) univs)
       with
@@ -1129,7 +1334,7 @@ let () =
       let box = Empty.abort in
       let state = info_univs infos in
       let qual_equal q1 q2 = CClosure.eq_quality infos q1 q2 in
-      let infos = { cnv_inf = infos; cnv_typ = true; lft_tab = tab; rgt_tab = tab; err_ret = box; cnv_cache = None } in
+      let infos = { cnv_inf = infos; cnv_typ = true; lft_tab = tab; rgt_tab = tab; err_ret = box; cnv_cache = None; cnv_xdecl = false } in
       let state', _ = ccnv CONV false infos el_id el_id a b (state, checked_universes_gen qual_equal) in
       assert (state==state');
       true
