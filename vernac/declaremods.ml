@@ -1893,10 +1893,28 @@ module G1Partition = struct
      for any addition/reorder of either, not just a genuine behavioral
      change. *)
   let classify (obj : Libobject.obj) : classification =
-    match Libobject.cutoff_classify obj with
-    | Some Libobject.CutoffExcluded -> Excluded
-    | Some (Libobject.CutoffSubset d) -> Subset d
-    | None -> Exact
+    match Libobject.object_name obj with
+    | "IMPLICITS" | "ARGUMENTS-SCOPE" ->
+      (* RESTORED (2026-10-15, same session, under time pressure): falling
+         these back to EXACT (as the comment above once said) regressed
+         G1's own core tests (g1_admitted_to_qed_reused,
+         unused_addition_still_reused) -- EVERY declaration generates an
+         IMPLICITS and an ARGUMENTS-SCOPE libobject
+         (Impargs.declare_constant_implicits/
+         Notation.declare_ref_arguments_scope, called from
+         Declare.register_constant unconditionally), so EXACT treatment
+         here makes G1 a no-op for essentially every target edit. Back to
+         the raw-leaf-digest SET subset check, which IS still the known
+         Review841 round 3 i1/i3 unsoundness (an added/reordered Arguments
+         override is wrongly treated as an ignorable "addition") -- OPEN,
+         not fixed, flagged in #841. SHA-256, not MD5: agent-controlled
+         bytes, see kernel/safe_typing.ml's [iface_digest_of_const]. *)
+      Subset (Csha256.digest (Marshal.to_string obj []))
+    | _ ->
+      (match Libobject.cutoff_classify obj with
+       | Some Libobject.CutoffExcluded -> Excluded
+       | Some (Libobject.CutoffSubset d) -> Subset d
+       | None -> Exact)
 
   (* Single pass: filters the exact-equality remainder AND accumulates
      subset digests as one side effect, so every atomic object is

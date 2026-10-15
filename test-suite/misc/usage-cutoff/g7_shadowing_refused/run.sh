@@ -71,7 +71,7 @@ if [ "$c_rc" -eq 0 ]; then
   echo "$c_out" >&2
   uc_fail "coqc C.v succeeded reusing B.vo after A added a declaration (f) that collides with a name B's own closure resolved (X.f) -- G7's whole point is this must be refused, since a fresh compile of B would now resolve f differently."
 fi
-echo "$c_out" | grep -q 'Inconsistent assumptions over module' \
+echo "$c_out" | grep -q 'makes inconsistent assumptions over library' \
   || uc_fail "coqc C.v refused the reuse (exit $c_rc) but not with the expected inconsistent-assumptions message -- got: $c_out"
 
 # Non-colliding addition must still reuse (G7 must not over-trigger).

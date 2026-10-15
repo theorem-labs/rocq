@@ -2404,17 +2404,24 @@ module Internal = struct
 end
 
 (** binary-equivalence-taiga#841 Review841 G1: register CONSTANT's cutoff
-    classifier (see [Libobject.register_cutoff_classifier]'s doc comment
-    for why this is a registry rather than [Declaremods] referencing this
-    module directly). Runs at program startup, well before any vernacular
-    command (this module is linked into the final binary regardless of
-    whether [Declaremods] ever refers to it). *)
+    classifier. REVERTED to EXCLUDED (2026-10-15, same session, under time
+    pressure): the SUBSET-digest-of-(cst_locl,cst_warn) version introduced
+    a real regression -- g1_admitted_to_qed_reused started failing again,
+    meaning something in (cst_locl, cst_warn) (or how it marshals) is NOT
+    actually stable across an unrelated Admitted->Qed edit to a DIFFERENT
+    declaration in the same library, re-opening exactly the Blocker this
+    whole lever exists to close. Root cause NOT diagnosed before the time
+    budget ran out -- flagged in #841 as open, with Review841 round 3's
+    l1/d1 fixtures (`Local Definition`, `#[deprecated]`) as the targeted
+    repro to debug from, and this exact revert point to resume from. Back
+    to wholesale exclusion (cst_locl/cst_warn precision gap OPEN, not
+    closed) rather than ship a change that breaks the lever's core case. *)
 let () =
   Libobject.register_cutoff_classifier "CONSTANT" (fun obj ->
       match Libobject.Dyn.Easy.prj obj objConstant with
-      | Some (_, cobj) ->
-        Some (Libobject.CutoffSubset (Internal.Constant.locl_warn_digest cobj))
+      | Some _ -> Some Libobject.CutoffExcluded
       | None -> None)
+
 
 
 (* This module could be merged with Obl, and placed before [Proof],
