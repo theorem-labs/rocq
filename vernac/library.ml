@@ -367,7 +367,7 @@ and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_
      topbin/rocqnative.ml's [intern_mandatory_library], never reimplemented
      by hand here. *)
   let ok =
-    Safe_typing.dep_ok ~actual:digest ~required:d
+    Safe_typing.dep_ok ?self_dp:None ~actual:digest ~required:d
       ~actual_iface:live_iface ~required_iface:d_iface
       ~actual_objects_digest:live_objects_digest ~required_objects_digest:d_objects_digest
       ~actual_univs_digest:live_univs_digest ~required_univs_digest:d_univs_digest

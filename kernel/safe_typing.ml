@@ -411,9 +411,26 @@ let group_closure (t : closure_table) : (DirPath.t * Digest.t) list Id.Map.t =
     of kind, by design -- see that constant's own doc comment) makes the
     borrowed digest-equality half of the check trivially satisfied, so
     folding introduces no spurious content-mismatch false positive. *)
-let closure_subset_ok ~recorded ~live =
+let closure_subset_ok ?self_dp ~recorded ~live =
   let rec_grouped = group_closure recorded in
   let live_grouped = group_closure live in
+  (* binary-equivalence-taiga#841 round 15 (Main/reviewer, sf1/sf2/sf6):
+     [self_dp], when given, is the dirpath of the library CURRENTLY being
+     loaded/checked (round 14's self-closure entries, tagged with that
+     SAME dirpath, folded in by [export] so a library's own module-type
+     labels get cross-kind shadow coverage). [current_libs] never has an
+     entry for a library still in the middle of loading itself (confirmed
+     by reading [import]'s call sequence -- a library is only added to
+     [current_libs] AFTER its own [check_required] call returns), so a
+     self-tagged entry can NEVER be found "still present" in [live] --
+     requiring that, as round 14's first push did, refuses EVERY reuse of
+     a library that declares any module type at all, the instant ANY of
+     its OTHER dependencies' digests move. Self-tagged entries are
+     therefore EXCLUDED from the "recorded must still be present" half
+     below entirely, but remain in [rec_grouped] for [allowed_by_modtype]
+     -- the ONLY place they need to participate, since that is the half
+     that actually detects a NEW colliding module appearing live. *)
+  let is_self dp = match self_dp with Some d -> DirPath.equal dp d | None -> false in
   (* allowed_by_modtype: a dp is additionally allowed for a live MODULE-kind
      id if recorded has a MODULE-TYPE entry for the same bare name from
      that exact dp -- never the reverse, and never a requirement that a
@@ -429,16 +446,19 @@ let closure_subset_ok ~recorded ~live =
        | Some rec_modtype_dps -> List.exists (fun (dp', _) -> DirPath.equal dp dp') rec_modtype_dps)
   in
   Id.Map.for_all (fun id rec_dps ->
-      match Id.Map.find_opt id live_grouped with
-      | None -> false
-      | Some live_dps ->
-        List.for_all (fun (dp, d) ->
-            List.exists (fun (dp', d') -> DirPath.equal dp dp' && String.equal d d') live_dps)
-          rec_dps
-        && List.for_all (fun (dp, _) ->
-            List.exists (fun (dp', _) -> DirPath.equal dp dp') rec_dps
-            || allowed_by_modtype id dp)
-          live_dps)
+      match List.filter (fun (dp, _) -> not (is_self dp)) rec_dps with
+      | [] -> true (* every recorded definer of this id is the self entry; nothing external to check *)
+      | rec_dps ->
+        match Id.Map.find_opt id live_grouped with
+        | None -> false
+        | Some live_dps ->
+          List.for_all (fun (dp, d) ->
+              List.exists (fun (dp', d') -> DirPath.equal dp dp' && String.equal d d') live_dps)
+            rec_dps
+          && List.for_all (fun (dp, _) ->
+              List.exists (fun (dp', _) -> DirPath.equal dp dp') rec_dps
+              || allowed_by_modtype id dp)
+            live_dps)
     rec_grouped
   &&
   (* A live MODULE-kind id never recorded at all (B used it only through
@@ -481,7 +501,7 @@ let closure_subset_ok ~recorded ~live =
     digest is unchanged (G7, round 5). [coqchk] must NEVER call this: see
     [check_required_strict] below, which is the original digest-only
     check with nothing else reachable from it. *)
-let dep_ok ~actual ~required ~actual_iface ~required_iface
+let dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
     ~actual_objects_digest ~required_objects_digest
     ~actual_univs_digest ~required_univs_digest
     ~actual_vernac_iface ~required_vernac_iface
@@ -494,7 +514,7 @@ let dep_ok ~actual ~required ~actual_iface ~required_iface
    Digest.equal required_objects_digest actual_objects_digest &&
    Digest.equal required_univs_digest actual_univs_digest &&
    iface_subset_ok_vernac ~recorded:required_vernac_iface ~live:actual_vernac_iface &&
-   closure_subset_ok ~recorded:required_closure_names ~live:actual_closure_names &&
+   closure_subset_ok ?self_dp ~recorded:required_closure_names ~live:actual_closure_names &&
    Digest.equal required_closure_none_digest actual_closure_none_digest)
 
 (** Functor and funsig parameters, most recent first *)
@@ -1048,7 +1068,7 @@ let check_empty_struct senv =
 (** When loading a library, its dependencies should be already there,
     with the correct digests. *)
 
-let check_required current_libs needed =
+let check_required ?self_dp current_libs needed =
   (* binary-equivalence-taiga#841 round 7 (or1/or2): [actual_closure_none_digest]
      stays GLOBAL (every None-iface entry anywhere in the consuming
      process's [current_libs]) exactly as before -- restricting it to
@@ -1120,7 +1140,7 @@ let check_required current_libs needed =
         recorded_dps []
     in
     let actual_closure_names, _ = flatten_closure scoped_live_list in
-    if not (dep_ok ~actual ~required ~actual_iface ~required_iface
+    if not (dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
               ~actual_objects_digest ~required_objects_digest
               ~actual_univs_digest ~required_univs_digest
               ~actual_vernac_iface ~required_vernac_iface
@@ -2618,7 +2638,7 @@ let import_gen ~check_required lib vmtab vodigest senv =
   }
 
 let import lib vmtab vodigest senv =
-  import_gen ~check_required lib vmtab vodigest senv
+  import_gen ~check_required:(fun c n -> check_required ~self_dp:lib.comp_name c n) lib vmtab vodigest senv
 
 (** The ONLY entry point [checker/safe_checking.ml] may call: every
     dependency is checked by whole-library digest equality alone, with the

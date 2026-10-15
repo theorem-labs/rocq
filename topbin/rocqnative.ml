@@ -181,7 +181,7 @@ and intern_mandatory_library caller from libs (dir,d,d_iface,d_objects_digest,d_
      only (Major-1: fails hard on every legitimate reuse) and was the one
      site that never agreed with the other two (Major-2). *)
   let ok =
-    Safe_typing.dep_ok ~actual:digest ~required:d
+    Safe_typing.dep_ok ?self_dp:None ~actual:digest ~required:d
       ~actual_iface:live_iface ~required_iface:d_iface
       ~actual_objects_digest:live_objects_digest ~required_objects_digest:d_objects_digest
       ~actual_univs_digest:live_univs_digest ~required_univs_digest:d_univs_digest
