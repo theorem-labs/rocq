@@ -24,24 +24,57 @@ whether the fork would actually refuse it. This wrapper closes that gap:
   1. Own-source check (never skipped): compare the sha256 of the .v file
      being "compiled", HASHED ONCE BEFORE the real compiler ever runs, against
      the hash recorded the last time this wrapper actually ran a real compile
-     (a `<file>.vo.cutoff-stamp` sidecar). Missing stamp, missing .vo, or a
-     hash mismatch -> always a real compile. (v1 hashed AFTER `subprocess.run`
-     returned and wrote that re-derived value -- a TOCTOU: an edit landing
-     during the compile got recorded against the OLD .vo. Fixed by capturing
-     `pre_hash` exactly once and never re-deriving it.)
+     (a `<file>.vo.cutoff-stamp` sidecar, JSON since #841 Review841 G3/G4 --
+     see below). Missing stamp, missing .vo, or a hash mismatch -> always a
+     real compile. (v1 hashed AFTER `subprocess.run` returned and wrote that
+     re-derived value -- a TOCTOU: an edit landing during the compile got
+     recorded against the OLD .vo. Fixed by capturing `pre_hash` exactly once
+     and never re-deriving it.)
+
+     The own-source hash alone only covers the `.v` file's own bytes. Two
+     gaps Review841 reproduced on top of it (issue #841 issuecomment-
+     6187211433, findings G3/G4) are closed the same way, both gated behind
+     the matching own-source hash so none of this runs on a changed `.v`:
+
+       - G3 (`Load`/`Extra Dependency`/plugin prerequisites are invisible to
+         the stamp): `rocq dep` already classifies every such prerequisite
+         for this exact file (`tools/coqdep/lib/common.ml`'s `Require`/
+         `Declare`/`Load`/`External` cases, rendered as a Make dependency
+         line by `tools/coqdep/lib/makefile.ml`'s `print_dep`). Every real
+         build runs `rocq dep` itself for this one file (no reliance on
+         locating coq_makefile's project-wide `.d` file, whose name depends
+         on the Makefile's own `-o` name and isn't recoverable from this
+         driver's argv), hashes every prerequisite coqdep lists EXCEPT the
+         `.vo`/`.vos`/`.vok`/`.glob` artifacts of other libraries (those are
+         already covered by make's own mtime cascade plus their own
+         per-file stamp), and records the set in the stamp. A REUSE decision
+         re-hashes every one of those files and refuses unless all of them
+         still match.
+       - G4 (the stamp isn't bound to the `.vo` it describes): hand-editing
+         the `.v` and reverting it, or hand-editing the `.vo` directly
+         (bypassing this driver, e.g. running `rocq c` by hand), can leave a
+         stamp whose `v_hash` still matches the reverted `.v` while the
+         `.vo` on disk reflects something this driver never produced. Every
+         real build also records the sha256 of the `.vo` it just produced,
+         read AFTER the compile (a different value from `v_hash`, which must
+         stay captured BEFORE compiling per the TOCTOU fix above -- the two
+         protect different things and must never be conflated). A REUSE
+         decision re-hashes the CURRENT `.vo` and refuses unless it still
+         matches.
   2. Interactive gate: the cutoff (reuse) logic below is only reachable when
      `CUTOFF_AGENT_INTERACTIVE=1` is set in the environment; otherwise this
      driver always real-builds, unconditionally, even against a matching
      stamp. v1 had this inverted (`BET_GRADING`, an opt-OUT nothing ever set,
      so the guard was inert by construction); this fails closed for any
      caller that doesn't explicitly opt in instead.
-  3. Cheap acceptance check (only reached when the own source is unchanged
-     and the caller opted in, i.e. make invoked us only because some
-     dependency's .vo got a newer mtime): derive this file's logical (dotted)
-     module name from the -Q/-R bindings in the same argv coq_makefile
-     already built, and ask a throwaway `coqtop -batch ... -require <logical>`
-     whether the existing .vo is still loadable. This is exactly Rocq's own
-     Require-time consistency check (vernac/library.ml's file-level gate +
+  3. Cheap acceptance check (only reached when the own source, the recorded
+     `.vo`, and every recorded dependency's content all still match, i.e.
+     make invoked us only because some dependency's .vo got a newer mtime):
+     derive this file's logical (dotted) module name from the -Q/-R
+     bindings in the same argv coq_makefile already built, and ask a
+     throwaway `coqtop -batch ... -require <logical>` whether the existing
+     .vo is still loadable. This is exactly Rocq's own Require-time
+     consistency check (vernac/library.ml's file-level gate +
      kernel/safe_typing.ml's check_required) with none of the proof
      elaboration a real compile would redo -- cheap by construction, not by
      sampling.
@@ -53,7 +86,9 @@ whether the fork would actually refuse it. This wrapper closes that gap:
      -require` check) for the identical state, and so anything that in turn
      depends on this file is never even visited by coq_makefile's own mtime
      check. v1 returned on REUSED without updating any state, so `make -q`
-     never settled and every later `make` re-ran the same cheap check.
+     never settled and every later `make` re-ran the same cheap check. The
+     new mtime is bounded "restat" semantics (#841 Review841 G5, see
+     `touch_reused_targets`), not an unconditional forward push.
   5. If step 3 refuses (or anything about it is inconclusive: a nested
      module/functor the fork's interface table can't represent, the
      subprocess failing to start, etc.): fall back to a real compile. This is
@@ -71,6 +106,7 @@ agent's own interactive `rocq_write`/`rocq_restart` MCP session loop, which is
 exactly the caller `CUTOFF_AGENT_INTERACTIVE=1` names.
 """
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -118,6 +154,26 @@ SAFE_FLAG_ARITY = {
 # SAFE_FLAG_ARITY, per BugFinderRedTeamV2 M4: prefer a structural test over
 # enumeration, fail toward more bypassing never toward more reuse.
 NON_VO_FLAGS = frozenset({"-vos", "-vok", "-vio", "-beautify"})
+
+# `compile`-only flags inside SAFE_FLAG_ARITY that `rocq dep`'s own argv
+# parser (`tools/coqdep/lib/args.ml`) either doesn't recognize or would
+# misparse (an unrecognized flag taking an argument has that argument
+# swallowed as a bare positional file, since coqdep's unknown-option
+# fallthrough doesn't know the dropped flag's arity): `-native-compiler`,
+# `-time-file`, `-profile` all take an argument and are irrelevant to
+# dependency computation; `-w`/`-q`/`-noinit`/
+# `-deprecated-native-compiler-option` are 0-arity so harmless either way but
+# equally irrelevant. Only `-Q`/`-R`/`-I` establish the loadpath `rocq dep`
+# needs to resolve `Require`/`Load` the same way `rocq compile` itself will.
+DEP_FLAG_ARITY = {"-Q": 2, "-R": 2, "-I": 1}
+
+# Prerequisite extensions that name another library's own build artifact
+# (produced by a `Require`d `.v` file's own compile). Content changes there
+# are already covered by make's own mtime cascade plus that file's own
+# per-file stamp chain; #841 Review841 G3 is about prerequisites those
+# checks never see at all (`Load`, `Extra Dependency`, `Declare ML Module`
+# plugin files), so they are excluded from the G3 content-hash set.
+ARTIFACT_EXTS = (".vo", ".vos", ".vok", ".glob")
 
 
 def log(kind: str, vfile: str, extra: str = "") -> None:
@@ -201,24 +257,198 @@ def parse_loadpath(flags: list[str]) -> list[tuple[str, str, str]]:
     return out
 
 
-def real_build(flags: list[str], vfile: str, stamp: str, pre_hash: str) -> None:
+def extract_dep_flags(flags: list[str]) -> list[str]:
+    """The subset of an already-classified `compile` flag list worth
+    forwarding to `rocq dep` (#841 Review841 G3): only `-Q`/`-R`/`-I`,
+    which establish the same loadpath bindings `rocq compile` itself uses to
+    resolve `Require`/`Load`. Everything else in `SAFE_FLAG_ARITY` is either
+    irrelevant to dependency computation or actively unsafe to forward (see
+    `DEP_FLAG_ARITY`'s comment).
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(flags):
+        arity = DEP_FLAG_ARITY.get(flags[i])
+        if arity is not None and i + arity < len(flags):
+            out.extend(flags[i : i + 1 + arity])
+            i += 1 + arity
+        else:
+            i += 1
+    return out
+
+
+def _split_make_tokens(rhs: str) -> list[str]:
+    """Split the right-hand side of a Make dependency rule into its
+    individual prerequisite tokens, honoring `tools/coqdep/lib/makefile.ml`
+    `escape`'s rules: a backslash makes the following character literal
+    (including a literal space, so it is not a token separator), and `$$`
+    unescapes to a single `$`.
+    """
+    tokens: list[str] = []
+    cur: list[str] = []
+    i = 0
+    while i < len(rhs):
+        c = rhs[i]
+        if c == "\\" and i + 1 < len(rhs):
+            cur.append(rhs[i + 1])
+            i += 2
+            continue
+        if c.isspace():
+            if cur:
+                tokens.append("".join(cur).replace("$$", "$"))
+                cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    if cur:
+        tokens.append("".join(cur).replace("$$", "$"))
+    return tokens
+
+
+def parse_coqdep_deps(output: str) -> list[str]:
+    """Parse the first Make-rule line of `rocq dep`'s stdout for a single
+    `.v` file -- exactly the format `tools/coqdep/lib/makefile.ml`'s
+    `print_dep` emits (`name.vo name.glob name.v.beautified
+    name.required_vo: name.v dep1 dep2 ...`) -- and return the full
+    right-hand-side token list, in order: the file's own `.v`, every
+    `Require`d library as a `.vo` path, every `Declare ML Module` plugin as
+    a `.cma`/`.cmxs` path, every `Load`ed/`Extra Dependency` file and the
+    worker path as raw paths (`tools/coqdep/lib/common.ml`'s `Require`/
+    `Declare`/`Load`/`External` classification). The left-hand side ends at
+    the first unescaped `:`, found the same way coqdep's own escaping makes
+    it unambiguous. Returns `[]` if no parseable rule line is found.
+    """
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        i = 0
+        colon = None
+        while i < len(line):
+            if line[i] == "\\" and i + 1 < len(line):
+                i += 2
+                continue
+            if line[i] == ":":
+                colon = i
+                break
+            i += 1
+        if colon is None:
+            continue
+        return _split_make_tokens(line[colon + 1 :])
+    return []
+
+
+def compute_prereqs(flags: list[str], vfile: str) -> list[str] | None:
+    """Run `rocq dep` for exactly this one `.v` file (never relying on
+    locating coq_makefile's own project-wide dependency file, whose name
+    depends on the Makefile's `-o` name, which isn't recoverable from this
+    driver's argv) and return coqdep's full prerequisite list for it.
+    Returns `None` if `rocq dep` can't be run, exits nonzero, or its output
+    doesn't parse -- callers must treat that as "can't confirm", the same
+    fail-toward-rebuild direction as every other check here.
+    """
+    cmd = [REAL_ROCQ, "dep"] + extract_dep_flags(flags) + [vfile]
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+    if r.returncode != 0:
+        return None
+    tokens = parse_coqdep_deps(r.stdout.decode("utf-8", "replace"))
+    return tokens or None
+
+
+def dep_hashes_match(dep_hashes: dict[str, str]) -> bool:
+    """#841 Review841 G3: re-hash every prerequisite recorded in the stamp
+    and require ALL of them to still match -- a missing file counts as a
+    mismatch, never as "nothing to check".
+    """
+    for path, expected in dep_hashes.items():
+        try:
+            if sha256_of(path) != expected:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def read_stamp(stamp: str) -> dict | None:
+    try:
+        data = json.loads(Path(stamp).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "v_hash" not in data:
+        return None
+    return data
+
+
+def write_stamp(
+    stamp: str,
+    v_hash: str,
+    vo_hash: str | None,
+    dep_hashes: dict[str, str] | None,
+    prereqs: list[str] | None,
+) -> None:
+    Path(stamp).write_text(
+        json.dumps(
+            {"v_hash": v_hash, "vo_hash": vo_hash, "dep_hashes": dep_hashes, "prereqs": prereqs},
+            sort_keys=True,
+        )
+    )
+
+
+def real_build(flags: list[str], vfile: str, vo: str, stamp: str, pre_hash: str) -> None:
     """Run the real compiler. `pre_hash` MUST be the sha256 of `vfile`
     captured before this call, and is written to the stamp verbatim, never
     re-derived -- #841 D5 / BugFinderRedTeamV2 M1: hashing again after
     `subprocess.run` returns can record a hash that doesn't match what was
     actually fed to the compiler, if `vfile` changed mid-compile.
+
+    On success, also records (#841 Review841 G3/G4) the sha256 of the
+    resulting `.vo` -- read AFTER the compile, since that is genuinely the
+    file whose identity the next REUSE decision must bind to, a different
+    value from `pre_hash` which protects a different thing and must stay
+    captured before compiling -- and the sha256 of every non-artifact
+    prerequisite `rocq dep` lists for this file OTHER than `vfile` itself
+    (already covered, pre-compile, by `pre_hash`/`v_hash` -- hashing it
+    again here would both be redundant and reintroduce exactly the
+    post-compile TOCTOU read M1 eliminated, just for a second field), plus
+    the raw prerequisite list itself (including `vfile`) for
+    `touch_reused_targets`'s bounded restat (G5). Any failure computing
+    those (the `rocq dep` subprocess failing, a listed prerequisite missing
+    from disk) records `None` rather than a partial or stale value, so a
+    later REUSE decision that can't confirm them fails closed into a real
+    rebuild instead of silently skipping the check.
     """
     cmd = [REAL_ROCQ, "compile"] + flags + [vfile]
     r = subprocess.run(cmd)
     if r.returncode == 0:
-        Path(stamp).write_text(pre_hash)
+        try:
+            vo_hash = sha256_of(vo)
+        except OSError:
+            vo_hash = None
+        prereqs = compute_prereqs(flags, vfile)
+        dep_hashes: dict[str, str] | None
+        if prereqs is None:
+            dep_hashes = None
+        else:
+            dep_hashes = {}
+            for tok in prereqs:
+                if tok.endswith(ARTIFACT_EXTS) or os.path.normpath(tok) == os.path.normpath(vfile):
+                    continue
+                try:
+                    dep_hashes[tok] = sha256_of(tok)
+                except OSError:
+                    dep_hashes = None
+                    break
+        write_stamp(stamp, pre_hash, vo_hash, dep_hashes, prereqs)
         log("REBUILD", vfile)
     else:
         log("FAIL", vfile, str(r.returncode))
     sys.exit(r.returncode)
 
 
-def touch_reused_targets(vo: str, glob: str, vfile: str, loadpath: list[tuple[str, str, str]]) -> None:
+def touch_reused_targets(vo: str, glob: str, prereqs: list[str]) -> None:
     """After a REUSED verdict, freshen every target CoqMakefile.in's grouped
     `$(1).vo $(1).glob &: $(1).v` rule normally produces, WITHOUT rewriting
     their bytes, so a subsequent `make` (a) considers this target up to date
@@ -227,36 +457,38 @@ def touch_reused_targets(vo: str, glob: str, vfile: str, loadpath: list[tuple[st
     verdict to anything depending on this file, which `make`'s own mtime
     check then never even visits (#841 D5 finding 5/Major-5).
 
-    Known limitation, not fully closed (BugFinderRedTeamV2 M2): `make`'s own
-    prerequisite-mtime staleness check -- not this driver -- decides whether
-    the driver is invoked at all, and that check knows nothing about content
-    hashes. Touching a target's mtime forward can make a LATER genuine edit
-    to `vfile` invisible to `make` if the edited file's own resulting mtime
-    ever ends up older than the touched target (clock skew, a timestamp-
-    preserving cache restore). This is the known cost of layering a hash-
-    based cutoff under a pure-mtime build system; it is mitigated here, not
-    eliminated, by choosing a new mtime strictly greater than every
-    prerequisite CURRENTLY on disk (not just the targets' own old mtime):
-    `vfile` itself, and every `.vo` reachable under the `-Q`/`-R` physical
-    directories -- the only prerequisites this driver can structurally name.
+    `prereqs` is the exact prerequisite list `rocq dep` reported for this
+    file at the last real build (stored in the stamp) -- the file's own
+    `.v`, every `Require`d library's `.vo`, every `Load`/plugin dependency --
+    the SAME set `make`'s own `-include`d dependency file already uses to
+    decide this target's staleness. The new mtime is bounded "restat"
+    semantics (#841 Review841 G5, a real regression this design introduced
+    in its original fix for finding 5/Major-5): `max` of those prerequisites'
+    CURRENT mtimes, capped at `time.time()` so it can never read as being
+    from the future, and applied only if that computed floor is strictly
+    greater than the target's own CURRENT mtime. The prior version set every
+    reused target's mtime to `max(now, every .vo under every -Q/-R dir) + 1`
+    unconditionally: a chain of N reused files pushed mtimes N seconds into
+    the future, and once wall-clock time caught up to an earlier link's
+    artificially-future mtime, `make` would treat the whole tree as up to
+    date even past a real breaking edit downstream. This version can never
+    manufacture freshness beyond what the prerequisites and the real clock
+    already support, and never moves a target that is already at least as
+    new as everything it depends on.
     """
-    candidates = [time.time(), os.path.getmtime(vfile)]
-    seen_dirs: set[str] = set()
-    for _kind, physdir, _logical in loadpath:
-        pd = os.path.normpath(physdir)
-        if pd in seen_dirs:
-            continue
-        seen_dirs.add(pd)
-        for dirpath, _dirnames, filenames in os.walk(pd):
-            for name in filenames:
-                if name.endswith(".vo"):
-                    try:
-                        candidates.append(os.path.getmtime(os.path.join(dirpath, name)))
-                    except OSError:
-                        pass
-    new_mtime = max(candidates) + 1
+    mtimes = []
+    for path in prereqs:
+        try:
+            mtimes.append(os.path.getmtime(path))
+        except OSError:
+            pass
+    if not mtimes:
+        return
+    new_mtime = min(max(mtimes), time.time())
     for target in (vo, glob):
-        if os.path.exists(target):
+        if not os.path.exists(target):
+            continue
+        if new_mtime > os.path.getmtime(target):
             os.utime(target, (new_mtime, new_mtime))
 
 
@@ -287,22 +519,48 @@ def main() -> None:
         # Default BLOCKED: no caller has opted in, so always real-build --
         # even against a stamp that still matches (#841 D5, M3).
         log("SKIP-NOT-INTERACTIVE", vfile)
-        real_build(flags, vfile, stamp, pre_hash)
+        real_build(flags, vfile, vo, stamp, pre_hash)
         return
 
     if not os.path.exists(vo) or not os.path.exists(stamp):
-        real_build(flags, vfile, stamp, pre_hash)
+        real_build(flags, vfile, vo, stamp, pre_hash)
         return
 
-    if Path(stamp).read_text().strip() != pre_hash:
-        real_build(flags, vfile, stamp, pre_hash)
+    stamp_data = read_stamp(stamp)
+    if stamp_data is None or stamp_data.get("v_hash") != pre_hash:
+        real_build(flags, vfile, vo, stamp, pre_hash)
+        return
+
+    # G4: the stamp must still describe the .vo actually on disk. An
+    # externally edited-then-reverted .v, or a hand-edited .vo (bypassing
+    # this driver entirely), can leave a stamp whose v_hash matches the
+    # reverted .v while the .vo no longer reflects what this driver last
+    # produced -- that inconsistent state must force a real rebuild even
+    # though the own-source check above passed.
+    try:
+        current_vo_hash = sha256_of(vo)
+    except OSError:
+        current_vo_hash = None
+    if current_vo_hash is None or current_vo_hash != stamp_data.get("vo_hash"):
+        log("REBUILD-VO-MISMATCH", vfile)
+        real_build(flags, vfile, vo, stamp, pre_hash)
+        return
+
+    # G3: every Load/Extra Dependency/plugin prerequisite rocq dep listed
+    # for this file at the last real build must still hash the same. A
+    # stamp that couldn't record them (dep_hashes is None, e.g. `rocq dep`
+    # itself failed at build time) can't confirm reuse either.
+    dep_hashes = stamp_data.get("dep_hashes")
+    if dep_hashes is None or not dep_hashes_match(dep_hashes):
+        log("REBUILD-DEP-MISMATCH", vfile)
+        real_build(flags, vfile, vo, stamp, pre_hash)
         return
 
     loadpath = parse_loadpath(flags)
     logical = derive_logical_name(vfile, loadpath)
     if logical is None:
         log("SKIP-NO-LOGICAL-NAME", vfile)
-        real_build(flags, vfile, stamp, pre_hash)
+        real_build(flags, vfile, vo, stamp, pre_hash)
         return
 
     check_cmd = [COQTOP, "-batch"] + flags + ["-require", logical]
@@ -310,10 +568,10 @@ def main() -> None:
     if r.returncode != 0:
         tail = r.stdout.decode("utf-8", "replace").strip().splitlines()[-1:]
         log("REBUILD-REFUSED", vfile, tail[0] if tail else "")
-        real_build(flags, vfile, stamp, pre_hash)
+        real_build(flags, vfile, vo, stamp, pre_hash)
         return
 
-    touch_reused_targets(vo, glob, vfile, loadpath)
+    touch_reused_targets(vo, glob, stamp_data.get("prereqs") or [])
     log("REUSED", vfile)
 
 
