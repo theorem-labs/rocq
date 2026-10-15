@@ -1865,6 +1865,17 @@ module G1Partition = struct
     | Excluded
     | Exact
 
+  let modpath_of_gr = function
+    | GlobRef.ConstRef c -> Some (Constant.modpath c)
+    | GlobRef.IndRef (mind, _) -> Some (MutInd.modpath mind)
+    | GlobRef.ConstructRef ((mind, _), _) -> Some (MutInd.modpath mind)
+    | GlobRef.VarRef _ -> None
+
+  let is_local dir gr =
+    match modpath_of_gr gr with
+    | Some mp -> ModPath.equal mp (MPfile dir)
+    | None -> false
+
   (* "IMPLICITS"/"ARGUMENTS-SCOPE" are EXCLUDED here (dropped from the
      exact digest), not subset-checked by their raw leaf bytes: an
      `Arguments foo {x}` added to an EXISTING declaration, or two
@@ -1880,68 +1891,82 @@ module G1Partition = struct
      library's OWN completed environment -- not the raw leaf objects),
      checked like the kernel's [iface_table] (every name the dependent
      used must still match; an added name is ignored; see [dep_ok] via
-     the new [req_vernac_iface] field). *)
-  let classify (obj : Libobject.obj) : classification =
-    match Libobject.object_name obj with
-    | "IMPLICITS" | "ARGUMENTS-SCOPE" -> Excluded
-    | _ ->
-      (match Libobject.cutoff_classify obj with
-       | Some Libobject.CutoffExcluded -> Excluded
-       | Some (Libobject.CutoffKeyed _) -> Excluded
-       | None -> Exact)
+     the new [req_vernac_iface] field).
 
-  let rec filter_atomic (o : Libobject.t) : Libobject.t option =
+     binary-equivalence-taiga#841 Review841 round 5 (forg, Main's
+     finding): this is sound ONLY when every target the raw object
+     concerns is itself one of THIS library's own top-level declarations
+     -- [vernac_iface_entries]'s own walk, below, only ever visits
+     declaration objects actually PRESENT in THIS library's own object
+     tree, so a `#[global] Arguments Nat.pred ...` overriding a FOREIGN
+     target (declared in a different, already-loaded library) is never
+     re-queried by that walk at all: excluding it here would drop it from
+     every digest with NOTHING picking up the slack. Fix: inspect the raw
+     object's own target [GlobRef.t](s) directly (via
+     [Impargs.cutoff_implicits_targets]/
+     [Notation.cutoff_arguments_scope_target]) and only Exclude when
+     EVERY target is local to [dir] (so [vernac_iface_entries]'s walk
+     will in fact re-visit it via that target's own CONSTANT/INDUCTIVE
+     declaration object elsewhere in the same tree); a foreign target (or
+     a [VarRef], which [vernac_iface_entries] never keys) stays in the
+     EXACT digest, same as before G1 for that specific object. *)
+  let classify dir (obj : Libobject.obj) : classification =
+    match Impargs.cutoff_implicits_targets obj with
+    | Some targets ->
+      if List.for_all (is_local dir) targets then Excluded else Exact
+    | None ->
+      match Notation.cutoff_arguments_scope_target obj with
+      | Some gr -> if is_local dir gr then Excluded else Exact
+      | None ->
+        (match Libobject.cutoff_classify obj with
+         | Some Libobject.CutoffExcluded -> Excluded
+         | Some (Libobject.CutoffKeyed _) -> Excluded
+         | None -> Exact)
+
+  let rec filter_atomic dir (o : Libobject.t) : Libobject.t option =
     match o with
     | Libobject.AtomicObject obj ->
-      (match classify obj with Exact -> Some o | Excluded -> None)
+      (match classify dir obj with Exact -> Some o | Excluded -> None)
     | Libobject.ModuleObject (id, (mbids, alg)) ->
-      Option.map (fun alg -> Libobject.ModuleObject (id, (mbids, alg))) (filter_algebraic alg)
+      Option.map (fun alg -> Libobject.ModuleObject (id, (mbids, alg))) (filter_algebraic dir alg)
     | Libobject.ModuleTypeObject (id, (mbids, alg)) ->
-      Option.map (fun alg -> Libobject.ModuleTypeObject (id, (mbids, alg))) (filter_algebraic alg)
+      Option.map (fun alg -> Libobject.ModuleTypeObject (id, (mbids, alg))) (filter_algebraic dir alg)
     | Libobject.IncludeObject alg ->
-      Option.map (fun alg -> Libobject.IncludeObject alg) (filter_algebraic alg)
+      Option.map (fun alg -> Libobject.IncludeObject alg) (filter_algebraic dir alg)
     | Libobject.KeepObject (id, { Libobject.keep_objects }) ->
-      Some (Libobject.KeepObject (id, { Libobject.keep_objects = List.filter_map filter_atomic keep_objects }))
+      Some (Libobject.KeepObject (id, { Libobject.keep_objects = List.filter_map (filter_atomic dir) keep_objects }))
     | Libobject.EscapeObject (id, { Libobject.escape_objects }) ->
-      Some (Libobject.EscapeObject (id, { Libobject.escape_objects = List.filter_map filter_atomic escape_objects }))
+      Some (Libobject.EscapeObject (id, { Libobject.escape_objects = List.filter_map (filter_atomic dir) escape_objects }))
     | Libobject.ExportObject _ -> Some o
-  and filter_algebraic = function
-    | Libobject.Objs l -> Some (Libobject.Objs (List.filter_map filter_atomic l))
+  and filter_algebraic dir = function
+    | Libobject.Objs l -> Some (Libobject.Objs (List.filter_map (filter_atomic dir) l))
     | Libobject.Ref _ as r -> Some r
 
-  let filter_library_objects ((substobjs, keepobjs, escapeobjs) : library_objects) : library_objects =
-    (List.filter_map filter_atomic substobjs,
-     { Libobject.keep_objects = List.filter_map filter_atomic keepobjs.Libobject.keep_objects },
-     { Libobject.escape_objects = List.filter_map filter_atomic escapeobjs.Libobject.escape_objects })
+  let filter_library_objects dir ((substobjs, keepobjs, escapeobjs) : library_objects) : library_objects =
+    (List.filter_map (filter_atomic dir) substobjs,
+     { Libobject.keep_objects = List.filter_map (filter_atomic dir) keepobjs.Libobject.keep_objects },
+     { Libobject.escape_objects = List.filter_map (filter_atomic dir) escapeobjs.Libobject.escape_objects })
 
-  (** binary-equivalence-taiga#841 Review841 round 3: the KEYED
+  (** binary-equivalence-taiga#841 Review841 round 3 + round 5: the KEYED
       vernac-level interface table, checked by [Safe_typing.iface_subset_ok]
-      exactly like the kernel's own [iface_table]. [dir] is the library's
-      own [DirPath.t] (available here at [end_library], unlike inside the
-      per-tag classifier callback in [library/libobject.ml], which only
-      sees the atomic object's own payload) -- enough to reconstruct the
-      [Constant.t]/[GlobRef.t] a top-level CONSTANT declaration got
-      ([Constant.make2 (MPfile dir) id], the same construction
-      [Safe_typing.export] uses for its own top-level bindings), without
-      needing [Global]/[Nametab] lookups. Scope note: only CONSTANT
-      entries are covered (the common case Review841's "i1"/"i3" fixtures
-      exercise, a `Definition`/`Lemma`'s own `Arguments`/implicits) --
-      INDUCTIVE/PRIMPROJS stay wholesale EXCLUDED with no vernac_iface
-      coverage, so an `Arguments`/implicits override targeting an
-      inductive type or constructor is NOT yet covered by this layer;
-      flagged as a smaller follow-up (same shape, [MutInd.make2] plus one
-      [IndRef]/[ConstructRef] entry per name in [ind_names]). *)
-  let vernac_iface_entries dir (objs : Libobject.t list) : (Names.Id.t * Digest.t) array =
+      exactly like the kernel's own [iface_table]. [Libobject.cutoff_classify]
+      now hands back the target [GlobRef.t] DIRECTLY (round 5; the
+      predecessor reconstructed it here from [dir]+[Id.t], which only
+      worked for CONSTANT) -- covers CONSTANT, INDUCTIVE types and
+      constructors (ind1/ind2/g7ctor); PRIMPROJS stays wholesale excluded
+      (see [DeclareInd]'s own classifier doc comment). *)
+  let vernac_iface_entries (objs : Libobject.t list) : (Names.Id.t * Digest.t) array =
     let env = Global.env () in
     let acc = ref [] in
     let handle_atomic obj =
       match Libobject.cutoff_classify obj with
-      | Some (Libobject.CutoffKeyed (id, base)) ->
-        let gr = GlobRef.ConstRef (Constant.make2 (MPfile dir) id) in
-        let impls = Impargs.implicits_of_global gr in
-        let scopes = Notation.find_arguments_scope env gr in
-        let d = Csha256.digest (Marshal.to_string (base, impls, scopes) []) in
-        acc := (id, d) :: !acc
+      | Some (Libobject.CutoffKeyed entries) ->
+        List.iter (fun (gr, id, base) ->
+            let impls = Impargs.implicits_of_global gr in
+            let scopes = Notation.find_arguments_scope env gr in
+            let d = Csha256.digest (Marshal.to_string (base, impls, scopes) []) in
+            acc := (id, d) :: !acc)
+          entries
       | Some Libobject.CutoffExcluded | None -> ()
     in
     let rec walk (o : Libobject.t) = match o with
@@ -1960,12 +1985,12 @@ module G1Partition = struct
     Array.of_list !acc
 
   let partition dir (md_syntax_objects, md_objects : library_objects * library_objects) =
-    let exact_syntax = filter_library_objects md_syntax_objects in
-    let exact_objects = filter_library_objects md_objects in
+    let exact_syntax = filter_library_objects dir md_syntax_objects in
+    let exact_objects = filter_library_objects dir md_objects in
     let exact_digest = Csha256.digest (Marshal.to_string (exact_syntax, exact_objects) []) in
     let (substobjs, keepobjs, escapeobjs) = md_objects in
     let vernac_iface =
-      vernac_iface_entries dir
+      vernac_iface_entries
         (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
     in
     (exact_digest, vernac_iface)

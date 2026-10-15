@@ -153,3 +153,9 @@ val select_impargs_size_for_proj :
 val impargs_for_proj :
   nexpectedparams:int -> nextraargs:int ->
   implicit_status list -> implicit_status list * implicit_status list
+
+val cutoff_implicits_targets : Libobject.obj -> GlobRef.t list option
+(** binary-equivalence-taiga#841 Review841 round 5 (forg): [Some] with the
+    target [GlobRef.t] list iff [obj] is an "IMPLICITS" object; lets
+    [Declaremods.G1Partition] tell a local target (keyed, excludable) from
+    a foreign one (kept in the exact digest). *)

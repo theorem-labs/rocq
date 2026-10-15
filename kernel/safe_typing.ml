@@ -176,57 +176,137 @@ let iface_subset_ok ~recorded ~live =
     than hiding behind set membership. *)
 let iface_subset_ok_vernac = iface_subset_ok
 
+(** A library's own [iface_table] entry, tagged with the OWNING
+    library's [DirPath.t] -- see [flatten_closure]'s doc comment for why
+    this is NOT a flat [(Id.t * Digest.t) array] like [iface_table]
+    (round 5's first attempt at this used that shape and a bug was found
+    before it shipped: a "last writer wins" flatten across DIFFERENT
+    libraries that happen to share a short name silently discards
+    whichever library's digest doesn't "win" the merge, which can hide a
+    genuine collision -- g7_shadowing_refused's own X/A pair, where X's
+    STATIC, unchanged `f` entry always wins the merge over A's, as long
+    as X's dirpath sorts after A's -- making A's change to `f`
+    invisible). *)
+type closure_table = (DirPath.t * Id.t * Digest.t) array
+
 type library_info =
   DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * iface_table
+  * closure_table * Digest.t
+(** The last two components ([closure_names]/[closure_none_digest], added
+    binary-equivalence-taiga#841 Review841 round 5) close g7exp/g7pre/
+    g7mod/g7ctor -- see [flatten_closure]'s doc comment below. *)
 
-(** binary-equivalence-taiga#841 Review841 G7. Once G1 lets an ADDED
-    declaration skip invalidating existing dependents, a dependency that
-    adds a declaration whose short name collides with a name already
-    resolved (through an absolute kernel reference) somewhere in the
-    dependent's own closure must refuse reuse: a FRESH compile would
-    resolve the now-ambiguous/shadowed name differently (or fail), so
-    keeping the old [.vo] would silently diverge from what a fresh
-    compile produces -- not a kernel soundness hole (the kept [.vo]'s own
-    term stays well-typed, since its absolute references are unaffected),
-    but exactly the kind of "the fast signal lies about what a fresh
-    compile would do" gap G1 exists to avoid without reopening.
+(** binary-equivalence-taiga#841 Review841 G7, round 5 (closing g7exp/
+    g7pre/g7mod/g7ctor -- issuecomment-6189455137/round-4 review
+    issuecomment-6189398514). The PREDECESSOR mechanism
+    ([used_names_of_needed]/[added_label_collision], removed this round)
+    only unioned the [iface_table] keys of a library's DIRECT, root-only
+    [needed] array, missing every name that becomes visible only through
+    a dependency's OWN transitive closure: a name re-exported via
+    [Require Export] several hops down (g7exp), a prelude/stdlib name
+    whose OWNING library isn't itself a direct dependency (g7pre -- the
+    auto-required prelude only re-exports it), any dependency whose
+    [iface_table] is [None] (a nested module, g7mod), and a constructor
+    label (not separately keyed by the OLD [iface_table_of_struct],
+    g7ctor -- see that function's own fix alongside this one).
 
-    No separate name-keyed table is needed for this: the existing kernel
-    [iface_table] (G1 left it untouched -- CONSTANT/INDUCTIVE are only
-    excluded from the VERNAC objects digest, never from this table) is
-    already keyed by every top-level declaration's [Id.t], for every
-    dependency a library recorded. [used_names_of_needed] below unions
-    those keys across a FULL [needed] array (one library's own recorded
-    dependency set) into the set of every short name that library's own
-    source could have resolved absolutely through one of its direct
-    dependencies -- limited, like everything else keyed off root-only
-    [comp_deps]/[md_deps] pre-D1, to DIRECT dependencies; full transitive
-    coverage needs D1's [comp_transitive_deps]. [added_label_collision]
-    then checks one dependency's [recorded]/[live] [iface_table] snapshot:
-    a LIVE key absent from [recorded] is an addition; if that addition's
-    name is also in [used_names], refuse. *)
-let used_names_of_needed (needed : library_info array) =
-  Array.fold_left (fun acc (_, _, iface, _, _, _) ->
-      match iface with
-      | Some tbl -> Array.fold_left (fun acc (id, _) -> Id.Set.add id acc) acc tbl
-      | None -> acc)
-    Id.Set.empty needed
+    Fix: rather than approximate "what could this library have used"
+    from its own direct deps, record, for EVERY library visible in the
+    FULL transitive closure at compile time (-- [senv.required]'s
+    complete binding set, every library this coqc process has loaded so
+    far when THIS library is compiled, unfiltered by [req_root]; see
+    [export] below), EVERY one of ITS OWN [(Id.t, Digest.t)] entries,
+    tagged with that library's own [DirPath.t] (a [closure_table], NOT
+    merged/flattened across libraries -- see that type's doc comment for
+    why). This does NOT require D1's [comp_transitive_deps]: a library's
+    own closure is fully populated in [senv.required]/[current_libs] by
+    the time it is compiled or checked, since every file in a require
+    graph is loaded bottom-up before its dependents are even considered
+    (confirmed by inspection of [vernac/library.ml]'s require pipeline:
+    [register_library]/[Safe_typing.import] for a file runs only after
+    [intern_library_deps] has fully recursed over that file's WHOLE
+    transitive closure). This field only tracks NAME EXISTENCE for
+    shadow detection -- it never re-validates a transitively-required
+    library's full CONTENT the way D1's induction argument would, so it
+    closes a narrower problem than D1's Blocker.
 
-let added_label_collision ~required_iface ~actual_iface ~used_names =
-  match required_iface, actual_iface with
-  | Some recorded, Some live ->
-    let recorded_ids =
-      Array.fold_left (fun acc (id, _) -> Id.Set.add id acc) Id.Set.empty recorded
-    in
-    Array.exists (fun (id, _) ->
-        not (Id.Set.mem id recorded_ids) && Id.Set.mem id used_names)
-      live
-  (* No representable [iface_table] on one side or the other: [dep_ok]'s
-     own [iface_subset_ok] conjunct below already forces the whole
-     relaxed path to [false] in that case, so this function's answer is
-     moot -- [false] (no collision reported) rather than vacuously
-     refusing for an unrelated reason. *)
-  | _ -> false
+    At CHECK time the SAME per-library tagging is recomputed from the
+    live [current_libs] map (which, by construction, holds the SAME full
+    closure, live) and compared via [closure_subset_ok]: for every
+    recorded [(dp, id, digest)] triple, the SAME triple must still be
+    present in the live set (a library's own declaration changing or
+    disappearing fails this, same as [iface_subset_ok]); AND, for every
+    [id] the recorded set names (from whichever [dp] originally defined
+    it), the live set must not have GAINED a triple for that SAME [id]
+    from a DIFFERENT [dp] -- that is exactly "someone new now defines a
+    name this dependent's closure already had a binding for," the shadow
+    hazard G7 exists to refuse. An id's recorded [dp] set staying fixed
+    while only EXTRA, entirely NEW ids appear (from any library) is the
+    ordinary, G1-intended "unused addition," explicitly allowed.
+
+    A library whose OWN [iface_table] is [None] (nested module) cannot be
+    enumerated into the per-id table at all, so a SEPARATE digest
+    ([closure_none_digest]) covers the sorted [(DirPath.t, vodigest)]
+    pairs of every None-iface entry in the closure: if such a library's
+    content changes (its own digest differs) or one is added/removed,
+    this digest changes and the check fails -- scoped to libraries that
+    ACTUALLY changed, so an untouched, unrelated nested-module library
+    anywhere in a large closure (e.g. the prelude) does not poison every
+    reuse decision. A name hidden inside such a library that collides
+    with something ADDED elsewhere (the deeper half of g7mod) is NOT
+    covered by this digest (it does not change when the OTHER library
+    changes) -- flagged as a narrower residual gap, same risk class as
+    the still-open G8/D1 gap: a dev-loop signal that can lie about what a
+    fresh compile would do, never a path to an unsound ACCEPT at grading
+    time (grading always recompiles from source; see the module-level
+    soundness argument). *)
+let flatten_closure (entries : (DirPath.t * vodigest * iface_table option) list) : closure_table * Digest.t =
+  let triples =
+    List.concat_map (fun (dp, _, iface) -> match iface with
+        | Some tbl -> Array.to_list (Array.map (fun (id, d) -> (dp, id, d)) tbl)
+        | None -> [])
+      entries
+  in
+  let triples = Array.of_list triples in
+  Array.sort (fun (dp1, id1, _) (dp2, id2, _) ->
+      let c = DirPath.compare dp1 dp2 in
+      if c <> 0 then c else Id.compare id1 id2)
+    triples;
+  let none_entries =
+    List.filter_map (fun (dp, Dvo_or_vi d, iface) ->
+        match iface with None -> Some (DirPath.to_string dp, d) | Some _ -> None)
+      entries
+  in
+  let none_entries = List.sort (fun (a, _) (b, _) -> String.compare a b) none_entries in
+  let none_digest = Csha256.digest (Marshal.to_string none_entries []) in
+  (triples, none_digest)
+
+(** Groups a [closure_table] by [Id.t], each id mapped to the (possibly
+    several, if unrelated libraries happen to share a short name)
+    [(DirPath.t * Digest.t)] pairs that define it -- the shape
+    [closure_subset_ok] below needs to detect both a changed/removed
+    declaration (within one [dp]) and a NEW [dp] appearing for an
+    already-recorded [id] (the shadow case). *)
+let group_closure (t : closure_table) : (DirPath.t * Digest.t) list Id.Map.t =
+  Array.fold_left (fun acc (dp, id, d) ->
+      let l = try Id.Map.find id acc with Not_found -> [] in
+      Id.Map.add id ((dp, d) :: l) acc)
+    Id.Map.empty t
+
+let closure_subset_ok ~recorded ~live =
+  let rec_grouped = group_closure recorded in
+  let live_grouped = group_closure live in
+  Id.Map.for_all (fun id rec_dps ->
+      match Id.Map.find_opt id live_grouped with
+      | None -> false
+      | Some live_dps ->
+        List.for_all (fun (dp, d) ->
+            List.exists (fun (dp', d') -> DirPath.equal dp dp' && String.equal d d') live_dps)
+          rec_dps
+        && List.for_all (fun (dp, _) ->
+            List.exists (fun (dp', _) -> DirPath.equal dp dp') rec_dps)
+          live_dps)
+    rec_grouped
 
 (** The relaxed acceptance predicate, shared by every loader that is
     allowed to use it (the kernel's own [check_required] below, and
@@ -236,24 +316,27 @@ let added_label_collision ~required_iface ~actual_iface ~used_names =
     the dependent recorded still has an identical digest in the live
     table, (b) the live library's exact-equality objects digest is EXACTLY
     what the dependent recorded (Hints/Instances/Notations/Ltac2/Canonical
-    Structures/Coercions/univ-constraint-source objects, plus IMPLICITS/
-    ARGUMENTS-SCOPE's raw leaf bytes/CONSTANT's own libobject -- any
-    change anywhere in that remainder forces a rebuild, deliberately
+    Structures/Coercions/univ-constraint-source objects, plus whatever
+    IMPLICITS/ARGUMENTS-SCOPE objects aren't locally keyed -- any change
+    anywhere in that remainder forces a rebuild, deliberately
     conservative), (c) the live library's [(comp_univs, comp_sorts)]
     digest is EXACTLY what the dependent recorded (G2), (d) every KEYED
-    [vernac_iface] entry (CONSTANT's `cst_locl`/`cst_warn` plus its
-    EFFECTIVE implicits/argument-scopes, G1/round-3) the dependent
-    recorded is still present with an EQUAL digest in the live table
-    (subset by name, extras ignored, same shape as (a)), AND (e) no name
-    this dependency's live [iface_table] adds collides with a name in
-    [used_names] (G7). [coqchk] must NEVER call this: see
+    [vernac_iface] entry (CONSTANT's `cst_locl`/`cst_warn`, INDUCTIVE/
+    constructor entries, plus every target's EFFECTIVE implicits/
+    argument-scopes, G1/round-3 + round-5) the dependent recorded is
+    still present with an EQUAL digest in the live table (subset by name,
+    extras ignored, same shape as (a)), AND (e) the live FULL CLOSURE's
+    flat name table is still a superset-with-identical-digests of what
+    the dependent recorded, AND (f) the live closure's None-iface-entry
+    digest is unchanged (G7, round 5). [coqchk] must NEVER call this: see
     [check_required_strict] below, which is the original digest-only
     check with nothing else reachable from it. *)
 let dep_ok ~actual ~required ~actual_iface ~required_iface
     ~actual_objects_digest ~required_objects_digest
     ~actual_univs_digest ~required_univs_digest
     ~actual_vernac_iface ~required_vernac_iface
-    ~used_names =
+    ~actual_closure_names ~required_closure_names
+    ~actual_closure_none_digest ~required_closure_none_digest =
   digest_match ~actual ~required ||
   ((match required_iface, actual_iface with
     | Some recorded, Some live -> iface_subset_ok ~recorded ~live
@@ -261,7 +344,8 @@ let dep_ok ~actual ~required ~actual_iface ~required_iface
    Digest.equal required_objects_digest actual_objects_digest &&
    Digest.equal required_univs_digest actual_univs_digest &&
    iface_subset_ok_vernac ~recorded:required_vernac_iface ~live:actual_vernac_iface &&
-   not (added_label_collision ~required_iface ~actual_iface ~used_names))
+   closure_subset_ok ~recorded:required_closure_names ~live:actual_closure_names &&
+   Digest.equal required_closure_none_digest actual_closure_none_digest)
 
 (** Functor and funsig parameters, most recent first *)
 type module_parameters = (MBId.t * module_type_body) list
@@ -356,6 +440,10 @@ type compiled_library = {
       [export]'s [~vernac_iface] parameter, same provenance as
       [comp_objects_digest]. *)
   comp_vernac_iface : iface_table;
+  (** G7 round 5: this library's full transitive closure, flattened. See
+      [flatten_closure]'s doc comment. *)
+  comp_closure_names : closure_table;
+  comp_closure_none_digest : Digest.t;
 }
 
 type reimport = compiled_library * Vmlibrary.on_disk * vodigest
@@ -811,11 +899,18 @@ let check_empty_struct senv =
     with the correct digests. *)
 
 let check_required current_libs needed =
-  (* G7: computed once for the whole [needed] array, see
-     [used_names_of_needed]'s doc comment above. *)
-  let used_names = used_names_of_needed needed in
+  (* G7 round 5: computed once per [check_required] call from the FULL
+     live closure (every dirpath currently loaded, not just this
+     library's own direct [needed] array) -- see [flatten_closure]'s doc
+     comment above. *)
+  let live_closure_list =
+    DirPath.Map.bindings current_libs
+    |> List.map (fun (dp, { req_digest; req_iface; _ }) -> (dp, req_digest, req_iface))
+  in
+  let actual_closure_names, actual_closure_none_digest = flatten_closure live_closure_list in
   let check current (id, required, required_iface, required_objects_digest,
-                      required_univs_digest, required_vernac_iface) =
+                      required_univs_digest, required_vernac_iface,
+                      required_closure_names, required_closure_none_digest) =
     match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
@@ -828,15 +923,17 @@ let check_required current_libs needed =
        but everything this dependent could have observed through it --
        its recorded [iface_table] subset, its exact-equality objects
        digest, its [(comp_univs, comp_sorts)] digest, its keyed
-       vernac_iface subset, and the absence of a G7 name collision --
-       still matches the dependency's current state, so the dependent's
-       own precompiled terms remain well-typed in the new environment.
-       NEVER used by coqchk: see [check_required_strict]. *)
+       vernac_iface subset, and the absence of a G7 closure-wide name
+       collision (round 5) -- still matches the dependency's current
+       state, so the dependent's own precompiled terms remain well-typed
+       in the new environment. NEVER used by coqchk: see
+       [check_required_strict]. *)
     if not (dep_ok ~actual ~required ~actual_iface ~required_iface
               ~actual_objects_digest ~required_objects_digest
               ~actual_univs_digest ~required_univs_digest
               ~actual_vernac_iface ~required_vernac_iface
-              ~used_names) then
+              ~actual_closure_names ~required_closure_names
+              ~actual_closure_none_digest ~required_closure_none_digest) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
     else if req_root then
@@ -861,7 +958,8 @@ let check_required current_libs needed =
     binary-equivalence-taiga#841 "D2". *)
 let check_required_strict current_libs needed =
   let check current (id, required, _required_iface, _required_objects_digest,
-                      _required_univs_digest, _required_vernac_iface) =
+                      _required_univs_digest, _required_vernac_iface,
+                      _required_closure_names, _required_closure_none_digest) =
     match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
@@ -1768,6 +1866,7 @@ let iface_of_library lib = lib.comp_iface
 let objects_digest_of_library lib = lib.comp_objects_digest
 let univs_digest_of_library lib = lib.comp_univs_digest
 let vernac_iface_of_library lib = lib.comp_vernac_iface
+let closure_of_library lib = lib.comp_closure_names, lib.comp_closure_none_digest
 
 let univs_of_library lib = lib.comp_sorts, lib.comp_univs
 
@@ -1857,9 +1956,27 @@ let iface_digest_of_const (cb : constant_body) : Digest.t =
 let iface_digest_of_mind (mib : mutual_inductive_body) : Digest.t =
   Csha256.digest (Marshal.to_string mib [])
 
-let iface_digest_of_sfb = function
-  | SFBconst cb -> Some (iface_digest_of_const cb)
-  | SFBmind mib -> Some (iface_digest_of_mind mib)
+(** binary-equivalence-taiga#841 Review841 G7 round 5 (g7ctor): a
+    constructor's own short name (e.g. [c] in [Inductive t := c | d]) was
+    not previously a separate key in this table at all -- only the
+    inductive TYPE's own label ([t]) was, so a dependency that added a
+    new top-level declaration whose name collided with an EXISTING
+    constructor's name (not the type's) was invisible to every reuse
+    check that keys off this table. Fix: emit one entry per constructor,
+    in addition to the type's own entry, all keyed to the SAME whole-mib
+    digest (a constructor's identity is part of the mib as a whole, same
+    as the type's). *)
+let iface_entries_of_sfb (id, sfb) : (Id.t * Digest.t) list option =
+  match sfb with
+  | SFBconst cb -> Some [(id, iface_digest_of_const cb)]
+  | SFBmind mib ->
+    let d = iface_digest_of_mind mib in
+    let names = ref [] in
+    Array.iter (fun mip ->
+        names := mip.mind_typename :: !names;
+        Array.iter (fun c -> names := c :: !names) mip.mind_consnames)
+      mib.mind_packets;
+    Some (List.map (fun n -> (n, d)) !names)
   (* A nested module/module type or a rewrite-rules block: no attempt to
      give it a per-declaration interface digest here, so a library
      containing one falls back to the whole-library digest entirely
@@ -1868,8 +1985,8 @@ let iface_digest_of_sfb = function
 
 let iface_table_of_struct (sb : structure_body) : iface_table option =
   try
-    Some (Array.of_list (List.map (fun (id, sfb) -> match iface_digest_of_sfb sfb with
-        | Some d -> (id, d)
+    Some (Array.of_list (List.concat_map (fun (id, sfb) -> match iface_entries_of_sfb (id, sfb) with
+        | Some l -> l
         | None -> raise Exit)
         sb))
   with Exit -> None
@@ -1912,6 +2029,18 @@ let export ~output_native_objects ~objects_digest ~vernac_iface senv dir =
     | NoFunctor sb -> iface_table_of_struct sb
     | MoreFunctor _ -> None
   in
+  (* G7 round 5: this library's (B's) own full transitive closure,
+     flattened once here and attached to EVERY kept dependency entry
+     below (the SAME value for each -- [dep_ok] treats it as a single
+     per-[check_required]-call constant, not per-entry data; storing it
+     redundantly per entry avoids a second signature on [check_required]/
+     [check_required_strict] for a single extra argument). See
+     [flatten_closure]'s doc comment. *)
+  let own_closure_list =
+    DirPath.Map.bindings senv.required
+    |> List.map (fun (dp, { req_digest; req_iface; _ }) -> (dp, req_digest, req_iface))
+  in
+  let comp_closure_names, comp_closure_none_digest = flatten_closure own_closure_list in
   (* v2's D1 (full transitive closure, [comp_transitive_deps]/
      [md_transitive_deps] as a SEPARATE field) lands as part of commit 1 on
      `sami/861-loc-free-identity`; this slice keeps [comp_deps] root-only,
@@ -1924,7 +2053,8 @@ let export ~output_native_objects ~objects_digest ~vernac_iface senv dir =
   let filter_dep (dp, { req_root; req_digest; req_iface; req_objects_digest;
                          req_univs_digest; req_vernac_iface }) =
     if req_root then Some (dp, req_digest, req_iface, req_objects_digest,
-                            req_univs_digest, req_vernac_iface)
+                            req_univs_digest, req_vernac_iface,
+                            comp_closure_names, comp_closure_none_digest)
     else None
   in
   let comp_deps = List.map_filter filter_dep (DirPath.Map.bindings senv.required) in
@@ -1947,6 +2077,8 @@ let export ~output_native_objects ~objects_digest ~vernac_iface senv dir =
     comp_objects_digest = objects_digest;
     comp_univs_digest;
     comp_vernac_iface = vernac_iface;
+    comp_closure_names;
+    comp_closure_none_digest;
   } in
   let vmlib = Vmlibrary.export @@ Environ.vm_library senv.env in
   mp, lib, vmlib, (ast, symbols)

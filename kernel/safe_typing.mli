@@ -31,26 +31,26 @@ val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
     directly (same keyed shape as the kernel [iface_table]), not a
     separate unkeyed-SET function -- the old [decl_objects_subset_ok] is
     removed; it was the unsound predecessor this round replaced. *)
-(** binary-equivalence-taiga#841 Review841 G7: see the doc comment on
-    [Safe_typing.used_names_of_needed]/[added_label_collision] in the
+(** binary-equivalence-taiga#841 Review841 G7, round 5: see the doc
+    comment on [Safe_typing.flatten_closure]/[closure_subset_ok] in the
     implementation for the full argument. [needed] here is structurally
     the same per-dependency tuple array as a library's own [comp_deps]/
-    [md_deps] (not named [library_info], which stays internal) -- every
-    one of [dep_ok]'s three call sites (the kernel's own [check_required],
-    [vernac/library.ml]'s and [topbin/rocqnative.ml]'s own
-    [intern_mandatory_library]) must compute this ONCE from its own full
-    dependency array and pass the SAME value into every [dep_ok] call for
-    that array, not recompute it per entry. *)
-val used_names_of_needed :
-  (DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * iface_table) array ->
-  Id.Set.t
+    [md_deps] (not named [library_info], which stays internal), now
+    carrying the library's own recorded closure-flatten in its last two
+    components. *)
+type closure_table = (DirPath.t * Id.t * Digest.t) array
+val flatten_closure :
+  (DirPath.t * vodigest * iface_table option) list -> closure_table * Digest.t
+val closure_subset_ok : recorded:closure_table -> live:closure_table -> bool
 val dep_ok :
   actual:vodigest -> required:vodigest ->
   actual_iface:iface_table option -> required_iface:iface_table option ->
   actual_objects_digest:Digest.t -> required_objects_digest:Digest.t ->
   actual_univs_digest:Digest.t -> required_univs_digest:Digest.t ->
   actual_vernac_iface:iface_table -> required_vernac_iface:iface_table ->
-  used_names:Id.Set.t -> bool
+  actual_closure_names:closure_table -> required_closure_names:closure_table ->
+  actual_closure_none_digest:Digest.t -> required_closure_none_digest:Digest.t ->
+  bool
 
 (** {6 Safe environments } *)
 
@@ -283,6 +283,8 @@ val univs_digest_of_library : compiled_library -> Digest.t
     (binary-equivalence-taiga#841 Review841 G2). *)
 val vernac_iface_of_library : compiled_library -> iface_table
 (** G1/round-3: KEYED per-declaration vernac-interface digests. *)
+val closure_of_library : compiled_library -> closure_table * Digest.t
+(** G7 round 5: this library's own recorded full-closure flatten. *)
 (** Used by the checker, which recompiles the VM bytecode of every constant
     instead of trusting the one serialized in the file. *)
 val univs_of_library : compiled_library -> Sorts.QContextSet.t * Univ.ContextSet.t

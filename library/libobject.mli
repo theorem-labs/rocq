@@ -325,7 +325,7 @@ val dump : unit -> (int * string) list
     `dune build` dependency cycle. *)
 type cutoff_classification =
   | CutoffExcluded
-  | CutoffKeyed of Names.Id.t * Digest.t
+  | CutoffKeyed of (Names.GlobRef.t * Names.Id.t * Digest.t) list
 
 val register_cutoff_classifier : string -> (obj -> cutoff_classification option) -> unit
 (** [register_cutoff_classifier tag f] registers [f] to be tried on every

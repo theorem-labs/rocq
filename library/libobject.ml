@@ -279,21 +279,28 @@ let dump = Dyn.dump
     caller, never silently dropped from every digest. *)
 type cutoff_classification =
   | CutoffExcluded
-  | CutoffKeyed of Names.Id.t * Digest.t
-  (** binary-equivalence-taiga#841 Review841 round 3 (l1/d1): a single
-      base digest covering ONLY the fields of this declaration that are
-      NOT independently covered elsewhere (for CONSTANT: [cst_locl]/
-      [cst_warn] -- [cst_kind]/[cst_loc] are presentation-only, the
-      kernel's own [iface_table] covers type/body/universes). The caller
-      ([Declaremods.G1Partition]) combines this with the declaration's
-      EFFECTIVE, resolved implicits/argument-scopes
+  | CutoffKeyed of (Names.GlobRef.t * Names.Id.t * Digest.t) list
+  (** binary-equivalence-taiga#841 Review841 round 3 (l1/d1) + round 5
+      (g1 inductive/constructor coverage, ind1/ind2/forg). One entry per
+      target [GlobRef.t] this atomic object concerns (a CONSTANT yields
+      exactly one; an INDUCTIVE block yields one for the type plus one
+      per constructor, g7ctor/ind1/ind2), each paired with a base digest
+      covering ONLY the fields of that declaration NOT independently
+      covered elsewhere (for CONSTANT: [cst_locl]/[cst_warn] --
+      [cst_kind]/[cst_loc] are presentation-only, the kernel's own
+      [iface_table] covers type/body/universes; for INDUCTIVE/
+      constructors: a fixed marker, since [ind_names]' own [Loc.t]s are
+      the only non-kernel-covered field and those are presentational
+      too). The caller ([Declaremods.G1Partition]) combines this with the
+      target's EFFECTIVE, resolved implicits/argument-scopes
       (`Impargs.implicits_of_global`/`Notation.find_arguments_scope`,
-      reconstructed from [Id.t] plus the library's own [DirPath.t], which
-      this registry callback cannot see) into ONE per-name entry in a
-      KEYED table, checked like the kernel [iface_table] (every name the
-      dependent used must still match; an ADDED name is ignored) -- never
-      a flat, unkeyed SET (round 3's own finding: an override or reorder
-      of Arguments/Implicits for an EXISTING name must still be caught,
+      queried directly against the supplied [GlobRef.t] -- no [DirPath.t]
+      reconstruction needed, unlike the predecessor of this type which
+      carried a bare [Id.t]) into ONE per-name entry in a KEYED table,
+      checked like the kernel [iface_table] (every name the dependent
+      used must still match; an ADDED name is ignored) -- never a flat,
+      unkeyed SET (round 3's own finding: an override or reorder of
+      Arguments/Implicits for an EXISTING name must still be caught,
       which a "new digest = ignorable addition" SET check cannot do). *)
 
 let cutoff_classifiers : (string, obj -> cutoff_classification option) Hashtbl.t =

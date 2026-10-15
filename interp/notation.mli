@@ -190,6 +190,10 @@ val declare_arguments_scope :
 
 val find_arguments_scope : Environ.env -> GlobRef.t -> scope_name list list
 
+val cutoff_arguments_scope_target : Libobject.obj -> GlobRef.t option
+(** binary-equivalence-taiga#841 Review841 round 5 (forg): [Some] with the
+    target [GlobRef.t] iff [obj] is an "ARGUMENTS-SCOPE" object. *)
+
 type scope_class
 
 (** Comparison of scope_class *)

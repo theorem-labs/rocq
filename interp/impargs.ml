@@ -656,14 +656,30 @@ type implicits_obj =
     implicit_discharge_request *
       (GlobRef.t * implicits_list list) list
 
-let inImplicits : implicits_obj -> obj =
-  declare_object {(default_object "IMPLICITS") with
+(** binary-equivalence-taiga#841 Review841 round 5 (forg): [declare_object_full]
+    rather than [declare_object], so [cutoff_implicits_targets] below can
+    [Dyn.Easy.prj] against this object's own tag and read back its target
+    [GlobRef.t] list directly -- needed to tell a LOCAL target (this
+    library's own declaration, already keyed via its own CONSTANT/
+    INDUCTIVE classifier) from a FOREIGN one (`#[global] Arguments
+    Nat.pred ...`, targeting a declaration from a DIFFERENT library,
+    which no per-tag classifier in THIS library's own [end_library] walk
+    will ever visit). *)
+let objImplicits : implicits_obj Libobject.Dyn.tag =
+  declare_object_full {(default_object "IMPLICITS") with
     cache_function = cache_implicits;
     load_function = load_implicits;
     subst_function = subst_implicits;
     classify_function = classify_implicits;
     discharge_function = discharge_implicits;
     rebuild_function = rebuild_implicits }
+
+let inImplicits (v : implicits_obj) : obj = Libobject.Dyn.Easy.inj v objImplicits
+
+let cutoff_implicits_targets (obj : obj) : GlobRef.t list option =
+  match Libobject.Dyn.Easy.prj obj objImplicits with
+  | Some (_req, l) -> Some (List.map fst l)
+  | None -> None
 
 let is_local local ref = local || isVarRef ref && Global.is_in_section ref
 

@@ -99,23 +99,44 @@ let inPrim (v : Projection.Repr.t * Constant.t) : Libobject.obj =
 
 let declare_primitive_projection p c = Lib.add_leaf (inPrim (p,c))
 
-(** binary-equivalence-taiga#841 Review841 G1: register INDUCTIVE's and
-    PRIMPROJS's cutoff classifiers (see
-    [Libobject.register_cutoff_classifier]'s doc comment for why this is
-    a registry rather than [Declaremods] referencing this module
-    directly). Both are EXCLUDED wholesale: a declaration's semantically
-    load-bearing identity (type, universe context, transparent body, and
-    for inductives the WHOLE [mutual_inductive_body] including
-    primitive-record/projection structure) is ALREADY independently
-    covered by [Safe_typing.comp_iface]'s kernel-level per-declaration
-    digest (subset-checked, extras ignored); these libobjects carry
-    nothing beyond that except [ind_names]'s declaration-site [Loc.t]s,
-    read only by [Nametab.set_cci_src_loc] ("Declared in" messages) --
-    presentation only, never typechecking or [Print Assumptions]. *)
+(** binary-equivalence-taiga#841 Review841 G1/G7 round 5 (ind1/ind2/
+    g7ctor): register INDUCTIVE's cutoff classifier KEYED (one entry per
+    [IndRef]/[ConstructRef] target this block declares -- an inductive
+    TYPE's own Arguments/implicits override, ind2, and a CONSTRUCTOR's
+    own override, ind1, were both invisible to every digest before this:
+    EXCLUDED from the exact digest (so an override/reorder was silently
+    ignored) and never separately keyed (so the kernel's own
+    [Safe_typing.iface_table] subset check couldn't catch it either,
+    since that check is about the DECLARATION's kernel identity, not its
+    vernac-level Arguments/implicits state) -- see
+    [Libobject.cutoff_classification]'s doc comment. The base digest per
+    entry is a fixed marker: a declaration's semantically load-bearing
+    kernel identity (type, universe context, transparent body, and the
+    WHOLE [mutual_inductive_body] including primitive-record/projection
+    structure) is ALREADY independently covered by
+    [Safe_typing.comp_iface]'s kernel-level per-declaration digest
+    (subset-checked, extras ignored, now itself emitting one entry per
+    constructor too -- g7ctor, [Safe_typing.iface_entries_of_sfb]); this
+    libobject carries nothing beyond that except [ind_names]'s
+    declaration-site [Loc.t]s, read only by [Nametab.set_cci_src_loc]
+    ("Declared in" messages) -- presentation only, never typechecking or
+    [Print Assumptions]. PRIMPROJS stays wholesale EXCLUDED: a primitive
+    projection's own Arguments/implicits target is ordinarily reached
+    through its compat CONSTANT reference, already covered there. *)
 let () =
   Libobject.register_cutoff_classifier "INDUCTIVE" (fun obj ->
       match Libobject.Dyn.Easy.prj obj objInductive with
-      | Some _ -> Some Libobject.CutoffExcluded
+      | Some (id, { ind_names }) ->
+        let mind = MutInd.make2 (Global.current_modpath ()) id in
+        let entries =
+          List.concat (List.mapi (fun block_i ({CAst.v=typename; _}, consnames) ->
+              (GlobRef.IndRef (mind, block_i), typename, Digest.string "ind") ::
+              List.mapi (fun j {CAst.v=consname; _} ->
+                  (GlobRef.ConstructRef ((mind, block_i), j + 1), consname, Digest.string "ind"))
+                consnames)
+              ind_names)
+        in
+        Some (Libobject.CutoffKeyed entries)
       | None -> None);
   Libobject.register_cutoff_classifier "PRIMPROJS" (fun obj ->
       match Libobject.Dyn.Easy.prj obj objPrimProj with

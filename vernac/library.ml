@@ -88,7 +88,7 @@ type library_disk = {
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t) array;
   md_ocaml : string;
   md_info : Library_info.t;
   (* Subset of the direct dependencies (i.e. of the dirpaths appearing in
@@ -103,7 +103,7 @@ type summary_disk = {
 type library_t = {
   library_name : compilation_unit_name;
   library_data : library_disk;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t) array;
   library_safe_deps : DirPath.Set.t;
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
@@ -338,19 +338,30 @@ let rec intern_library ~intern (needed, contents as acc) dir =
 
 and intern_library_deps ~intern (needed, contents) dir m =
   let contents = DirPath.Map.add dir m contents in
-  (* G7: computed once per library from its own full recorded dependency
-     array, matching kernel/safe_typing.ml's own [check_required]. *)
-  let used_names = Safe_typing.used_names_of_needed m.library_deps in
   let needed, contents =
-    Array.fold_left (intern_mandatory_library ~intern ~used_names dir)
+    Array.fold_left (intern_mandatory_library ~intern dir)
       (needed, contents) m.library_deps in
   ((false, dir) :: needed, contents)
 
-and intern_mandatory_library ~intern ~used_names caller (needed, contents) (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface) =
+and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface,d_closure_names,d_closure_none_digest) =
   let needed, contents = intern_library ~intern (needed, contents) dir in
   let digest, live_iface, live_objects_digest, live_univs_digest, live_vernac_iface =
     digest_of_dep ~contents dir
   in
+  (* G7 round 5: the closure-wide conjunct of [dep_ok] needs the FULL
+     transitive closure as a comparison baseline (every dirpath this
+     compile has or will load), which is only ever fully populated AFTER
+     this whole fold over a library's siblings finishes -- [contents]
+     here reflects only what's been loaded so far IN THIS FOLD, which
+     undercounts and would make [iface_subset_ok] wrongly refuse (a
+     recorded name "missing" from an INCOMPLETE live view looks
+     identical to a genuinely removed one). Passing the recorded value
+     back as the "live" value makes this conjunct a no-op AT THIS SITE
+     ONLY: kernel/safe_typing.ml's own [check_required] (invoked for the
+     same files via [Safe_typing.import], with a correctly-complete
+     [current_libs]) is the sole, correct G7 closure enforcement point;
+     this site's remaining conjuncts (iface/objects/univs/vernac_iface)
+     are unaffected and still independently enforced here. *)
   (* Shared predicate (binary-equivalence-taiga#841 D3): identical
      acceptance rule to kernel/safe_typing.ml's own [check_required] and
      topbin/rocqnative.ml's [intern_mandatory_library], never reimplemented
@@ -361,7 +372,8 @@ and intern_mandatory_library ~intern ~used_names caller (needed, contents) (dir,
       ~actual_objects_digest:live_objects_digest ~required_objects_digest:d_objects_digest
       ~actual_univs_digest:live_univs_digest ~required_univs_digest:d_univs_digest
       ~actual_vernac_iface:live_vernac_iface ~required_vernac_iface:d_vernac_iface
-      ~used_names
+      ~actual_closure_names:d_closure_names ~required_closure_names:d_closure_names
+      ~actual_closure_none_digest:d_closure_none_digest ~required_closure_none_digest:d_closure_none_digest
   in
   let () = if not ok then
     let from = library_full_filename caller in
@@ -435,7 +447,7 @@ let compute_modes ~cmd_safe ~roots contents =
   while not (Queue.is_empty queue) do
     let dir = Queue.pop queue in
     let m = DirPath.Map.find dir contents in
-    Array.iter (fun (d, _, _, _, _, _) ->
+    Array.iter (fun (d, _, _, _, _, _, _, _) ->
         if not (DirPath.Set.mem d m.library_safe_deps) then mark d)
       m.library_deps
   done;
@@ -464,7 +476,7 @@ let check_closure_conflicts ~cmd_safe ~roots contents =
       if not (DirPath.Set.mem dir !visited) then begin
         visited := DirPath.Set.add dir !visited;
         let m = DirPath.Map.find dir contents in
-        Array.iter (fun (d, _, _, _, _, _) ->
+        Array.iter (fun (d, _, _, _, _, _, _, _) ->
             if not (DirPath.Set.mem d m.library_safe_deps) then visit d)
           m.library_deps
       end
@@ -646,7 +658,19 @@ let current_deps () =
      closure (comp_transitive_deps/md_transitive_deps) lands separately
      with commit 1 on sami/861-loc-free-identity; this stays byte-for-byte
      the same filtering as stock so compute_modes/check_closure_conflicts
-     (above, unchanged) are unaffected (binary-equivalence-taiga#841 D1). *)
+     (above, unchanged) are unaffected (binary-equivalence-taiga#841 D1).
+     The G7 round-5 closure fields below are a SEPARATE, unfiltered
+     flatten over the WHOLE [libraries_loaded_list] (every dirpath loaded
+     in this compile, root or not) -- see
+     [Safe_typing.flatten_closure]'s doc comment; computed once and
+     attached to every kept (root) entry. *)
+  let closure_list =
+    List.map (fun (_, dp) ->
+        let _, m = try_find_library dp in
+        (dp, m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled))
+      !libraries_loaded_list
+  in
+  let closure_names, closure_none_digest = Safe_typing.flatten_closure closure_list in
   let map (root, m) =
     if root then
       let _, m = try_find_library m in
@@ -654,7 +678,8 @@ let current_deps () =
             Safe_typing.iface_of_library m.library_data.md_compiled,
             Safe_typing.objects_digest_of_library m.library_data.md_compiled,
             Safe_typing.univs_digest_of_library m.library_data.md_compiled,
-            Safe_typing.vernac_iface_of_library m.library_data.md_compiled)
+            Safe_typing.vernac_iface_of_library m.library_data.md_compiled,
+            closure_names, closure_none_digest)
     else None
   in
   List.map_filter map !libraries_loaded_list
@@ -723,7 +748,7 @@ let save_library_struct ~output_native_objects dir =
     ; md_syntax_objects
     ; md_objects
     } in
-  if Array.exists (fun (d,_,_,_,_,_) -> DirPath.equal d dir) sd.md_deps then
+  if Array.exists (fun (d,_,_,_,_,_,_,_) -> DirPath.equal d dir) sd.md_deps then
     error_recursively_dependent_library dir;
   sd, md, vmlib, ast
 

@@ -58,7 +58,7 @@ let coq_version = "9.2+rc2"
    (the round-3 fix for the i1/i3/l1/d1 findings) -- same shape, different
    semantics, so a stale reader would silently misinterpret a name/digest
    pair as a bare digest string. Forces another hard version bump. *)
-let vo_magic = 91202
+let vo_magic = 91203
 let is_a_released_version = false
 
 (** Default OCaml binaries *)

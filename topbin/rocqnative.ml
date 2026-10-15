@@ -95,7 +95,7 @@ type library_info
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t) array;
   md_ocaml : string;
   md_info : library_info;
 }
@@ -104,7 +104,7 @@ type library_t = {
   library_name : compilation_unit_name;
   library_file : string;
   library_data : Safe_typing.compiled_library;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t) array;
   library_digests : Safe_typing.vodigest;
   library_vm : Vmlibrary.on_disk;
 }
@@ -157,12 +157,9 @@ let rec intern_library (needed, contents) dir =
   m.library_digests, (dir :: needed, DirPath.Map.add dir m contents)
 
 and intern_library_deps libs dir m from =
-  (* G7: computed once per library from its own full recorded dependency
-     array, matching kernel/safe_typing.ml's own [check_required]. *)
-  let used_names = Safe_typing.used_names_of_needed m.library_deps in
-  Array.fold_left (intern_mandatory_library ~used_names dir from) libs m.library_deps
+  Array.fold_left (intern_mandatory_library dir from) libs m.library_deps
 
-and intern_mandatory_library ~used_names caller from libs (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface) =
+and intern_mandatory_library caller from libs (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface,d_closure_names,d_closure_none_digest) =
   let digest, (_, contents as libs) = intern_library libs dir in
   let live_iface, live_objects_digest, live_univs_digest, live_vernac_iface =
     match DirPath.Map.find_opt dir contents with
@@ -172,6 +169,12 @@ and intern_mandatory_library ~used_names caller from libs (dir,d,d_iface,d_objec
                 Safe_typing.vernac_iface_of_library m.library_data
     | None -> None, Digest.string "", Digest.string "", [||]
   in
+  (* G7 round 5: the closure-wide conjunct needs the FULL transitive
+     closure, only fully populated after this whole fold finishes -- see
+     vernac/library.ml's own [intern_mandatory_library] doc comment for
+     why this is a no-op here, not a (silently incorrect) recomputation.
+     kernel/safe_typing.ml's own [check_required] is the sole correct
+     G7 closure enforcement point. *)
   (* Shared predicate (binary-equivalence-taiga#841 D3), same rule as
      kernel/safe_typing.ml's check_required and vernac/library.ml's
      intern_mandatory_library -- rocqnative previously used digest_match
@@ -183,7 +186,8 @@ and intern_mandatory_library ~used_names caller from libs (dir,d,d_iface,d_objec
       ~actual_objects_digest:live_objects_digest ~required_objects_digest:d_objects_digest
       ~actual_univs_digest:live_univs_digest ~required_univs_digest:d_univs_digest
       ~actual_vernac_iface:live_vernac_iface ~required_vernac_iface:d_vernac_iface
-      ~used_names
+      ~actual_closure_names:d_closure_names ~required_closure_names:d_closure_names
+      ~actual_closure_none_digest:d_closure_none_digest ~required_closure_none_digest:d_closure_none_digest
   in
   if not ok then
     user_err (str "Compiled library " ++ DirPath.print caller ++

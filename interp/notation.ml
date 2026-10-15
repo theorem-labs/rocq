@@ -1111,14 +1111,24 @@ type arguments_scope_obj =
     scope_name list list * scope_class option list *
     scope_class_map
 
-let inArgumentsScope : arguments_scope_obj -> obj =
-  declare_object {(default_object "ARGUMENTS-SCOPE") with
+(** binary-equivalence-taiga#841 Review841 round 5 (forg): see
+    [Impargs.cutoff_implicits_targets]'s doc comment -- same reasoning,
+    same fix shape. *)
+let objArgumentsScope : arguments_scope_obj Libobject.Dyn.tag =
+  declare_object_full {(default_object "ARGUMENTS-SCOPE") with
       cache_function = cache_arguments_scope;
       load_function = load_arguments_scope;
       subst_function = subst_arguments_scope;
       classify_function = classify_arguments_scope;
       discharge_function = discharge_arguments_scope;
       rebuild_function = rebuild_arguments_scope }
+
+let inArgumentsScope (v : arguments_scope_obj) : obj = Libobject.Dyn.Easy.inj v objArgumentsScope
+
+let cutoff_arguments_scope_target (obj : obj) : GlobRef.t option =
+  match Libobject.Dyn.Easy.prj obj objArgumentsScope with
+  | Some (_req, r, _, _, _) -> Some r
+  | None -> None
 
 let is_local local ref = local || isVarRef ref && Global.is_in_section ref
 

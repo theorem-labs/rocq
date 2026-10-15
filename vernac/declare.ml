@@ -2418,7 +2418,8 @@ let () =
   Libobject.register_cutoff_classifier "CONSTANT" (fun obj ->
       match Libobject.Dyn.Easy.prj obj objConstant with
       | Some (id, cobj) ->
-        Some (Libobject.CutoffKeyed (id, Internal.Constant.locl_warn_digest cobj))
+        let gr = GlobRef.ConstRef (Constant.make2 (Global.current_modpath ()) id) in
+        Some (Libobject.CutoffKeyed [(gr, id, Internal.Constant.locl_warn_digest cobj)])
       | None -> None)
 
 
