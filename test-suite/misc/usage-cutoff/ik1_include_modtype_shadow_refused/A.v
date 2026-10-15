@@ -1,2 +1,2 @@
 Require Export W.
-Definition unrelated_a := 0.
+Definition g := 0.

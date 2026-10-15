@@ -1,1 +1,1 @@
-Definition unrelated_w := 0.
+Definition w := 0.
