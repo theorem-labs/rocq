@@ -192,7 +192,7 @@ VSUBSYSTEMS := prerequisite success failure bugs bugs-nocoqchk output output-coq
   coqdoc ssr $(wildcard primitive/*) ltac2 coqchk
 
 # All subsystems
-SUBSYSTEMS := $(filter-out $(DISABLED_SUBSYSTEMS),$(VSUBSYSTEMS) misc ide ide coqchk output-coqchk coqwc coq-makefile precomputed-time-tests tools $(UNIT_TESTS))
+SUBSYSTEMS := $(filter-out $(DISABLED_SUBSYSTEMS),$(VSUBSYSTEMS) misc usage-cutoff ide ide coqchk output-coqchk coqwc coq-makefile precomputed-time-tests tools $(UNIT_TESTS))
 
 # EJGA: This seems dangerous as first target...
 .csdp.cache: .csdp.cache.test-suite
@@ -280,6 +280,7 @@ summary:
 	  $(call summary_dir, "Output (modulo time changes) tests", output-modulo-time); \
 	  $(call summary_dir, "Interactive tests", interactive); \
 	  $(call summary_dir, "Miscellaneous tests", misc); \
+	  $(call summary_dir, "usage-cutoff/ tests (binary-equivalence-taiga#841 D6)", usage-cutoff); \
 	  $(call summary_dir, "Complexity tests", complexity); \
 	  $(call summary_dir, "Module tests", modules); \
 	  $(call summary_dir, "Primitive tests", primitive); \
@@ -687,6 +688,33 @@ $(patsubst %.sh,%.log,$(wildcard misc/*.sh)): %.log: %.sh $(PREREQUISITELOG)
 	  fi; \
 	} > "$@"
 	$(HIDE)$(call REPORT_TIMER,$@)
+
+# usage-cutoff/ (binary-equivalence-taiga#841 D6): nested-fixture
+# regression tests for the usage-cutoff fork's relaxed .vo loader, one
+# subdirectory per case with its own run.sh, mirroring the tools/ and
+# coq-makefile/precomputed-time-tests/ pattern above rather than misc's
+# flat-script pattern, since several cases need a scratch coq_makefile
+# project of their own.
+
+usage-cutoff: $(patsubst %/run.sh,%.log,$(wildcard misc/usage-cutoff/*/run.sh))
+
+$(patsubst %/run.sh,%.log,$(wildcard misc/usage-cutoff/*/run.sh)): %.log: %/run.sh $(PREREQUISITELOG)
+	$(SHOW) "TEST      $*"
+	$(HIDE)(\
+	  export BIN=$(BIN); \
+	  export COQBIN=$(BIN); \
+	  export COQPREFIX=$(COQPREFIX); \
+	  cd $* && \
+	  bash run.sh 2>&1; \
+	if [ $$? = 0 ]; then \
+	    echo $(log_success); \
+	    echo "    $< ... Ok"; \
+	  else \
+	    echo $(log_failure); \
+	    echo "    $< ... Error!"; \
+	    $(FAIL); \
+	  fi; \
+	) > "$@"
 
 # IDE : some tests of backtracking for coqtop -ideslave
 
