@@ -556,6 +556,11 @@ class TestBoundedMtimeRestat:
     as those prerequisites -- not the prior unconditional
     `max(now, every .vo under -Q/-R) + 1` ratchet, which pushed every reused
     target N seconds into the future across an N-file reuse chain.
+
+    #841 Review841 R1: all arithmetic is integer nanoseconds end to end, so
+    every assertion here checks EXACT `st_mtime_ns` equality rather than
+    `pytest.approx`-tolerant float mtimes -- a float round-trip anywhere in
+    `touch_reused_targets` would make these tests fail, which is the point.
     """
 
     def test_touches_forward_to_max_prerequisite_mtime(self, tmp_path, monkeypatch):
@@ -566,41 +571,41 @@ class TestBoundedMtimeRestat:
         dep = tmp_path / "Dep.vo"
         dep.write_bytes(b"dep")
 
-        old = time.time() - 1000
-        os.utime(vo, (old, old))
-        os.utime(glob, (old, old))
-        dep_mtime = time.time() - 10
-        os.utime(dep, (dep_mtime, dep_mtime))
+        old_ns = time.time_ns() - 1000 * 10**9
+        os.utime(vo, ns=(old_ns, old_ns))
+        os.utime(glob, ns=(old_ns, old_ns))
+        dep_mtime_ns = time.time_ns() - 10 * 10**9
+        os.utime(dep, ns=(dep_mtime_ns, dep_mtime_ns))
 
-        fixed_now = time.time() + 10_000  # far ahead of dep_mtime
-        monkeypatch.setattr(cutoff_rocq.time, "time", lambda: fixed_now)
+        fixed_now_ns = time.time_ns() + 10_000 * 10**9  # far ahead of dep_mtime
+        monkeypatch.setattr(cutoff_rocq.time, "time_ns", lambda: fixed_now_ns)
 
         cutoff_rocq.touch_reused_targets(str(vo), str(glob), [str(dep)])
 
         # The new mtime is exactly the prerequisite's mtime -- NOT `now`,
         # and NOT `now + 1`: restat to own prerequisites, never an
         # unconditional forward push to wall-clock time.
-        assert os.path.getmtime(vo) == pytest.approx(dep_mtime, abs=1e-3)
-        assert os.path.getmtime(glob) == pytest.approx(dep_mtime, abs=1e-3)
+        assert os.stat(vo).st_mtime_ns == dep_mtime_ns
+        assert os.stat(glob).st_mtime_ns == dep_mtime_ns
 
     def test_never_exceeds_real_time_even_if_a_prerequisite_is_in_the_future(self, tmp_path, monkeypatch):
         vo = tmp_path / "Foo.vo"
         vo.write_bytes(b"vo")
-        old = time.time() - 1000
-        os.utime(vo, (old, old))
+        old_ns = time.time_ns() - 1000 * 10**9
+        os.utime(vo, ns=(old_ns, old_ns))
 
         dep = tmp_path / "Dep.vo"
         dep.write_bytes(b"dep")
-        future_mtime = time.time() + 5000  # clock-skew-style future prerequisite
-        os.utime(dep, (future_mtime, future_mtime))
+        future_mtime_ns = time.time_ns() + 5000 * 10**9  # clock-skew-style future prerequisite
+        os.utime(dep, ns=(future_mtime_ns, future_mtime_ns))
 
-        fixed_now = time.time() + 1  # real time is far earlier than the skewed prerequisite
-        monkeypatch.setattr(cutoff_rocq.time, "time", lambda: fixed_now)
+        fixed_now_ns = time.time_ns() + 1 * 10**9  # real time is far earlier than the skewed prerequisite
+        monkeypatch.setattr(cutoff_rocq.time, "time_ns", lambda: fixed_now_ns)
 
         cutoff_rocq.touch_reused_targets(str(vo), str(vo), [str(dep)])
 
-        assert os.path.getmtime(vo) == pytest.approx(fixed_now, abs=1e-3)
-        assert os.path.getmtime(vo) < future_mtime
+        assert os.stat(vo).st_mtime_ns == fixed_now_ns
+        assert os.stat(vo).st_mtime_ns < future_mtime_ns
 
     def test_does_not_touch_a_target_already_at_least_as_new(self, tmp_path, monkeypatch):
         vo = tmp_path / "Foo.vo"
@@ -608,9 +613,9 @@ class TestBoundedMtimeRestat:
         dep = tmp_path / "Dep.vo"
         dep.write_bytes(b"dep")
 
-        now = time.time()
-        os.utime(dep, (now - 100, now - 100))
-        os.utime(vo, (now - 10, now - 10))  # already newer than its only prerequisite
+        now_ns = time.time_ns()
+        os.utime(dep, ns=(now_ns - 100 * 10**9, now_ns - 100 * 10**9))
+        os.utime(vo, ns=(now_ns - 10 * 10**9, now_ns - 10 * 10**9))  # already newer than its only prerequisite
 
         utime_calls = []
         monkeypatch.setattr(cutoff_rocq.os, "utime", lambda *a, **k: utime_calls.append(a))
@@ -629,18 +634,18 @@ class TestBoundedMtimeRestat:
         never incrementing further down the chain and never exceeding real
         time.
         """
-        fixed_now = time.time() + 100  # keep "now" comfortably ahead of everything below
-        monkeypatch.setattr(cutoff_rocq.time, "time", lambda: fixed_now)
+        fixed_now_ns = time.time_ns() + 100 * 10**9  # keep "now" comfortably ahead of everything below
+        monkeypatch.setattr(cutoff_rocq.time, "time_ns", lambda: fixed_now_ns)
 
         files = [tmp_path / f"{letter}.vo" for letter in "ABCDEFGHI"]
-        base = fixed_now - 1000
+        base_ns = fixed_now_ns - 1000 * 10**9
         for f in files:
             f.write_bytes(b"x")
-            os.utime(f, (base, base))
+            os.utime(f, ns=(base_ns, base_ns))
 
         # A gets a genuine fresh rebuild, newer than everything downstream.
-        rebuilt = base + 5
-        os.utime(files[0], (rebuilt, rebuilt))
+        rebuilt_ns = base_ns + 5 * 10**9
+        os.utime(files[0], ns=(rebuilt_ns, rebuilt_ns))
 
         for prev, cur in zip(files, files[1:]):
             cutoff_rocq.touch_reused_targets(str(cur), str(cur), [str(prev)])
@@ -649,5 +654,47 @@ class TestBoundedMtimeRestat:
         # never incremented link over link (the old `+1` ratchet would have
         # left the last link 7 seconds ahead of A), and never above "now".
         for f in files:
-            assert os.path.getmtime(f) == pytest.approx(rebuilt, abs=1e-3)
-            assert os.path.getmtime(f) <= fixed_now + 1e-6
+            assert os.stat(f).st_mtime_ns == rebuilt_ns
+            assert os.stat(f).st_mtime_ns <= fixed_now_ns
+
+    def test_ns_precision_no_float_round_trip(self, tmp_path, monkeypatch):
+        """#841 Review841 R1: the observed repro. A prerequisite's mtime
+        carries an odd nanosecond suffix (mirroring the `.916288375`-style
+        value Review841 observed) that does NOT round-trip cleanly through
+        a Python float -- `float(ns) / 1e9` rounded back to ns can land
+        below the original integer. Before this fix, `touch_reused_targets`
+        read/wrote mtimes via `os.path.getmtime`/`os.utime`'s float
+        `(atime, mtime)` form, so the reused target could silently end up
+        OLDER than its prerequisite despite the restat logic intending
+        equal-or-newer -- the exact `make` reinvokes-every-run regression
+        Review841 found. This test fails against that float implementation
+        and passes against the integer-nanosecond one.
+        """
+        vo = tmp_path / "Foo.vo"
+        vo.write_bytes(b"vo")
+        dep = tmp_path / "Dep.vo"
+        dep.write_bytes(b"dep")
+
+        # An mtime whose nanosecond remainder does not survive a
+        # float64 round-trip at current epoch magnitudes: a float stores
+        # ~15-17 significant decimal digits, and a current epoch value
+        # already consumes ~10 of those for the whole-second part, leaving
+        # too little precision to represent every nanosecond exactly.
+        now_ns = time.time_ns()
+        dep_mtime_ns = (now_ns - 1_000_000_000) - (now_ns % 1000) + 375
+        assert round(float(dep_mtime_ns) / 1e9 * 1e9) != dep_mtime_ns, (
+            "fixture value must NOT survive a float round-trip, or this test proves nothing"
+        )
+
+        old_ns = dep_mtime_ns - 1_000_000_000
+        os.utime(vo, ns=(old_ns, old_ns))
+        os.utime(dep, ns=(dep_mtime_ns, dep_mtime_ns))
+
+        fixed_now_ns = dep_mtime_ns + 1_000_000_000  # keep "now" comfortably ahead
+        monkeypatch.setattr(cutoff_rocq.time, "time_ns", lambda: fixed_now_ns)
+
+        cutoff_rocq.touch_reused_targets(str(vo), str(vo), [str(dep)])
+
+        # Must be EXACTLY the prerequisite's nanosecond-exact mtime -- no
+        # float round-trip anywhere, in either direction.
+        assert os.stat(vo).st_mtime_ns == dep_mtime_ns

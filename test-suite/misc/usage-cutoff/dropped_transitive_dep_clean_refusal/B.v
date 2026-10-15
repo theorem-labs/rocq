@@ -1,2 +1,2 @@
 Require Import A.
-Definition b := f.
+Definition b := X.f.

@@ -69,7 +69,7 @@ if [ "$chk_rc" -eq 0 ]; then
   echo "$chk_out" >&2
   uc_fail "rocqchk accepted the merged U/A/B tree -- the universe contradiction (U1 <= U2 and U2 <= U1) was not caught."
 fi
-echo "$chk_out" | grep -qi -E 'universe|inconsisten' \
-  || uc_fail "rocqchk rejected the merged tree (exit $chk_rc) but not with a universe/inconsistency error -- evidence is vacuous (m2): got: $chk_out"
+echo "$chk_out" | grep -qi 'Universe inconsistency' \
+  || uc_fail "rocqchk rejected the merged tree (exit $chk_rc) but not with the specific 'Universe inconsistency' error -- the previous grep (-E 'universe|inconsisten') was non-discriminating: it also matches rocqchk's own '[intern .../universe_contradiction_still_caught/work/B.vo' progress lines, since the TEST DIRECTORY NAME itself contains 'universe' (binary-equivalence-taiga#841 Review841 round 2, R4). Got: $chk_out"
 
-uc_ok "coqc C.v correctly refused the reuse ($(echo "$c_out" | grep -im1 'inconsistent assumptions')), and rocqchk independently confirmed the universe contradiction over U/A/B: $(echo "$chk_out" | grep -i -m1 -E 'universe|inconsisten')"
+uc_ok "coqc C.v correctly refused the reuse ($(echo "$c_out" | grep -im1 'inconsistent assumptions')), and rocqchk independently confirmed the universe contradiction over U/A/B with the specific error: $(echo "$chk_out" | grep -i -m1 'Universe inconsistency')"
