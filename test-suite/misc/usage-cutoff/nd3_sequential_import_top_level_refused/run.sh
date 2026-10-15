@@ -2,12 +2,19 @@
 # binary-equivalence-taiga#841 Review841 round 10 (Lean round 10 review,
 # issuecomment-6198625773, fixture "nd3", P3). Same as nd2, but B does
 # `Import M.` then a SEPARATE `Import N.` instead of the single qualified
-# `Import M.N.` -- after `Import M.`, the nested Module N becomes directly
-# nameable via the local scope M established, and that local binding takes
-# precedence over an unrelated global top-level N; a fresh compile still
-# succeeds regardless of W's new top-level N. Confirms nd2's fix covers
-# both ways of reaching a nested module (one qualified-path statement, or
-# two sequential unqualified ones after the parent is imported).
+# `Import M.N.`. X and A are required TOGETHER, upfront (`Require Import
+# X A.`), before either `Import` statement, so at the point `Import N.`
+# runs, X's nested N is the only "N" that resolution has ever seen -- a
+# fresh compile still succeeds regardless of W's new top-level N.
+#
+# Round 11 tried fixing this (and nd2) by encoding each label's FULL
+# nesting path -- then Main found (nd5, which separates the `Require
+# Import A` from the earlier `Import M.`) that order, not just depth,
+# determines whether a bare `Import <name>` picks up a later top-level
+# definer, so the full-path key is unsound. Round 12 reverted to the
+# reviewer's original basename-only, namespaced shape, which refuses this
+# case too -- an accepted over-refusal (see nd2's header for the full
+# argument), not a soundness gap.
 . ../lib.sh
 
 D=$(pwd)
@@ -26,7 +33,10 @@ build B.v >>"$WORK/setup.log" 2>&1 || uc_fail "SETUP: could not build B.v (BEFOR
 build C.v >>"$WORK/setup.log" 2>&1 || uc_fail "SETUP: could not build C.v (BEFORE): $(cat "$WORK/setup.log")"
 
 # Sanity: a FRESH compile of B against the AFTER state (W adds an unrelated
-# top-level Module N) still succeeds.
+# top-level Module N) still succeeds -- X and A were required together,
+# upfront, so Import N. only ever sees X's nested N. This is what makes
+# the refusal below an OVER-refusal, recorded here so the imprecision is
+# visible, not just asserted.
 cp "$D/W1.v" "$WORK/W.v"
 build W.v >"$WORK/sanity-rebuild.log" 2>&1 \
   || uc_fail "SETUP: could not rebuild W.v (AFTER) for the sanity check: $(cat "$WORK/sanity-rebuild.log")"
@@ -37,7 +47,7 @@ fresh_out=$(cd "$WORK" && uc_coqc -Q . "" B_fresh_check.v 2>&1)
 fresh_rc=$?
 if [ "$fresh_rc" -ne 0 ]; then
   echo "$fresh_out" >&2
-  uc_fail "SANITY: a fresh compile of B against the unrelated-top-level-N W failed -- this fixture does not actually isolate an over-refusal (fresh B should succeed: Import M. brings the nested N into local scope ahead of any unrelated global N)."
+  uc_fail "SANITY: a fresh compile of B against the unrelated-top-level-N W failed -- expected to succeed (Import M. Import N. with X/A required together upfront only ever sees X's nested N); the over-refusal premise of this fixture no longer holds."
 fi
 rm -f "$WORK"/B_fresh_check.*
 
@@ -55,8 +65,11 @@ build A.v >>"$WORK/rebuild.log" 2>&1 || uc_fail "REBUILD A (same source, against
 
 c_out=$(build C.v 2>&1)
 c_rc=$?
-if [ "$c_rc" -ne 0 ]; then
+if [ "$c_rc" -eq 0 ]; then
   echo "$c_out" >&2
-  uc_fail "coqc C.v was REFUSED reusing B.vo after W added an UNRELATED top-level Module N -- B's sequential Import M. Import N. can never be confused with W's bare top-level N, and a fresh compile succeeds, so this is an over-refusal."
+  uc_fail "coqc C.v succeeded reusing B.vo after W added an unrelated top-level Module N -- expected a sound, basename-level over-refusal (round 12 reverted the full-path key as unsound, per nd5)."
 fi
-uc_ok "unrelated top-level Module N correctly reused despite sharing X's nested M.N's innermost name (sequential-Import variant): $(echo "$c_out" | tail -1)"
+echo "$c_out" | grep -qi 'inconsistent assumptions' \
+  || uc_fail "coqc C.v refused the reuse (exit $c_rc) but not with the expected inconsistent-assumptions message -- got: $c_out"
+
+uc_ok "unrelated top-level Module N correctly (if conservatively) refused, sequential-Import variant: $(echo "$c_out" | grep -im1 'inconsistent assumptions')"

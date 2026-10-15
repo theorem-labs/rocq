@@ -2208,69 +2208,111 @@ let mark_basename (marker : string) (path : string) : string =
     saw the module/module-type NAME itself, only fields nested inside
     it). Round 10 shipped this as a PLAIN entry, [(qualify id,
     module_label_digest)] -- an unmarked key in the SAME basename space
-    ordinary constants use, reduced to just its innermost segment by
-    [flatten_closure]/[basename_of_qualified_path] like every other
-    entry. The round-10 review (binary-equivalence-taiga#841 round 11,
-    nd2/nd3/lc1/lc2) found this over-refuses twice over: (a) a module's
-    label can collide with a same-named CONSTANT, though Rocq resolves
-    module and term names through separate Nametab tables entirely; (b)
-    a NEW top-level module collides with an unrelated, differently-
-    NESTED module that merely happens to share the same INNERMOST name
-    (nd2: X's nested `M.N`, reached only via the qualified `Import M.N`
-    or `Import M.` then `Import N.`, can never be confused with an
-    unrelated top-level `N` -- Rocq's qualid resolution requires a
-    matching path SUFFIX, not merely a matching innermost segment;
-    confirmed empirically both ways in the round-11 writeup).
+    ordinary constants use. Round 11 then tried making the key encode the
+    label's FULL nesting path (joined by ['#'], never truncated by
+    [basename_of_qualified_path]), to fix two over-refusals the round-10
+    review found (nd2/nd3: an unrelated TOP-LEVEL module colliding with a
+    differently-nested one of the same innermost name; lc1/lc2: a
+    module's label colliding with a same-named CONSTANT, though Rocq
+    resolves module and term names through separate Nametab tables).
 
-    Fix: [module_label_key] encodes the label's FULL internal nesting
-    path, not just its innermost segment -- every enclosing [Module]'s
-    own name, joined by ['#'], with the incoming [path] parameter's own
-    ['.']-joined segments (inherited from the caller, [entries_of_signature]'s
-    [sub_path]) rewritten to ['#'] too, so the result contains NO literal
-    ['.'] at ANY nesting depth; [basename_of_qualified_path] then finds no
-    ['.'] to split on and returns the WHOLE key verbatim, with no loss of
-    path context regardless of depth. A label reached from a DIFFERENT
-    path (nd2: top-level vs. nested) therefore never equals one reached
-    from the SAME path (mns1/nd1/nd4: the identical nesting, reproduced by
-    an unrelated library), closing the precision gap without touching
-    [flatten_closure] or [is_marked_basename] at all.
+    **Round 11's full-path key was UNSOUND, found by Main (binary-
+    equivalence-taiga#841 round 11 follow-up) and confirmed empirically
+    before any code changed: nd5.** X declares a 2-level-nested `Module
+    M. Module N. Definition f := 1.`. B does `Require Import X. Import
+    M. Require Import A. Import N.` -- note the ORDER: `Import M.` runs
+    BEFORE `Require Import A.`, which transitively re-exports W. When W
+    later adds an UNRELATED TOP-LEVEL `Module N`, a bare `Import N.`
+    issued AFTER `Require Import A` resolves to W's top-level N, not
+    X's nested M.N, even though `Import M.` ran first and even though
+    nd3's near-identical shape (X/A required TOGETHER, upfront, before
+    any `Import`) resolves the OPPOSITE way. Confirmed directly: a FRESH
+    compile of this exact B against the post-change W fails with "f was
+    not found", proving the ambiguity is real and order-dependent, not a
+    full-path-keys false negative -- Rocq's unqualified name resolution
+    for a BARE `Import <name>` statement depends on REQUIRE/IMPORT ORDER,
+    not merely on nesting depth, so a key that only ever compares full
+    paths (ignoring that two DIFFERENT full paths can still compete for
+    the SAME bare name depending on when each was brought into scope)
+    misses this exactly the way basename-only keys were designed to
+    catch. (nd5b, the same shape with `Definition b : N.f = 1 :=
+    eq_refl.` -- a QUALIFIED reference, no bare `Import N.` statement at
+    all -- does NOT diverge: `Import M.` already binds "N" to M's nested
+    N as a local, transparent dot-accessible name, unaffected by any
+    LATER `Require`; only a FRESH bare-name Nametab lookup, as `Import
+    N.` performs, is order-sensitive this way.)
 
-    The whole key is additionally prefixed with [module_label_tag], itself
-    containing ['#'] -- a character [Unicode]'s own trailing-identifier
-    classification refuses (confirmed empirically: `Definition a#b := 0.`
-    is a SYNTAX error, parsed as two tokens, not an unusual name), so this
-    key can NEVER equal any real constant's own basename, in its ENTIRETY
-    and at any position, not merely by a leading character -- the same
-    mathematical uncollidability [opaque_entry_prefix]/[modtype_entry_marker]
-    get from a digit-leading first character, reached by a different
-    forbidden-character argument because a LABEL entry, unlike those two,
-    must still PARTICIPATE in ordinary G7 cross-library comparison (never
-    be [is_marked_basename]-excluded, which checks only a DIGIT-leading
-    first character and does not match ours) -- comparing only against
-    OTHER label keys, since no real identifier can ever equal one. This
-    closes lc1/lc2 (a label can no longer collide with any constant's
-    basename, regardless of name) without a separate table or a second
-    [flatten_closure] pass: the key design alone gives module/module-type
-    labels their own, full-path-precise, constant-disjoint G7 namespace.
-    Still NOT load-bearing beyond existence/identity tracking: a module's/
-    module-type's own internal CONTENT is independently covered by its
-    recursively-produced field entries, unaffected by this key's exact
-    shape. Still shared between [Module] and [Module Type] labels (both
-    use the SAME tag/scheme): a module and a module type cannot share a
-    label within one structure, and Rocq resolves an unqualified name to
-    either kind through the same Nametab lookup, so treating them the
-    same way for shadow purposes remains correct (mns1 vs. mtns1, both
-    still refused). *)
-let module_label_tag = "zmodlabel#"
-let module_label_key (path : string) (id : Id.t) : string =
-  let hashed_path = String.map (fun c -> if c = '.' then '#' else c) path in
-  let full = if hashed_path = "" then Id.to_string id else hashed_path ^ "#" ^ Id.to_string id in
-  module_label_tag ^ full
+    **Fix (this round): back to the reviewer's own original shape --
+    basename-only, namespaced away from constants, AND tagged by KIND
+    (module vs. module type).** [mark_basename] (the SAME mechanism
+    already used for [modtype_entry_marker] on module type fields) tags
+    ONLY the label's own innermost segment, leaving any outer path intact
+    in [comp_iface]'s own full-path key (same-library uniqueness,
+    avoiding a kd1/kd2-style masking bug, unaffected by this).
+    [flatten_closure]'s [basename_of_qualified_path] then extracts just
+    the marked innermost segment -- IDENTICAL for X's nested `M.N`'s
+    label and W's top-level `N`'s label (both [Module]s), so they DO
+    collide, sound but imprecise exactly like the pre-round-11 bare-
+    basename rule that already (correctly) refuses nd1/nd4/nd5/nd6/nd7/
+    nd8/nd5t. nd2/nd3 (and now nd5/nd5b) go back to being OVER-refusals:
+    Main's explicit ruling after nd5 ("leaves nd2/nd3 as over-refusals,
+    which is sound") accepts this, since relaxing them without an order-
+    aware, full Nametab-accurate model (replicating Rocq's own resolution
+    precedence exactly) cannot be done soundly with a per-library digest
+    table.
 
-(** The digest value paired with every [module_label_key] entry. Not
-    load-bearing for soundness, per [module_label_key]'s own doc comment --
-    a single constant suffices, since existence/identity under the key
-    above is what matters, not content. *)
+    **Two DIFFERENT markers, one per kind, not one shared marker
+    (mvt3).** The reviewer's own follow-up (mvt3: X has `Module N`, W
+    adds an unrelated `Module Type N`, B does `Import N.` -- a fresh
+    compile succeeds regardless) found that Rocq resolves a module name
+    and a module TYPE name through independent lookups: `Import`
+    syntactically only ever accepts a module, never a module type, so a
+    same-named module type anywhere is never even a candidate. A single
+    shared marker for both kinds would make mvt3 wrongly collide (an
+    over-refusal beyond what's sound, unlike nd2/nd3/nd5/nd5b, which are
+    genuine, accepted basename-level imprecision); [module_label_marker]
+    (for [SFBmodule]) and [modtype_label_marker] (for [SFBmodtype]'s own
+    LABEL -- distinct from [modtype_entry_marker], which marks its
+    FIELDS) keep the two kinds in their own, mutually disjoint G7
+    sub-namespaces, so mvt3 reuses correctly while mns1 (module vs.
+    module, same kind) and mtns1 (module type vs. module type, same
+    kind) still refuse.
+
+    Both markers still make labels uncollidable with any REAL constant's
+    basename (['#'] cannot appear inside an identifier the parser
+    accepts, confirmed empirically: `Definition a#b := 0.` is a syntax
+    error, parsed as two tokens) -- so lc1/lc2 stay fixed, the one part
+    of round 11's fix this round keeps. Neither marker is excluded by
+    [is_marked_basename] (which checks only a digit-leading first
+    character): a label must still PARTICIPATE in ordinary G7 cross-
+    library comparison, unlike an [opaque_entry_prefix]/
+    [modtype_entry_marker] entry, which is deliberately excluded
+    entirely.
+
+    **What this does NOT fix, recorded as a known limitation, not
+    built.** nd2/nd3/nd5/nd5b stay refused; nd6 ([Export] instead of a
+    later [Import]), nd7 (the colliding module nested inside an
+    [Export]ed [Module K]), and nd8 (a qualified [Import M.N] binding to
+    an UNRELATED library's [Z.M.N] after [Export Z], since qualids
+    resolve by path SUFFIX to ANY depth) all confirm the SAME shape of
+    gap generalizes arbitrarily: Rocq's actual name resolution is a
+    suffix search over every name currently in scope, order- and
+    export-sensitive, which no per-library digest table keyed by a
+    bounded amount of path context can fully replicate. The precise
+    alternative -- recording, at the VERNAC layer (which alone sees the
+    resolved [Libnames.qualid] a `Require`/`Import`/`Module ... : T`
+    statement actually bound), exactly which qualified name each
+    unqualified reference in a file resolved to, and checking THAT
+    specific binding instead of a coarse basename -- is the next step for
+    these remaining over-refusals, and is NOT built this round. *)
+let module_label_marker = "zmodlabel#"
+let modtype_label_marker = "zmodtypelabel#"
+
+(** The digest value paired with every module/module-type label entry.
+    Not load-bearing for soundness: [closure_subset_ok]/[iface_subset_ok]
+    key on the full [(dp, id)] pair, and a module's/module-type's own
+    internal content is independently covered by its recursively-produced
+    field entries. A single constant suffices. *)
 let module_label_digest = Csha256.digest "0usage_cutoff_module_label"
 
 let rec iface_entries_of_struct (path : string) (sb : structure_body)
@@ -2300,9 +2342,9 @@ and iface_entries_of_sfb (path : string) (id, sfb) : (string * Digest.t) list =
   | SFBrules r ->
     [(opaque_entry_key path id, Csha256.digest (Marshal.to_string r []))]
   | SFBmodule mb ->
-    (module_label_key path id, module_label_digest) :: entries_of_signature path id (mod_type mb)
+    (mark_basename module_label_marker (qualify id), module_label_digest) :: entries_of_signature path id (mod_type mb)
   | SFBmodtype mtb ->
-    (module_label_key path id, module_label_digest) ::
+    (mark_basename modtype_label_marker (qualify id), module_label_digest) ::
     List.map (fun (k, d) -> (mark_basename modtype_entry_marker k, d))
       (entries_of_signature path id (mod_type mtb))
 
