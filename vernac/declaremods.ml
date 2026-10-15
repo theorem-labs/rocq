@@ -1946,7 +1946,31 @@ module G1Partition = struct
     (List.filter_map (filter_atomic dir) substobjs,
      { Libobject.keep_objects = List.filter_map (filter_atomic dir) keepobjs.Libobject.keep_objects },
      { Libobject.escape_objects = List.filter_map (filter_atomic dir) escapeobjs.Libobject.escape_objects })
+  (* Export visibility is the only part of the vernac object stream needed by
+     the closure checker: a plain Require changing to Require Export changes
+     which already-reachable libraries contribute names to a fresh import. *)
+  let rec export_objects = function
+    | Libobject.ExportObject _ as o -> [o]
+    | Libobject.ModuleObject (_, (_, alg))
+    | Libobject.ModuleTypeObject (_, (_, alg))
+    | Libobject.IncludeObject alg -> export_algebraic alg
+    | Libobject.KeepObject (_, { Libobject.keep_objects }) ->
+      List.concat_map export_objects keep_objects
+    | Libobject.EscapeObject (_, { Libobject.escape_objects }) ->
+      List.concat_map export_objects escape_objects
+    | Libobject.AtomicObject _ -> []
+  and export_algebraic = function
+    | Libobject.Objs l -> List.concat_map export_objects l
+    | Libobject.Ref _ -> []
 
+  let export_digest (md_syntax_objects, md_objects) =
+    let flatten (substobjs, keepobjs, escapeobjs) =
+      List.concat_map export_objects
+        (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
+
+    in
+    Csha256.digest (Marshal.to_string
+      (flatten md_syntax_objects, flatten md_objects) [])
   (** binary-equivalence-taiga#841 Review841 round 3 + round 5: the KEYED
       vernac-level interface table, checked by [Safe_typing.iface_subset_ok]
       exactly like the kernel's own [iface_table]. [Libobject.cutoff_classify]
@@ -2031,12 +2055,13 @@ module G1Partition = struct
     let exact_syntax = filter_library_objects dir md_syntax_objects in
     let exact_objects = filter_library_objects dir md_objects in
     let exact_digest = Csha256.digest (Marshal.to_string (exact_syntax, exact_objects) []) in
+    let export_digest = export_digest (md_syntax_objects, md_objects) in
     let (substobjs, keepobjs, escapeobjs) = md_objects in
     let vernac_iface, abbrev_iface =
       vernac_iface_entries
         (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
     in
-    (exact_digest, vernac_iface, abbrev_iface)
+    (exact_digest, export_digest, vernac_iface, abbrev_iface)
 end
 
 
@@ -2059,10 +2084,10 @@ let end_library ~output_native_objects dir =
      edit to anything NOT excluded/subset-checked) until rebased. *)
   let md_objects = drop_anticipate lib_stack in
   let md_syntax_objects = drop_anticipate lib_stack_syntax in
-  let objects_digest, vernac_iface, abbrev_iface =
+  let objects_digest, export_digest, vernac_iface, abbrev_iface =
     G1Partition.partition dir (md_syntax_objects, md_objects)
   in
-  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~vernac_iface ~extra_closure_names:abbrev_iface dir in
+  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~export_digest ~vernac_iface ~extra_closure_names:abbrev_iface dir in
   assert (ModPath.equal mp (MPfile dir));
   cenv,md_objects,md_syntax_objects,vmlib,ast,info
 

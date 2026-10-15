@@ -621,11 +621,13 @@ let v_vodigest = v_sum_c ("module_impl",0, [| [|v_string|]; [|v_string;v_string|
 let v_iface = v_array (v_pair v_id v_string)
 let v_closure = v_array (v_tuple "closure" [|v_dp;v_id;v_string|])
 let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest;v_opt v_iface;v_string;v_string;v_iface;v_closure;v_string|])
+let v_export_digests = v_array (v_pair v_dp v_string)
 let v_flags = v_tuple "flags" [|v_bool|] (* Allow Rewrite Rules *)
 let v_compiled_lib =
   v_tuple "compiled"
     [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps; v_flags;
-      v_opt v_iface; v_string; v_string; v_iface; v_closure; v_string|]
+      v_opt v_iface; v_string; v_string; v_string; v_iface; v_export_digests;
+      v_closure; v_string|]
 
 (** Toplevel structures in a vo (see Cic.mli) *)
 
