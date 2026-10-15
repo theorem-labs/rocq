@@ -281,24 +281,43 @@ let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn =
      every later fork's copy-on-write memory -- a sibling file's `.vo`,
      written to disk by an EARLIER fork from this same daemon after the
      cache was taken, is invisible to a LATER fork's lookups in that same
-     directory, because `trust_file_cache=true` skips the one fallback
-     path (`not fresh && rescan`) that would otherwise re-read the real
-     directory on a cache miss. Confirmed live: a `Require` of a sibling
-     in the same zygote group and the same source directory, compiled by
-     an earlier fork from this daemon, failed with "Unable to locate
-     library" under a real -j16 build, while the exact same file-pair
-     rebuilt serially (dependency already on disk when this daemon's
-     cache for that directory was first populated) succeeded immediately
-     -- the file was real and complete on disk either way, only its
-     discovery failed. Dropping back to false here, once per request in
-     THIS freshly-forked child only (the parent's own trust_file_cache
-     setting, and any sibling fork's, is untouched), makes every
-     directory-cache miss fall through to a real re-scan, matching what a
-     brand-new stock process would actually see -- the fix's effect is
-     confined to whether a Require is DISCOVERED at all; it never changes
-     what gets loaded once discovery succeeds, so it cannot affect any
-     already-passing file's .vo bytes. *)
-  System.trust_file_cache := false;
+     directory. Confirmed live: a `Require` of a sibling in the same
+     zygote group and the same source directory, compiled by an earlier
+     fork from this daemon, failed with "Unable to locate library" under
+     a real -j16 build, while the exact same file-pair rebuilt serially
+     (dependency already on disk when this daemon's cache for that
+     directory was first populated) succeeded immediately.
+
+     A first version of this fix only flipped trust_file_cache to false
+     here, which fixes a cache MISS (a name absent from the stale listing
+     gets a real re-scan) but leaves a cache HIT trusted unconditionally:
+     `exists_in_dir_respecting_case` returns true the moment the sought
+     name is found in the (possibly stale) cached set, before ever
+     checking the freshness flag. A directory whose cached listing
+     already contains a name since deleted, or a stale entry a later
+     build step replaced with different content under the same name,
+     would still read as present either way. Clearing the cache outright
+     instead of just the trust flag closes that gap too: the child's
+     FIRST query for any given directory is then guaranteed to be a
+     real, uncached scan (the map lookup below finds nothing, so the
+     fallback branch always rescans), so the entry it populates is
+     exactly what a brand-new process's first query would see -- present
+     things are present because they were just observed, not because an
+     older snapshot said so. Every later query, for the SAME directory,
+     within THIS SAME CHILD, does reuse what that first query found, the
+     same as a stock process would for the rest of ONE file's compile --
+     not a new assumption, the same "batch mode trusts the filesystem
+     not to change out from under one compile" premise trust_file_cache
+     has always encoded, just no longer carried forward from a different
+     file's compile in a different, earlier fork. trust_file_cache
+     itself is left exactly as the parent set it (true, matching stock):
+     only the cached CONTENTS are dropped, not the policy of trusting a
+     freshly-populated entry for the rest of this one compile.
+
+     The fix's effect is confined to whether a Require is DISCOVERED at
+     all; it never changes what gets loaded once discovery succeeds, so
+     it cannot affect any already-passing file's .vo bytes. *)
+  System.reset_dir_cache ();
   (* Always move onto a fresh descriptor before we repoint fd 0/1/2 for the
      compile's own stdout/stderr -- stdin/stdout/stderr are already open in
      this process, so dup never returns one of them. set_close_on_exec is
