@@ -73,17 +73,28 @@ def ensure_zygote(group, prefix_file, sock_path):
             log_path = os.path.join(SOCKDIR, f"{group}.log")
             coqlibs_raw = os.environ.get("ROCQ_ZYGOTE_COQLIBS", "")
             coqlibs = coqlibs_raw.split()
-            with open(log_path, "ab") as log:
-                subprocess.Popen(
-                    [ZYGOTE_EXE, "-q"] + coqlibs + [
-                        "--rocq-zygote-prefix", prefix_file,
-                        "--rocq-zygote-socket", sock_path,
-                        "--rocq-zygote-idle-timeout", IDLE_TIMEOUT,
-                        "--rocq-zygote-coqlibs", coqlibs_raw,
-                    ],
-                    stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
+            # This module's own docstring promises a fallback to an
+            # ordinary `rocq compile` for ANY failure talking to a zygote,
+            # including "daemon spawn failure" -- but neither opening the
+            # log file nor Popen itself was ever guarded here. A missing/
+            # non-executable ZYGOTE_EXE, or fork()/exec() failing with
+            # EAGAIN/ENOMEM under load, propagated an uncaught OSError all
+            # the way out of main(), turning an infrastructure hiccup into
+            # a hard build break instead of the documented silent fallback.
+            try:
+                with open(log_path, "ab") as log:
+                    subprocess.Popen(
+                        [ZYGOTE_EXE, "-q"] + coqlibs + [
+                            "--rocq-zygote-prefix", prefix_file,
+                            "--rocq-zygote-socket", sock_path,
+                            "--rocq-zygote-idle-timeout", IDLE_TIMEOUT,
+                            "--rocq-zygote-coqlibs", coqlibs_raw,
+                        ],
+                        stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+            except OSError:
+                return False
             deadline = time.time() + 120
             while time.time() < deadline:
                 if os.path.exists(sock_path):

@@ -267,13 +267,18 @@ let reopen_std fd path =
    documented in 20d). The chdir runs in the forked child only, so it
    never perturbs the parent zygote's own cwd for later forks. *)
 let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn =
-  Unix.set_close_on_exec conn;
   (* Always move onto a fresh descriptor before we repoint fd 0/1/2 for the
      compile's own stdout/stderr -- stdin/stdout/stderr are already open in
-     this process, so dup never returns one of them. *)
+     this process, so dup never returns one of them. set_close_on_exec is
+     applied to the descriptor that survives (moved), not the one we are
+     about to close: dup() does not propagate FD_CLOEXEC to the new
+     descriptor, so applying it to conn before the dup was a no-op on the
+     fd actually used for the rest of this request -- a native-compute
+     child compiler process forked later would have inherited it open. *)
   let moved = Unix.dup conn in
   Unix.close conn;
   let conn = moved in
+  Unix.set_close_on_exec conn;
   let line = recv_line conn in
   match String.split_on_char '\t' line with
   | ["COMPILE"; client_cwd; client_coqlibs; file; output; echo; stdout_path; stderr_path] ->
@@ -363,15 +368,27 @@ let reap_finished_children () =
    confirmed live: `Print Libraries.`/`Print ML Modules.` after `Require
    Import Ltac2.Ltac2.` share not one entry -- Library knows nothing
    about ltac2_plugin.cmxs), taken once right after warm-up and
-   re-verified before every accepted connection; residual risk: a
-   same-second edit that preserves the file's size is not detected
-   (Unix.stat's mtime has only second resolution, matching rocq-warm's
-   own design note that its daemon uses mtime_ns -- not available in
-   OCaml's Unix.stat). On mismatch the daemon answers this one request
-   MISMATCH (the existing, already-handled fallback path), then exits
-   instead of forking -- the next client's ensure_zygote finds no socket
-   and spawns a fresh daemon, which re-interprets the now-current prefix
-   (and re-links whatever plugins it now needs). *)
+   re-verified before every accepted connection; residual risks:
+   - a same-second edit that preserves the file's size is not detected
+     (Unix.stat's mtime has only second resolution, matching rocq-warm's
+     own design note that its daemon uses mtime_ns -- not available in
+     OCaml's Unix.stat).
+   - native-compute `.coq-native` shards are a THIRD on-disk dependency
+     category this fingerprint does not cover at all:
+     Library.register_native_library Dynlink-loads a library's native
+     object on every Require when the native compiler is enabled, via a
+     mechanism distinct from both the .vo table and the ML-plugin list
+     above. A prefix compiled with native_compute enabled could go stale
+     in this third category without tripping the guard. Low exposure
+     today (the deployed prefixes are Require-only, built without
+     native_compute), but a real blind spot if that ever changes --
+     closing it needs a native-object enumeration this prototype does
+     not yet have.
+   On mismatch the daemon answers this one request MISMATCH (the
+   existing, already-handled fallback path), then exits instead of
+   forking -- the next client's ensure_zygote finds no socket and spawns
+   a fresh daemon, which re-interprets the now-current prefix (and
+   re-links whatever plugins it now needs). *)
 type fingerprint = (string * float * int) list
 
 let capture_fingerprint () : fingerprint =
@@ -407,17 +424,22 @@ let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~fingerpri
     (Array.length prefix_sentences) socket_path;
   let rec loop () =
     reap_finished_children ();
-    let readable =
+    match
       if idle_timeout > 0.0 then
-        let r, _, _ = Unix.select [sock] [] [] idle_timeout in r
-      else [sock]
-    in
-    match readable with
-    | [] ->
+        (try Some (let r, _, _ = Unix.select [sock] [] [] idle_timeout in r)
+         (* A signal interrupting select is not readiness, and not idleness
+            either -- re-enter the loop exactly as the accept path below
+            already does for the same exception, rather than treating an
+            interrupted wait as if the idle timeout had elapsed. *)
+         with Unix.Unix_error (Unix.EINTR, _, _) -> None)
+      else Some [sock]
+    with
+    | None -> loop ()
+    | Some [] ->
       Printf.eprintf "rocq-zygote: idle timeout, exiting\n%!";
       (try Unix.unlink socket_path with _ -> ());
       exit 0
-    | _ ->
+    | Some _ ->
       (match Unix.accept sock with
        | conn, _ when fingerprint_stale fingerprint ->
          Printf.eprintf
