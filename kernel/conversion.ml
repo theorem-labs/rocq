@@ -323,11 +323,71 @@ end
    variable, every constant already imported from a library other than the
    one currently being checked). Gated by ROCQ_CONV_XDECL_STATS=1; wired
    only into the checked-conversion path (see [cnv_xdecl] below), never
-   into [generic_conv] or the [CClosure.set_conv] callback. *)
+   into [generic_conv] or the [CClosure.set_conv] callback.
+
+   Memory bound (binary-equivalence-taiga#874, the A6 OOM): the first cut
+   of this counter keyed the table on the two full reified [Constr.t]
+   terms, so every first-seen keyable probe permanently retained both
+   whole term graphs for the rest of the process -- on A6's much larger
+   tree that grows without bound and exhausted a 24G cap in under five
+   minutes. This version keys on two independent structural hashes plus
+   the term's node count instead ([HKey.t] below); a table entry is now a
+   handful of fixed-size ints regardless of how big the compared terms
+   are, so table memory is bounded by the number of *distinct* keyable
+   pairs, not by their content. A reification is also capped at
+   [max_nodes] nodes: a cheap pre-check walks the raw (unsubstituted)
+   [fconstr] shape before calling [CClosure.to_constr] at all, so a term
+   whose own surface already exceeds the cap is never reified; the
+   post-reification hash/size walk re-checks the realized term as a
+   backstop (substitution can expand a shared sub-closure past what the
+   surface walk saw), discarding it as soon as it crosses the cap. That
+   backstop still allocates the realized term before discarding it -- a
+   one-shot, never-retained, GC-collectible spike, not the unbounded
+   permanent retention the old version had. *)
 module XDeclCache = struct
   let enabled =
     match Sys.getenv "ROCQ_CONV_XDECL_STATS" with
     | "1" -> true | _ -> false | exception Not_found -> false
+
+  (* Node-count cap for both the fconstr surface pre-check and the
+     post-reification backstop. Overridable for experiments; the default
+     is generous enough to rarely trip on an ordinary compared subterm
+     while still bounding the one-shot reification cost of a pathological
+     giant term. *)
+  let max_nodes =
+    match Sys.getenv "ROCQ_CONV_XDECL_MAX_NODES" with
+    | s -> (try int_of_string s with _ -> 100_000)
+    | exception Not_found -> 100_000
+
+  (* Last-resort safety valve, independent of [max_nodes]: that cap prices
+     a term's own SURFACE shape (the compact, unsubstituted fconstr graph,
+     or after reification its node count), but [CClosure.to_constr] can
+     still expand a small-surface term combinatorially when a shared
+     sub-closure is substituted into several places that are each
+     themselves substituted again -- a real case hit on the A6 tree (a
+     single declaration whose compared terms stayed under a 5,000-node
+     surface cap still drove the process from ~5GB to past a 24G cap in
+     the few probes between two 2,000,000-probe progress checkpoints).
+     No per-term size check can see that coming since the blowup only
+     exists in the fully-substituted form [to_constr] materializes. Once
+     the live heap crosses [max_heap_words], every later probe is treated
+     as unkeyable (reason [HeapGuard]) without attempting reification at
+     all: the real conversion check this counter rides on is unaffected
+     either way, so the diagnostic degrades instead of taking the host
+     process down with it. *)
+  let max_heap_words =
+    match Sys.getenv "ROCQ_CONV_XDECL_MAX_HEAP_WORDS" with
+    | s -> (try int_of_string s with _ -> 2_000_000_000)
+    | exception Not_found -> 2_000_000_000
+  let heap_guard_tripped = ref false
+  let heap_guard_trips = ref 0
+  let heap_guard_ok () =
+    if !heap_guard_tripped then false
+    else if (Gc.quick_stat ()).Gc.heap_words > max_heap_words then begin
+      heap_guard_tripped := true;
+      incr heap_guard_trips;
+      false
+    end else true
 
   (* One id per top-level clos_gen_conv call. A table entry remembers the
      call id it was first recorded under, so [record] can tell a same-call
@@ -347,6 +407,7 @@ module XDeclCache = struct
   let mark_library_done dp = imported := DirPath.Set.add dp !imported
 
   exception Not_shareable
+  exception Over_cap
 
   (* Root DirPath.t of a ModPath.t, or None for a bound (functor-parameter)
      module path: that never denotes a sealed, already-imported library. *)
@@ -380,18 +441,6 @@ module XDeclCache = struct
     Sorts.QVar.Set.exists (fun q -> Sorts.QVar.var_index q <> None) qs
     || Univ.Level.Set.exists (fun l -> Univ.Level.var_index l <> None) us
 
-  (* None: not even keyable (open term, or carries a bound universe/sort-
-     quality variable) -- it can't mean the same thing in two different
-     declarations, so it is excluded from the repeat-counting table
-     entirely, not just from the shareable subset.
-     Some refs: keyable; [refs] is every Const/Ind/Construct/Proj ModPath.t
-     the term mentions, still to be checked against the library-import
-     criterion by [refs_shareable]. *)
-  let keyable t =
-    match scan t with
-    | refs -> if has_bound_univs t then None else Some refs
-    | exception Not_shareable -> None
-
   (* Every mentioned name is rooted at a library other than the one
      currently being checked, and that library already finished loading. *)
   let refs_shareable refs =
@@ -404,18 +453,180 @@ module XDeclCache = struct
            | _ -> DirPath.Set.mem dp !imported))
       refs
 
+  (* [to_constr] walks the WHOLE term, including subterms the comparison
+     algorithm has not forced to whnf (ccnv only peeks at heads before
+     recursing); on such an unforced closure it can hit an internal
+     esubst.ml invariant (lift/subst depth) that only holds for the
+     already-whnf-reduced forms [to_constr] is normally applied to
+     elsewhere (kl/norm_head). This is a diagnostic side-table, never
+     consulted by the real check, so it fails open: an unreifiable probe
+     still counts toward [probes] but is excluded from repeat tracking,
+     same as an open term or one with a bound universe variable. *)
+  let safe_to_constr lft t =
+    match CClosure.to_constr lft t with
+    | v -> Some v
+    | exception _ -> None
+
+  (* Cheap node-count walk over a PLAIN [Constr.t], no hashing: used by the
+     fconstr surface pre-check below to price embedded (not-yet-forced)
+     subterms without materializing anything new. *)
+  let rec constr_nodes_budget budget c =
+    if budget <= 0 then raise Over_cap;
+    Constr.fold constr_nodes_budget (budget - 1) c
+
+  (* Surface node count of the raw, unsubstituted [fconstr] shape -- the
+     same case split [CClosure.to_constr] uses, but counting instead of
+     building, and never composing a substitution (an FCLOS/FLIFT/binder
+     boundary is priced via the cheap embedded-Constr.t count above, not
+     expanded). This can UNDERESTIMATE the fully-substituted size when a
+     shared closure is referenced from many places (exactly the sharing
+     [to_constr]'s own doc comment describes) -- the post-reification
+     backstop in [classify_side] catches that rarer case. *)
+  let rec fterm_nodes budget t =
+    if budget <= 0 then raise Over_cap;
+    let budget = budget - 1 in
+    match fterm_of t with
+    | FRel _ | FInd _ | FInt _ | FFloat _ | FString _
+    | FIrrelevant | FLOCKED | FFlex _ -> budget
+    | FAtom c -> constr_nodes_budget budget c
+    | FConstruct (_, args) -> Array.fold_left fterm_nodes budget args
+    | FApp (f, ve) -> Array.fold_left fterm_nodes (fterm_nodes budget f) ve
+    | FProj (_, _, c) -> fterm_nodes budget c
+    | FFix ((_, (_, tys, bds)), _) | FCoFix ((_, (_, tys, bds)), _) ->
+      let budget = Array.fold_left constr_nodes_budget budget tys in
+      Array.fold_left constr_nodes_budget budget bds
+    | FCaseT (_, _, pms, p, c, ve, _) ->
+      let budget = Array.fold_left constr_nodes_budget budget pms in
+      let budget = constr_nodes_budget budget (snd (fst p)) in
+      let budget = fterm_nodes budget c in
+      Array.fold_left (fun b br -> constr_nodes_budget b (snd br)) budget ve
+    | FCaseInvert (_, _, pms, p, indices, c, ve, _) ->
+      let budget = Array.fold_left constr_nodes_budget budget pms in
+      let budget = constr_nodes_budget budget (snd (fst p)) in
+      let budget = Array.fold_left fterm_nodes budget (get_invert indices) in
+      let budget = fterm_nodes budget c in
+      Array.fold_left (fun b br -> constr_nodes_budget b (snd br)) budget ve
+    | FLambda (_, tys, f, _) ->
+      let budget = List.fold_left (fun b (_, c) -> constr_nodes_budget b c) budget tys in
+      constr_nodes_budget budget f
+    | FProd (_, t, c, _) -> constr_nodes_budget (fterm_nodes budget t) c
+    | FLetIn (_, b, t, f, _) ->
+      constr_nodes_budget (fterm_nodes (fterm_nodes budget b) t) f
+    | FEvar (_, args, _, _) -> List.fold_left constr_nodes_budget budget args
+    | FLIFT (_, a) -> fterm_nodes budget a
+    | FCLOS (c, _) -> constr_nodes_budget budget c
+    | FArray (_, arr, ty) ->
+      let budget = budget - Parray.length_int arr in
+      if budget <= 0 then raise Over_cap else fterm_nodes budget ty
+
+  (* Second, independent structural hash over the realized [Constr.t],
+     combined in one budgeted walk with an exact node count (the [size]
+     component of the key): a different traversal/mixing scheme from
+     whatever [Constr.hash] does internally, built from [Hashtbl.hash] on
+     each node's own small payload (a generic, unrelated algorithm) tagged
+     by constructor. Raises [Over_cap] as the reification-size backstop. *)
+  let hash_and_size cap c =
+    let rec go (budget, h) c =
+      if budget <= 0 then raise Over_cap;
+      let budget = budget - 1 in
+      let tag = match kind c with
+        | Rel i -> 0x1 lxor Hashtbl.hash i
+        | Var id -> 0x2 lxor Hashtbl.hash id
+        | Meta m -> 0x3 lxor Hashtbl.hash m
+        | Evar (e, _) -> 0x4 lxor Hashtbl.hash e
+        | Sort s -> 0x5 lxor Hashtbl.hash s
+        | Cast _ -> 0x6
+        | Prod _ -> 0x7
+        | Lambda _ -> 0x8
+        | LetIn _ -> 0x9
+        | App _ -> 0xA
+        | Const (cst, _) -> 0xB lxor Hashtbl.hash cst
+        | Ind (ind, _) -> 0xC lxor Hashtbl.hash ind
+        | Construct (ctor, _) -> 0xD lxor Hashtbl.hash ctor
+        | Case _ -> 0xE
+        | Fix _ -> 0xF
+        | CoFix _ -> 0x10
+        | Proj (p, _, _) -> 0x11 lxor Hashtbl.hash p
+        | Int i -> 0x12 lxor Hashtbl.hash i
+        | Float f -> 0x13 lxor Hashtbl.hash f
+        | Array _ -> 0x14
+        | String s -> 0x15 lxor Hashtbl.hash s
+      in
+      let h = (h * 1000003) lxor tag in
+      Constr.fold go (budget, h) c
+    in
+    let (remaining, h) = go (cap, 0x9E3779B1) c in
+    (h, cap - remaining)
+
+  type reason = Open | BoundUniv | ReifyFailed | OverCap | HeapGuard
+
+  let unkeyable_open = ref 0
+  let unkeyable_bound_univ = ref 0
+  let unkeyable_reify_failed = ref 0
+  let unkeyable_over_cap = ref 0
+  let unkeyable_heap_guard = ref 0
+  let record_unkeyable = function
+    | Open -> incr unkeyable_open
+    | BoundUniv -> incr unkeyable_bound_univ
+    | ReifyFailed -> incr unkeyable_reify_failed
+    | OverCap -> incr unkeyable_over_cap
+    | HeapGuard -> incr unkeyable_heap_guard
+
+  type side_keyed = { h1 : int; h2 : int; sz : int; refs : ModPath.t list }
+  type side_result = Keyed of side_keyed | Unkeyable of reason
+
+  (* None: not even keyable (open term, carries a bound universe/sort-
+     quality variable, fails to reify, or crosses the node cap) -- it
+     can't mean the same thing in two different declarations, so it is
+     excluded from the repeat-counting table entirely, not just from the
+     shareable subset. Some: keyable; [refs] is every
+     Const/Ind/Construct/Proj ModPath.t the term mentions, still to be
+     checked against the library-import criterion by [refs_shareable]. *)
+  let classify_side lft t =
+    if not (heap_guard_ok ()) then Unkeyable HeapGuard
+    else match (try `Ok (fterm_nodes max_nodes t) with Over_cap -> `Cap) with
+    | `Cap -> Unkeyable OverCap
+    | `Ok _ ->
+      (match safe_to_constr lft t with
+       | None -> Unkeyable ReifyFailed
+       | Some c ->
+         (match scan c with
+          | refs ->
+            if has_bound_univs c then Unkeyable BoundUniv
+            else
+              (match (try `Ok (hash_and_size max_nodes c) with Over_cap -> `Cap) with
+               | `Cap -> Unkeyable OverCap
+               | `Ok (h2, sz) -> Keyed { h1 = Constr.hash c; h2; sz; refs })
+          | exception Not_shareable -> Unkeyable Open))
+
   type entry = { verdict : bool; call : int }
 
-  module Key = struct
-    type t = Constr.t * Constr.t * bool
-    let equal (a1,b1,c1) (a2,b2,c2) =
-      Bool.equal c1 c2 && Constr.equal a1 a2 && Constr.equal b1 b2
-    let hash (a,b,c) =
-      let h = Constr.hash a * 0x3B9ACA07 + Constr.hash b in
-      let h = h lxor (h lsr 16) in
-      if c then h lxor 0x5BF03635 else h
+  (* Lightweight key: two independent hashes plus the exact node count of
+     each side, never the terms themselves -- a table entry is now a fixed
+     handful of ints regardless of how big the compared terms are. A false
+     match (both hashes AND both sizes coinciding for two actually-
+     different term pairs) only blurs this diagnostic's counts, never a
+     real verdict; see the issue comment for the assumed collision bound. *)
+  module HKey = struct
+    type t = {
+      h1a : int; h2a : int; sz1 : int;
+      h1b : int; h2b : int; sz2 : int;
+      cumul : bool;
+    }
+    let equal a b =
+      Int.equal a.h1a b.h1a && Int.equal a.h2a b.h2a && Int.equal a.sz1 b.sz1
+      && Int.equal a.h1b b.h1b && Int.equal a.h2b b.h2b && Int.equal a.sz2 b.sz2
+      && Bool.equal a.cumul b.cumul
+    let hash a =
+      let h = a.h1a in
+      let h = h * 1000003 + a.h2a in
+      let h = h * 1000003 + a.sz1 in
+      let h = h * 1000003 + a.h1b in
+      let h = h * 1000003 + a.h2b in
+      let h = h * 1000003 + a.sz2 in
+      if a.cumul then h lxor 0x5BF03635 else h
   end
-  module Tbl = Hashtbl.Make(Key)
+  module Tbl = Hashtbl.Make(HKey)
 
   let table : entry Tbl.t = Tbl.create 65536
 
@@ -439,52 +650,116 @@ module XDeclCache = struct
     | Some n -> DPTbl.replace per_library dp (n + 1)
     | None -> DPTbl.add per_library dp 1
 
-  (* [to_constr] walks the WHOLE term, including subterms the comparison
-     algorithm has not forced to whnf (ccnv only peeks at heads before
-     recursing); on such an unforced closure it can hit an internal
-     esubst.ml invariant (lift/subst depth) that only holds for the
-     already-whnf-reduced forms [to_constr] is normally applied to
-     elsewhere (kl/norm_head). This is a diagnostic side-table, never
-     consulted by the real check, so it fails open: an unreifiable probe
-     still counts toward [probes] but is excluded from repeat tracking,
-     same as an open term or one with a bound universe variable. *)
-  let safe_to_constr lft t =
-    match CClosure.to_constr lft t with
-    | v -> Some v
-    | exception _ -> None
+  (* Allocation and CPU spent computing keys (reification, surface/
+     backstop size walks, both hashes) -- over EVERY probe, keyable or
+     not. Gc.counters is three field reads, no allocation; Sys.time is a
+     getrusage-class call. [ccnv] snapshots both at a window's start and
+     end and subtracts the delta from that window's own raw Gc/CPU delta,
+     so a nested probe's OWN classification cost -- paid again every time
+     [record] runs for it, strictly inside whichever ancestor window is
+     currently open -- is excluded from the ceiling: that cost is diagnostic
+     overhead a real cache would not need to pay the way this counter does
+     (it classifies shareability in full; a real cache only hashes), and
+     without the subtraction an ancestor's measured window silently
+     includes every descendant's reification work, which is how an
+     earlier version of this measurement priced "repeats" above the
+     process's own total allocation. *)
+  let key_cost_words = ref 0.
+  let key_cost_cpu_seconds = ref 0.
+  let key_cost_snapshot () = (!key_cost_words, !key_cost_cpu_seconds)
 
-  let record ~cumul lft1 term1 lft2 term2 verdict =
+  let gc_words () =
+    let (minor, promoted, major) = Gc.counters () in
+    minor +. major -. promoted
+
+
+  (* How many ancestor probes (recursive ccnv calls inside the SAME
+     eqappr) are currently running. Purely structural -- incremented and
+     decremented in [ccnv] around every xdecl-gated [eqappr] call,
+     regardless of reification or classification, so checking it never
+     requires reifying a term early. (An earlier version of this counter
+     reified to classify BEFORE calling [eqappr], to decide whether to
+     time that call; that meant reifying pre-reduction, not-yet-forced
+     terms on every single probe instead of only the post-reduction forms
+     [eqappr]'s own in-place WHNF memoization leaves behind -- the surface
+     node cap here cannot see that blowup, since it undercounts exactly
+     the substitution expansion a pre-reduction term is still carrying,
+     and materializing it anyway OOMed a 24G cap in under two minutes on
+     the Coturn tree. Keeping reification where the original, safe v3
+     counter had it -- after [eqappr] runs -- avoids that regression.) *)
+  let measuring_depth = ref 0
+  let outermost () = Int.equal !measuring_depth 0
+  let enter_measure () = incr measuring_depth
+  let exit_measure () = decr measuring_depth
+
+  let repeat_alloc_words = ref 0.
+  let repeat_cpu_seconds = ref 0.
+  let repeat_outermost_count = ref 0
+  let record_measure alloc cpu =
+    repeat_alloc_words := !repeat_alloc_words +. alloc;
+    repeat_cpu_seconds := !repeat_cpu_seconds +. cpu;
+    incr repeat_outermost_count
+
+  (* Called once per probe, AFTER [eqappr] has run and mutated term1/term2's
+     closures in place to their WHNF form (the same point the committed v3
+     counter reified at) -- reifies and classifies both sides (paying, and
+     metering, the key-computation cost over every probe), looks the key
+     up, and updates/inserts it. [outermost] and [timing] come from [ccnv]:
+     whether this probe's own [eqappr] call was itself nested inside
+     another one already being weighed, and if not, the Gc/CPU delta that
+     call cost -- recorded only if this turns out to be a genuine
+     shareable successful repeat, so the ceiling sum never double-counts a
+     subtree a real cache hit would have skipped entirely. *)
+  let record ~cumul ~outermost ~timing lft1 term1 lft2 term2 verdict =
     incr probes;
-    match safe_to_constr lft1 term1, safe_to_constr lft2 term2 with
-    | None, _ | _, None -> ()
-    | Some t1, Some t2 ->
-    match keyable t1, keyable t2 with
-    | None, _ | _, None -> ()
-    | Some refs1, Some refs2 ->
-      let key = (t1, t2, cumul) in
+    if Int.equal (!probes mod 2_000_000) 0 then begin
+      let st = Gc.quick_stat () in
+      Printf.eprintf
+        "ROCQ_CONV_XDECL_PROGRESS probes=%d table_entries=%d heap_words=%d minor_words=%.0f major_words=%.0f lib=%s\n%!"
+        !probes (Tbl.length table) st.Gc.heap_words st.Gc.minor_words st.Gc.major_words
+        (match !current_library with Some dp -> DirPath.to_string dp | None -> "?")
+    end;
+    let a0 = gc_words () in
+    let c0 = Sys.time () in
+    let s1 = classify_side lft1 term1 in
+    let s2 = classify_side lft2 term2 in
+    let a1 = gc_words () in
+    let c1 = Sys.time () in
+    key_cost_words := !key_cost_words +. (a1 -. a0);
+    key_cost_cpu_seconds := !key_cost_cpu_seconds +. (c1 -. c0);
+    (match s1 with Unkeyable r -> record_unkeyable r | Keyed _ -> ());
+    (match s2 with Unkeyable r -> record_unkeyable r | Keyed _ -> ());
+    match s1, s2 with
+    | Keyed k1, Keyed k2 ->
+      let key = { HKey.h1a = k1.h1; h2a = k1.h2; sz1 = k1.sz;
+                  h1b = k2.h1; h2b = k2.h2; sz2 = k2.sz; cumul } in
       (match Tbl.find_opt table key with
        | Some old when old.call <> !call_id ->
          incr repeats;
          if old.verdict then begin
            incr repeats_success;
-           if refs_shareable refs1 && refs_shareable refs2 then begin
+           if refs_shareable k1.refs && refs_shareable k2.refs then begin
              incr shareable_repeats_success;
              (match !current_library with
               | Some dp -> bump_library dp
-              | None -> ())
+              | None -> ());
+             if outermost then
+               (match timing with
+                | Some (alloc, cpu) -> record_measure alloc cpu
+                | None -> ())
            end
          end
        | Some _ -> ()
        | None -> Tbl.add table key { verdict; call = !call_id })
+    | _ -> ()
 
   let approx_table_words () =
-    (* One Hashtbl bucket entry (3-word block: key, data, next) plus the Key
-       tuple (3 words incl. header) plus the entry record (3 words incl.
-       header); Constr.t nodes are shared with the live term graph via
-       hash-consing misses aside, so this counts only the table's own
-       bookkeeping allocation, not the (already-allocated) terms it points
-       to. *)
-    Tbl.length table * (3 + 3 + 3)
+    (* One Hashtbl bucket cons cell (key, data, next + header: 4 words)
+       plus the HKey.t record (7 fields + header: 8 words) plus the entry
+       record (2 fields + header: 3 words) -- fixed per entry regardless
+       of how big the compared terms were, unlike the first cut of this
+       counter which stored the terms themselves. *)
+    Tbl.length table * (4 + 8 + 3)
 
   let () =
     if enabled then at_exit (fun () ->
@@ -494,9 +769,13 @@ module XDeclCache = struct
       in
       let top10 = List.filteri (fun i _ -> i < 10) top in
       Printf.eprintf
-        "ROCQ_CONV_XDECL_STATS probes=%d repeats=%d repeats_success=%d shareable_repeats_success=%d table_entries=%d table_words=%d\n%!"
+        "ROCQ_CONV_XDECL_STATS probes=%d repeats=%d repeats_success=%d shareable_repeats_success=%d table_entries=%d table_words=%d max_nodes=%d max_heap_words=%d heap_guard_tripped=%b unkeyable_open=%d unkeyable_bound_univ=%d unkeyable_reify_failed=%d unkeyable_over_cap=%d unkeyable_heap_guard=%d\n%!"
         !probes !repeats !repeats_success !shareable_repeats_success
-        (Tbl.length table) (approx_table_words ());
+        (Tbl.length table) (approx_table_words ()) max_nodes max_heap_words !heap_guard_tripped
+        !unkeyable_open !unkeyable_bound_univ !unkeyable_reify_failed !unkeyable_over_cap !unkeyable_heap_guard;
+      Printf.eprintf
+        "ROCQ_CONV_XDECL_WEIGHT key_cost_words=%.0f key_cost_cpu_seconds=%.6f repeat_outermost_count=%d repeat_alloc_words=%.0f repeat_cpu_seconds=%.6f\n%!"
+        !key_cost_words !key_cost_cpu_seconds !repeat_outermost_count !repeat_alloc_words !repeat_cpu_seconds;
       List.iter (fun (name, n) ->
           Printf.eprintf "ROCQ_CONV_XDECL_STATS top_library %s %d\n%!" name n)
         top10)
@@ -698,10 +977,35 @@ let rec ccnv cv_pb l2r infos lft1 lft2 term1 term2 cuniv =
         eqappr cv_pb l2r infos (lft1, (term1,[])) (lft2, (term2,[])) cuniv
       else begin
         let cumul = match cv_pb with CONV -> false | CUMUL -> true in
+        let is_outermost = XDeclCache.outermost () in
+        XDeclCache.enter_measure ();
+        let snap0 =
+          if is_outermost then
+            Some (XDeclCache.gc_words (), Sys.time (), XDeclCache.key_cost_snapshot ())
+          else None
+        in
+        let settle verdict =
+          XDeclCache.exit_measure ();
+          let timing = match snap0 with
+            | Some (g0, t0, (kw0, kc0)) ->
+              let g1 = XDeclCache.gc_words () in
+              let t1 = Sys.time () in
+              let (kw1, kc1) = XDeclCache.key_cost_snapshot () in
+              (* Exclude every nested probe's own key-computation cost
+                 (accrued into [key_cost_words]/[key_cost_cpu_seconds] by
+                 its own [record] call, strictly inside this window): that
+                 cost is this diagnostic's own classification overhead, not
+                 real conversion work, and left in, it is exactly what made
+                 an earlier version of this measurement exceed the run's
+                 own total allocation. *)
+              Some (g1 -. g0 -. (kw1 -. kw0), t1 -. t0 -. (kc1 -. kc0))
+            | None -> None
+          in
+          XDeclCache.record ~cumul ~outermost:is_outermost ~timing lft1 term1 lft2 term2 verdict
+        in
         match eqappr cv_pb l2r infos (lft1, (term1,[])) (lft2, (term2,[])) cuniv with
-        | cuniv -> XDeclCache.record ~cumul lft1 term1 lft2 term2 true; cuniv
-        | exception NotConvertible ->
-          XDeclCache.record ~cumul lft1 term1 lft2 term2 false; raise NotConvertible
+        | cuniv -> settle true; cuniv
+        | exception NotConvertible -> settle false; raise NotConvertible
       end
     | Some cache ->
       let cumul = match cv_pb with CONV -> false | CUMUL -> true in
