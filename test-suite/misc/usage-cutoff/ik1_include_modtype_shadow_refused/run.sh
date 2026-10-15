@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# binary-equivalence-taiga#841 Review841 round 11 (reviewer, issuecomment-
-# 6199183929, fixture "mvt"). X has `Module M. Module Type T. Parameter f
-# : nat. End T. End M.` (a MODULE TYPE); W adds a top-level `Module T`
-# (a MODULE, different kind). B seals `Module Q : T.` -- Rocq's `: T`
-# seal syntax only ever resolves a MODULE TYPE, so W's unrelated module T
-# is never a candidate: a fresh compile always succeeds. Confirms the
-# kind tag (module_label_marker vs modtype_label_marker) keeps the two
-# kinds from colliding, so this reuses correctly (not merely refused
-# soundly, as nd2/nd3/nd5q/nd5c/nd5b/nd5c are).
+# binary-equivalence-taiga#841 Review841 round 12 (Main/reviewer, fixture
+# "ik1"). `Include` interns its argument with Modintern.ModAny, which
+# tries a MODULE lookup first and falls back to a MODULE TYPE -- no site
+# falls back the other way (confirmed by grepping every ModAny/ModType
+# interning site in interp/modintern.ml and vernac/declaremods.ml). X has
+# `Module Type T. Parameter f : nat. End T.`; W adds a top-level `Module
+# T. Definition zzq := 0. End T.` (a MODULE, different kind, same name);
+# B does `Module Type Q. Include T. End Q. Module R : Q. Definition f :=
+# 1. End R.` A TRUE shadow: a fresh compile's Include now resolves T to
+# W's module, so Q (and R) require "zzq" instead of "f".
 . ../lib.sh
 D=$(pwd); WORK="$D/work"; rm -rf "$WORK"; mkdir -p "$WORK"
 cp "$D"/X.v "$D"/A.v "$D"/B.v "$D"/C.v "$WORK"/
@@ -24,7 +25,8 @@ build W.v >"$WORK/sanity.log" 2>&1 || uc_fail "rebuild W (AFTER): $(cat "$WORK/s
 build A.v >>"$WORK/sanity.log" 2>&1 || uc_fail "rebuild A against W1: $(cat "$WORK/sanity.log")"
 cp "$D/B.v" "$WORK/B_fresh_check.v"
 fresh_out=$(cd "$WORK" && uc_coqc -Q . "" B_fresh_check.v 2>&1); fresh_rc=$?
-[ "$fresh_rc" -eq 0 ] || { echo "$fresh_out" >&2; uc_fail "SANITY: fresh B failed -- expected to succeed (: T seal only ever resolves a module type, never W's module T)."; }
+[ "$fresh_rc" -ne 0 ] || { echo "$fresh_out" >&2; uc_fail "SANITY: fresh B succeeded -- this fixture does not exercise a real shadow."; }
+echo "$fresh_out" | grep -q "is missing in" || uc_fail "fresh B did not fail with the expected missing-field error: $fresh_out"
 rm -f "$WORK"/B_fresh_check.*
 
 cp "$D/W0.v" "$WORK/W.v"
@@ -35,5 +37,6 @@ build W.v >"$WORK/rebuild.log" 2>&1 || uc_fail "rebuild W (AFTER): $(cat "$WORK/
 build A.v >>"$WORK/rebuild.log" 2>&1 || uc_fail "rebuild A (AFTER): $(cat "$WORK/rebuild.log")"
 
 c_out=$(build C.v 2>&1); c_rc=$?
-[ "$c_rc" -eq 0 ] || { echo "$c_out" >&2; uc_fail "coqc C.v was refused reusing B.vo after an unrelated MODULE T (different kind than X's Module Type T) -- the kind tag must keep these from colliding (mvt)."; }
-uc_ok "unrelated same-named Module T (different kind) correctly reused: $(echo "$c_out" | tail -1)"
+[ "$c_rc" -ne 0 ] || { echo "$c_out" >&2; uc_fail "coqc C.v reused B.vo after a TRUE Include-ModAny shadow -- must refuse (ik1)."; }
+echo "$c_out" | grep -qi 'inconsistent assumptions' || uc_fail "wrong refusal message: $c_out"
+uc_ok "Include-ModAny module-over-module-type shadow correctly refused: $(echo "$c_out" | grep -im1 'inconsistent assumptions')"

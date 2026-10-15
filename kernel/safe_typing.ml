@@ -189,6 +189,23 @@ let is_marked_basename (id : Id.t) : bool =
   let s = Id.to_string id in
   String.length s > 0 && (match s.[0] with '0' .. '9' -> true | _ -> false)
 
+(** Reserved, mutually-disjoint G7 namespace tags for a [Module]'s vs. a
+    [Module Type]'s own LABEL (round 12). Defined here, ahead of
+    [closure_subset_ok], because round 13 needs both names there -- see
+    [iface_entries_of_sfb]'s own doc comment (far below, where they are
+    applied via [mark_basename]) for the full history and the
+    [Definition a#b := 0.] syntax-error argument for why ['#'] makes
+    either tag uncollidable with any real identifier. *)
+let module_label_marker = "zmodlabel#"
+let modtype_label_marker = "zmodtypelabel#"
+
+(** Strips [prefix] from the front of [s], if present. *)
+let strip_prefix (prefix : string) (s : string) : string option =
+  let lp = String.length prefix in
+  if String.length s >= lp && String.equal (String.sub s 0 lp) prefix
+  then Some (String.sub s lp (String.length s - lp))
+  else None
+
 (** A dependency record as it is written to and read from disk: the
     library's name, its whole-library digest, its per-declaration interface
     table (if representable), the digest of its exported vernac-object
@@ -357,9 +374,60 @@ let group_closure (t : closure_table) : (DirPath.t * Digest.t) list Id.Map.t =
       Id.Map.add id ((dp, d) :: l) acc)
     Id.Map.empty t
 
+(** binary-equivalence-taiga#841 round 13 (ik1-ik4/ik6, Main/reviewer):
+    [Modintern.lookup_module_or_modtype] tries a MODULE lookup first and
+    falls back to a MODULE TYPE only for [ModAny]-kind queries --
+    confirmed by reading every [ModAny]/[ModType] interning site in
+    [interp/modintern.ml] and [vernac/declaremods.ml]:
+    [declare_one_include_core] (`Include`) interns with [ModAny]
+    (declaremods.ml:1484); so does a functor APPLICATION's argument
+    (modintern.ml:123, guarded immediately after by
+    [error_application_to_module_type] if the result is a module type --
+    an error, not a silent accept, so it cannot itself cause a stale
+    reuse). Every seal/signature site ([: T], [Declare Module : T], a
+    functor's OWN parameter signature, [Module Type] abbreviation) interns
+    with the literal [ModType] kind, which [lookup_module_or_modtype]
+    (modintern.ml:54) skips the module lookup for ENTIRELY (`if kind ==
+    ModType then raise Not_found`) -- no fallback the OTHER way exists
+    anywhere in this tree. So `Include T`, resolving [T] via [ModAny], can
+    silently re-resolve to a NEW, unrelated MODULE of the same bare name
+    if one appears later (reachable only transitively, e.g. through a
+    [Require Export]) -- B's own closure never recorded [T] under the
+    MODULE tag at all (only under the MODULE TYPE tag, since that is what
+    [T] resolved to at B's own compile time), so the ordinary per-id
+    check below, which only ever visits a key already present in
+    [recorded], never looks at the new module-tagged key [live] gains.
+
+    Fix, ONE-DIRECTIONAL: before the ordinary check, fold every RECORDED
+    entry keyed under [modtype_label_marker ^ base] into the group keyed
+    under [module_label_marker ^ base] too (creating that key if B never
+    recorded a module there at all) -- so a NEW live module-tagged dp for
+    that bare name is only accepted if it is ALSO one of the dps already
+    recorded as having defined EITHER the module type or (if any) the
+    module itself. The REVERSE never happens: a module-type-tagged live
+    entry is checked ONLY against recorded module-type entries, since no
+    lookup falls back from [ModType] to a module. The shared
+    [module_label_digest] constant (same value for every label regardless
+    of kind, by design -- see that constant's own doc comment) makes the
+    borrowed digest-equality half of the check trivially satisfied, so
+    folding introduces no spurious content-mismatch false positive. *)
 let closure_subset_ok ~recorded ~live =
   let rec_grouped = group_closure recorded in
   let live_grouped = group_closure live in
+  (* allowed_by_modtype: a dp is additionally allowed for a live MODULE-kind
+     id if recorded has a MODULE-TYPE entry for the same bare name from
+     that exact dp -- never the reverse, and never a requirement that a
+     module-type-only name must also have a live module counterpart (that
+     would wrongly refuse every module type with no same-named module
+     anywhere, e.g. mkc1/mkc2/mt1). *)
+  let allowed_by_modtype id dp =
+    match strip_prefix module_label_marker (Id.to_string id) with
+    | None -> false
+    | Some base ->
+      (match Id.Map.find_opt (Id.of_string_soft (modtype_label_marker ^ base)) rec_grouped with
+       | None -> false
+       | Some rec_modtype_dps -> List.exists (fun (dp', _) -> DirPath.equal dp dp') rec_modtype_dps)
+  in
   Id.Map.for_all (fun id rec_dps ->
       match Id.Map.find_opt id live_grouped with
       | None -> false
@@ -368,9 +436,27 @@ let closure_subset_ok ~recorded ~live =
             List.exists (fun (dp', d') -> DirPath.equal dp dp' && String.equal d d') live_dps)
           rec_dps
         && List.for_all (fun (dp, _) ->
-            List.exists (fun (dp', _) -> DirPath.equal dp dp') rec_dps)
+            List.exists (fun (dp', _) -> DirPath.equal dp dp') rec_dps
+            || allowed_by_modtype id dp)
           live_dps)
     rec_grouped
+  &&
+  (* A live MODULE-kind id never recorded at all (B used it only through
+     Include/ModAny, so it was recorded under the MODULE-TYPE tag, never
+     the MODULE one) still needs checking -- ik1-ik4/ik6's actual shape. *)
+  Id.Map.for_all (fun id live_dps ->
+      Id.Map.mem id rec_grouped
+      || match strip_prefix module_label_marker (Id.to_string id) with
+         | None -> true
+         | Some base ->
+           (match Id.Map.find_opt (Id.of_string_soft (modtype_label_marker ^ base)) rec_grouped with
+            | None -> true (* nothing recorded under this name as a module type either; an ordinary new addition *)
+            | Some rec_modtype_dps ->
+              List.for_all (fun (dp, _) ->
+                  List.exists (fun (dp', _) -> DirPath.equal dp dp') rec_modtype_dps)
+                live_dps))
+    live_grouped
+
 
 (** The relaxed acceptance predicate, shared by every loader that is
     allowed to use it (the kernel's own [check_required] below, and
@@ -2305,8 +2391,8 @@ let mark_basename (marker : string) (path : string) : string =
     unqualified reference in a file resolved to, and checking THAT
     specific binding instead of a coarse basename -- is the next step for
     these remaining over-refusals, and is NOT built this round. *)
-let module_label_marker = "zmodlabel#"
-let modtype_label_marker = "zmodtypelabel#"
+(* module_label_marker/modtype_label_marker are now defined earlier,
+   just after is_marked_basename, since closure_subset_ok needs them too. *)
 
 (** The digest value paired with every module/module-type label entry.
     Not load-bearing for soundness: [closure_subset_ok]/[iface_subset_ok]
