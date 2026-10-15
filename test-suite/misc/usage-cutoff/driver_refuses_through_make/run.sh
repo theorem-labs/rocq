@@ -59,7 +59,8 @@ for f in A B C; do
   uc_assert_contains "$STATS_LOG" $'^REBUILD\t'"$f"'\.v' "$f.v must show a REBUILD entry after a change to f"
 done
 
-result_out=$(cd "$WORK" && printf 'Print result.\n' | "$COQBIN"rocq repl -batch -Q . "" -require-import C 2>&1)
+printf 'Require Import C.\nPrint result.\n' > "$WORK/probe.v"
+result_out=$(cd "$WORK" && "$UC_ROCQ" c -Q . "" probe.v 2>&1)
 echo "$result_out" | grep -q 'result = 2' \
   || uc_fail "C.result does not reflect the post-edit value of f (expected 2) -- a stale B/C was used somewhere in the chain. Output: $result_out"
 

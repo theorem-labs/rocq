@@ -54,7 +54,8 @@ mk real-all >"$WORK/build2.log" 2>&1 || uc_fail "'make real-all' after 'make vos
 
 uc_assert_contains "$STATS_LOG" $'^REBUILD\tM\\.v' "the real-all pass after 'make vos' must REBUILD M.v (no valid stamp exists), not REUSE the stale pre-edit .vo"
 
-check_out=$(cd "$WORK" && printf 'Print after_marker.\n' | "$COQBIN"rocq repl -batch -Q . "" -require-import M 2>&1)
+printf 'Require Import M.\nPrint after_marker.\n' > "$WORK/probe.v"
+check_out=$(cd "$WORK" && "$UC_ROCQ" c -Q . "" probe.v 2>&1)
 echo "$check_out" | grep -q 'after_marker = 2' \
   || uc_fail "final M.vo does not reflect the post-'make vos' edit (after_marker missing/wrong) -- the stale pre-edit .vo was reused. Output: $check_out"
 

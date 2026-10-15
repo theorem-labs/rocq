@@ -45,8 +45,8 @@ if [ "$chk_rc" -ne 0 ]; then
   uc_fail "rocqchk rejected (or crashed on, exit $chk_rc) a well-typed tree with a non-degenerate dependency tuple (multi-entry iface_table, non-empty objects_digest) -- a same-arity/different-order tuple mismatch is exactly what this looks like."
 fi
 
-values_out=$(cd "$WORK" && printf 'Eval compute in check1.\nEval compute in check2.\nEval compute in check3.\n' \
-  | "$COQBIN"rocq repl -batch -Q . "" -require-import Consumer 2>&1)
+printf 'Require Import Consumer.\nEval compute in check1.\nEval compute in check2.\nEval compute in check3.\n' > "$WORK/probe.v"
+values_out=$(build probe.v 2>&1)
 for pair in "check1:111" "check2:222" "check3:333"; do
   name=${pair%%:*}; expected=${pair##*:}
   echo "$values_out" | grep -q "= $expected" \

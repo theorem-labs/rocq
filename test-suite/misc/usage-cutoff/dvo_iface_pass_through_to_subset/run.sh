@@ -13,13 +13,19 @@
 # declaration subset layer accept reuse -- confirming the two layers
 # actually compose, not merely that each works in isolation.
 #
-# Precondition gate, not a guess at behavior: `Dvo_iface` does not exist
-# anywhere in kernel/checker/vernac sources on this branch yet (grep
-# confirmed empty at the time this test was written), so there is today NO
-# way to construct a case where Dvo_iface's fast path is even REACHED,
-# let alone falls through to the subset layer -- dep_ok's fast path is
-# still the pre-existing raw digest_match. Until Dvo_iface lands, this
-# test is intentionally UNABLE to distinguish itself from
+# Precondition gate, not a guess at behavior: `Dvo_iface` does not exist as
+# an actual constructor/binding anywhere in kernel/checker/vernac sources
+# on this branch yet (only as a forward-looking comment reference, e.g.
+# kernel/safe_typing.ml's retroknowledge-disqualification note and
+# vernac/declaremods.ml's Loc-normalization note, both added by the G1/G2
+# slice -- a bare `grep -rq 'Dvo_iface'` false-positives on those comments
+# and silently runs this test against the OLD fast path, failing for G1's
+# unrelated reason instead of ever reaching the composition claim this
+# test exists to check; reproduced while writing this fix). The gate below
+# greps for `Dvo_iface of` (an OCaml constructor DEFINITION pattern), which
+# only a real `vodigest`/digest-variant implementation would ever contain
+# -- no comment in this tree phrases it that way. Until Dvo_iface lands,
+# this test is intentionally UNABLE to distinguish itself from
 # "unused_addition_still_reused" (which already covers the identical
 # observable scenario via the old fast path) and fails loudly here rather
 # than silently duplicating that test's assertions and claiming to have
@@ -27,7 +33,7 @@
 set -uo pipefail
 . ../lib.sh
 
-if ! grep -rq 'Dvo_iface' "$UC_ROOT/kernel" "$UC_ROOT/checker" "$UC_ROOT/vernac" 2>/dev/null; then
+if ! grep -rq 'Dvo_iface of' "$UC_ROOT/kernel" "$UC_ROOT/checker" "$UC_ROOT/vernac" 2>/dev/null; then
   uc_fail "Dvo_iface has not landed yet (commit 1, sami/loc-free-identity) -- dep_ok's fast path is still the raw whole-library digest, so this test cannot yet exercise the Dvo_iface/iface_table composition it is meant to check. See this file's header."
 fi
 

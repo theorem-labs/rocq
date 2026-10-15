@@ -2,7 +2,14 @@
 # binary-equivalence-taiga#841 D6, test "rocqnative_reuse_succeeds" (issue
 # list item 6 of 15). Depends on: D3 (the shared dep_ok predicate, used by
 # rocqnative's own intern_mandatory_library instead of a bare digest-only
-# check). Should PASS once D3 lands.
+# check). EXPECTED TO FAIL until G1 lands (not D1): the Admitted->Qed edit
+# below changes the CONSTANT libobject's `cst_kind` (`IsAssumption
+# Conjectural` -> `IsProof _`), which sits inside the exact-equality
+# objects digest (`md_objects`) regardless of D1/D3/D4's status -- Review841
+# G1. D3 itself (rocqnative sharing `dep_ok` instead of a bare digest
+# check) is independently verified correct; this test just can't observe
+# that correctness until G1's per-declaration split lands, since dep_ok's
+# relaxed branch never gets past the objects-digest check for this edit.
 #
 # rocq#10's code-quality review, Major-1, reproduced through a real
 # coq_makefile Makefile with native compilation ON: A goes Admitted->Qed
@@ -16,7 +23,7 @@
 # it rejected the legitimately-reused B.vo and `make` failed.
 #
 # Assertion (Major-1's repro, inverted): `make` must now exit 0 end to end,
-# where v1 failed.
+# where v1 failed. EXPECTED TO FAIL until G1 lands (see header above).
 . ../lib.sh
 
 D=$(pwd)

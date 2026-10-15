@@ -1,1 +1,0 @@
-Definition z := 1.

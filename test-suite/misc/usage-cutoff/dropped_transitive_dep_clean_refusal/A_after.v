@@ -1,0 +1,1 @@
+Definition dummy := 0.

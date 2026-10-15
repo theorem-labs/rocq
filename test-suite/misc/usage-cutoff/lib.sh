@@ -17,7 +17,11 @@ export PATH="$COQBIN:$PATH"
 
 # Repo root, derived from this file's own location (never hardcoded, unlike
 # v1's dev/usage-cutoff scripts, which is exactly what finding 6/m6 flagged).
-UC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+# test-suite/misc/usage-cutoff/lib.sh -> ../../.. is the repo root (misc ->
+# test-suite -> repo root); the previous ../../../.. landed one level
+# ABOVE the repo root, so UC_DRIVER/UC_ROCQ could never be found
+# (binary-equivalence-taiga#841 Review841 D6 table, tests 5/6/9/14).
+UC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 UC_DRIVER="$UC_ROOT/dev/usage-cutoff/cutoff_rocq.py"
 UC_ROCQ="${COQBIN}rocq"
 UC_ROCQCHK="${COQBIN}rocqchk"

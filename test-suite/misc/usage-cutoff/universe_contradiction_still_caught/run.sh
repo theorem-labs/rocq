@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 # binary-equivalence-taiga#841 D6, test "universe_contradiction_still_caught"
-# (issue list item 11 of 15). Carried over from v1's run_universe.sh
-# unchanged in substance ("confirmed still correct since comp_univs push in
-# import is unconditional and untouched" -- not gated by D1-D5 at all), but
-# with REAL assertions instead of v1's print-only script (fixing m2: v1's
-# own coqchk step errored out, "Cannot find library"/an anomaly, making the
-# printed trust-anchor evidence vacuous -- rocq#10 deep review, m2). Should
-# PASS unconditionally (no design-decision dependency).
+# (issue list item 11 of 15). Depends on: unaffected by D1 (still correct
+# whichever way D1 lands), but FLIPPED by G2's fix (Review841): before G2,
+# `comp_univs`/`comp_sorts` were outside both digests, so this scenario's
+# opaque-proof-introduced universe constraint (`pose (U1 : U2)`) was
+# accepted by the relaxed loader and only caught by rocqchk's independent
+# re-verification. G2 adds an exact-equality `(comp_univs, comp_sorts)`
+# digest to `dep_ok`'s relaxed branch (kernel/safe_typing.ml), so the SAME
+# scenario is now refused at `coqc`/interactive-loader time already:
+# `Require Import A B` while compiling C invokes
+# vernac/library.ml's `intern_mandatory_library`, which rejects because
+# B's recorded dependency on A carries a (comp_univs, comp_sorts) digest
+# that no longer matches A_agent's live digest. Should PASS once G2 lands
+# (and fails at the pre-G2 head, where the old test's "loader accepts"
+# assertion was in fact the design's acknowledged gap G2 closes).
 #
-# The loader's interface digest deliberately does not track `comp_univs`
-# (a library's whole-library monomorphic universe constraints), so an
-# agent's opaque proof can add a universe constraint that contradicts one
-# baked into a dependent compiled against the reference, WITHOUT the
-# reused dependent being refused at load time: this case is expected to be
-# ACCEPTED by the loader. The claim under test is that `rocqchk`, run over
-# the actual merged object set regardless of how it got assembled, still
-# catches the inconsistency (coqc's own `import` unconditionally pushes
-# `comp_univs` with `~strict:true`, independent of which branch of the
-# acceptance check passed).
+# U declares two universes; the reference A's opaque proof adds no extra
+# constraint; B bakes in `U2 <= U1` against the reference A; the agent's
+# A instead adds `U1 <= U2` (an opaque-proof-only constraint, via
+# `pose (U1 : U2)`) -- together the two constraints are only mutually
+# inconsistent once B.vo (compiled against the reference A) is combined
+# with the rebuilt agent A. B.vo is kept (not rebuilt) when A is swapped.
 . ../lib.sh
 
 D=$(pwd)
@@ -45,22 +48,28 @@ rm -f "$WORK"/A_fresh_check.*
 cp "$D/A_agent.v" "$WORK/A.v"
 build A.v >"$WORK/rebuild.log" 2>&1 || uc_fail "REBUILD A (agent) failed unexpectedly: $(cat "$WORK/rebuild.log")"
 
+# The trust anchor (post-G2): the interactive loader itself must now
+# refuse to load B.vo against the changed A -- not merely let rocqchk
+# catch it later.
 c_out=$(build C.v 2>&1)
 c_rc=$?
-if [ "$c_rc" -ne 0 ]; then
+if [ "$c_rc" -eq 0 ]; then
   echo "$c_out" >&2
-  uc_fail "coqc C.v failed -- expected B.vo to be ACCEPTED here (comp_univs is deliberately outside the interface digest), so this is a false-REFUSE regression, not the universe check this test targets."
+  uc_fail "coqc C.v succeeded reusing B.vo against an A whose (comp_univs, comp_sorts) digest changed (pose (U1 : U2)) -- G2's fix is not being applied by dep_ok's relaxed branch."
 fi
+echo "$c_out" | grep -qi 'inconsistent assumptions' \
+  || uc_fail "coqc C.v failed (exit $c_rc) but not with an inconsistent-assumptions error -- got: $c_out"
 
-# The trust anchor: rocqchk over the actual merged object set MUST catch
-# the universe inconsistency, with a real, non-vacuous error (fixing m2).
-chk_out=$(cd "$WORK" && "$UC_ROCQCHK" -o -Q . "" -norec U -norec A -norec B -norec C 2>&1)
+# Independent second confirmation: rocqchk over the actual merged object
+# set also catches the universe contradiction on its own strict path
+# (unaffected by G2 -- it never took the relaxed branch to begin with).
+chk_out=$(cd "$WORK" && "$UC_ROCQCHK" -o -Q . "" -norec U -norec A -norec B 2>&1)
 chk_rc=$?
 if [ "$chk_rc" -eq 0 ]; then
   echo "$chk_out" >&2
-  uc_fail "rocqchk accepted the merged tree -- the universe contradiction (U1 <= U2 and U2 <= U1) was not caught."
+  uc_fail "rocqchk accepted the merged U/A/B tree -- the universe contradiction (U1 <= U2 and U2 <= U1) was not caught."
 fi
 echo "$chk_out" | grep -qi -E 'universe|inconsisten' \
   || uc_fail "rocqchk rejected the merged tree (exit $chk_rc) but not with a universe/inconsistency error -- evidence is vacuous (m2): got: $chk_out"
 
-uc_ok "B.vo was accepted for reuse (coqc C exit 0), and rocqchk independently caught the universe contradiction: $(echo "$chk_out" | grep -i -m1 -E 'universe|inconsisten')"
+uc_ok "coqc C.v correctly refused the reuse ($(echo "$c_out" | grep -im1 'inconsistent assumptions')), and rocqchk independently confirmed the universe contradiction over U/A/B: $(echo "$chk_out" | grep -i -m1 -E 'universe|inconsisten')"

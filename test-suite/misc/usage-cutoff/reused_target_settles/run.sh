@@ -2,7 +2,13 @@
 # binary-equivalence-taiga#841 D6, test "reused_target_settles" (issue list
 # item 9 of 15). Depends on: D5 (a REUSED file has its .vo/.glob mtimes
 # touched forward, so a later `make` sees it as up to date instead of
-# re-invoking the driver on it every time). Should PASS once D5 lands.
+# re-invoking the driver on it every time). EXPECTED TO FAIL until G1
+# lands (not D1): the Admitted->Qed edit below changes the CONSTANT
+# libobject's `cst_kind` (`IsAssumption Conjectural` -> `IsProof _`),
+# which sits inside the exact-equality objects digest (`md_objects`)
+# regardless of D1/D5's status -- Review841 G1. D5's own mtime-settling
+# fix is independently correct; this test just can't observe a REUSED
+# verdict for this specific edit until G1's per-declaration split lands.
 #
 # rocq#10's code-quality review, Major-5, reproduced: A goes Admitted->Qed,
 # B (unchanged) is REUSED. Before D5, a REUSED verdict returned without
@@ -14,6 +20,7 @@
 # Assertion: after the REUSED build, a second `make real-all` performs
 # ZERO work (an empty stats log -- no coqtop -require subprocess spawned
 # for anything), and `make -q real-all` exits 0 (reports up to date).
+# EXPECTED TO FAIL until G1 lands (see header above).
 . ../lib.sh
 
 D=$(pwd)

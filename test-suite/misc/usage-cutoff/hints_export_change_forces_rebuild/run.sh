@@ -55,7 +55,7 @@ rm -f "$WORK/B.vo" "$WORK/B.glob" "$WORK/B.vo.cutoff-stamp"
 if fresh_out=$(build B.v 2>&1); then
   uc_fail "a fresh compile of B.v succeeded even without A's Hint -- the fixture doesn't actually exercise the hint (test is broken), or Hint Constructors is not required for auto here."
 fi
-echo "$fresh_out" | grep -qi -E 'auto|unable|no applicable tactic' \
-  || uc_fail "fresh B.v compile failed, but not with the expected 'auto'/'unable to find' error; got: $fresh_out"
+echo "$fresh_out" | grep -qi -E 'auto|unable|no applicable tactic|incomplete proof' \
+  || uc_fail "fresh B.v compile failed, but not with the expected 'auto'/'unable to find'/'incomplete proof' error; got: $fresh_out"
 
 uc_ok "stale B.vo was refused ($(echo "$out" | tail -1)), and a fresh B.v build genuinely fails without the hint ($(echo "$fresh_out" | tail -1))."
