@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # binary-equivalence-taiga#841 D6, test "driver_refuses_through_make"
-# (issue list item 14 of 15). Depends on: D1 (the full transitive-closure
-# fix), routed through D5's driver and a REAL coq_makefile Makefile.
-# EXPECTED TO FAIL until commit comp_transitive_deps/Dvo_iface lands.
+# (issue list item 14 of 15), routed through D5's driver and a REAL
+# coq_makefile Makefile. The G7 full-transitive-closure mechanism (D1's
+# own goal, reached extensionally via [comp_transitive_deps]/[closure_table]
+# rather than waiting on commit 1's intensional [Dvo_iface]) already
+# refuses the stale B/C here; round 10/11 review found this test was
+# failing on a HARNESS bug, not a product gap -- see below.
 #
 # BugFinderRedTeamV2 M5/M6: every other test in this suite drives either
 # raw coqc (tests 1-4/11-13/15) or checks a reuse decision only where reuse
@@ -59,9 +62,9 @@ for f in A B C; do
   uc_assert_contains "$STATS_LOG" $'^REBUILD\t'"$f"'\.v' "$f.v must show a REBUILD entry after a change to f"
 done
 
-printf 'Require Import C.\nPrint result.\n' > "$WORK/probe.v"
+printf 'Require Import C.\nEval compute in result.\n' > "$WORK/probe.v"
 result_out=$(cd "$WORK" && "$UC_ROCQ" c -Q . "" probe.v 2>&1)
-echo "$result_out" | grep -q 'result = 2' \
+echo "$result_out" | grep -q '= 2' \
   || uc_fail "C.result does not reflect the post-edit value of f (expected 2) -- a stale B/C was used somewhere in the chain. Output: $result_out"
 
 uc_ok "every file downstream of the change to f was genuinely REBUILT (never REUSED), and the final value reflects the post-edit world."

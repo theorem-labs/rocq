@@ -2202,30 +2202,75 @@ let mark_basename (marker : string) (path : string) : string =
   | Some i -> String.sub path 0 (i + 1) ^ marker ^ String.sub path (i + 1) (String.length path - i - 1)
   | None -> marker ^ path
 
-(** Reserved digest value for the entry [iface_entries_of_sfb] now adds
-    for a [Module]'s or [Module Type]'s own LABEL (round 9 P1/mns1/
+(** Reserved key-construction scheme for the entry [iface_entries_of_sfb]
+    adds for a [Module]'s or [Module Type]'s own LABEL (round 9 P1/mns1/
     mtns1: without an entry here, [flatten_closure]'s shadow table never
     saw the module/module-type NAME itself, only fields nested inside
-    it, so a "Module M"/"Module Type T" reachable only transitively,
-    through a [Require Export] several hops down, could shadow a name a
-    dependent already resolved unqualified at its own compile time, with
-    nothing in [closure_subset_ok] to catch it -- see that function's
-    doc comment). The exact digest value here is NOT load-bearing for
-    soundness: [closure_subset_ok]/[iface_subset_ok] key on the full
-    [(dp, id)] pair, and the module's/module-type's OWN internal content
-    is independently covered by its recursively-produced field entries,
-    entirely unaffected by this entry. A single constant suffices --
-    deliberately NOT a content digest of the module's signature, which
-    would re-[Marshal]/re-hash the module's entire structure a second
-    time for every module in the tree, for no soundness benefit (every
-    real content change is already caught by the fields themselves
-    changing or vanishing). Unmarked (no [modtype_entry_marker]) even
-    for a [Module Type]'s own label: a module and a module type cannot
-    share a label within one structure, so the label can never collide
-    with a sibling field, and treating a module's and a module type's
-    OWN names the same way for shadow purposes is correct -- Rocq
-    resolves an unqualified name to either kind through the same
-    Nametab lookup. *)
+    it). Round 10 shipped this as a PLAIN entry, [(qualify id,
+    module_label_digest)] -- an unmarked key in the SAME basename space
+    ordinary constants use, reduced to just its innermost segment by
+    [flatten_closure]/[basename_of_qualified_path] like every other
+    entry. The round-10 review (binary-equivalence-taiga#841 round 11,
+    nd2/nd3/lc1/lc2) found this over-refuses twice over: (a) a module's
+    label can collide with a same-named CONSTANT, though Rocq resolves
+    module and term names through separate Nametab tables entirely; (b)
+    a NEW top-level module collides with an unrelated, differently-
+    NESTED module that merely happens to share the same INNERMOST name
+    (nd2: X's nested `M.N`, reached only via the qualified `Import M.N`
+    or `Import M.` then `Import N.`, can never be confused with an
+    unrelated top-level `N` -- Rocq's qualid resolution requires a
+    matching path SUFFIX, not merely a matching innermost segment;
+    confirmed empirically both ways in the round-11 writeup).
+
+    Fix: [module_label_key] encodes the label's FULL internal nesting
+    path, not just its innermost segment -- every enclosing [Module]'s
+    own name, joined by ['#'], with the incoming [path] parameter's own
+    ['.']-joined segments (inherited from the caller, [entries_of_signature]'s
+    [sub_path]) rewritten to ['#'] too, so the result contains NO literal
+    ['.'] at ANY nesting depth; [basename_of_qualified_path] then finds no
+    ['.'] to split on and returns the WHOLE key verbatim, with no loss of
+    path context regardless of depth. A label reached from a DIFFERENT
+    path (nd2: top-level vs. nested) therefore never equals one reached
+    from the SAME path (mns1/nd1/nd4: the identical nesting, reproduced by
+    an unrelated library), closing the precision gap without touching
+    [flatten_closure] or [is_marked_basename] at all.
+
+    The whole key is additionally prefixed with [module_label_tag], itself
+    containing ['#'] -- a character [Unicode]'s own trailing-identifier
+    classification refuses (confirmed empirically: `Definition a#b := 0.`
+    is a SYNTAX error, parsed as two tokens, not an unusual name), so this
+    key can NEVER equal any real constant's own basename, in its ENTIRETY
+    and at any position, not merely by a leading character -- the same
+    mathematical uncollidability [opaque_entry_prefix]/[modtype_entry_marker]
+    get from a digit-leading first character, reached by a different
+    forbidden-character argument because a LABEL entry, unlike those two,
+    must still PARTICIPATE in ordinary G7 cross-library comparison (never
+    be [is_marked_basename]-excluded, which checks only a DIGIT-leading
+    first character and does not match ours) -- comparing only against
+    OTHER label keys, since no real identifier can ever equal one. This
+    closes lc1/lc2 (a label can no longer collide with any constant's
+    basename, regardless of name) without a separate table or a second
+    [flatten_closure] pass: the key design alone gives module/module-type
+    labels their own, full-path-precise, constant-disjoint G7 namespace.
+    Still NOT load-bearing beyond existence/identity tracking: a module's/
+    module-type's own internal CONTENT is independently covered by its
+    recursively-produced field entries, unaffected by this key's exact
+    shape. Still shared between [Module] and [Module Type] labels (both
+    use the SAME tag/scheme): a module and a module type cannot share a
+    label within one structure, and Rocq resolves an unqualified name to
+    either kind through the same Nametab lookup, so treating them the
+    same way for shadow purposes remains correct (mns1 vs. mtns1, both
+    still refused). *)
+let module_label_tag = "zmodlabel#"
+let module_label_key (path : string) (id : Id.t) : string =
+  let hashed_path = String.map (fun c -> if c = '.' then '#' else c) path in
+  let full = if hashed_path = "" then Id.to_string id else hashed_path ^ "#" ^ Id.to_string id in
+  module_label_tag ^ full
+
+(** The digest value paired with every [module_label_key] entry. Not
+    load-bearing for soundness, per [module_label_key]'s own doc comment --
+    a single constant suffices, since existence/identity under the key
+    above is what matters, not content. *)
 let module_label_digest = Csha256.digest "0usage_cutoff_module_label"
 
 let rec iface_entries_of_struct (path : string) (sb : structure_body)
@@ -2255,9 +2300,9 @@ and iface_entries_of_sfb (path : string) (id, sfb) : (string * Digest.t) list =
   | SFBrules r ->
     [(opaque_entry_key path id, Csha256.digest (Marshal.to_string r []))]
   | SFBmodule mb ->
-    (qualify id, module_label_digest) :: entries_of_signature path id (mod_type mb)
+    (module_label_key path id, module_label_digest) :: entries_of_signature path id (mod_type mb)
   | SFBmodtype mtb ->
-    (qualify id, module_label_digest) ::
+    (module_label_key path id, module_label_digest) ::
     List.map (fun (k, d) -> (mark_basename modtype_entry_marker k, d))
       (entries_of_signature path id (mod_type mtb))
 
