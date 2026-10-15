@@ -480,20 +480,6 @@ let print_ml_modules () =
   let l = get_loaded_modules () in
   str"Loaded ML Modules: " ++ pr_vertical_list str (List.map PluginSpec.pp l)
 
-(* The actual on-disk .cmxs/.cmo files backing every currently loaded ML
-   plugin (same resolution PluginSpec.load used to Dynlink them in the
-   first place). Exposed for topbin/zygote.ml's dependency-staleness
-   guard: a warm fork server's in-memory plugin code is exactly whatever
-   was Dynlink-loaded during warm-up, with no later re-check against
-   disk -- these paths are what that guard must also fingerprint,
-   alongside the .vo-backed libraries Library.loaded_libraries already
-   covers, so a plugin rebuilt while the daemon sits warm is caught the
-   same way a rebuilt theory is. *)
-let loaded_plugin_files () =
-  List.concat_map
-    (fun spec -> Fl_internals.fl_find_plugins (PluginSpec.to_package spec))
-    (get_loaded_modules ())
-
 let print_gc () =
   let stat = Gc.stat () in
   let msg =

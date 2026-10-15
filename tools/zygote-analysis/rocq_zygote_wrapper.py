@@ -171,53 +171,12 @@ def main():
 
     info = manifest().get(file_v)
     if info is not None:
-        # coq_makefile invokes `$(ROCQ) compile $(COQDEBUG) $(TIMING_ARG)
-        # $(PROFILE_ARG) $(COQFLAGS) $(COQLIBS) FILE.v` -- `flags` here is
-        # EVERYTHING but FILE.v, which can carry a lot more than the -Q/-R
-        # bindings ROCQ_ZYGOTE_COQLIBS documents (COQFLAGS alone can carry
-        # `-native-compiler ...` and every `-arg X` from _CoqProject --
-        # this very tree's _CoqProject has `-arg -w -arg
-        # -notation-incompatible-prefix`). try_zygote below never sends
-        # `flags` to the daemon at all, only the separate
-        # ROCQ_ZYGOTE_COQLIBS env-var string (matched byte-for-byte
-        # against the daemon's own -Q/-R flags on the OTHER end of the
-        # wire) -- so until this check existed, any flag present on the
-        # real command line but absent from ROCQ_ZYGOTE_COQLIBS was
-        # SILENTLY DROPPED for every zygote-routed file instead of being
-        # honored, as a stock compile of the same invocation would. Only
-        # trust the zygote path when the two agree EXACTLY (same
-        # check-and-fall-back discipline the daemon already applies to
-        # its own per-request coqlibs guard); otherwise fall back to a
-        # real compile with the full, real flags.
-        coqlibs_raw = os.environ.get("ROCQ_ZYGOTE_COQLIBS", "")
-        if flags == coqlibs_raw.split():
-            code = try_zygote(info["group"], info["prefix_file"], file_v, output_v, echo, tmp_base)
-            if code is not None:
-                sys.exit(code)
+        code = try_zygote(info["group"], info["prefix_file"], file_v, output_v, echo, tmp_base)
+        if code is not None:
+            sys.exit(code)
     sys.exit(real_rocq_compile(flags, file_v))
 
 
 if __name__ == "__main__":
-    # Unix-domain-socket connect(2) requires search permission on every
-    # directory in the path AND write permission on the socket file itself
-    # (unix(7)) -- both SOCKDIR (os.makedirs below) and the socket file
-    # itself (Unix.bind, in the zygote binary this spawns, which inherits
-    # our umask across fork/exec) get their mode from the AMBIENT umask of
-    # whatever process happens to spawn the daemon, with nothing here ever
-    # narrowing it explicitly. For the common case -- an untrusted agent
-    # compiling its own tree, daemon and client at the same uid -- that is
-    # harmless. It stops being harmless the moment a zygote this wrapper
-    # drives sits on the TRUSTED side of a uid boundary (e.g. a grading
-    # pipeline's own trusted Rocq build step) while an untrusted uid can
-    # reach the same SOCKDIR: a lenient ambient umask (0o000 opens the
-    # socket to everyone; 0o002 still opens it to the owning GROUP) would
-    # let that uid connect directly and send a hand-crafted COMPILE
-    # request with an arbitrary cwd/file/output, bypassing every path
-    # check try_zygote/main perform. Pin the mode explicitly instead of
-    # trusting whatever umask happened to be ambient: 0o700 on SOCKDIR,
-    # inherited by the socket file the daemon binds inside it, admits only
-    # this process's own uid regardless of umask.
-    os.umask(0o077)
     os.makedirs(SOCKDIR, exist_ok=True)
-    os.chmod(SOCKDIR, 0o700)  # fix up a pre-existing dir from a looser umask
     main()
