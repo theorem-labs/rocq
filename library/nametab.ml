@@ -887,8 +887,23 @@ let capture_stop (r : cache_entry list ref) =
   capture := None;
   List.rev !r
 
+(* Always-on, negligible-overhead cache-hit statistics (three integer
+   increments per push/apply, no string formatting unless the process
+   actually exits normally) -- used by #871's measurement protocol to
+   confirm, per compiled file, how much of a file's own Nametab cost was
+   actually skipped, rather than inferring it from wall-clock noise. *)
+let stat_individual_pushes = ref 0
+let stat_cached_libs = ref 0
+let stat_cached_entries = ref 0
+
+let () =
+  at_exit (fun () ->
+      Printf.eprintf "NAMETAB_CACHE_STATS cached_libs=%d cached_entries=%d individual_pushes=%d\n%!"
+        !stat_cached_libs !stat_cached_entries !stat_individual_pushes)
+
 let push_abbreviation ?user_warns visibility sp kn =
   if not !loading_from_cache then begin
+    incr stat_individual_pushes;
     (match !capture with
      | Some r -> r := (visibility, sp, Abbrev kn, user_warns) :: !r
      | None -> ());
@@ -903,6 +918,7 @@ let remove_abbreviation sp kn =
 
 let push ?user_warns vis sp kn =
   if not !loading_from_cache then begin
+    incr stat_individual_pushes;
     (match !capture with
      | Some r -> r := (vis, sp, TrueGlobal kn, user_warns) :: !r
      | None -> ());
@@ -920,6 +936,8 @@ let push ?user_warns vis sp kn =
    nametab-cache] can tell two libraries' entries apart. Passes the stored
    [user_warns] back through as [?wdata], same as a real [push] would. *)
 let apply_cache ?(lib = "?") entries =
+  incr stat_cached_libs;
+  stat_cached_entries := !stat_cached_entries + List.length entries;
   dbg_cache Pp.(fun () ->
       str "apply_cache lib=" ++ str lib ++ str " count=" ++ int (List.length entries));
   List.iter (fun (vis, sp, xref, user_warns) ->
