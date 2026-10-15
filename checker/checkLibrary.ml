@@ -63,7 +63,7 @@ type library_t = {
      checker never evaluates the 3rd/4th/5th components for acceptance (D2:
      Safe_typing.import_strict never reads them); they are carried only so
      this record's shape matches the bytes it reads. *)
-  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Digest.t array) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table) array;
   library_digest : Safe_typing.vodigest;
 }
 
@@ -286,7 +286,7 @@ type library_info
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Digest.t array) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table) array;
   md_ocaml : string;
   md_info : library_info;
   md_safe_deps : DirPath.Set.t;

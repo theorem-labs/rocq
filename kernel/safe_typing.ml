@@ -154,21 +154,30 @@ let iface_subset_ok ~recorded ~live =
     empty), so neither is ever optional -- unlike [iface_table option],
     which is genuinely absent for a library whose top level isn't a flat
     constant/inductive run. *)
-(** binary-equivalence-taiga#841 Review841 G1: [decl_objects] is the set of
-    per-declaration vernac-object digests that need SUBSET treatment but
-    have no independent kernel-level coverage the way CONSTANT/INDUCTIVE
-    themselves do via [iface_table] -- IMPLICITS and ARGUMENTS-SCOPE
-    settings (see [Declaremods]'s [G1Partition] for the exact partition
-    and the soundness argument for excluding CONSTANT/INDUCTIVE entirely).
-    No per-entry name is carried: membership in the unordered digest SET
-    is enough, since an entry that changed or was removed simply won't be
-    found among the live digests, and an entry that's merely ADDED is
-    exactly what must be ignored. *)
-let decl_objects_subset_ok ~recorded ~live =
-  Array.for_all (fun d -> Array.mem d live) recorded
+(** binary-equivalence-taiga#841 Review841 G1/round-3: [vernac_iface] is a
+    KEYED per-declaration vernac-object digest table (same shape as
+    [iface_table] above, checked the same way by [iface_subset_ok]) for
+    declarations whose non-presentational interface has no independent
+    kernel-level coverage via [iface_table] itself -- today, a CONSTANT's
+    [cst_locl]/[cst_warn] plus its EFFECTIVE, resolved implicits/argument-
+    scopes (see [Declaremods.G1Partition.vernac_iface_entries], which
+    computes this at [end_library] time from the library's own completed
+    environment, not from raw leaf libobjects). Round 3 found the
+    PREDECESSOR of this field (an unkeyed [Digest.t array], SET-membership
+    checked) unsound twice over: Review841's "l1"/"d1" (a `Local
+    Definition`/`#[deprecated]` change on one declaration could regress a
+    flat, unrelated digest elsewhere in the same SET) and "i1"/"i3" (an
+    added/reordered `Arguments` override for an EXISTING name was wrongly
+    tolerated as an ignorable "addition," since nothing about the entry
+    SET changes when the EFFECTIVE value for that name does). Keying by
+    name and checking per-key, exactly like [iface_table], closes both:
+    an edit to declaration X's own entry can only ever affect X's own
+    check, and an override/reorder changes X's digest in place rather
+    than hiding behind set membership. *)
+let iface_subset_ok_vernac = iface_subset_ok
 
 type library_info =
-  DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * Digest.t array
+  DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * iface_table
 
 (** binary-equivalence-taiga#841 Review841 G7. Once G1 lets an ADDED
     declaration skip invalidating existing dependents, a dependency that
@@ -227,21 +236,23 @@ let added_label_collision ~required_iface ~actual_iface ~used_names =
     the dependent recorded still has an identical digest in the live
     table, (b) the live library's exact-equality objects digest is EXACTLY
     what the dependent recorded (Hints/Instances/Notations/Ltac2/Canonical
-    Structures/Coercions/univ-constraint-source objects -- any change
-    anywhere in that remainder forces a rebuild, deliberately
+    Structures/Coercions/univ-constraint-source objects, plus IMPLICITS/
+    ARGUMENTS-SCOPE's raw leaf bytes/CONSTANT's own libobject -- any
+    change anywhere in that remainder forces a rebuild, deliberately
     conservative), (c) the live library's [(comp_univs, comp_sorts)]
-    digest is EXACTLY what the dependent recorded (G2), (d) every
-    decl-objects digest (IMPLICITS/ARGUMENTS-SCOPE, G1) the dependent
-    recorded is still present among the live ones (subset, extras
-    ignored, same shape as (a)), AND (e) no name this dependency's live
-    [iface_table] adds collides with a name in [used_names] (G7).
-    [coqchk] must NEVER call this: see [check_required_strict] below,
-    which is the original digest-only check with nothing else reachable
-    from it. *)
+    digest is EXACTLY what the dependent recorded (G2), (d) every KEYED
+    [vernac_iface] entry (CONSTANT's `cst_locl`/`cst_warn` plus its
+    EFFECTIVE implicits/argument-scopes, G1/round-3) the dependent
+    recorded is still present with an EQUAL digest in the live table
+    (subset by name, extras ignored, same shape as (a)), AND (e) no name
+    this dependency's live [iface_table] adds collides with a name in
+    [used_names] (G7). [coqchk] must NEVER call this: see
+    [check_required_strict] below, which is the original digest-only
+    check with nothing else reachable from it. *)
 let dep_ok ~actual ~required ~actual_iface ~required_iface
     ~actual_objects_digest ~required_objects_digest
     ~actual_univs_digest ~required_univs_digest
-    ~actual_decl_objects ~required_decl_objects
+    ~actual_vernac_iface ~required_vernac_iface
     ~used_names =
   digest_match ~actual ~required ||
   ((match required_iface, actual_iface with
@@ -249,7 +260,7 @@ let dep_ok ~actual ~required ~actual_iface ~required_iface
     | _ -> false) &&
    Digest.equal required_objects_digest actual_objects_digest &&
    Digest.equal required_univs_digest actual_univs_digest &&
-   decl_objects_subset_ok ~recorded:required_decl_objects ~live:actual_decl_objects &&
+   iface_subset_ok_vernac ~recorded:required_vernac_iface ~live:actual_vernac_iface &&
    not (added_label_collision ~required_iface ~actual_iface ~used_names))
 
 (** Functor and funsig parameters, most recent first *)
@@ -340,10 +351,11 @@ type compiled_library = {
       binary-equivalence-taiga#841 Review841 G2: see [library_info]'s doc
       comment for the blind spot this closes. *)
   comp_univs_digest : Digest.t;
-  (** G1: per-leaf digests of IMPLICITS/ARGUMENTS-SCOPE objects, subset-
-      checked (see [decl_objects_subset_ok]). Handed in through [export]'s
-      [~decl_objects] parameter, same provenance as [comp_objects_digest]. *)
-  comp_decl_objects : Digest.t array;
+  (** G1/round-3: KEYED per-declaration vernac-interface digests (see
+      [iface_subset_ok_vernac]'s doc comment). Handed in through
+      [export]'s [~vernac_iface] parameter, same provenance as
+      [comp_objects_digest]. *)
+  comp_vernac_iface : iface_table;
 }
 
 type reimport = compiled_library * Vmlibrary.on_disk * vodigest
@@ -354,7 +366,7 @@ type required_lib = {
   req_iface : iface_table option;
   req_objects_digest : Digest.t;
   req_univs_digest : Digest.t;
-  req_decl_objects : Digest.t array;
+  req_vernac_iface : iface_table;
 }
 
 (** Part of the safe_env at a section opening time to be backtracked *)
@@ -803,27 +815,27 @@ let check_required current_libs needed =
      [used_names_of_needed]'s doc comment above. *)
   let used_names = used_names_of_needed needed in
   let check current (id, required, required_iface, required_objects_digest,
-                      required_univs_digest, required_decl_objects) =
+                      required_univs_digest, required_vernac_iface) =
     match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
            req_objects_digest = actual_objects_digest;
            req_univs_digest = actual_univs_digest;
-           req_decl_objects = actual_decl_objects } ->
+           req_vernac_iface = actual_vernac_iface } ->
     (* Fast path: the dependency is byte-identical to what this library was
        compiled against. Fallback (see [dep_ok]): the dependency changed,
        but everything this dependent could have observed through it --
        its recorded [iface_table] subset, its exact-equality objects
-       digest, its [(comp_univs, comp_sorts)] digest, its decl-objects
-       subset, and the absence of a G7 name collision -- still matches
-       the dependency's current state, so the dependent's own precompiled
-       terms remain well-typed in the new environment. NEVER used by
-       coqchk: see [check_required_strict]. *)
+       digest, its [(comp_univs, comp_sorts)] digest, its keyed
+       vernac_iface subset, and the absence of a G7 name collision --
+       still matches the dependency's current state, so the dependent's
+       own precompiled terms remain well-typed in the new environment.
+       NEVER used by coqchk: see [check_required_strict]. *)
     if not (dep_ok ~actual ~required ~actual_iface ~required_iface
               ~actual_objects_digest ~required_objects_digest
               ~actual_univs_digest ~required_univs_digest
-              ~actual_decl_objects ~required_decl_objects
+              ~actual_vernac_iface ~required_vernac_iface
               ~used_names) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
@@ -833,7 +845,7 @@ let check_required current_libs needed =
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
                             req_univs_digest = actual_univs_digest;
-                            req_decl_objects = actual_decl_objects } current
+                            req_vernac_iface = actual_vernac_iface } current
     else
       (* nothing to do *)
       current
@@ -849,14 +861,14 @@ let check_required current_libs needed =
     binary-equivalence-taiga#841 "D2". *)
 let check_required_strict current_libs needed =
   let check current (id, required, _required_iface, _required_objects_digest,
-                      _required_univs_digest, _required_decl_objects) =
+                      _required_univs_digest, _required_vernac_iface) =
     match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
            req_objects_digest = actual_objects_digest;
            req_univs_digest = actual_univs_digest;
-           req_decl_objects = actual_decl_objects } ->
+           req_vernac_iface = actual_vernac_iface } ->
     if not (digest_match ~actual ~required) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
@@ -865,11 +877,12 @@ let check_required_strict current_libs needed =
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
                             req_univs_digest = actual_univs_digest;
-                            req_decl_objects = actual_decl_objects } current
+                            req_vernac_iface = actual_vernac_iface } current
     else
       current
   in
   Array.fold_left check current_libs needed
+
 
 (** When loading a library, the current flags should match
     those needed for the library *)
@@ -1754,7 +1767,7 @@ let replace_module_of_library lib mb = { lib with comp_mod = mb }
 let iface_of_library lib = lib.comp_iface
 let objects_digest_of_library lib = lib.comp_objects_digest
 let univs_digest_of_library lib = lib.comp_univs_digest
-let decl_objects_of_library lib = lib.comp_decl_objects
+let vernac_iface_of_library lib = lib.comp_vernac_iface
 
 let univs_of_library lib = lib.comp_sorts, lib.comp_univs
 
@@ -1861,7 +1874,7 @@ let iface_table_of_struct (sb : structure_body) : iface_table option =
         sb))
   with Exit -> None
 
-let export ~output_native_objects ~objects_digest ~decl_objects senv dir =
+let export ~output_native_objects ~objects_digest ~vernac_iface senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
   let str = NoFunctor (List.rev senv.revstruct) in
@@ -1909,9 +1922,9 @@ let export ~output_native_objects ~objects_digest ~decl_objects senv dir =
      block for the full-closure field without touching [compute_modes] at
      all (binary-equivalence-taiga#841 "D1"). *)
   let filter_dep (dp, { req_root; req_digest; req_iface; req_objects_digest;
-                         req_univs_digest; req_decl_objects }) =
+                         req_univs_digest; req_vernac_iface }) =
     if req_root then Some (dp, req_digest, req_iface, req_objects_digest,
-                            req_univs_digest, req_decl_objects)
+                            req_univs_digest, req_vernac_iface)
     else None
   in
   let comp_deps = List.map_filter filter_dep (DirPath.Map.bindings senv.required) in
@@ -1933,7 +1946,7 @@ let export ~output_native_objects ~objects_digest ~decl_objects senv dir =
     comp_iface;
     comp_objects_digest = objects_digest;
     comp_univs_digest;
-    comp_decl_objects = decl_objects;
+    comp_vernac_iface = vernac_iface;
   } in
   let vmlib = Vmlibrary.export @@ Environ.vm_library senv.env in
   mp, lib, vmlib, (ast, symbols)
@@ -1974,7 +1987,7 @@ let import_gen ~check_required lib vmtab vodigest senv =
         { req_root = true; req_digest = vodigest; req_iface = lib.comp_iface;
           req_objects_digest = lib.comp_objects_digest;
           req_univs_digest = lib.comp_univs_digest;
-          req_decl_objects = lib.comp_decl_objects } required
+          req_vernac_iface = lib.comp_vernac_iface } required
   in
   mp,
   { senv with

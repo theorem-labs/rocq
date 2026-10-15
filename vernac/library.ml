@@ -88,7 +88,7 @@ type library_disk = {
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Digest.t array) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table) array;
   md_ocaml : string;
   md_info : Library_info.t;
   (* Subset of the direct dependencies (i.e. of the dirpaths appearing in
@@ -103,7 +103,7 @@ type summary_disk = {
 type library_t = {
   library_name : compilation_unit_name;
   library_data : library_disk;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Digest.t array) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table) array;
   library_safe_deps : DirPath.Set.t;
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
@@ -346,9 +346,9 @@ and intern_library_deps ~intern (needed, contents) dir m =
       (needed, contents) m.library_deps in
   ((false, dir) :: needed, contents)
 
-and intern_mandatory_library ~intern ~used_names caller (needed, contents) (dir,d,d_iface,d_objects_digest,d_univs_digest,d_decl_objects) =
+and intern_mandatory_library ~intern ~used_names caller (needed, contents) (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface) =
   let needed, contents = intern_library ~intern (needed, contents) dir in
-  let digest, live_iface, live_objects_digest, live_univs_digest, live_decl_objects =
+  let digest, live_iface, live_objects_digest, live_univs_digest, live_vernac_iface =
     digest_of_dep ~contents dir
   in
   (* Shared predicate (binary-equivalence-taiga#841 D3): identical
@@ -360,7 +360,7 @@ and intern_mandatory_library ~intern ~used_names caller (needed, contents) (dir,
       ~actual_iface:live_iface ~required_iface:d_iface
       ~actual_objects_digest:live_objects_digest ~required_objects_digest:d_objects_digest
       ~actual_univs_digest:live_univs_digest ~required_univs_digest:d_univs_digest
-      ~actual_decl_objects:live_decl_objects ~required_decl_objects:d_decl_objects
+      ~actual_vernac_iface:live_vernac_iface ~required_vernac_iface:d_vernac_iface
       ~used_names
   in
   let () = if not ok then
@@ -378,13 +378,13 @@ and digest_of_dep ~contents dir =
   | Some m -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled,
               Safe_typing.objects_digest_of_library m.library_data.md_compiled,
               Safe_typing.univs_digest_of_library m.library_data.md_compiled,
-              Safe_typing.decl_objects_of_library m.library_data.md_compiled
+              Safe_typing.vernac_iface_of_library m.library_data.md_compiled
   | None ->
     match find_library dir with
     | Some (_, m) -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled,
                      Safe_typing.objects_digest_of_library m.library_data.md_compiled,
                      Safe_typing.univs_digest_of_library m.library_data.md_compiled,
-                     Safe_typing.decl_objects_of_library m.library_data.md_compiled
+                     Safe_typing.vernac_iface_of_library m.library_data.md_compiled
     | None ->
       (* binary-equivalence-taiga#841 Review841 G8: a recorded dependency
          absent from the live closure is a legitimate "refuse this reuse"
@@ -654,7 +654,7 @@ let current_deps () =
             Safe_typing.iface_of_library m.library_data.md_compiled,
             Safe_typing.objects_digest_of_library m.library_data.md_compiled,
             Safe_typing.univs_digest_of_library m.library_data.md_compiled,
-            Safe_typing.decl_objects_of_library m.library_data.md_compiled)
+            Safe_typing.vernac_iface_of_library m.library_data.md_compiled)
     else None
   in
   List.map_filter map !libraries_loaded_list

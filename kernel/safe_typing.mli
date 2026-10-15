@@ -27,7 +27,10 @@ val digest_match : actual:vodigest -> required:vodigest -> bool
     own -- see #841's "Red team, round 1" section. *)
 type iface_table = (Id.t * Digest.t) array
 val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
-val decl_objects_subset_ok : recorded:Digest.t array -> live:Digest.t array -> bool
+(** Review841 round 3: [vernac_iface] entries use [iface_subset_ok] above
+    directly (same keyed shape as the kernel [iface_table]), not a
+    separate unkeyed-SET function -- the old [decl_objects_subset_ok] is
+    removed; it was the unsound predecessor this round replaced. *)
 (** binary-equivalence-taiga#841 Review841 G7: see the doc comment on
     [Safe_typing.used_names_of_needed]/[added_label_collision] in the
     implementation for the full argument. [needed] here is structurally
@@ -39,14 +42,14 @@ val decl_objects_subset_ok : recorded:Digest.t array -> live:Digest.t array -> b
     dependency array and pass the SAME value into every [dep_ok] call for
     that array, not recompute it per entry. *)
 val used_names_of_needed :
-  (DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * Digest.t array) array ->
+  (DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * iface_table) array ->
   Id.Set.t
 val dep_ok :
   actual:vodigest -> required:vodigest ->
   actual_iface:iface_table option -> required_iface:iface_table option ->
   actual_objects_digest:Digest.t -> required_objects_digest:Digest.t ->
   actual_univs_digest:Digest.t -> required_univs_digest:Digest.t ->
-  actual_decl_objects:Digest.t array -> required_decl_objects:Digest.t array ->
+  actual_vernac_iface:iface_table -> required_vernac_iface:iface_table ->
   used_names:Id.Set.t -> bool
 
 (** {6 Safe environments } *)
@@ -278,8 +281,8 @@ val objects_digest_of_library : compiled_library -> Digest.t
 val univs_digest_of_library : compiled_library -> Digest.t
 (** Digest of this library's OWN [(comp_univs, comp_sorts)] pair
     (binary-equivalence-taiga#841 Review841 G2). *)
-val decl_objects_of_library : compiled_library -> Digest.t array
-(** G1: per-leaf IMPLICITS/ARGUMENTS-SCOPE digests, subset-checked. *)
+val vernac_iface_of_library : compiled_library -> iface_table
+(** G1/round-3: KEYED per-declaration vernac-interface digests. *)
 (** Used by the checker, which recompiles the VM bytecode of every constant
     instead of trusting the one serialized in the file. *)
 val univs_of_library : compiled_library -> Sorts.QContextSet.t * Univ.ContextSet.t
@@ -288,7 +291,7 @@ val check_flags_for_library : compiled_library -> safe_transformer0
 val start_library : DirPath.t -> ModPath.t safe_transformer
 
 val export :
-  output_native_objects:bool -> objects_digest:Digest.t -> decl_objects:Digest.t array ->
+  output_native_objects:bool -> objects_digest:Digest.t -> vernac_iface:iface_table ->
   safe_environment -> DirPath.t ->
     ModPath.t * compiled_library * Vmlibrary.compiled_library * Nativelib.native_library
 

@@ -1863,96 +1863,112 @@ let end_library_hook () =
 module G1Partition = struct
   type classification =
     | Excluded
-    | Subset of Digest.t
     | Exact
 
-  (* binary-equivalence-taiga#841 Review841 round 3 (Lean i1/i3): IMPLICITS
-     and ARGUMENTS-SCOPE are DELIBERATELY NOT subset-checked here, unlike
-     an earlier revision of this module. Digesting each raw leaf object
-     and checking SET membership (ignoring "additions") is unsound for
-     these two tags specifically: an `Arguments foo {x}` directive added
-     to an EXISTING declaration is not an independent new fact the way a
-     brand-new CONSTANT is -- it OVERRIDES `foo`'s effective implicit/
-     scope behavior for everyone who references `foo` afterward, and two
-     reordered Arguments leaves for the same name change which one is
-     EFFECTIVE (Rocq uses the latest) without changing the SET of digests
-     at all. Both were reproduced as real failures (Review841's "i1"/"i3"
-     fixtures: a reused dependent loads where a fresh compile fails).
-     Correct fix (not done here, time-boxed out of this round): a
-     per-GlobRef digest of the EFFECTIVE, resolved value
-     (`Impargs.implicits_of_global`/`Notation.find_arguments_scope`, the
-     same functions elaboration itself consults -- not the raw leaf
-     objects), keyed the same way CONSTANT/INDUCTIVE already are, checked
-     by [iface_subset_ok] rather than set membership. Blocked here on
-     reconstructing a declaration's [GlobRef.t] from inside the per-tag
-     classifier callback (which sees only the atomic object's own payload,
-     not the enclosing library's [ModPath.t]) within the time available --
-     flagged in #841 as the follow-up with this exact shape. Until then,
-     IMPLICITS/ARGUMENTS-SCOPE fall through to EXACT below: sound (exact
-     equality can never under-refuse), at the cost of forcing a rebuild
-     for any addition/reorder of either, not just a genuine behavioral
-     change. *)
+  (* "IMPLICITS"/"ARGUMENTS-SCOPE" are EXCLUDED here (dropped from the
+     exact digest), not subset-checked by their raw leaf bytes: an
+     `Arguments foo {x}` added to an EXISTING declaration, or two
+     reordered Arguments leaves for the same name, change which one is
+     EFFECTIVE without the leaf SET changing at all -- Review841 round 3's
+     "i1"/"i3" fixtures reproduced exactly this as a real unsoundness
+     (reused dependent loads where a fresh compile fails) against an
+     earlier revision's raw-leaf-digest SET. Their real coverage lives in
+     [vernac_iface_entries] below: a per-NAME digest of the EFFECTIVE,
+     RESOLVED value (`Impargs.implicits_of_global`/
+     `Notation.find_arguments_scope`, the same functions elaboration
+     itself consults, queried fresh at [end_library] time against the
+     library's OWN completed environment -- not the raw leaf objects),
+     checked like the kernel's [iface_table] (every name the dependent
+     used must still match; an added name is ignored; see [dep_ok] via
+     the new [req_vernac_iface] field). *)
   let classify (obj : Libobject.obj) : classification =
     match Libobject.object_name obj with
-    | "IMPLICITS" | "ARGUMENTS-SCOPE" ->
-      (* RESTORED (2026-10-15, same session, under time pressure): falling
-         these back to EXACT (as the comment above once said) regressed
-         G1's own core tests (g1_admitted_to_qed_reused,
-         unused_addition_still_reused) -- EVERY declaration generates an
-         IMPLICITS and an ARGUMENTS-SCOPE libobject
-         (Impargs.declare_constant_implicits/
-         Notation.declare_ref_arguments_scope, called from
-         Declare.register_constant unconditionally), so EXACT treatment
-         here makes G1 a no-op for essentially every target edit. Back to
-         the raw-leaf-digest SET subset check, which IS still the known
-         Review841 round 3 i1/i3 unsoundness (an added/reordered Arguments
-         override is wrongly treated as an ignorable "addition") -- OPEN,
-         not fixed, flagged in #841. SHA-256, not MD5: agent-controlled
-         bytes, see kernel/safe_typing.ml's [iface_digest_of_const]. *)
-      Subset (Csha256.digest (Marshal.to_string obj []))
+    | "IMPLICITS" | "ARGUMENTS-SCOPE" -> Excluded
     | _ ->
       (match Libobject.cutoff_classify obj with
        | Some Libobject.CutoffExcluded -> Excluded
-       | Some (Libobject.CutoffSubset d) -> Subset d
+       | Some (Libobject.CutoffKeyed _) -> Excluded
        | None -> Exact)
 
-  (* Single pass: filters the exact-equality remainder AND accumulates
-     subset digests as one side effect, so every atomic object is
-     classified exactly once (never the two-pass double-classify a
-     naive walk-then-filter split would invite). *)
-  let rec filter_atomic subset_digests (o : Libobject.t) : Libobject.t option =
+  let rec filter_atomic (o : Libobject.t) : Libobject.t option =
     match o with
     | Libobject.AtomicObject obj ->
-      (match classify obj with
-       | Exact -> Some o
-       | Excluded -> None
-       | Subset d -> subset_digests := d :: !subset_digests; None)
+      (match classify obj with Exact -> Some o | Excluded -> None)
     | Libobject.ModuleObject (id, (mbids, alg)) ->
-      Option.map (fun alg -> Libobject.ModuleObject (id, (mbids, alg))) (filter_algebraic subset_digests alg)
+      Option.map (fun alg -> Libobject.ModuleObject (id, (mbids, alg))) (filter_algebraic alg)
     | Libobject.ModuleTypeObject (id, (mbids, alg)) ->
-      Option.map (fun alg -> Libobject.ModuleTypeObject (id, (mbids, alg))) (filter_algebraic subset_digests alg)
+      Option.map (fun alg -> Libobject.ModuleTypeObject (id, (mbids, alg))) (filter_algebraic alg)
     | Libobject.IncludeObject alg ->
-      Option.map (fun alg -> Libobject.IncludeObject alg) (filter_algebraic subset_digests alg)
+      Option.map (fun alg -> Libobject.IncludeObject alg) (filter_algebraic alg)
     | Libobject.KeepObject (id, { Libobject.keep_objects }) ->
-      Some (Libobject.KeepObject (id, { Libobject.keep_objects = List.filter_map (filter_atomic subset_digests) keep_objects }))
+      Some (Libobject.KeepObject (id, { Libobject.keep_objects = List.filter_map filter_atomic keep_objects }))
     | Libobject.EscapeObject (id, { Libobject.escape_objects }) ->
-      Some (Libobject.EscapeObject (id, { Libobject.escape_objects = List.filter_map (filter_atomic subset_digests) escape_objects }))
+      Some (Libobject.EscapeObject (id, { Libobject.escape_objects = List.filter_map filter_atomic escape_objects }))
     | Libobject.ExportObject _ -> Some o
-  and filter_algebraic subset_digests = function
-    | Libobject.Objs l -> Some (Libobject.Objs (List.filter_map (filter_atomic subset_digests) l))
+  and filter_algebraic = function
+    | Libobject.Objs l -> Some (Libobject.Objs (List.filter_map filter_atomic l))
     | Libobject.Ref _ as r -> Some r
 
-  let filter_library_objects subset_digests ((substobjs, keepobjs, escapeobjs) : library_objects) : library_objects =
-    (List.filter_map (filter_atomic subset_digests) substobjs,
-     { Libobject.keep_objects = List.filter_map (filter_atomic subset_digests) keepobjs.Libobject.keep_objects },
-     { Libobject.escape_objects = List.filter_map (filter_atomic subset_digests) escapeobjs.Libobject.escape_objects })
+  let filter_library_objects ((substobjs, keepobjs, escapeobjs) : library_objects) : library_objects =
+    (List.filter_map filter_atomic substobjs,
+     { Libobject.keep_objects = List.filter_map filter_atomic keepobjs.Libobject.keep_objects },
+     { Libobject.escape_objects = List.filter_map filter_atomic escapeobjs.Libobject.escape_objects })
 
-  let partition (md_syntax_objects, md_objects : library_objects * library_objects) =
-    let subset_digests = ref [] in
-    let exact_syntax = filter_library_objects subset_digests md_syntax_objects in
-    let exact_objects = filter_library_objects subset_digests md_objects in
+  (** binary-equivalence-taiga#841 Review841 round 3: the KEYED
+      vernac-level interface table, checked by [Safe_typing.iface_subset_ok]
+      exactly like the kernel's own [iface_table]. [dir] is the library's
+      own [DirPath.t] (available here at [end_library], unlike inside the
+      per-tag classifier callback in [library/libobject.ml], which only
+      sees the atomic object's own payload) -- enough to reconstruct the
+      [Constant.t]/[GlobRef.t] a top-level CONSTANT declaration got
+      ([Constant.make2 (MPfile dir) id], the same construction
+      [Safe_typing.export] uses for its own top-level bindings), without
+      needing [Global]/[Nametab] lookups. Scope note: only CONSTANT
+      entries are covered (the common case Review841's "i1"/"i3" fixtures
+      exercise, a `Definition`/`Lemma`'s own `Arguments`/implicits) --
+      INDUCTIVE/PRIMPROJS stay wholesale EXCLUDED with no vernac_iface
+      coverage, so an `Arguments`/implicits override targeting an
+      inductive type or constructor is NOT yet covered by this layer;
+      flagged as a smaller follow-up (same shape, [MutInd.make2] plus one
+      [IndRef]/[ConstructRef] entry per name in [ind_names]). *)
+  let vernac_iface_entries dir (objs : Libobject.t list) : (Names.Id.t * Digest.t) array =
+    let env = Global.env () in
+    let acc = ref [] in
+    let handle_atomic obj =
+      match Libobject.cutoff_classify obj with
+      | Some (Libobject.CutoffKeyed (id, base)) ->
+        let gr = GlobRef.ConstRef (Constant.make2 (MPfile dir) id) in
+        let impls = Impargs.implicits_of_global gr in
+        let scopes = Notation.find_arguments_scope env gr in
+        let d = Csha256.digest (Marshal.to_string (base, impls, scopes) []) in
+        acc := (id, d) :: !acc
+      | Some Libobject.CutoffExcluded | None -> ()
+    in
+    let rec walk (o : Libobject.t) = match o with
+      | Libobject.AtomicObject obj -> handle_atomic obj
+      | Libobject.ModuleObject (_, (_, alg)) -> walk_alg alg
+      | Libobject.ModuleTypeObject (_, (_, alg)) -> walk_alg alg
+      | Libobject.IncludeObject alg -> walk_alg alg
+      | Libobject.KeepObject (_, { Libobject.keep_objects }) -> List.iter walk keep_objects
+      | Libobject.EscapeObject (_, { Libobject.escape_objects }) -> List.iter walk escape_objects
+      | Libobject.ExportObject _ -> ()
+    and walk_alg = function
+      | Libobject.Objs l -> List.iter walk l
+      | Libobject.Ref _ -> ()
+    in
+    List.iter walk objs;
+    Array.of_list !acc
+
+  let partition dir (md_syntax_objects, md_objects : library_objects * library_objects) =
+    let exact_syntax = filter_library_objects md_syntax_objects in
+    let exact_objects = filter_library_objects md_objects in
     let exact_digest = Csha256.digest (Marshal.to_string (exact_syntax, exact_objects) []) in
-    (exact_digest, Array.of_list !subset_digests)
+    let (substobjs, keepobjs, escapeobjs) = md_objects in
+    let vernac_iface =
+      vernac_iface_entries dir
+        (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
+    in
+    (exact_digest, vernac_iface)
 end
 
 
@@ -1975,10 +1991,10 @@ let end_library ~output_native_objects dir =
      edit to anything NOT excluded/subset-checked) until rebased. *)
   let md_objects = drop_anticipate lib_stack in
   let md_syntax_objects = drop_anticipate lib_stack_syntax in
-  let objects_digest, decl_objects =
-    G1Partition.partition (md_syntax_objects, md_objects)
+  let objects_digest, vernac_iface =
+    G1Partition.partition dir (md_syntax_objects, md_objects)
   in
-  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~decl_objects dir in
+  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~vernac_iface dir in
   assert (ModPath.equal mp (MPfile dir));
   cenv,md_objects,md_syntax_objects,vmlib,ast,info
 

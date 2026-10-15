@@ -111,7 +111,32 @@ fi
 echo "$p2_out" | grep -q '^b =' \
   || uc_fail "phase2: coqc C.v exited 0 but did not print b's value as expected -- harness is broken: $p2_out"
 
-( cd "$P2" && "$UC_ROCQCHK" -Q . "" -norec A -norec B ) >"$P2/rocqchk.log" 2>&1 \
-  || uc_fail "phase2: rocqchk -norec A B rejected the reused tree: $(cat "$P2/rocqchk.log")"
+# Round 4 fix (Main/Review841): rocqchk is ALWAYS strict (D2) -- A's raw
+# .vo bytes genuinely changed (Admitted->Qed is a different compiled
+# artifact), so coqchk's whole-digest-only check MUST refuse this tree
+# regardless of G1's relaxed loader accepting it; asserting ACCEPTANCE
+# here was the test bug, not a kernel defect. Soundness is instead
+# checked by comparing the REUSED C output against a FRESH (non-reused)
+# compile of B+C: if they agree, the relaxed accept was actually sound.
+chk_out=$(cd "$P2" && "$UC_ROCQCHK" -Q . "" -norec A -norec B 2>&1)
+chk_rc=$?
+if [ "$chk_rc" -eq 0 ]; then
+  echo "$chk_out" >&2
+  uc_fail "phase2: rocqchk -norec A B ACCEPTED a tree where A's raw digest changed (Admitted->Qed) -- D2's strict path is not being taken."
+fi
+echo "$chk_out" | grep -qi 'inconsisten' \
+  || uc_fail "phase2: rocqchk rejected the tree (exit $chk_rc) but not with an inconsistent-assumptions message -- got: $chk_out"
 
-uc_ok "phase2: f's Admitted->Qed edit (vm_compute'd in B) correctly reused B.vo once G1 lands, confirmed rocqchk-sound"
+P2F="$WORK/phase2-fresh"
+mkdir -p "$P2F"
+cp "$D/phase2_A_after.v" "$P2F/A.v"
+cp "$D"/B.v "$D"/C.v "$P2F"/
+build "$P2F" A.v >"$P2F/setup.log" 2>&1 || uc_fail "phase2 fresh-check SETUP: could not build A.v: $(cat "$P2F/setup.log")"
+build "$P2F" B.v >>"$P2F/setup.log" 2>&1 || uc_fail "phase2 fresh-check SETUP: could not build B.v FRESH against Qed-A: $(cat "$P2F/setup.log")"
+fresh_out=$(build "$P2F" C.v 2>&1)
+fresh_rc=$?
+[ "$fresh_rc" -eq 0 ] || uc_fail "phase2 fresh-check: a FRESH (non-reused) compile of B+C against the Qed-A failed -- $fresh_out"
+uc_assert_eq "$(echo "$p2_out" | grep '^b =')" "$(echo "$fresh_out" | grep '^b =')" \
+  "phase2: the REUSED C's output for b differs from a FRESH compile's -- the relaxed accept was actually unsound."
+
+uc_ok "phase2: f's Admitted->Qed edit (vm_compute'd in B) correctly reused B.vo (coqc), rocqchk correctly refused the same tree (D2, always strict), and the reused output matches a fresh compile (soundness confirmed directly, not just by rocqchk's unrelated digest check)"

@@ -215,8 +215,8 @@ let mind_of_delta_kn kn =
 (** Operations on libraries *)
 
 let start_library dir = globalize (Safe_typing.start_library dir)
-let export ~output_native_objects ~objects_digest ~decl_objects s =
-  Safe_typing.export ~output_native_objects ~objects_digest ~decl_objects (safe_env ()) s
+let export ~output_native_objects ~objects_digest ~vernac_iface s =
+  Safe_typing.export ~output_native_objects ~objects_digest ~vernac_iface (safe_env ()) s
 let import c t d = globalize (Safe_typing.import c t d)
 let import_strict c t d = globalize (Safe_typing.import_strict c t d)
 

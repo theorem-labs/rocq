@@ -2403,24 +2403,24 @@ module Internal = struct
 
 end
 
-(** binary-equivalence-taiga#841 Review841 G1: register CONSTANT's cutoff
-    classifier. REVERTED to EXCLUDED (2026-10-15, same session, under time
-    pressure): the SUBSET-digest-of-(cst_locl,cst_warn) version introduced
-    a real regression -- g1_admitted_to_qed_reused started failing again,
-    meaning something in (cst_locl, cst_warn) (or how it marshals) is NOT
-    actually stable across an unrelated Admitted->Qed edit to a DIFFERENT
-    declaration in the same library, re-opening exactly the Blocker this
-    whole lever exists to close. Root cause NOT diagnosed before the time
-    budget ran out -- flagged in #841 as open, with Review841 round 3's
-    l1/d1 fixtures (`Local Definition`, `#[deprecated]`) as the targeted
-    repro to debug from, and this exact revert point to resume from. Back
-    to wholesale exclusion (cst_locl/cst_warn precision gap OPEN, not
-    closed) rather than ship a change that breaks the lever's core case. *)
+(** binary-equivalence-taiga#841 Review841 G1/round-3 (l1/d1): register
+    CONSTANT's cutoff classifier as KEYED (not a flat unkeyed digest, which
+    regressed g1_admitted_to_qed_reused the first time this was tried --
+    an unrelated declaration's unchanged digest sitting in the SAME flat
+    SET as everything else is fragile; a per-NAME check, the same shape
+    as the kernel's own [iface_table], is not). The base digest here
+    covers only [cst_locl]/[cst_warn] ([cst_kind]/[cst_loc] stay excluded,
+    presentation-only); [Declaremods.G1Partition] combines it with this
+    name's EFFECTIVE resolved implicits/argument-scopes before it becomes
+    one keyed entry -- see [Libobject.cutoff_classification]'s doc
+    comment. *)
 let () =
   Libobject.register_cutoff_classifier "CONSTANT" (fun obj ->
       match Libobject.Dyn.Easy.prj obj objConstant with
-      | Some _ -> Some Libobject.CutoffExcluded
+      | Some (id, cobj) ->
+        Some (Libobject.CutoffKeyed (id, Internal.Constant.locl_warn_digest cobj))
       | None -> None)
+
 
 
 

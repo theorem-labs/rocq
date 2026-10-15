@@ -53,7 +53,12 @@ let coq_version = "9.2+rc2"
 (* G1 (binary-equivalence-taiga#841 Review841): library_info/compiled_library
    widen a third time, adding the decl_objects (IMPLICITS/ARGUMENTS-SCOPE)
    digest array. *)
-let vo_magic = 91201
+(* binary-equivalence-taiga#841 Review841 round 3: that 6th field's TYPE
+   changes from a flat Digest.t array to a KEYED (Id.t * Digest.t) array
+   (the round-3 fix for the i1/i3/l1/d1 findings) -- same shape, different
+   semantics, so a stale reader would silently misinterpret a name/digest
+   pair as a bare digest string. Forces another hard version bump. *)
+let vo_magic = 91202
 let is_a_released_version = false
 
 (** Default OCaml binaries *)
