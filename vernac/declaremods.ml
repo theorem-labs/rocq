@@ -1955,27 +1955,61 @@ module G1Partition = struct
       worked for CONSTANT) -- covers CONSTANT, INDUCTIVE types and
       constructors (ind1/ind2/g7ctor); PRIMPROJS stays wholesale excluded
       (see [DeclareInd]'s own classifier doc comment). *)
-  let vernac_iface_entries (objs : Libobject.t list) : (Names.Id.t * Digest.t) array * (Names.Id.t * Digest.t) array =
+  (** binary-equivalence-taiga#841 round 8 (kd1/kd2/dv2/dl2): keyed by a
+      QUALIFIED string derived from [gr] itself (the [GlobRef.t] a
+      [CutoffKeyed] entry already carries, now correctly scoped --
+      [Declare]/[DeclareInd]'s own classifiers capture the declaration's
+      true [ModPath.t] at declaration time rather than reconstructing it
+      from [Global.current_modpath ()] at [end_library] time; see
+      [Declare.constant_obj]'s [cst_modpath] doc comment), NEVER the bare
+      [Id.t] round 5 first shipped with: two declarations sharing a
+      short name (a top-level [foo] and a nested [M.foo]) landing under
+      the SAME bare key let [Safe_typing.iface_subset_ok]'s
+      single-match lookup silently pair a changed SECOND entry against
+      an unrelated, unchanged FIRST one with the same key -- confirmed
+      exploitable into a kernel-accepted proof of [False] (round 8
+      review, "kd1"/"kd2"). [qualified_key_of_globref] has no notion of
+      "basename" to extract back out afterward: unlike the kernel's own
+      [iface_table]/[closure_table] split, [vernac_iface] is NEVER
+      flattened into a cross-library shadow table at all (see [dep_ok]'s
+      doc comment, condition (d)) -- it only ever compares one library's
+      own recorded entries against its own live ones, so there is no
+      second, coarser representation it needs to feed. *)
+  let qualified_key_of_globref (gr : GlobRef.t) : string =
+    match gr with
+    | GlobRef.ConstRef c -> Constant.to_string c
+    | GlobRef.IndRef (mind, i) -> MutInd.to_string mind ^ "#" ^ string_of_int i
+    | GlobRef.ConstructRef ((mind, i), j) ->
+      MutInd.to_string mind ^ "#" ^ string_of_int i ^ "#" ^ string_of_int j
+    | GlobRef.VarRef id -> Id.to_string id
+
+  let vernac_iface_entries (objs : Libobject.t list) : (string * Digest.t) array * (string * Digest.t) array =
     let env = Global.env () in
     let acc = ref [] in
     let abbrev_acc = ref [] in
     let handle_atomic obj =
       match Libobject.cutoff_classify obj with
       | Some (Libobject.CutoffKeyed entries) ->
-        List.iter (fun (gr, id, base) ->
+        List.iter (fun (gr, _id, base) ->
             let impls = Impargs.implicits_of_global gr in
             let scopes = Notation.find_arguments_scope env gr in
             let d = Csha256.digest (Marshal.to_string (base, impls, scopes) []) in
-            acc := (id, d) :: !acc)
+            acc := (qualified_key_of_globref gr, d) :: !acc)
           entries
       | Some Libobject.CutoffExcluded | None ->
         (* binary-equivalence-taiga#841 round 7 (ab1): an abbreviation is
            not a [CutoffKeyed] target (it has no [GlobRef.t] -- see
            [Abbreviation.cutoff_abbrev_entry]'s doc comment), so it is
            checked separately here rather than through
-           [Libobject.cutoff_classify]. *)
+           [Libobject.cutoff_classify]. Still keyed by bare [Id.t]
+           (round 8 does not extend the qualified-path fix to
+           abbreviations): unlike CONSTANT/INDUCTIVE, nothing here yet
+           captures an abbreviation's own enclosing module path, so a
+           nested [Notation] colliding with another same-named one is a
+           known, narrower residual version of the SAME masking class --
+           no worse than before this round. *)
         (match Abbreviation.cutoff_abbrev_entry obj with
-         | Some (id, d) -> abbrev_acc := (id, d) :: !abbrev_acc
+         | Some (id, d) -> abbrev_acc := (Id.to_string id, d) :: !abbrev_acc
          | None -> ())
     in
     let rec walk (o : Libobject.t) = match o with

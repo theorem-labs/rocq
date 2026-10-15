@@ -108,23 +108,29 @@ let digest_match ~actual ~required =
   | Dvo_or_vi d1, Dvo_or_vi d2 -> String.equal d1 d2
 
 (** Per-declaration interface digest of one compiled library's exported
-    constants/inductives, keyed by bare [Id.t]: for every [SFBconst]/
-    [SFBmind] entry anywhere in the library -- at the top level or nested
-    inside any number of [Module]/[Module Type]s, recursively, see
-    [iface_entries_of_sfb]'s doc comment -- a digest of everything a
-    dependent could ever observe through it -- type, universe context,
-    typing flags, and the actual value when transparent -- deliberately
-    excluding an opaque proof's own term and whether the constant is
-    [Undef] ([Admitted], no body) or [OpaqueDef] (whatever handle [Qed]
-    assigned it): a dependent can never unfold either one, so neither is
-    part of the exported interface. A rewrite-rules block or an unapplied
-    functor's own body gets a single opaque, exact-match-only entry
-    instead (same doc comment). [None] is reserved for a library this
-    mechanism cannot represent AT ALL (one with non-empty
-    retroknowledge, [Register]/[Primitive] -- see [export]'s own doc
-    comment on [has_retroknowledge]): such a library falls back to the
-    whole-library digest only, i.e. stock behavior. *)
-type iface_table = (Id.t * Digest.t) array
+    constants/inductives, keyed by the FULL QUALIFIED dotted path (e.g.
+    [M.foo] for a constant nested one level deep, [foo] for a top-level
+    one -- binary-equivalence-taiga#841 round 8/kd1/kd2: NOT a bare
+    [Id.t], which let two differently-located declarations sharing a
+    short name collide under one key and mask each other in
+    [iface_subset_ok]; see [iface_entries_of_sfb]'s doc comment): for
+    every [SFBconst]/[SFBmind] entry anywhere in the library -- at the
+    top level or nested inside any number of [Module]s, recursively --
+    a digest of everything a dependent could ever observe through it --
+    type, universe context, typing flags, and the actual value when
+    transparent -- deliberately excluding an opaque proof's own term and
+    whether the constant is [Undef] ([Admitted], no body) or [OpaqueDef]
+    (whatever handle [Qed] assigned it): a dependent can never unfold
+    either one, so neither is part of the exported interface. A
+    rewrite-rules block or an unapplied functor's own body gets a single
+    opaque, exact-match-only entry instead (same doc comment). A [Module
+    Type]'s own fields are excluded entirely (round 8/mt1; see that same
+    doc comment). [None] is reserved for a library this mechanism cannot
+    represent AT ALL (one with non-empty retroknowledge, [Register]/
+    [Primitive] -- see [export]'s own doc comment on
+    [has_retroknowledge]): such a library falls back to the whole-library
+    digest only, i.e. stock behavior. *)
+type iface_table = (string * Digest.t) array
 
 (** [recorded] is what a dependent saw of a library at its own compile
     time; [live] is that library's current table. Every entry the
@@ -132,13 +138,31 @@ type iface_table = (Id.t * Digest.t) array
     entries in [live] (declarations added since) are ignored -- that is
     exactly what lets an unused addition skip invalidating existing
     dependents. A name the dependent recorded that has since vanished (a
-    statement removed or renamed) fails the check. *)
+    statement removed or renamed) fails the check. Sound against two
+    DIFFERENT declarations sharing a bare basename (round 8/kd1/kd2)
+    ONLY because every key here is a full qualified path, unique within
+    one library -- [Array.find_opt] finding "the first" match is the
+    bug this fixes, not something this function's own logic works around. *)
 let iface_subset_ok ~recorded ~live =
-  let find id = Array.find_opt (fun (id', _) -> Id.equal id id') live in
-  Array.for_all (fun (id, d) -> match find id with
+  let find key = Array.find_opt (fun (key', _) -> String.equal key key') live in
+  Array.for_all (fun (key, d) -> match find key with
       | Some (_, d') -> String.equal d d'
       | None -> false)
     recorded
+
+(** The basename (innermost segment) of a qualified path built by
+    [iface_entries_of_sfb] -- used ONLY by [flatten_closure] to populate
+    its OWN, deliberately coarser, bare-name [closure_table] (see that
+    function's doc comment for why cross-library G7 shadow detection
+    needs the bare name, never a qualified one). Defined here (ahead of
+    [iface_entries_of_sfb] itself, far below) purely because
+    [flatten_closure] needs it first. *)
+let basename_of_qualified_path (path : string) : Id.t =
+  let base = match String.rindex_opt path '.' with
+    | Some i -> String.sub path (i + 1) (String.length path - i - 1)
+    | None -> path
+  in
+  Id.of_string_soft base
 
 (** A dependency record as it is written to and read from disk: the
     library's name, its whole-library digest, its per-declaration interface
@@ -265,7 +289,7 @@ type library_info =
 let flatten_closure (entries : (DirPath.t * vodigest * iface_table option) list) : closure_table * Digest.t =
   let triples =
     List.concat_map (fun (dp, _, iface) -> match iface with
-        | Some tbl -> Array.to_list (Array.map (fun (id, d) -> (dp, id, d)) tbl)
+        | Some tbl -> Array.to_list (Array.map (fun (path, d) -> (dp, basename_of_qualified_path path, d)) tbl)
         | None -> [])
       entries
   in
@@ -2012,71 +2036,103 @@ let iface_digest_of_mind (mib : mutual_inductive_body) : Digest.t =
     as the type's).
 
     binary-equivalence-taiga#841 round 7 (g7mod): a label can also be a
-    nested [Module]/[Module Type], not just a leaf [SFBconst]/[SFBmind],
-    and the PREDECESSOR of this function bailed the WHOLE library to
-    [None] the moment it saw one, hiding every name nested inside it from
-    the G7 shadow check (see [flatten_closure]'s doc comment for why that
-    is unsound: a name hidden this way can be shadowed by a LATER
-    addition elsewhere with nothing to catch it). Fix: recurse into a
-    nested module/module type's own expanded signature ([mod_type],
-    which already reflects any ascribed restriction -- [Module M : T.
-    ... End M.] only exposes [T]'s labels, never the unrestricted body),
-    collecting its [SFBconst]/[SFBmind] entries the SAME way as a
-    top-level one, keyed by their bare (innermost) [Id.t] -- NOT a
-    qualified [M.x] path. This matches the shadow check's existing
-    approximation ([closure_table] is already keyed by bare [Id.t], never
-    a qualified name, since a NEW declaration can only create ambiguity
-    for an UNQUALIFIED/partially-qualified reference, never for one
-    that's fully qualified -- two different libraries can never share a
-    [DirPath.t], so a fully-qualified name is always unambiguous): a
-    nested [M.x] is folded into the very same per-id table a top-level
-    [x] would be, so either can be recognized as colliding with the
-    other, regardless of nesting depth or which side moved.
+    nested [Module], not just a leaf [SFBconst]/[SFBmind], and the
+    PREDECESSOR of this function bailed the WHOLE library to [None] the
+    moment it saw one, hiding every name nested inside it from the G7
+    shadow check (see [flatten_closure]'s doc comment for why that is
+    unsound: a name hidden this way can be shadowed by a LATER addition
+    elsewhere with nothing to catch it). Fix: recurse into a nested
+    module's own expanded signature ([mod_type], which already reflects
+    any ascribed restriction -- [Module M : T. ... End M.] only exposes
+    [T]'s labels, never the unrestricted body), collecting its
+    [SFBconst]/[SFBmind] entries the SAME way as a top-level one.
+
+    binary-equivalence-taiga#841 round 8 (kd1/kd2, Lean round 7 review):
+    entries are keyed by the FULL QUALIFIED dotted path (e.g. [M.foo]),
+    NOT the bare [Id.t] round 7 first shipped with. Round 7's bare-[Id.t]
+    keying put a top-level [foo] and a nested [M.foo] in the SAME
+    [iface_table] under the SAME key "foo" -- harmless for
+    [closure_subset_ok] (grouped into a LIST per id, every [(dp, digest)]
+    pair checked by existence, so duplicates are fine), but UNSOUND for
+    [iface_subset_ok]: its single [Array.find_opt] returns only the
+    FIRST "foo" it finds, so when the recorded table ALSO has two "foo"
+    entries that started with the SAME digest (the common case: nothing
+    forces a dependency's own declarations to differ from each other),
+    checking the SECOND recorded entry against [live] silently compares
+    it against the FIRST live entry instead -- if that first one is
+    unchanged, the check wrongly PASSES even though the actual second
+    declaration changed. Confirmed exploitable: a dependent that proved
+    something from the nested declaration's value kept its [.vo] reused
+    after ONLY the top-level, same-named declaration's value changed (or
+    the reverse), producing a kernel-accepted proof of [False]. Keying by
+    the full path makes every entry UNIQUE per library, so
+    [Array.find_opt] always finds the one real match -- [iface_subset_ok]
+    needs no other change. [flatten_closure] derives the bare basename
+    back out of each qualified path only for ITS OWN per-[DirPath.t]
+    shadow table, which is a DIFFERENT (deliberately coarser,
+    cross-library) checked property.
+
+    binary-equivalence-taiga#841 round 8 (mt1): a [Module Type]'s own
+    fields (e.g. [Parameter x] in [Module Type T. Parameter x : nat. End
+    T.]) are EXCLUDED entirely, not merely path-qualified -- a module
+    type is never directly dereferenceable the way a module is (there is
+    no [Import T.] for a module type), so its own abstract field names
+    are never actual G7 shadow candidates; folding them in only produced
+    spurious cross-library "collisions" (an unrelated library's harmless
+    [Module Type] sharing a bare field name with a real declaration
+    elsewhere wrongly refused every reuse of the library that defines
+    it). If a concrete module is later ascribed to or built from the
+    module type, THAT module's own expanded signature is enumerated
+    normally wherever it is itself declared -- nothing is lost by
+    skipping the abstract spec itself.
 
     Two things remain genuinely unenumerable, and are NOT folded into the
-    per-id table as an ordinary name: a rewrite-rules block ([SFBrules],
+    per-path table as an ordinary name: a rewrite-rules block ([SFBrules],
     which retargets an EXISTING [Constant.t] rather than naming a new
-    one, so there is no candidate [Id.t] to key an entry on) and an
-    unapplied functor's own body (a nested module/module type whose own
-    [mod_type] is [MoreFunctor _] -- its parameter-dependent content has
-    no fixed digest, and in any case nothing inside it is nameable from
-    outside without first supplying an argument: there is no [F.x]
-    syntax for an unapplied functor [F]; apply it to get a concrete
-    module, whose OWN expanded signature is enumerated normally wherever
-    THAT module is itself declared). Rather than bailing the WHOLE
-    library to [None] for either case the way the old code did, fold the
-    unenumerable chunk's own content digest into the SAME table under a
-    synthetic [Id.t] scoped to its exact nested path ([opaque_entry_id]):
-    [iface_subset_ok]/[closure_subset_ok] already refuse whenever a
-    recorded [(id, digest)] pair's digest changes or the id vanishes,
-    which is exactly "this unenumerable chunk's content changed or
-    disappeared" -- the SAME exact-match fallback the old whole-library
-    [None] gave this chunk, now scoped to just the chunk instead of
-    poisoning every ordinary, unrelated declaration sharing its
-    library. *)
+    one, so there is no candidate name to key an entry on) and an
+    unapplied functor's own body (a nested module whose own [mod_type]
+    is [MoreFunctor _] -- its parameter-dependent content has no fixed
+    digest, and in any case nothing inside it is nameable from outside
+    without first supplying an argument: there is no [F.x] syntax for an
+    unapplied functor [F]; apply it to get a concrete module, whose OWN
+    expanded signature is enumerated normally wherever THAT module is
+    itself declared). Rather than bailing the WHOLE library to [None] for
+    either case the way the pre-round-7 code did, fold the unenumerable
+    chunk's own content digest into the SAME table under a synthetic key
+    scoped to its exact qualified path ([opaque_entry_key]):
+    [iface_subset_ok] already refuses whenever a recorded entry's digest
+    changes or its key vanishes, which is exactly "this unenumerable
+    chunk's content changed or disappeared" -- the SAME exact-match
+    fallback the pre-round-7 whole-library [None] gave this chunk, now
+    scoped to just the chunk instead of poisoning every ordinary,
+    unrelated declaration sharing its library. *)
 let opaque_entry_prefix = "0usage_cutoff_opaque_"
-(** Reserved prefix for a synthetic [Id.t] standing in for a chunk of a
-    library's structure that [iface_entries_of_sfb] cannot give a normal
-    per-name digest ([SFBrules], or a nested module/module type whose own
+(** Reserved prefix for a synthetic FINAL SEGMENT standing in for a chunk
+    of a library's structure that [iface_entries_of_sfb] cannot give a
+    normal per-name digest ([SFBrules], or a nested module whose own
     [mod_type] is a [MoreFunctor]). Starts with a digit: Rocq's lexer
     classifies a digit as [IdentPart], never [Letter]/[IdentSep], so NO
     identifier the parser ever accepts can start with one
-    ([Unicode.is_valid_ident_initial]) -- no real declaration, in this
-    library or any other, can ever collide with a key built from this
-    prefix. [Id.of_string_soft] still accepts it: the "invalid initial
-    character" refutation it trips is the non-fatal class ([strict=false]
-    only suppresses that one; a genuinely malformed UTF-8 byte sequence
-    would still raise). *)
-let opaque_entry_id (path : string) : Id.t =
-  Id.of_string_soft (opaque_entry_prefix ^ path)
+    ([Unicode.is_valid_ident_initial]) -- no real declaration's own
+    basename, in this library or any other, can ever collide with a key
+    built from this prefix. [opaque_entry_key] marks ONLY the final
+    (innermost) segment, keeping any containing path intact, so
+    [basename_of_qualified_path] -- which looks at the segment AFTER the
+    last dot -- still returns a synthetic, uncollidable basename for a
+    NESTED unenumerable chunk too (e.g. an [SFBrules] block inside
+    [Module M]), not the real [M] it sits inside. *)
+let opaque_entry_key (path : string) (id : Id.t) : string =
+  let marked = opaque_entry_prefix ^ Id.to_string id in
+  if path = "" then marked else path ^ "." ^ marked
 
 let rec iface_entries_of_struct (path : string) (sb : structure_body)
-    : (Id.t * Digest.t) list =
+    : (string * Digest.t) list =
   List.concat_map (fun (id, sfb) -> iface_entries_of_sfb path (id, sfb)) sb
 
-and iface_entries_of_sfb (path : string) (id, sfb) : (Id.t * Digest.t) list =
+and iface_entries_of_sfb (path : string) (id, sfb) : (string * Digest.t) list =
+  let qualify id = if path = "" then Id.to_string id else path ^ "." ^ Id.to_string id in
   match sfb with
-  | SFBconst cb -> [(id, iface_digest_of_const cb)]
+  | SFBconst cb -> [(qualify id, iface_digest_of_const cb)]
   | SFBmind mib ->
     let d = iface_digest_of_mind mib in
     let names = ref [] in
@@ -2084,23 +2140,17 @@ and iface_entries_of_sfb (path : string) (id, sfb) : (Id.t * Digest.t) list =
         names := mip.mind_typename :: !names;
         Array.iter (fun c -> names := c :: !names) mip.mind_consnames)
       mib.mind_packets;
-    List.map (fun n -> (n, d)) !names
+    List.map (fun n -> (qualify n, d)) !names
   | SFBrules r ->
-    [(opaque_entry_id (path ^ Id.to_string id), Csha256.digest (Marshal.to_string r []))]
+    [(opaque_entry_key path id, Csha256.digest (Marshal.to_string r []))]
   | SFBmodule mb ->
-    let sub_path = path ^ Id.to_string id in
+    let sub_path = qualify id in
     let msig = mod_type mb in
     (match msig with
-     | NoFunctor sb' -> iface_entries_of_struct (sub_path ^ ".") sb'
+     | NoFunctor sb' -> iface_entries_of_struct sub_path sb'
      | MoreFunctor _ ->
-       [(opaque_entry_id sub_path, Csha256.digest (Marshal.to_string msig []))])
-  | SFBmodtype mtb ->
-    let sub_path = path ^ Id.to_string id in
-    let msig = mod_type mtb in
-    (match msig with
-     | NoFunctor sb' -> iface_entries_of_struct (sub_path ^ ".") sb'
-     | MoreFunctor _ ->
-       [(opaque_entry_id sub_path, Csha256.digest (Marshal.to_string msig []))])
+       [(opaque_entry_key path id, Csha256.digest (Marshal.to_string msig []))])
+  | SFBmodtype _ -> []
 
 let iface_table_of_struct (sb : structure_body) : iface_table option =
   Some (Array.of_list (iface_entries_of_struct "" sb))

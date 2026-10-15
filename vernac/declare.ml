@@ -406,6 +406,18 @@ type constant_obj = {
   cst_locl : Locality.import_status;
   cst_warn : Globnames.extended_global_reference UserWarn.with_qf option;
   cst_loc : Loc.t option;
+  (** binary-equivalence-taiga#841 round 8 (dv2/dl2): the [ModPath.t] this
+      constant was declared under, captured HERE at declaration time
+      (from [cst] itself, below in [register_constant], which is already
+      correctly scoped) rather than reconstructed later from
+      [Global.current_modpath ()] -- by the time the G1 cutoff classifier
+      runs (at [end_library], after every nested [Module] has closed),
+      [Global.current_modpath ()] always returns the FILE's own top-level
+      path, silently mis-locating any constant declared inside a nested
+      [Module]. Substituted properly on [Include]/module substitution
+      (see [subst_constant_obj]), unlike every other field here, which
+      needs no remapping. *)
+  cst_modpath : ModPath.t;
 }
 
 let load_constant i ((sp,kn), obj) =
@@ -448,6 +460,14 @@ let discharge_constant obj = Some obj
 
 let classify_constant cst = Libobject.Substitute
 
+(** binary-equivalence-taiga#841 round 8: [cst_modpath] is the one field
+    of [constant_obj] that genuinely needs remapping under module
+    substitution (e.g. [Include F.] re-homing one of [F]'s own
+    declarations into the including module) -- every other field is
+    presentation/locality data with no module-path content. *)
+let subst_constant_obj (subst, obj) =
+  { obj with cst_modpath = Mod_subst.subst_mp subst obj.cst_modpath }
+
 let (objConstant : (Id.t * constant_obj) Libobject.Dyn.tag) =
   let open Libobject in
   declare_named_object_full { (default_object "CONSTANT") with
@@ -455,7 +475,7 @@ let (objConstant : (Id.t * constant_obj) Libobject.Dyn.tag) =
     load_function = load_constant;
     open_function = filtered_open open_constant;
     classify_function = classify_constant;
-    subst_function = ident_subst_function;
+    subst_function = subst_constant_obj;
     discharge_function = discharge_constant }
 
 let inConstant v = Libobject.Dyn.Easy.inj v objConstant
@@ -465,7 +485,8 @@ let register_constant loc cst kind ?user_warns local =
   (* Register the declaration *)
   let id = Constant.label cst in
   let loc = fallback_loc id loc in
-  let o = inConstant (id, { cst_kind = kind; cst_locl = local; cst_warn = user_warns; cst_loc = loc; }) in
+  let o = inConstant (id, { cst_kind = kind; cst_locl = local; cst_warn = user_warns; cst_loc = loc;
+                             cst_modpath = Constant.modpath cst; }) in
   let () = Lib.add_leaf o in
   (* Register associated data *)
   Impargs.declare_constant_implicits cst;
@@ -2413,12 +2434,22 @@ end
     presentation-only); [Declaremods.G1Partition] combines it with this
     name's EFFECTIVE resolved implicits/argument-scopes before it becomes
     one keyed entry -- see [Libobject.cutoff_classification]'s doc
-    comment. *)
+    comment.
+
+    binary-equivalence-taiga#841 round 8 (dv2/dl2): [cobj.cst_modpath],
+    captured by [register_constant] at declaration time, NOT
+    [Global.current_modpath ()] -- by the time this classifier runs (at
+    [end_library], long after every nested [Module] has closed),
+    [Global.current_modpath ()] always returns the FILE's own top-level
+    path, so a constant declared inside a nested [Module] got a WRONG
+    [gr] here, silently querying (and digesting) some OTHER target's
+    implicits/argument-scopes -- or nothing at all -- instead of its
+    own. *)
 let () =
   Libobject.register_cutoff_classifier "CONSTANT" (fun obj ->
       match Libobject.Dyn.Easy.prj obj objConstant with
       | Some (id, cobj) ->
-        let gr = GlobRef.ConstRef (Constant.make2 (Global.current_modpath ()) id) in
+        let gr = GlobRef.ConstRef (Constant.make2 cobj.cst_modpath id) in
         Some (Libobject.CutoffKeyed [(gr, id, Internal.Constant.locl_warn_digest cobj)])
       | None -> None)
 

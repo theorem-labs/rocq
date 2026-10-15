@@ -25,7 +25,11 @@ val digest_match : actual:vodigest -> required:vodigest -> bool
     direct roots only, same as stock, so this slice is independently
     buildable but does NOT yet close the Blocker (two-levels-down) on its
     own -- see #841's "Red team, round 1" section. *)
-type iface_table = (Id.t * Digest.t) array
+type iface_table = (string * Digest.t) array
+(** binary-equivalence-taiga#841 round 8 (kd1/kd2): keyed by a full
+    qualified path/identity string, NOT a bare [Id.t] -- see
+    kernel/safe_typing.ml's doc comment on this type and on
+    [iface_entries_of_sfb]. *)
 val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
 (** Review841 round 3: [vernac_iface] entries use [iface_subset_ok] above
     directly (same keyed shape as the kernel [iface_table]), not a

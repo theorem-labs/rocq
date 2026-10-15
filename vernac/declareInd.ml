@@ -22,8 +22,14 @@ let declare_inductive_argument_scopes kn mie =
     done) mie.mind_entry_inds
 
 type inductive_obj = {
-  ind_names : (lident * lident list) list
+  ind_names : (lident * lident list) list;
   (* For each block, name of the type + name of constructors *)
+  ind_modpath : ModPath.t;
+  (** binary-equivalence-taiga#841 round 8 (dv2/dl2, kd-adjacent): see
+      [Declare.constant_obj]'s [cst_modpath] doc comment -- same fix,
+      same reason: [Global.current_modpath ()] is wrong by the time the
+      INDUCTIVE cutoff classifier runs, for an inductive block declared
+      inside a nested [Module]. *)
 }
 
 let inductive_names sp kn obj =
@@ -63,6 +69,9 @@ let cache_inductive o =
 let discharge_inductive names =
   Some names
 
+let subst_inductive_obj (subst, obj) =
+  { obj with ind_modpath = Mod_subst.subst_mp subst obj.ind_modpath }
+
 let objInductive : (Id.t * inductive_obj) Libobject.Dyn.tag =
   let open Libobject in
   declare_named_object_full {(default_object "INDUCTIVE") with
@@ -70,7 +79,7 @@ let objInductive : (Id.t * inductive_obj) Libobject.Dyn.tag =
     load_function = load_inductive;
     open_function = filtered_open open_inductive;
     classify_function = (fun a -> Substitute);
-    subst_function = ident_subst_function;
+    subst_function = subst_inductive_obj;
     discharge_function = discharge_inductive;
   }
 
@@ -126,8 +135,8 @@ let declare_primitive_projection p c = Lib.add_leaf (inPrim (p,c))
 let () =
   Libobject.register_cutoff_classifier "INDUCTIVE" (fun obj ->
       match Libobject.Dyn.Easy.prj obj objInductive with
-      | Some (id, { ind_names }) ->
-        let mind = MutInd.make2 (Global.current_modpath ()) id in
+      | Some (id, { ind_names; ind_modpath }) ->
+        let mind = MutInd.make2 ind_modpath id in
         let entries =
           List.concat (List.mapi (fun block_i ({CAst.v=typename; _}, consnames) ->
               (GlobRef.IndRef (mind, block_i), typename, Digest.string "ind") ::
@@ -182,7 +191,7 @@ let declare_mind ?typing_flags ~indlocs mie =
       check_exists typ;
       List.iter (fun {CAst.v} -> check_exists v) cons) names;
   let mind, why_not_prim_record = Global.add_mind ?typing_flags id mie in
-  let () = Lib.add_leaf (inInductive (id, { ind_names = names })) in
+  let () = Lib.add_leaf (inInductive (id, { ind_names = names; ind_modpath = MutInd.modpath mind })) in
   let () = UState.add_template_default_univs (Global.env ()) mind in
   if is_unsafe_typing_flags() then feedback_axiom ();
   Impargs.declare_mib_implicits mind;
