@@ -1,1 +1,2 @@
-Require Export X.
+Definition dummy := 0.
+Require X.

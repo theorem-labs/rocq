@@ -1,2 +1,2 @@
 Require Import B.
-Check b.
+Eval compute in b.
