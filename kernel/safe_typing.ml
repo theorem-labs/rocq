@@ -2074,17 +2074,41 @@ let iface_digest_of_mind (mib : mutual_inductive_body) : Digest.t =
 
     binary-equivalence-taiga#841 round 8 (mt1): a [Module Type]'s own
     fields (e.g. [Parameter x] in [Module Type T. Parameter x : nat. End
-    T.]) are EXCLUDED entirely, not merely path-qualified -- a module
-    type is never directly dereferenceable the way a module is (there is
-    no [Import T.] for a module type), so its own abstract field names
-    are never actual G7 shadow candidates; folding them in only produced
-    spurious cross-library "collisions" (an unrelated library's harmless
-    [Module Type] sharing a bare field name with a real declaration
-    elsewhere wrongly refused every reuse of the library that defines
-    it). If a concrete module is later ascribed to or built from the
-    module type, THAT module's own expanded signature is enumerated
-    normally wherever it is itself declared -- nothing is lost by
-    skipping the abstract spec itself.
+    T.]) are never real G7 shadow candidates -- a module type is never
+    directly dereferenceable the way a module is (there is no [Import T.]
+    for a module type) -- so folding their bare basenames into the SAME
+    basename space as ordinary declarations produced spurious
+    cross-library "collisions" (an unrelated library's harmless [Module
+    Type] sharing a bare field name with a real declaration elsewhere
+    wrongly refused every reuse of the library that defines it, the mt1
+    shape).
+
+    Round 8 shipped this by excluding [SFBmodtype] from [comp_iface]
+    ENTIRELY ([SFBmodtype _ -> []]). That over-corrected: Review841 round
+    8 (Lean round 8 review, issuecomment-6192580006) found it also
+    removes a Module Type's fields from [comp_iface] itself, the table
+    [iface_subset_ok] checks a library's OWN content against -- so a
+    changed Module Type signature (a [Parameter]'s type, an [Axiom]'s
+    statement) became invisible to the per-declaration subset check too,
+    and a stale dependent that sealed a module against the old
+    signature, declared a module of it, included it, or took it as a
+    functor parameter was wrongly REUSED even though a fresh compile
+    fails (mtc1/mtc3/mtc4/mtc5/mtc6/mtn1).
+
+    Fix (round 9): recurse into [SFBmodtype] exactly like [SFBmodule]
+    (same [mod_type]/[NoFunctor]/[MoreFunctor] cases, via the shared
+    [entries_of_signature] below), so a Module Type's fields DO enter
+    [comp_iface] -- closing mtc1-6/mtn1 -- and then mark every entry
+    produced while recursing through a Module Type's structure with the
+    reserved [modtype_entry_marker] prefix on its OWN basename (via
+    [mark_basename]). A marked basename can never equal any real
+    identifier's basename (same digit-leading trick as
+    [opaque_entry_prefix]; see that constant's doc comment below), so
+    [flatten_closure]'s shadow table -- which only ever compares entries
+    by basename -- can never confuse a Module Type's abstract field with
+    a same-named real declaration anywhere, preserving mt1/fuB/fuD/fu3's
+    fix exactly. [comp_iface]/[iface_subset_ok] compare by the FULL
+    qualified path, unaffected by the marker's presence or position.
 
     Two things remain genuinely unenumerable, and are NOT folded into the
     per-path table as an ordinary name: a rewrite-rules block ([SFBrules],
@@ -2125,9 +2149,32 @@ let opaque_entry_key (path : string) (id : Id.t) : string =
   let marked = opaque_entry_prefix ^ Id.to_string id in
   if path = "" then marked else path ^ "." ^ marked
 
+let modtype_entry_marker = "0usage_cutoff_modtype_"
+(** Reserved prefix, same uncollidable-with-any-real-identifier property
+    as [opaque_entry_prefix] above (digit-leading -- see that constant's
+    doc comment), applied by [mark_basename] to the BASENAME ONLY of
+    every entry produced while recursing into an [SFBmodtype]'s own
+    structure. Never applied to a qualified path's non-final segments, so
+    [comp_iface]/[iface_subset_ok] (which compare the FULL path) see an
+    ordinary-looking, still-unique-per-library key; [flatten_closure]'s
+    shadow table (which strips to the basename via
+    [basename_of_qualified_path]) sees an uncollidable one. *)
+let mark_basename (marker : string) (path : string) : string =
+  match String.rindex_opt path '.' with
+  | Some i -> String.sub path 0 (i + 1) ^ marker ^ String.sub path (i + 1) (String.length path - i - 1)
+  | None -> marker ^ path
+
 let rec iface_entries_of_struct (path : string) (sb : structure_body)
     : (string * Digest.t) list =
   List.concat_map (fun (id, sfb) -> iface_entries_of_sfb path (id, sfb)) sb
+
+and entries_of_signature (path : string) (id : Id.t) (msig : module_signature)
+    : (string * Digest.t) list =
+  let sub_path = if path = "" then Id.to_string id else path ^ "." ^ Id.to_string id in
+  match msig with
+  | NoFunctor sb' -> iface_entries_of_struct sub_path sb'
+  | MoreFunctor _ ->
+    [(opaque_entry_key path id, Csha256.digest (Marshal.to_string msig []))]
 
 and iface_entries_of_sfb (path : string) (id, sfb) : (string * Digest.t) list =
   let qualify id = if path = "" then Id.to_string id else path ^ "." ^ Id.to_string id in
@@ -2143,14 +2190,10 @@ and iface_entries_of_sfb (path : string) (id, sfb) : (string * Digest.t) list =
     List.map (fun n -> (qualify n, d)) !names
   | SFBrules r ->
     [(opaque_entry_key path id, Csha256.digest (Marshal.to_string r []))]
-  | SFBmodule mb ->
-    let sub_path = qualify id in
-    let msig = mod_type mb in
-    (match msig with
-     | NoFunctor sb' -> iface_entries_of_struct sub_path sb'
-     | MoreFunctor _ ->
-       [(opaque_entry_key path id, Csha256.digest (Marshal.to_string msig []))])
-  | SFBmodtype _ -> []
+  | SFBmodule mb -> entries_of_signature path id (mod_type mb)
+  | SFBmodtype mtb ->
+    List.map (fun (k, d) -> (mark_basename modtype_entry_marker k, d))
+      (entries_of_signature path id (mod_type mtb))
 
 let iface_table_of_struct (sb : structure_body) : iface_table option =
   Some (Array.of_list (iface_entries_of_struct "" sb))
