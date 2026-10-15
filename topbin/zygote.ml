@@ -267,6 +267,38 @@ let reopen_std fd path =
    documented in 20d). The chdir runs in the forked child only, so it
    never perturbs the parent zygote's own cwd for later forks. *)
 let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn =
+  (* System.dirmap (lib/system.ml) caches each queried directory's listing
+     the FIRST time `exists_in_dir_respecting_case` scans it, and reuses
+     that listing for the rest of the process's life whenever
+     System.trust_file_cache is true -- exactly the setting zygote_run's
+     init_extra sets (copying coqc.ml's own batch-mode default) before the
+     warm-up compile runs. For a stock compile this is correct: each file
+     gets a brand-new process, so the cache can only ever have been
+     populated no earlier than that file's own compile started, by which
+     point make has already finished every prerequisite. For THIS daemon,
+     the cache is populated ONCE (typically during warm-up, before any
+     real target file has been compiled) and then inherited unchanged by
+     every later fork's copy-on-write memory -- a sibling file's `.vo`,
+     written to disk by an EARLIER fork from this same daemon after the
+     cache was taken, is invisible to a LATER fork's lookups in that same
+     directory, because `trust_file_cache=true` skips the one fallback
+     path (`not fresh && rescan`) that would otherwise re-read the real
+     directory on a cache miss. Confirmed live: a `Require` of a sibling
+     in the same zygote group and the same source directory, compiled by
+     an earlier fork from this daemon, failed with "Unable to locate
+     library" under a real -j16 build, while the exact same file-pair
+     rebuilt serially (dependency already on disk when this daemon's
+     cache for that directory was first populated) succeeded immediately
+     -- the file was real and complete on disk either way, only its
+     discovery failed. Dropping back to false here, once per request in
+     THIS freshly-forked child only (the parent's own trust_file_cache
+     setting, and any sibling fork's, is untouched), makes every
+     directory-cache miss fall through to a real re-scan, matching what a
+     brand-new stock process would actually see -- the fix's effect is
+     confined to whether a Require is DISCOVERED at all; it never changes
+     what gets loaded once discovery succeeds, so it cannot affect any
+     already-passing file's .vo bytes. *)
+  System.trust_file_cache := false;
   (* Always move onto a fresh descriptor before we repoint fd 0/1/2 for the
      compile's own stdout/stderr -- stdin/stdout/stderr are already open in
      this process, so dup never returns one of them. set_close_on_exec is
