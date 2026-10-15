@@ -2388,7 +2388,8 @@ module Internal = struct
         ignored), so CONSTANT keeps everything G1 needs AND the two fields
         that remain load-bearing for what a fresh compile would do. *)
     let locl_warn_digest obj =
-      Digest.string (Marshal.to_string (obj.cst_locl, obj.cst_warn) [])
+      (* SHA-256 (Lean attack-battery D3), not MD5: agent-controlled bytes. *)
+      Csha256.digest (Marshal.to_string (obj.cst_locl, obj.cst_warn) [])
   end
 
   let objVariable = objVariable

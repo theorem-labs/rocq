@@ -1829,36 +1829,32 @@ let end_library_hook () =
       `ind_names`'s declaration-site `Loc.t`s, read only by
       `Nametab.set_cci_src_loc` ("Declared in" messages) -- presentation
       only, never typechecking or `Print Assumptions`.
-    - SUBSET-CHECKED (`"CONSTANT"`, `"IMPLICITS"`, `"ARGUMENTS-SCOPE"`):
-      CONSTANT is NOT fully excluded like INDUCTIVE/PRIMPROJS, because two
-      of its four fields are NOT presentation-only:
-      `Declare`'s own registered classifier (`Declare.ml`'s top-level
-      `Libobject.register_cutoff_classifier "CONSTANT"`) digests `cst_locl`
-      (whether the name needs qualification when `Import`ed -- a FRESH
-      compile of a dependent could resolve an unqualified reference
-      differently if this changes) and `cst_warn` (a deprecation/warning
-      annotation on USES of this name -- a FRESH compile could fail under
-      `-w +deprecated...-warn-error`); `cst_kind`/`cst_loc` are still
-      excluded from that digest for the same presentation-only reason as
-      INDUCTIVE's fields. IMPLICITS/ARGUMENTS-SCOPE affect only FUTURE
-      elaboration of new source text referencing the declaration (never
-      an already-elaborated dependent's own term, which has no
-      implicit-argument placeholders left to resolve) but have no
-      independent kernel-level coverage, so a CHANGE (not just an
-      addition) must still be caught -- digested per-leaf (the whole
-      `Dyn.t`, opaque, via `Marshal`). All three digest kinds land in one
-      unordered SET, subset-checked (`Safe_typing.decl_objects_subset_ok`):
-      every digest the dependent recorded must still be found among the
-      library's current digests; new digests (additions, including an
-      entirely new CONSTANT/INDUCTIVE/IMPLICITS/ARGUMENTS-SCOPE
-      declaration) are ignored. No per-entry name is needed for this
-      check -- membership in a set is enough, and the only entries that
-      can disappear from the live set are ones that genuinely changed or
-      were removed, which must always refuse.
+    - SUBSET-CHECKED (`"CONSTANT"` only): NOT fully excluded like
+      INDUCTIVE/PRIMPROJS, because two of its four fields are NOT
+      presentation-only: `Declare`'s own registered classifier
+      (`Declare.ml`'s top-level `Libobject.register_cutoff_classifier
+      "CONSTANT"`) digests `cst_locl` (whether the name needs
+      qualification when `Import`ed -- a FRESH compile of a dependent
+      could resolve an unqualified reference differently if this changes)
+      and `cst_warn` (a deprecation/warning annotation on USES of this
+      name -- a FRESH compile could fail under `-w
+      +deprecated...-warn-error`); `cst_kind`/`cst_loc` are still excluded
+      from that digest for the same presentation-only reason as
+      INDUCTIVE's fields (Review841 round 3's "l1"/"d1" fixtures: exactly
+      this gap, reproduced and closed). Lands in a per-declaration digest
+      SET, subset-checked (`Safe_typing.decl_objects_subset_ok`): every
+      digest the dependent recorded must still be found among the
+      library's current digests; an added CONSTANT is ignored.
     - EXACT (everything else -- Hints, Instances, Notations, Canonical
       Structures, Coercions, the univ-constraint-source object, Ltac,
-      `ExportObject`, module/include wrappers): unchanged from the
-      existing design, exact equality over the ordered remainder.
+      IMPLICITS, ARGUMENTS-SCOPE, `ExportObject`, module/include
+      wrappers): unchanged from the existing design for most of these,
+      but IMPLICITS/ARGUMENTS-SCOPE moved HERE in round 3 (Review841's
+      "i1"/"i3" fixtures) after an earlier revision's raw-leaf-digest SET
+      treatment proved unsound -- see [classify]'s own doc comment for
+      why and for the correct (not-yet-built) per-GlobRef-effective-value
+      fix.
+
 
     G7 (name-shadowing refusal) is implemented in `Safe_typing.dep_ok`
     directly (`added_label_collision`/`used_names_of_needed`), reusing the
@@ -1870,15 +1866,37 @@ module G1Partition = struct
     | Subset of Digest.t
     | Exact
 
+  (* binary-equivalence-taiga#841 Review841 round 3 (Lean i1/i3): IMPLICITS
+     and ARGUMENTS-SCOPE are DELIBERATELY NOT subset-checked here, unlike
+     an earlier revision of this module. Digesting each raw leaf object
+     and checking SET membership (ignoring "additions") is unsound for
+     these two tags specifically: an `Arguments foo {x}` directive added
+     to an EXISTING declaration is not an independent new fact the way a
+     brand-new CONSTANT is -- it OVERRIDES `foo`'s effective implicit/
+     scope behavior for everyone who references `foo` afterward, and two
+     reordered Arguments leaves for the same name change which one is
+     EFFECTIVE (Rocq uses the latest) without changing the SET of digests
+     at all. Both were reproduced as real failures (Review841's "i1"/"i3"
+     fixtures: a reused dependent loads where a fresh compile fails).
+     Correct fix (not done here, time-boxed out of this round): a
+     per-GlobRef digest of the EFFECTIVE, resolved value
+     (`Impargs.implicits_of_global`/`Notation.find_arguments_scope`, the
+     same functions elaboration itself consults -- not the raw leaf
+     objects), keyed the same way CONSTANT/INDUCTIVE already are, checked
+     by [iface_subset_ok] rather than set membership. Blocked here on
+     reconstructing a declaration's [GlobRef.t] from inside the per-tag
+     classifier callback (which sees only the atomic object's own payload,
+     not the enclosing library's [ModPath.t]) within the time available --
+     flagged in #841 as the follow-up with this exact shape. Until then,
+     IMPLICITS/ARGUMENTS-SCOPE fall through to EXACT below: sound (exact
+     equality can never under-refuse), at the cost of forcing a rebuild
+     for any addition/reorder of either, not just a genuine behavioral
+     change. *)
   let classify (obj : Libobject.obj) : classification =
-    match Libobject.object_name obj with
-    | "IMPLICITS" | "ARGUMENTS-SCOPE" ->
-      Subset (Digest.string (Marshal.to_string obj []))
-    | _ ->
-      (match Libobject.cutoff_classify obj with
-       | Some Libobject.CutoffExcluded -> Excluded
-       | Some (Libobject.CutoffSubset d) -> Subset d
-       | None -> Exact)
+    match Libobject.cutoff_classify obj with
+    | Some Libobject.CutoffExcluded -> Excluded
+    | Some (Libobject.CutoffSubset d) -> Subset d
+    | None -> Exact
 
   (* Single pass: filters the exact-equality remainder AND accumulates
      subset digests as one side effect, so every atomic object is
@@ -1915,7 +1933,7 @@ module G1Partition = struct
     let subset_digests = ref [] in
     let exact_syntax = filter_library_objects subset_digests md_syntax_objects in
     let exact_objects = filter_library_objects subset_digests md_objects in
-    let exact_digest = Digest.string (Marshal.to_string (exact_syntax, exact_objects) []) in
+    let exact_digest = Csha256.digest (Marshal.to_string (exact_syntax, exact_objects) []) in
     (exact_digest, Array.of_list !subset_digests)
 end
 

@@ -1813,8 +1813,26 @@ let canon_const_body (cb : constant_body) : canon_const_body =
   | Primitive p -> CBPrimitive p
   | Symbol b -> CBSymbol b
 
+(** binary-equivalence-taiga#841 (Lean attack-battery D3): [Csha256], not
+    [Digest]/MD5, for every digest computed over bytes the AGENT fully
+    controls (a constant/inductive's own type/body/universes) -- MD5
+    collisions are a few seconds of attacker compute for a chosen-prefix
+    construction, and this digest is the one thing [dep_ok]'s relaxed
+    fallback trusts without re-verification (a REUSED dependent's own
+    term is never re-typechecked on load, unlike a fresh compile). Bound:
+    this remains dev-loop-only (never consulted by [check_required_strict]/
+    coqchk, and the grade always recompiles the agent's own `.v` from
+    scratch, never trusting a cached `.vo`), but Review841/Lean's round
+    found that bound alone was treated as a reason not to fix an
+    otherwise-practical attack, which is the wrong call once a free fix
+    exists -- [Csha256.t] is a plain [string] like [Digest.t], so every
+    comparison site ([Digest.equal]/[String.equal]/[Array.mem]) keeps
+    working unchanged; only the computation changes. The stock
+    whole-library [vodigest] (pre-fork Rocq's own file-identity digest,
+    [digest_match] above) is UNCHANGED, deliberately out of this fork's
+    scope -- see the module-level note on [Csha256] for why. *)
 let iface_digest_of_const (cb : constant_body) : Digest.t =
-  Digest.string (Marshal.to_string
+  Csha256.digest (Marshal.to_string
     (cb.const_hyps, cb.const_univ_hyps, canon_const_body cb, cb.const_type,
      cb.const_relevance, cb.const_universes, cb.const_inline_code,
      cb.const_typing_flags)
@@ -1824,7 +1842,7 @@ let iface_digest_of_const (cb : constant_body) : Digest.t =
    eliminators are always fully transparent), so their whole body is part
    of the interface as-is. *)
 let iface_digest_of_mind (mib : mutual_inductive_body) : Digest.t =
-  Digest.string (Marshal.to_string mib [])
+  Csha256.digest (Marshal.to_string mib [])
 
 let iface_digest_of_sfb = function
   | SFBconst cb -> Some (iface_digest_of_const cb)
@@ -1899,9 +1917,11 @@ let export ~output_native_objects ~objects_digest ~decl_objects senv dir =
   let comp_deps = List.map_filter filter_dep (DirPath.Map.bindings senv.required) in
   (* binary-equivalence-taiga#841 Review841 G2: digest of this library's OWN
      global universe constraints/sort qualities, computed here (not handed
-     in like [objects_digest]) since the kernel already has both values. *)
+     in like [objects_digest]) since the kernel already has both values.
+     SHA-256 (Lean attack-battery D3), not MD5: see [iface_digest_of_const]'s
+     doc comment. *)
   let comp_univs_digest =
-    Digest.string (Marshal.to_string (senv.univ, senv.qualities) [])
+    Csha256.digest (Marshal.to_string (senv.univ, senv.qualities) [])
   in
   let lib = {
     comp_name = dir;
