@@ -14,13 +14,11 @@
    Require statements cost ~8% of tree-wide coqc command time, dominated by
    Library.register_library's replay of a required library's objects into
    the live Nametab/kernel environment (confirmed by direct reading:
-   vernac/library.ml's libraries_table is a `Summary.ref`, but nothing in
-   a straight-line batch compile (`Ccompile.compile_file`) ever unfreezes
-   a summary, so across one process's lifetime it behaves exactly like a
-   plain process-global ref -- `intern_library` treats an already-loaded
-   dependency as terminal and skips re-registering it entirely, never even
-   calling Declaremods.Interp.register_library for it). A cached-nametab-
-   fragment prototype (Sections 17-19) was proven
+   vernac/library.ml's libraries_table is a plain, process-global `ref`,
+   not scoped to any STM document -- `intern_library` treats an
+   already-loaded dependency as terminal and skips re-registering it
+   entirely, never even calling Declaremods.Interp.register_library for
+   it). A cached-nametab-fragment prototype (Sections 17-19) was proven
    UNSAFE: the compile-time-interpretation and replay-time code paths
    compute different visibility levels for the same declarations.
 
@@ -54,16 +52,11 @@
    Wire protocol (one line in, one line out, tab-separated, over a Unix
    domain socket):
      client -> server: "COMPILE\t<cwd>\t<coqlibs>\t<file>\t<.vo output>\t<echo:0|1>\t<stdout path>\t<stderr path>\n"
-    server -> client: "MISMATCH\n"      -- either the client's <coqlibs> string didn't match this
-                                            daemon's own -Q/-R flags, or chdir to <cwd> failed, or
-                                            the file's own leading sentences differ from the
-                                            zygote's recorded prefix, or a library the warm-up
-                                            loaded has changed on disk since (the dependency-
-                                            staleness guard, capture_fingerprint/fingerprint_stale
-                                            below -- in the last case the daemon also exits after
-                                            answering, so the next ensure_zygote call respawns and
-                                            re-interprets the now-current prefix); caller must fall
-                                            back to an ordinary, non-zygote compile.
+     server -> client: "MISMATCH\n"      -- either the client's <coqlibs> string didn't match this
+                                             daemon's own -Q/-R flags, or chdir to <cwd> failed, or
+                                             the file's own leading sentences differ from the
+                                             zygote's recorded prefix; caller must fall back
+                                             to an ordinary, non-zygote compile.
                         "EXIT\t<code>\n" -- the file was compiled (or failed) under the
                                              zygote; stdout/stderr were written to the paths
                                              given in the request; caller exits with <code>.
@@ -310,47 +303,7 @@ let reap_finished_children () =
     done
   with Unix.Unix_error ((Unix.ECHILD | Unix.EINTR), _, _) -> ()
 
-(* Dependency-staleness guard: the warm-up compile (zygote_run, below)
-   loads every Require'd library ONCE into this process's library table,
-   and nothing in this design ever re-checks that in-memory state against
-   disk afterward. If a library the shared prefix touches is rebuilt while
-   this daemon sits warm (idle_timeout can hold it for minutes), every
-   later fork would silently compile against stale in-memory library
-   state -- the same bug class rocq-warm's own staleness tests exist to
-   catch (DESIGN.md "The .vo on disk was rebuilt under the session"), not
-   exercised anywhere in this prototype before this check. The guard is a
-   coarse (mtime, size) fingerprint of every loaded library's .vo, taken
-   once right after warm-up and re-verified before every accepted
-   connection; residual risk: a same-second edit that preserves the file's
-   size is not detected (Unix.stat's mtime has only second resolution,
-   matching rocq-warm's own design note that its daemon uses mtime_ns --
-   not available in OCaml's Unix.stat). On mismatch the daemon answers
-   this one request MISMATCH (the existing, already-handled fallback
-   path), then exits instead of forking -- the next client's ensure_zygote
-   finds no socket and spawns a fresh daemon, which re-interprets the
-   now-current prefix. *)
-type fingerprint = (string * float * int) list
-
-let capture_fingerprint () : fingerprint =
-  List.filter_map (fun dir ->
-    let path = Library.library_full_filename dir in
-    if path = "<unavailable filename>" then None
-    else
-      try
-        let st = Unix.stat path in
-        Some (path, st.Unix.st_mtime, st.Unix.st_size)
-      with Unix.Unix_error _ -> Some (path, nan, -1)
-        (* vanished out from under us -- definitely stale *))
-    (Library.loaded_libraries ())
-
-let fingerprint_stale fp =
-  List.exists (fun (path, mtime, size) ->
-    match (try Some (Unix.stat path) with Unix.Unix_error _ -> None) with
-    | None -> true
-    | Some st -> st.Unix.st_mtime <> mtime || st.Unix.st_size <> size)
-    fp
-
-let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~fingerprint ~socket_path ~idle_timeout =
+let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~socket_path ~idle_timeout =
   (try Unix.unlink socket_path with Sys_error _ | Unix.Unix_error _ -> ());
   let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.bind sock (Unix.ADDR_UNIX socket_path);
@@ -371,13 +324,6 @@ let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~fingerpri
       exit 0
     | _ ->
       (match Unix.accept sock with
-       | conn, _ when fingerprint_stale fingerprint ->
-         Printf.eprintf
-           "rocq-zygote: a loaded library changed on disk since warm-up, refusing and exiting\n%!";
-         (try send_line conn "MISMATCH" with _ -> ());
-         (try Unix.close conn with _ -> ());
-         (try Unix.unlink socket_path with _ -> ());
-         exit 0
        | conn, _ ->
          flush_all ();
          (match Unix.fork () with
@@ -410,11 +356,8 @@ let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
      compile any ordinary file, in THIS (pre-fork) process. This is the
      only place the heavy Require/Nametab-registration work happens; every
      later child skips it because library/library.ml's libraries_table
-     (a Summary.ref, but never unfrozen by compile_like_coqc's
-     straight-line Ccompile.compile_file -- this design never touches the
-     STM/interactive layer that would restore it, so it behaves as a
-     plain process-global cell for every batch compile this server ever
-     runs) already has these libraries loaded. *)
+     (a plain, process-global ref -- confirmed by direct reading) already
+     has these libraries loaded. *)
   let warmup_copts = Coqcargs.{ default with
     compile_file = Some (prefix_file, false);
     compilation_output_name = None;
@@ -424,9 +367,8 @@ let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
     Printf.eprintf "rocq-zygote: prefix warm-up failed (exit %d), refusing to serve\n%!" code;
     exit code
   end;
-  let fingerprint = capture_fingerprint () in
   serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs:zargs.coqlibs
-    ~fingerprint ~socket_path ~idle_timeout:zargs.idle_timeout
+    ~socket_path ~idle_timeout:zargs.idle_timeout
 
 let custom_zygote
   : ((zygote_args * Coqcargs.t * Colors.color) * Stm.AsyncOpts.stm_opt, Coqargs.injection_command list) Coqtop.custom_toplevel
