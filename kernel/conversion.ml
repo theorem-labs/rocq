@@ -194,12 +194,132 @@ let convert_inductives_gen cmp_instances cmp_cumul cv_pb (mind,ind) nargs u1 u2 
     else
       cmp_cumul cv_pb variances u1 u2 s
 
+(* Conversion result cache. Within one top-level conv/conv_leq call the same
+   pair of closures is often compared many times, because beta-substitution
+   shares payload cells across every occurrence of a bound variable: the
+   reduction machine has no memory of this and re-derives each
+   convertibility subproblem from scratch. A per-session (i.e. per-call)
+   table maps a pair of cell ids (CClosure.get_fid), together with the
+   exact pair of lifts applied to each side and the conversion problem
+   kind (CONV/CUMUL), to the outcome.
+
+   Only sound for CHECKED conversion ([gen_conv], used by the kernel's own
+   re-verification in Typeops/Safe_typing -- the same kernel code coqc and
+   coqchk both link against unmodified): that path is a deterministic
+   function of a FIXED environment and universe graph, and accumulates no
+   universe constraints to replay. Never enabled for the tactic engine's
+   inference-mode conversion ([generic_conv]), which backtracks and
+   discards constraints.
+
+   The cache is created fresh for each top-level call (see
+   [clos_gen_conv]) and discarded at the end of it: it never persists
+   across declarations, across files, or across coqchk/coqc sessions, so
+   it cannot leak a result computed against one environment/universe state
+   into a check against a different one. It never reads
+   Conv_oracle/Strategy/Opaque settings -- those influence only the
+   reduction ORDER of the underlying complete decision procedure, never
+   its outcome, so the cached boolean is still the answer an uncached
+   comparison would reach regardless of Strategy. *)
+module ConvCache = struct
+  module Key = struct
+    (* ids of the two cells, and whether the problem is cumulativity *)
+    type t = int * int * bool
+    let equal (u1, v1, b1) (u2, v2, b2) =
+      Int.equal u1 u2 && Int.equal v1 v2 && Bool.equal b1 b2
+    let hash (u, v, b) =
+      let h = u * 0x3B9ACA07 + v in
+      let h = h lxor (h lsr 16) in
+      if b then h lxor 0x5BF03635 else h
+  end
+  module Tbl = Hashtbl.Make(Key)
+
+  type t = {
+    tbl : (lift * lift * bool) list ref Tbl.t;
+    mutable size : int;
+  }
+
+  (* Diagnostic counters, process-lifetime (NOT per-cache, so they survive
+     across the many short-lived per-call caches in one coqc/coqchk run):
+     how many times a conv/conv_leq entry point consulted the cache, and
+     how many of those probes were already recorded. Printed when
+     ROCQ_CONV_CACHE_STATS=1, to measure the repeat rate on a real tree
+     before committing to the full design. *)
+  let probes = ref 0
+  let hits = ref 0
+
+  (* Optional cap on cached entries per session (ROCQ_CONV_CACHE_MAX; 0 or
+     unset means unlimited: like the per-call [clos_tab]s, the table's
+     lifetime already bounds its memory). *)
+  let max_size =
+    match int_of_string (Sys.getenv "ROCQ_CONV_CACHE_MAX") with
+    | 0 -> max_int
+    | n -> n
+    | exception _ -> max_int
+
+  (* Enabled by default; ROCQ_CONV_CACHE=0 disables it (e.g. for a coqchk
+     invocation that must stay byte-for-byte on the stock decision path). *)
+  let enabled =
+    match Sys.getenv "ROCQ_CONV_CACHE" with
+    | "0" -> false
+    | _ -> true
+    | exception Not_found -> true
+
+  let create () = if enabled then Some { tbl = Tbl.create 16; size = 0 } else None
+
+  let rec strip_flift k v = match fterm_of v with
+    | FLIFT (n, v') -> strip_flift (k + n) v'
+    | _ -> (k, v)
+
+  (* [probe] and [record] renormalize the pair independently: nothing probe
+     computes needs to stay live across the comparison run between the two
+     calls. *)
+  let probe cache ~cumul lft1 t1 lft2 t2 =
+    incr probes;
+    let (k1, v1) = strip_flift 0 t1 in
+    let (k2, v2) = strip_flift 0 t2 in
+    let l1 = el_shft k1 lft1 in
+    let l2 = el_shft k2 lft2 in
+    let key = (get_fid v1, get_fid v2, cumul) in
+    match Tbl.find_opt cache.tbl key with
+    | None -> None
+    | Some entries ->
+      let rec find = function
+        | [] -> None
+        | (l1', l2', r) :: rest ->
+          if eq_lift l1' l1 && eq_lift l2' l2 then (incr hits; Some r)
+          else find rest
+      in
+      find !entries
+
+  let record cache ~cumul lft1 t1 lft2 t2 r =
+    if cache.size < max_size then begin
+      let (k1, v1) = strip_flift 0 t1 in
+      let (k2, v2) = strip_flift 0 t2 in
+      let l1 = el_shft k1 lft1 in
+      let l2 = el_shft k2 lft2 in
+      let key = (get_fid v1, get_fid v2, cumul) in
+      cache.size <- cache.size + 1;
+      match Tbl.find_opt cache.tbl key with
+      | Some entries -> entries := (l1, l2, r) :: !entries
+      | None -> Tbl.add cache.tbl key (ref [(l1, l2, r)])
+    end
+
+  let () =
+    let want_stats =
+      match Sys.getenv "ROCQ_CONV_CACHE_STATS" with
+      | "1" -> true | _ -> false | exception Not_found -> false
+    in
+    if want_stats then at_exit (fun () ->
+      Printf.eprintf "ROCQ_CONV_CACHE_STATS probes=%d hits=%d\n%!" !probes !hits)
+end
+
 type 'e conv_tab = {
   cnv_inf : clos_infos;
   cnv_typ : bool; (* true if the input terms were well-typed *)
   lft_tab : clos_tab;
   rgt_tab : clos_tab;
   err_ret : 'e -> payload;
+  cnv_cache : ConvCache.t option;
 }
 (** Invariant: for any tl ∈ lft_tab and tr ∈ rgt_tab, there is no mutable memory
     location contained both in tl and in tr. *)
@@ -378,7 +498,20 @@ let rec ccnv cv_pb l2r infos lft1 lft2 term1 term2 cuniv =
   let fast = fast_test lft1 term1 lft2 term2 in
   if fast then cuniv
   else
-    eqappr cv_pb l2r infos (lft1, (term1,[])) (lft2, (term2,[])) cuniv
+    match infos.cnv_cache with
+    | None ->
+      eqappr cv_pb l2r infos (lft1, (term1,[])) (lft2, (term2,[])) cuniv
+    | Some cache ->
+      let cumul = match cv_pb with CONV -> false | CUMUL -> true in
+      match ConvCache.probe cache ~cumul lft1 term1 lft2 term2 with
+      | Some true -> cuniv
+      | Some false -> raise NotConvertible
+      | None ->
+        match eqappr cv_pb l2r infos (lft1, (term1,[])) (lft2, (term2,[])) cuniv with
+        | cuniv ->
+          ConvCache.record cache ~cumul lft1 term1 lft2 term2 true; cuniv
+        | exception NotConvertible ->
+          ConvCache.record cache ~cumul lft1 term1 lft2 term2 false; raise NotConvertible
 
 (* Conversion between [lft1](hd1 v1) and [lft2](hd2 v2) *)
 and eqappr cv_pb l2r infos (lft1,st1) (lft2,st2) cuniv =
@@ -935,18 +1068,20 @@ and convert_list l2r infos lft1 lft2 v1 v2 cuniv = match v1, v2 with
   convert_list l2r infos lft1 lft2 v1 v2 cuniv
 | _, _ -> raise NotConvertible
 
-let clos_gen_conv (type err) ~typed trans cv_pb l2r evars env graph univs t1 t2 =
+let clos_gen_conv (type err) ~typed ~use_cache trans cv_pb l2r evars env graph univs t1 t2 =
   NewProfile.profile "Conversion" begin fun () ->
       let reds = RedFlags.red_add_transparent RedFlags.betaiotazeta trans in
       let infos = create_conv_infos ~univs:graph ~evars reds env in
       let module Error = struct type payload += Error of err end in
       let box e = Error.Error e in
+      let cache = if use_cache then ConvCache.create () else None in
       let infos = {
         cnv_inf = infos;
         cnv_typ = typed;
         lft_tab = create_tab ();
         rgt_tab = create_tab ();
         err_ret = box;
+        cnv_cache = cache;
       } in
       try Result.Ok (ccnv cv_pb l2r infos el_id el_id (inject t1) (inject t2) univs)
       with
@@ -994,7 +1129,7 @@ let () =
       let box = Empty.abort in
       let state = info_univs infos in
       let qual_equal q1 q2 = CClosure.eq_quality infos q1 q2 in
-      let infos = { cnv_inf = infos; cnv_typ = true; lft_tab = tab; rgt_tab = tab; err_ret = box } in
+      let infos = { cnv_inf = infos; cnv_typ = true; lft_tab = tab; rgt_tab = tab; err_ret = box; cnv_cache = None } in
       let state', _ = ccnv CONV false infos el_id el_id a b (state, checked_universes_gen qual_equal) in
       assert (state==state');
       true
@@ -1012,7 +1147,7 @@ let gen_conv ~typed cv_pb ?(l2r=false) ?(reds=TransparentState.full) env ?(evars
     else eq_constr_univs univs t1 t2
   in
     if b then Result.Ok ()
-    else match clos_gen_conv ~typed reds cv_pb l2r evars env univs (state, checked_universes) t1 t2 with
+    else match clos_gen_conv ~typed ~use_cache:true reds cv_pb l2r evars env univs (state, checked_universes) t1 t2 with
     | Result.Ok (_ : 'a * ('a, Empty.t) universe_compare)-> Result.Ok ()
     | Result.Error None -> Result.Error ()
     | Result.Error (Some e) -> Empty.abort e
@@ -1022,7 +1157,7 @@ let conv_leq = gen_conv ~typed:false CUMUL
 
 let generic_conv cv_pb ~l2r reds env ?(evars=default_evar_handler env) state t1 t2 =
   let graph = Environ.universes env in
-  match clos_gen_conv ~typed:false reds cv_pb l2r evars env graph state t1 t2 with
+  match clos_gen_conv ~typed:false ~use_cache:false reds cv_pb l2r evars env graph state t1 t2 with
   | Result.Ok (s, _) -> Result.Ok s
   | Result.Error e -> Result.Error e
 
