@@ -447,7 +447,13 @@ let closure_subset_ok ?self_dp ~recorded ~live =
   in
   Id.Map.for_all (fun id rec_dps ->
       match List.filter (fun (dp, _) -> not (is_self dp)) rec_dps with
-      | [] -> true (* every recorded definer of this id is the self entry; nothing external to check *)
+      | [] ->
+        (* The declaration itself is absent while this library is loading,
+           but a newly live external definition of its basename may shadow
+           it after a later [Require]. *)
+        (match Id.Map.find_opt id live_grouped with
+         | None -> true
+         | Some live_dps -> List.for_all (fun (dp, _) -> is_self dp) live_dps)
       | rec_dps ->
         match Id.Map.find_opt id live_grouped with
         | None -> false
@@ -2454,6 +2460,44 @@ and iface_entries_of_sfb (path : string) (id, sfb) : (string * Digest.t) list =
     List.map (fun (k, d) -> (mark_basename modtype_entry_marker k, d))
       (entries_of_signature path id (mod_type mtb))
 
+(* The self closure records every basename B itself defines.  Module and
+   module-type labels retain their kind markers so they match live entries,
+   but nested module-type labels are not wrapped in [modtype_entry_marker],
+   which [flatten_closure] drops.  The table is compared only to the live side
+   to reject a new external definition that could shadow B after a later
+   [Require].  The walk enters nested module types and functor bodies, which
+   [iface_entries_of_signature] keeps opaque for the ordinary
+   declaration-subset check. *)
+let rec self_entries_of_struct path sb =
+  List.concat_map (fun (id, sfb) -> self_entries_of_sfb path (id, sfb)) sb
+
+and self_entries_of_signature path id msig =
+  let sub_path = if path = "" then Id.to_string id else path ^ "." ^ Id.to_string id in
+  self_entries_of_signature_at_path sub_path msig
+
+and self_entries_of_signature_at_path path = function
+  | NoFunctor sb -> self_entries_of_struct path sb
+  | MoreFunctor (_, _, msig) -> self_entries_of_signature_at_path path msig
+
+and self_entries_of_sfb path (id, sfb) =
+  let qualify id = if path = "" then Id.to_string id else path ^ "." ^ Id.to_string id in
+  match sfb with
+  | SFBconst _ -> [(qualify id, module_label_digest)]
+  | SFBmind mib ->
+    let names = ref [] in
+    Array.iter (fun mip ->
+        names := mip.mind_typename :: !names;
+        Array.iter (fun c -> names := c :: !names) mip.mind_consnames)
+      mib.mind_packets;
+    List.map (fun n -> (qualify n, module_label_digest)) !names
+  | SFBrules _ -> []
+  | SFBmodule mb ->
+    (mark_basename module_label_marker (qualify id), module_label_digest) ::
+    self_entries_of_signature path id (mod_type mb)
+  | SFBmodtype mtb ->
+    (mark_basename modtype_label_marker (qualify id), module_label_digest) ::
+    self_entries_of_signature path id (mod_type mtb)
+
 let iface_table_of_struct (sb : structure_body) : iface_table option =
   Some (Array.of_list (iface_entries_of_struct "" sb))
 
@@ -2532,16 +2576,15 @@ let export ~output_native_objects ~objects_digest ~vernac_iface ~extra_closure_n
      any depth. The placeholder digest is never compared against
      anything meaningful ([Some comp_iface] is the branch flatten_closure
      reads; [None]'s [none_entries] never sees this entry). *)
-  let self_modtype_iface =
-    Option.map (fun tbl ->
-        Array.of_list
-          (List.filter (fun (k, _) ->
-               Option.has_some (strip_prefix modtype_label_marker (Id.to_string (basename_of_qualified_path k))))
-              (Array.to_list tbl)))
-      comp_iface
+  let self_iface =
+    if has_retroknowledge then None else match str with
+    | NoFunctor sb ->
+      Some (Array.of_list
+              (self_entries_of_struct "" sb @ Array.to_list extra_closure_names))
+    | MoreFunctor _ -> None
   in
   let own_closure_list =
-    (dir, Dvo_or_vi (Digest.string "self"), self_modtype_iface) ::
+    (dir, Dvo_or_vi (Digest.string "self"), self_iface) ::
     (DirPath.Map.bindings senv.required
      |> List.map (fun (dp, { req_digest; req_iface; _ }) -> (dp, req_digest, req_iface)))
   in

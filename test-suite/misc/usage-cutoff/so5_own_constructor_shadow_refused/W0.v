@@ -1,0 +1,1 @@
+Definition w := 0.
