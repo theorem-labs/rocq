@@ -11,9 +11,11 @@ uc_round16() {
   name=$(basename "$dir")
   mkdir -p "$work"
   cp "$dir"/X.v "$dir"/A.v "$dir"/B.v "$dir"/C.v "$work"/
+  test ! -f "$dir/Y.v" || cp "$dir/Y.v" "$work/Y.v"
   cp "$dir/W0.v" "$work/W.v"
   build() { ( cd "$work" && uc_coqc -Q . "" "$1" ); }
   build X.v >"$work/setup.log" 2>&1 || uc_fail "$name setup X: $(cat "$work/setup.log")"
+  test ! -f "$work/Y.v" || build Y.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup Y: $(cat "$work/setup.log")"
   build W.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup W0: $(cat "$work/setup.log")"
   build A.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup A: $(cat "$work/setup.log")"
   build B.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup B: $(cat "$work/setup.log")"
@@ -41,6 +43,10 @@ uc_round16() {
     [ "$c_rc" -ne 0 ] || uc_fail "$name reused stale B where fresh B fails"
     printf %s "$c_out" | grep -qi inconsistent || uc_fail "$name refused for the wrong reason: $c_out"
     uc_ok "$name correctly refused"
+  elif [ "$expected" = overrefused ]; then
+    [ "$c_rc" -ne 0 ] || uc_fail "$name reused despite the expected P3 refusal"
+    printf %s "$c_out" | grep -qi inconsistent || uc_fail "$name refused for the wrong reason: $c_out"
+    uc_ok "$name correctly over-refused"
   else
     [ "$c_rc" -eq 0 ] || uc_fail "$name refused a valid reuse: $c_out"
     uc_ok "$name correctly reused"

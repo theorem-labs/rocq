@@ -1,0 +1,1 @@
+Definition g := 0.

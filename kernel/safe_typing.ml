@@ -631,6 +631,9 @@ type required_lib = {
   req_objects_digest : Digest.t;
   req_univs_digest : Digest.t;
   req_vernac_iface : iface_table;
+  (** The live library's direct requirements, used only to find the closure
+      reachable from a library being checked. *)
+  req_deps : library_info array;
 }
 
 (** Part of the safe_env at a section opening time to be backtracked *)
@@ -1074,6 +1077,23 @@ let check_empty_struct senv =
 (** When loading a library, its dependencies should be already there,
     with the correct digests. *)
 
+(* The live closure must be rooted in this library's requirements, not in the
+   names it recorded before an intermediate library gained a new dependency.
+   Traversing the current direct-requirement edges admits newly reachable
+   libraries while keeping unrelated roots out. *)
+let reachable_required current_libs needed =
+  let rec visit seen dp =
+    if DirPath.Set.mem dp seen then seen else
+    let seen = DirPath.Set.add dp seen in
+    match DirPath.Map.find_opt dp current_libs with
+    | None -> seen
+    | Some { req_deps; _ } ->
+      Array.fold_left (fun seen (child, _, _, _, _, _, _, _) -> visit seen child)
+        seen req_deps
+  in
+  Array.fold_left (fun seen (dp, _, _, _, _, _, _, _) -> visit seen dp)
+    DirPath.Set.empty needed
+
 let check_required ?self_dp current_libs needed =
   (* binary-equivalence-taiga#841 round 7 (or1/or2): [actual_closure_none_digest]
      stays GLOBAL (every None-iface entry anywhere in the consuming
@@ -1096,6 +1116,7 @@ let check_required ?self_dp current_libs needed =
     |> List.map (fun (dp, { req_digest; req_iface; _ }) -> (dp, req_digest, req_iface))
   in
   let _, actual_closure_none_digest = flatten_closure live_closure_list in
+  let reachable_dps = reachable_required current_libs needed in
   let check current (id, required, required_iface, required_objects_digest,
                       required_univs_digest, required_vernac_iface,
                       required_closure_names, required_closure_none_digest) =
@@ -1103,6 +1124,7 @@ let check_required ?self_dp current_libs needed =
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
+           req_deps = actual_deps;
            req_objects_digest = actual_objects_digest;
            req_univs_digest = actual_univs_digest;
            req_vernac_iface = actual_vernac_iface } ->
@@ -1116,34 +1138,20 @@ let check_required ?self_dp current_libs needed =
        state, so the dependent's own precompiled terms remain well-typed
        in the new environment. NEVER used by coqchk: see
        [check_required_strict]. *)
-    (* binary-equivalence-taiga#841 round 7 (or1/or2): scope the LIVE
-       per-id closure table to exactly the [DirPath.t]s the DEPENDENT's
-       OWN recorded closure named, looked up fresh in [current] (the
-       SAME live map every other check here already uses) -- not every
-       library the CONSUMING process happens to have loaded elsewhere
-       (the previous, globally-scoped [live_closure_list] above). An
-       unrelated library loaded earlier in THIS SAME process (for an
-       entirely different root [Require]) that happens to share a bare
-       [Id.t] with something in [required_closure_names] is invisible to
-       THIS dependent's own fresh compile (it never requires that
-       library), so it must stay invisible here too -- the old,
-       globally-scoped version refused reuse purely because of WHAT ELSE
-       the consuming file happened to import, and in what order, never
-       because of anything about the dependent itself. A [dp] recorded
-       at compile time that is no longer loaded at all is simply dropped
-       from the live side here, same as any other declaration that
-       "vanished" -- [closure_subset_ok] already refuses that case on
-       its own. *)
-    let recorded_dps =
-      Array.fold_left (fun s (dp, _, _) -> DirPath.Set.add dp s)
-        DirPath.Set.empty required_closure_names
-    in
+    (* Scope the live per-id table to libraries reachable from B's direct
+       requirements through their CURRENT [comp_deps]. This includes a
+       library newly reached through [Require Export], so a new name can no
+       longer hide from [closure_subset_ok]. It still excludes a library
+       imported only for an unrelated root (or1/or2). [required_lib] retains
+       each live library's direct requirements solely for this traversal. A
+       recorded library that is no longer live is absent here and is refused
+       by [closure_subset_ok]. *)
     let scoped_live_list =
       DirPath.Set.fold (fun dp acc ->
           match DirPath.Map.find_opt dp current with
           | Some { req_digest; req_iface; _ } -> (dp, req_digest, req_iface) :: acc
           | None -> acc)
-        recorded_dps []
+        reachable_dps []
     in
     let actual_closure_names, _ = flatten_closure scoped_live_list in
     if not (dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
@@ -1160,6 +1168,7 @@ let check_required ?self_dp current_libs needed =
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
                             req_univs_digest = actual_univs_digest;
+                            req_deps = actual_deps;
                             req_vernac_iface = actual_vernac_iface } current
     else
       (* nothing to do *)
@@ -1183,6 +1192,7 @@ let check_required_strict current_libs needed =
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
            req_objects_digest = actual_objects_digest;
+           req_deps = actual_deps;
            req_univs_digest = actual_univs_digest;
            req_vernac_iface = actual_vernac_iface } ->
     if not (digest_match ~actual ~required) then
@@ -1193,6 +1203,7 @@ let check_required_strict current_libs needed =
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
                             req_univs_digest = actual_univs_digest;
+                            req_deps = actual_deps;
                             req_vernac_iface = actual_vernac_iface } current
     else
       current
@@ -2666,6 +2677,7 @@ let import_gen ~check_required lib vmtab vodigest senv =
     else DirPath.Map.add lib.comp_name
         { req_root = true; req_digest = vodigest; req_iface = lib.comp_iface;
           req_objects_digest = lib.comp_objects_digest;
+          req_deps = lib.comp_deps;
           req_univs_digest = lib.comp_univs_digest;
           req_vernac_iface = lib.comp_vernac_iface } required
   in
