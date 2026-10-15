@@ -50,7 +50,10 @@ let coq_version = "9.2+rc2"
    the narrower shape (Marshal performs no cross-version structural check),
    so this format change must force a hard version mismatch at load time,
    not a quiet misinterpretation. *)
-let vo_magic = 91200
+(* G1 (binary-equivalence-taiga#841 Review841): library_info/compiled_library
+   widen a third time, adding the decl_objects (IMPLICITS/ARGUMENTS-SCOPE)
+   digest array. *)
+let vo_magic = 91201
 let is_a_released_version = false
 
 (** Default OCaml binaries *)

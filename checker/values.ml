@@ -610,17 +610,19 @@ let v_vodigest = v_sum_c ("module_impl",0, [| [|v_string|]; [|v_string;v_string|
    EXACTLY (BugFinderRedTeamV2 B1: Validate.validate + Obj.obj is an
    unchecked cast once bytes pass this schema -- a same-arity, wrong-order
    mistake here is invisible to the type checker and silently misreads the
-   library on load). The trailing [v_string] on both [v_deps] and
-   [v_compiled_lib] is the (comp_univs, comp_sorts) digest added for
-   Review841 G2 -- same append-at-the-end convention as the preceding
-   objects-digest [v_string]. *)
+   library on load). The 5th element on [v_deps]/[v_compiled_lib] is the
+   (comp_univs, comp_sorts) digest (Review841 G2); the 6th
+   (`v_decl_objects`) is the G1 per-leaf IMPLICITS/ARGUMENTS-SCOPE digest
+   array -- both appended at the end, same convention as the
+   objects-digest [v_string] before them. *)
 let v_iface = v_array (v_pair v_id v_string)
-let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest;v_opt v_iface;v_string;v_string|])
+let v_decl_objects = v_array v_string
+let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest;v_opt v_iface;v_string;v_string;v_decl_objects|])
 let v_flags = v_tuple "flags" [|v_bool|] (* Allow Rewrite Rules *)
 let v_compiled_lib =
   v_tuple "compiled"
     [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps; v_flags;
-      v_opt v_iface; v_string; v_string|]
+      v_opt v_iface; v_string; v_string; v_decl_objects|]
 
 (** Toplevel structures in a vo (see Cic.mli) *)
 

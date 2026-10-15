@@ -154,8 +154,21 @@ let iface_subset_ok ~recorded ~live =
     empty), so neither is ever optional -- unlike [iface_table option],
     which is genuinely absent for a library whose top level isn't a flat
     constant/inductive run. *)
+(** binary-equivalence-taiga#841 Review841 G1: [decl_objects] is the set of
+    per-declaration vernac-object digests that need SUBSET treatment but
+    have no independent kernel-level coverage the way CONSTANT/INDUCTIVE
+    themselves do via [iface_table] -- IMPLICITS and ARGUMENTS-SCOPE
+    settings (see [Declaremods]'s [G1Partition] for the exact partition
+    and the soundness argument for excluding CONSTANT/INDUCTIVE entirely).
+    No per-entry name is carried: membership in the unordered digest SET
+    is enough, since an entry that changed or was removed simply won't be
+    found among the live digests, and an entry that's merely ADDED is
+    exactly what must be ignored. *)
+let decl_objects_subset_ok ~recorded ~live =
+  Array.for_all (fun d -> Array.mem d live) recorded
+
 type library_info =
-  DirPath.t * vodigest * iface_table option * Digest.t * Digest.t
+  DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * Digest.t array
 
 (** The relaxed acceptance predicate, shared by every loader that is
     allowed to use it (the kernel's own [check_required] below, and
@@ -163,26 +176,28 @@ type library_info =
     [intern_mandatory_library]): accept iff the whole-library digest
     matches (stock, unconditionally sound), OR ALL OF (a) every declaration
     the dependent recorded still has an identical digest in the live
-    table, (b) the live library's exported-object digest is EXACTLY (not a
-    subset) what the dependent recorded -- any change to
-    Hints/Instances/Notations/Ltac2/Canonical Structures anywhere in the
-    library forces a rebuild, deliberately conservative -- AND (c) the live
-    library's [(comp_univs, comp_sorts)] digest is EXACTLY what the
-    dependent recorded (G2: closes the universe-constraint blind spot
-    documented on [library_info] above; a straight [Digest.equal], not a
-    subset test -- unlike (a)/iface_table, there is no meaningful notion of
-    "the dependent only used a subset of the global constraints"). [coqchk]
-    must NEVER call this: see [check_required_strict] below, which is the
-    original digest-only check with nothing else reachable from it. *)
+    table, (b) the live library's exact-equality objects digest is EXACTLY
+    what the dependent recorded (Hints/Instances/Notations/Ltac2/Canonical
+    Structures/Coercions/univ-constraint-source objects -- any change
+    anywhere in that remainder forces a rebuild, deliberately
+    conservative), (c) the live library's [(comp_univs, comp_sorts)]
+    digest is EXACTLY what the dependent recorded (G2), AND (d) every
+    decl-objects digest (IMPLICITS/ARGUMENTS-SCOPE, G1) the dependent
+    recorded is still present among the live ones (subset, extras
+    ignored, same shape as (a)). [coqchk] must NEVER call this: see
+    [check_required_strict] below, which is the original digest-only
+    check with nothing else reachable from it. *)
 let dep_ok ~actual ~required ~actual_iface ~required_iface
     ~actual_objects_digest ~required_objects_digest
-    ~actual_univs_digest ~required_univs_digest =
+    ~actual_univs_digest ~required_univs_digest
+    ~actual_decl_objects ~required_decl_objects =
   digest_match ~actual ~required ||
   ((match required_iface, actual_iface with
     | Some recorded, Some live -> iface_subset_ok ~recorded ~live
     | _ -> false) &&
    Digest.equal required_objects_digest actual_objects_digest &&
-   Digest.equal required_univs_digest actual_univs_digest)
+   Digest.equal required_univs_digest actual_univs_digest &&
+   decl_objects_subset_ok ~recorded:required_decl_objects ~live:actual_decl_objects)
 
 (** Functor and funsig parameters, most recent first *)
 type module_parameters = (MBId.t * module_type_body) list
@@ -272,6 +287,10 @@ type compiled_library = {
       binary-equivalence-taiga#841 Review841 G2: see [library_info]'s doc
       comment for the blind spot this closes. *)
   comp_univs_digest : Digest.t;
+  (** G1: per-leaf digests of IMPLICITS/ARGUMENTS-SCOPE objects, subset-
+      checked (see [decl_objects_subset_ok]). Handed in through [export]'s
+      [~decl_objects] parameter, same provenance as [comp_objects_digest]. *)
+  comp_decl_objects : Digest.t array;
 }
 
 type reimport = compiled_library * Vmlibrary.on_disk * vodigest
@@ -282,6 +301,7 @@ type required_lib = {
   req_iface : iface_table option;
   req_objects_digest : Digest.t;
   req_univs_digest : Digest.t;
+  req_decl_objects : Digest.t array;
 }
 
 (** Part of the safe_env at a section opening time to be backtracked *)
@@ -727,24 +747,27 @@ let check_empty_struct senv =
 
 let check_required current_libs needed =
   let check current (id, required, required_iface, required_objects_digest,
-                      required_univs_digest) =
+                      required_univs_digest, required_decl_objects) =
     match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
            req_objects_digest = actual_objects_digest;
-           req_univs_digest = actual_univs_digest } ->
+           req_univs_digest = actual_univs_digest;
+           req_decl_objects = actual_decl_objects } ->
     (* Fast path: the dependency is byte-identical to what this library was
        compiled against. Fallback (see [dep_ok]): the dependency changed,
        but everything this dependent could have observed through it --
-       its recorded [iface_table] subset, its exported-object digest, and
-       its [(comp_univs, comp_sorts)] digest -- still matches the
-       dependency's current state, so the dependent's own precompiled
-       terms remain well-typed in the new environment. NEVER used by
-       coqchk: see [check_required_strict]. *)
+       its recorded [iface_table] subset, its exact-equality objects
+       digest, its [(comp_univs, comp_sorts)] digest, and its
+       decl-objects subset -- still matches the dependency's current
+       state, so the dependent's own precompiled terms remain well-typed
+       in the new environment. NEVER used by coqchk: see
+       [check_required_strict]. *)
     if not (dep_ok ~actual ~required ~actual_iface ~required_iface
               ~actual_objects_digest ~required_objects_digest
-              ~actual_univs_digest ~required_univs_digest) then
+              ~actual_univs_digest ~required_univs_digest
+              ~actual_decl_objects ~required_decl_objects) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
     else if req_root then
@@ -752,7 +775,8 @@ let check_required current_libs needed =
       DirPath.Map.set id { req_root = false; req_digest = actual;
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
-                            req_univs_digest = actual_univs_digest } current
+                            req_univs_digest = actual_univs_digest;
+                            req_decl_objects = actual_decl_objects } current
     else
       (* nothing to do *)
       current
@@ -768,13 +792,14 @@ let check_required current_libs needed =
     binary-equivalence-taiga#841 "D2". *)
 let check_required_strict current_libs needed =
   let check current (id, required, _required_iface, _required_objects_digest,
-                      _required_univs_digest) =
+                      _required_univs_digest, _required_decl_objects) =
     match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
            req_objects_digest = actual_objects_digest;
-           req_univs_digest = actual_univs_digest } ->
+           req_univs_digest = actual_univs_digest;
+           req_decl_objects = actual_decl_objects } ->
     if not (digest_match ~actual ~required) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
@@ -782,7 +807,8 @@ let check_required_strict current_libs needed =
       DirPath.Map.set id { req_root = false; req_digest = actual;
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
-                            req_univs_digest = actual_univs_digest } current
+                            req_univs_digest = actual_univs_digest;
+                            req_decl_objects = actual_decl_objects } current
     else
       current
   in
@@ -1671,6 +1697,7 @@ let replace_module_of_library lib mb = { lib with comp_mod = mb }
 let iface_of_library lib = lib.comp_iface
 let objects_digest_of_library lib = lib.comp_objects_digest
 let univs_digest_of_library lib = lib.comp_univs_digest
+let decl_objects_of_library lib = lib.comp_decl_objects
 
 let univs_of_library lib = lib.comp_sorts, lib.comp_univs
 
@@ -1759,7 +1786,7 @@ let iface_table_of_struct (sb : structure_body) : iface_table option =
         sb))
   with Exit -> None
 
-let export ~output_native_objects ~objects_digest senv dir =
+let export ~output_native_objects ~objects_digest ~decl_objects senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
   let str = NoFunctor (List.rev senv.revstruct) in
@@ -1807,9 +1834,9 @@ let export ~output_native_objects ~objects_digest senv dir =
      block for the full-closure field without touching [compute_modes] at
      all (binary-equivalence-taiga#841 "D1"). *)
   let filter_dep (dp, { req_root; req_digest; req_iface; req_objects_digest;
-                         req_univs_digest }) =
+                         req_univs_digest; req_decl_objects }) =
     if req_root then Some (dp, req_digest, req_iface, req_objects_digest,
-                            req_univs_digest)
+                            req_univs_digest, req_decl_objects)
     else None
   in
   let comp_deps = List.map_filter filter_dep (DirPath.Map.bindings senv.required) in
@@ -1829,6 +1856,7 @@ let export ~output_native_objects ~objects_digest senv dir =
     comp_iface;
     comp_objects_digest = objects_digest;
     comp_univs_digest;
+    comp_decl_objects = decl_objects;
   } in
   let vmlib = Vmlibrary.export @@ Environ.vm_library senv.env in
   mp, lib, vmlib, (ast, symbols)
@@ -1868,7 +1896,8 @@ let import_gen ~check_required lib vmtab vodigest senv =
     else DirPath.Map.add lib.comp_name
         { req_root = true; req_digest = vodigest; req_iface = lib.comp_iface;
           req_objects_digest = lib.comp_objects_digest;
-          req_univs_digest = lib.comp_univs_digest } required
+          req_univs_digest = lib.comp_univs_digest;
+          req_decl_objects = lib.comp_decl_objects } required
   in
   mp,
   { senv with

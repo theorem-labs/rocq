@@ -27,11 +27,13 @@ val digest_match : actual:vodigest -> required:vodigest -> bool
     own -- see #841's "Red team, round 1" section. *)
 type iface_table = (Id.t * Digest.t) array
 val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
+val decl_objects_subset_ok : recorded:Digest.t array -> live:Digest.t array -> bool
 val dep_ok :
   actual:vodigest -> required:vodigest ->
   actual_iface:iface_table option -> required_iface:iface_table option ->
   actual_objects_digest:Digest.t -> required_objects_digest:Digest.t ->
-  actual_univs_digest:Digest.t -> required_univs_digest:Digest.t -> bool
+  actual_univs_digest:Digest.t -> required_univs_digest:Digest.t ->
+  actual_decl_objects:Digest.t array -> required_decl_objects:Digest.t array -> bool
 
 (** {6 Safe environments } *)
 
@@ -262,6 +264,8 @@ val objects_digest_of_library : compiled_library -> Digest.t
 val univs_digest_of_library : compiled_library -> Digest.t
 (** Digest of this library's OWN [(comp_univs, comp_sorts)] pair
     (binary-equivalence-taiga#841 Review841 G2). *)
+val decl_objects_of_library : compiled_library -> Digest.t array
+(** G1: per-leaf IMPLICITS/ARGUMENTS-SCOPE digests, subset-checked. *)
 (** Used by the checker, which recompiles the VM bytecode of every constant
     instead of trusting the one serialized in the file. *)
 val univs_of_library : compiled_library -> Sorts.QContextSet.t * Univ.ContextSet.t
@@ -270,7 +274,7 @@ val check_flags_for_library : compiled_library -> safe_transformer0
 val start_library : DirPath.t -> ModPath.t safe_transformer
 
 val export :
-  output_native_objects:bool -> objects_digest:Digest.t ->
+  output_native_objects:bool -> objects_digest:Digest.t -> decl_objects:Digest.t array ->
   safe_environment -> DirPath.t ->
     ModPath.t * compiled_library * Vmlibrary.compiled_library * Nativelib.native_library
 

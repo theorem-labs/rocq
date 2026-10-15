@@ -70,10 +70,39 @@ test list") and its Review841/disposition comments for the authoritative
 wording each case implements, and rocq#10's two review comments (`gh pr
 view 10 -R theorem-labs/rocq --comments`) for the original reproductions.
 
-## Known gaps not covered here
+## G1 implemented 2026-10-15 (Review841 round 2)
 
-G1 and G7 have no implementation yet (a design decision, not a bug fix, is
-still pending for G7's name-shadowing question) — tests 4, 6, 9, 12 and 13
-above already document exactly how their absence manifests, and no
-additional case was added for either: there is nothing new to assert until
-an implementation lands to assert it against.
+G1 (the objects-digest partition excluding CONSTANT/INDUCTIVE's `cst_kind`
+from the exact-equality check, subset-checking IMPLICITS/ARGUMENTS-SCOPE
+instead) is now implemented (`vernac/declaremods.ml`'s `G1Partition`
+module, `kernel/safe_typing.ml`'s `decl_objects_subset_ok`/widened
+`dep_ok`). Two new real tests added and PASSING:
+
+18. `g1_admitted_to_qed_reused` -- an unused Admitted->Qed edit is now
+    REUSED (the lever's whole stated purpose; was refused before G1).
+19. `g1_changed_statement_still_refused` -- a dependency's directly-used
+    declaration changing VALUE is still REFUSED (confirms G1's exclusion
+    didn't weaken the existing per-declaration kernel check).
+
+Full suite run 2026-10-15 after G1 landed: **12/17 PASS** (up from 6/17
+before G1, 0/15 at the start of this review round). The 5 remaining
+failures are exactly the D1-dependent ones, unchanged and expected:
+`two_level_false`, `b1_two_levels_export`, `n_levels_deep`,
+`driver_refuses_through_make`, `dvo_iface_pass_through_to_subset`.
+
+**G7 (name-shadowing refusal) is still NOT implemented** -- it needs
+access to the dependent's own Nametab short-name resolution state, a
+cross-cutting lookup `end_library` has no natural way to reach; the design
+is written in #841 but not built. No new test was added for it.
+
+**Residual finding, not yet investigated:** a standalone run of
+`reused_target_settles` showed the driver being re-invoked on a repeat
+`make real-all` with nothing changed (G5's "settling" property did not
+hold in that one run), but the SAME test passed in a full-suite batch run
+moments later -- looks timing/mtime-precision-sensitive rather than a hard
+failure, not chased further given time. Flagged for whoever picks this up
+next, with the exact repro: build A+B through `make`+driver, edit A's
+proof body (Qed->Qed, unrelated to G1), rebuild (B should show REUSED),
+then run `make real-all` again immediately with nothing changed and check
+the stats log for a second REUSED entry (expected: none at all, second run
+should do zero work).

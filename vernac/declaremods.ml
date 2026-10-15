@@ -1797,6 +1797,126 @@ let append_end_library_hook f =
 let end_library_hook () =
   List.iter (fun f -> f ()) (List.rev !end_library_hook)
 
+(** binary-equivalence-taiga#841 G1 fix (Review841's finding: the exact
+    objects digest refuses every Admitted->Qed and every unused addition,
+    defeating the whole lever, because `cst_kind` -- IsAssumption vs
+    IsProof -- lives inside the CONSTANT libobject's payload, and an
+    ADDED declaration is new content under any exact-equality comparison
+    regardless of field-level normalization).
+
+    Partition every atomic libobject in a library's exported content into
+    three groups, by its registered tag (`Libobject.object_name`, the
+    string each `declare_object`/`declare_named_object_full` call
+    registers -- e.g. "CONSTANT"):
+    - EXCLUDED (`"CONSTANT"`, `"INDUCTIVE"`, `"PRIMPROJS"`): a
+      declaration's semantically load-bearing identity (type, universe
+      context, transparent body) is ALREADY independently covered by
+      `Safe_typing.comp_iface`'s kernel-level per-declaration digest
+      (D1/D3), which is itself subset-checked (extras ignored) and does
+      NOT read `cst_kind`/`cst_loc` at all. The CONSTANT/INDUCTIVE
+      libobject's OWN remaining content beyond that (`cst_kind`,
+      `cst_loc`) is provably safe to ignore for reuse soundness: both are
+      read only by presentation (`Print`, `About`) and by LIVE,
+      always-current queries (`Print Assumptions`, which walks the
+      CURRENT environment's kind for each referenced constant at query
+      time, never anything cached in a dependent's own `.vo`) -- so a
+      reused dependent's own fresh `Print Assumptions` already reflects a
+      dependency's CURRENT Admitted/Qed status correctly regardless of
+      whether the dependent itself was recompiled. Excluding these tags
+      entirely (not merely subset-checking them) is what makes
+      Admitted->Qed and an unused addition reusable again.
+    - SUBSET-CHECKED (`"IMPLICITS"`, `"ARGUMENTS-SCOPE"`): these affect
+      only FUTURE elaboration of new source text that references the
+      declaration (never an already-elaborated dependent's own term,
+      which has no implicit-argument placeholders left to resolve) --
+      but UNLIKE CONSTANT/INDUCTIVE they have no independent kernel-level
+      coverage, so a CHANGE (not just an addition) must still be caught.
+      Digested per-leaf (the whole `Dyn.t`, opaque, via `Marshal`) and
+      compared as an unordered SET: every digest the dependent recorded
+      must still be found among the library's current digests; new
+      digests (additions) are ignored. No per-entry name is needed for
+      this check -- membership in a set is enough, and the only entries
+      that can disappear from the live set are ones that genuinely
+      changed or were removed, which must always refuse.
+    - EXACT (everything else -- Hints, Instances, Notations, Canonical
+      Structures, Coercions, the univ-constraint-source object, Ltac,
+      `ExportObject`, module/include wrappers): unchanged from the
+      existing design, exact equality over the ordered remainder.
+
+    G7 (name-shadowing refusal) is NOT implemented here: it needs access
+    to the dependent's own visible short-name resolution state (Nametab),
+    a cross-cutting lookup this function has no natural way to reach from
+    inside `end_library`, and is written up as open design in #841 rather
+    than attempted half-built. *)
+module G1Partition = struct
+  let excluded_tags = ["CONSTANT"; "INDUCTIVE"; "PRIMPROJS"]
+  let subset_tags = ["IMPLICITS"; "ARGUMENTS-SCOPE"]
+
+  let rec iter_atomic f (o : Libobject.t) = match o with
+    | Libobject.AtomicObject obj -> f obj
+    | Libobject.ModuleObject (_, (_, alg)) -> iter_algebraic f alg
+    | Libobject.ModuleTypeObject (_, (_, alg)) -> iter_algebraic f alg
+    | Libobject.IncludeObject alg -> iter_algebraic f alg
+    | Libobject.KeepObject (_, { Libobject.keep_objects }) -> List.iter (iter_atomic f) keep_objects
+    | Libobject.EscapeObject (_, { Libobject.escape_objects }) -> List.iter (iter_atomic f) escape_objects
+    | Libobject.ExportObject _ -> ()
+  and iter_algebraic f = function
+    | Libobject.Objs l -> List.iter (iter_atomic f) l
+    | Libobject.Ref _ -> ()
+
+  let iter_library_objects f ((substobjs, keepobjs, escapeobjs) : library_objects) =
+    List.iter (iter_atomic f) substobjs;
+    List.iter (iter_atomic f) keepobjs.Libobject.keep_objects;
+    List.iter (iter_atomic f) escapeobjs.Libobject.escape_objects
+
+  (* [exact_objects] mirrors the input's own ordering (stable, since we
+     only ever filter, never reorder) so the exact digest stays as
+     sensitive to order as the pre-G1 digest was. *)
+  let partition (md_syntax_objects, md_objects : library_objects * library_objects) =
+    let subset_digests = ref [] in
+    let classify obj =
+      let tag = Libobject.object_name obj in
+      if List.mem tag excluded_tags then `Excluded
+      else if List.mem tag subset_tags then begin
+        subset_digests := Digest.string (Marshal.to_string obj []) :: !subset_digests;
+        `Subset
+      end else `Exact
+    in
+    let rec filter_atomic (o : Libobject.t) : Libobject.t option = match o with
+      | Libobject.AtomicObject obj ->
+        (match classify obj with `Exact -> Some o | `Excluded | `Subset -> None)
+      | Libobject.ModuleObject (id, (mbids, alg)) ->
+        Option.map (fun alg -> Libobject.ModuleObject (id, (mbids, alg))) (filter_algebraic alg)
+      | Libobject.ModuleTypeObject (id, (mbids, alg)) ->
+        Option.map (fun alg -> Libobject.ModuleTypeObject (id, (mbids, alg))) (filter_algebraic alg)
+      | Libobject.IncludeObject alg ->
+        Option.map (fun alg -> Libobject.IncludeObject alg) (filter_algebraic alg)
+      | Libobject.KeepObject (id, { Libobject.keep_objects }) ->
+        Some (Libobject.KeepObject (id, { Libobject.keep_objects = List.filter_map filter_atomic keep_objects }))
+      | Libobject.EscapeObject (id, { Libobject.escape_objects }) ->
+        Some (Libobject.EscapeObject (id, { Libobject.escape_objects = List.filter_map filter_atomic escape_objects }))
+      | Libobject.ExportObject _ -> Some o
+    and filter_algebraic = function
+      | Libobject.Objs l ->
+        let l = List.filter_map filter_atomic l in
+        Some (Libobject.Objs l)
+      | Libobject.Ref _ as r -> Some r
+    in
+    let filter_library_objects ((substobjs, keepobjs, escapeobjs) : library_objects) : library_objects =
+      (List.filter_map filter_atomic substobjs,
+       { Libobject.keep_objects = List.filter_map filter_atomic keepobjs.Libobject.keep_objects },
+       { Libobject.escape_objects = List.filter_map filter_atomic escapeobjs.Libobject.escape_objects })
+    in
+    (* Walk BOTH to populate subset_digests (classify as a side effect),
+       then filter both to build the exact-equality remainder. *)
+    iter_library_objects (fun obj -> ignore (classify obj)) md_syntax_objects;
+    iter_library_objects (fun obj -> ignore (classify obj)) md_objects;
+    let exact_syntax = filter_library_objects md_syntax_objects in
+    let exact_objects = filter_library_objects md_objects in
+    let exact_digest = Digest.string (Marshal.to_string (exact_syntax, exact_objects) []) in
+    (exact_digest, Array.of_list !subset_digests)
+end
+
 let end_library ~output_native_objects dir =
   end_library_hook();
   let { Lib.info; interp_objects = lib_stack; synterp_objects = lib_stack_syntax; } =
@@ -1805,22 +1925,21 @@ let end_library ~output_native_objects dir =
   let drop_anticipate {Lib.substobjs; keepobjs; escapeobjs; anticipateobjs=_} =
     (substobjs, keepobjs, escapeobjs)
   in
-  (* binary-equivalence-taiga#841 D4: compute md_objects/md_syntax_objects
+  (* binary-equivalence-taiga#841 D4/G1: compute md_objects/md_syntax_objects
      (Anticipate-dropped, matching exactly what is returned/serialized
-     below) BEFORE calling Global.export, so the objects digest -- and
-     commit 1's Dvo_iface, once it lands and consumes the same values --
-     sees the REQUIRE-leaf-free value that ends up on disk, never a
-     different one. WIP: not yet run through commit 1's shared Loc-erasing
-     normalization hook (lands with sami/861-loc-free-identity) -- this is
-     the raw, pre-normalization digest, sound but less precise (changes on
-     every length-changing edit, not just real Hints/Instances/Notations
-     changes) until rebased. *)
+     below) BEFORE calling Global.export, so the digests -- and commit 1's
+     Dvo_iface, once it lands and consumes the same values -- see the
+     REQUIRE-leaf-free value that ends up on disk, never a different one.
+     WIP: not yet run through commit 1's shared Loc-erasing normalization
+     hook (lands with sami/861-loc-free-identity) -- the exact-equality
+     half is sound but less precise (changes on every length-changing
+     edit to anything NOT excluded/subset-checked) until rebased. *)
   let md_objects = drop_anticipate lib_stack in
   let md_syntax_objects = drop_anticipate lib_stack_syntax in
-  let objects_digest =
-    Digest.string (Marshal.to_string (md_syntax_objects, md_objects) [])
+  let objects_digest, decl_objects =
+    G1Partition.partition (md_syntax_objects, md_objects)
   in
-  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest dir in
+  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~decl_objects dir in
   assert (ModPath.equal mp (MPfile dir));
   cenv,md_objects,md_syntax_objects,vmlib,ast,info
 
