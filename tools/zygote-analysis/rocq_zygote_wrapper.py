@@ -6,14 +6,37 @@ to an ordinary, unmodified `rocq compile` invocation for every other file,
 and for ANY failure talking to a zygote (missing manifest entry, daemon
 spawn failure, MISMATCH response, socket error).
 
+The coqlibs/flags string a zygote group's daemon is warmed up with, and
+that every request to it is matched against, is DERIVED from each
+invocation's own real argv (every flag `make` actually passed, minus the
+file), never from a separately-configured value. An earlier version took
+this from a ROCQ_ZYGOTE_COQLIBS env var the deployer had to set to match
+`make`'s real COQFLAGS+COQLIBS by hand; every deployment of this wrapper so
+far set it to only the tree's -Q/-R bindings, which never equals the real
+invocation once COQFLAGS carries anything (coq_makefile's `-arg` lines, the
+native-compiler flag) -- every file silently fell back to a stock compile,
+every time, with no warning (confirmed live: the zygote sockdir ended up
+with zero daemon log files across a full-tree run). Deriving the match
+value from the real argv instead makes that whole class of drift
+impossible by construction: the first file in a group spawns its daemon
+with exactly its own real flags, and the daemon's own per-request guard
+(see zygote.ml's handle_connection) still rejects any later sibling whose
+real flags differ, falling back for exactly that file -- the safety
+property is unchanged, only the configuration footgun is gone.
+
 Configuration via environment variables (all required except the last two):
   ROCQ_ZYGOTE_MANIFEST   path to zygote-manifest.json
   ROCQ_ZYGOTE_EXE        path to the rocq-zygote executable
   ROCQ_ZYGOTE_REAL_ROCQ  path to the real, stock `rocq` binary (fallback + fed to the daemon)
   ROCQ_ZYGOTE_SOCKDIR    directory for per-group sockets/locks (created if missing)
   ROCQLIB                passed through to both the daemon and the fallback
-  ROCQ_ZYGOTE_COQLIBS    shared -Q/-R flags (same for every file in this tree)
   ROCQ_ZYGOTE_IDLE       idle timeout seconds for spawned daemons (default 600)
+
+Every invocation appends one line to `$ROCQ_ZYGOTE_SOCKDIR/stats.jsonl`
+recording whether it hit zygote or fell back and why, so a deployment can
+see its own hit rate instead of silently getting zero benefit -- the
+earlier all-fallback run above produced correct output and no error, and
+was only caught by comparing the two arms' wall-clock time.
 """
 import errno
 import fcntl
@@ -29,6 +52,7 @@ ZYGOTE_EXE = os.environ["ROCQ_ZYGOTE_EXE"]
 REAL_ROCQ = os.environ["ROCQ_ZYGOTE_REAL_ROCQ"]
 SOCKDIR = os.environ["ROCQ_ZYGOTE_SOCKDIR"]
 IDLE_TIMEOUT = os.environ.get("ROCQ_ZYGOTE_IDLE", "600")
+STATS_PATH = os.path.join(SOCKDIR, "stats.jsonl")
 
 _manifest = None
 
@@ -41,11 +65,23 @@ def manifest():
     return _manifest
 
 
+def record_outcome(file_v, outcome, reason):
+    # One JSON line per invocation; short enough that concurrent appends
+    # from parallel `make -jN` workers stay atomic on a local filesystem
+    # (POSIX O_APPEND writes under PIPE_BUF don't interleave).
+    rec = json.dumps({"file": file_v, "outcome": outcome, "reason": reason, "pid": os.getpid()})
+    try:
+        with open(STATS_PATH, "a") as f:
+            f.write(rec + "\n")
+    except OSError:
+        pass  # diagnostics only; never fail a compile over this
+
+
 def real_rocq_compile(flags, file_v):
     return subprocess.run([REAL_ROCQ, "compile"] + flags + [file_v]).returncode
 
 
-def ensure_zygote(group, prefix_file, sock_path):
+def ensure_zygote(group, prefix_file, sock_path, coqlibs_raw):
     if os.path.exists(sock_path):
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -71,7 +107,6 @@ def ensure_zygote(group, prefix_file, sock_path):
                 except OSError:
                     pass
             log_path = os.path.join(SOCKDIR, f"{group}.log")
-            coqlibs_raw = os.environ.get("ROCQ_ZYGOTE_COQLIBS", "")
             coqlibs = coqlibs_raw.split()
             # This module's own docstring promises a fallback to an
             # ordinary `rocq compile` for ANY failure talking to a zygote,
@@ -112,10 +147,10 @@ def ensure_zygote(group, prefix_file, sock_path):
             fcntl.flock(lockf, fcntl.LOCK_UN)
 
 
-def try_zygote(group, prefix_file, file_v, output_v, echo, tmp_base):
+def try_zygote(group, prefix_file, file_v, output_v, echo, tmp_base, coqlibs_raw):
     sock_path = os.path.join(SOCKDIR, f"{group}.sock")
-    if not ensure_zygote(group, prefix_file, sock_path):
-        return None
+    if not ensure_zygote(group, prefix_file, sock_path, coqlibs_raw):
+        return None, "daemon spawn/connect failed"
     stdout_tmp = f"{tmp_base}.zygote.out.{os.getpid()}"
     stderr_tmp = f"{tmp_base}.zygote.err.{os.getpid()}"
     try:
@@ -123,7 +158,6 @@ def try_zygote(group, prefix_file, file_v, output_v, echo, tmp_base):
         s.settimeout(600)
         s.connect(sock_path)
         cwd = os.getcwd()
-        coqlibs_raw = os.environ.get("ROCQ_ZYGOTE_COQLIBS", "")
         # cwd+coqlibs let the daemon chdir to match the client's own cwd before
         # resolving file_v/output_v (relative, 20d/21) and verify its own -Q/-R
         # flags still match this client's, rather than assuming both forever.
@@ -136,28 +170,28 @@ def try_zygote(group, prefix_file, file_v, output_v, echo, tmp_base):
                 break
             buf += chunk
         s.close()
-    except OSError:
-        return None
+    except OSError as e:
+        return None, f"socket error: {e}"
     line = buf.decode("utf-8", "replace").strip()
     parts = line.split("\t")
     if parts and parts[0] == "EXIT" and len(parts) == 2:
         try:
             code = int(parts[1])
         except ValueError:
-            return None
+            return None, "malformed EXIT response"
         for path, stream in ((stdout_tmp, sys.stdout), (stderr_tmp, sys.stderr)):
             if os.path.exists(path):
                 with open(path, "r", errors="replace") as f:
                     stream.write(f.read())
                 os.unlink(path)
-        return code
+        return code, None
     # MISMATCH or anything else: fall back.
     for path in (stdout_tmp, stderr_tmp):
         try:
             os.unlink(path)
         except OSError:
             pass
-    return None
+    return None, f"daemon response: {line!r}"
 
 
 def main():
@@ -184,27 +218,20 @@ def main():
     if info is not None:
         # coq_makefile invokes `$(ROCQ) compile $(COQDEBUG) $(TIMING_ARG)
         # $(PROFILE_ARG) $(COQFLAGS) $(COQLIBS) FILE.v` -- `flags` here is
-        # EVERYTHING but FILE.v, which can carry a lot more than the -Q/-R
-        # bindings ROCQ_ZYGOTE_COQLIBS documents (COQFLAGS alone can carry
-        # `-native-compiler ...` and every `-arg X` from _CoqProject --
-        # this very tree's _CoqProject has `-arg -w -arg
-        # -notation-incompatible-prefix`). try_zygote below never sends
-        # `flags` to the daemon at all, only the separate
-        # ROCQ_ZYGOTE_COQLIBS env-var string (matched byte-for-byte
-        # against the daemon's own -Q/-R flags on the OTHER end of the
-        # wire) -- so until this check existed, any flag present on the
-        # real command line but absent from ROCQ_ZYGOTE_COQLIBS was
-        # SILENTLY DROPPED for every zygote-routed file instead of being
-        # honored, as a stock compile of the same invocation would. Only
-        # trust the zygote path when the two agree EXACTLY (same
-        # check-and-fall-back discipline the daemon already applies to
-        # its own per-request coqlibs guard); otherwise fall back to a
-        # real compile with the full, real flags.
-        coqlibs_raw = os.environ.get("ROCQ_ZYGOTE_COQLIBS", "")
-        if flags == coqlibs_raw.split():
-            code = try_zygote(info["group"], info["prefix_file"], file_v, output_v, echo, tmp_base)
-            if code is not None:
-                sys.exit(code)
+        # EVERYTHING but FILE.v, carrying whatever COQFLAGS adds (every
+        # `-arg X` from _CoqProject, the native-compiler flag) ahead of the
+        # -Q/-R bindings. This IS what gets sent to the daemon and what a
+        # NEW daemon for this group gets spawned with -- see the module
+        # docstring for why this is derived here rather than taken from a
+        # separately-configured value.
+        coqlibs_raw = " ".join(flags)
+        code, reason = try_zygote(info["group"], info["prefix_file"], file_v, output_v, echo, tmp_base, coqlibs_raw)
+        if code is not None:
+            record_outcome(file_v, "hit", None)
+            sys.exit(code)
+        record_outcome(file_v, "miss", reason)
+    else:
+        record_outcome(file_v, "miss", "not in manifest")
     sys.exit(real_rocq_compile(flags, file_v))
 
 
