@@ -475,21 +475,31 @@ def touch_reused_targets(vo: str, glob: str, prereqs: list[str]) -> None:
     manufacture freshness beyond what the prerequisites and the real clock
     already support, and never moves a target that is already at least as
     new as everything it depends on.
+
+    All arithmetic here is integer nanoseconds (#841 Review841 R1): a
+    Python float mtime only resolves to ~238ns at current epoch values, so
+    comparing/assigning via `os.path.getmtime`/`os.utime`'s float
+    `(atime, mtime)` form could silently round a target's intended
+    equal-or-newer mtime to BELOW a prerequisite's real mtime (observed:
+    every B*.vo landing 46ns OLDER than A.vo despite the restat logic
+    intending equal-or-newer), making `make` reinvoke this driver on every
+    single no-op run. `st_mtime_ns`/`os.utime(..., ns=...)` keep every value
+    an exact integer nanosecond count, so no such round-trip can occur.
     """
-    mtimes = []
+    mtimes_ns = []
     for path in prereqs:
         try:
-            mtimes.append(os.path.getmtime(path))
+            mtimes_ns.append(os.stat(path).st_mtime_ns)
         except OSError:
             pass
-    if not mtimes:
+    if not mtimes_ns:
         return
-    new_mtime = min(max(mtimes), time.time())
+    new_mtime_ns = min(max(mtimes_ns), time.time_ns())
     for target in (vo, glob):
         if not os.path.exists(target):
             continue
-        if new_mtime > os.path.getmtime(target):
-            os.utime(target, (new_mtime, new_mtime))
+        if new_mtime_ns > os.stat(target).st_mtime_ns:
+            os.utime(target, ns=(new_mtime_ns, new_mtime_ns))
 
 
 def main() -> None:
