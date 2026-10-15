@@ -558,19 +558,21 @@ module XDeclCache = struct
     let (remaining, h) = go (cap, 0x9E3779B1) c in
     (h, cap - remaining)
 
-  type reason = Open | BoundUniv | ReifyFailed | OverCap | HeapGuard
+  type reason = Open | BoundUniv | ReifyFailed | OverCap | HeapGuard | StackOverflow
 
   let unkeyable_open = ref 0
   let unkeyable_bound_univ = ref 0
   let unkeyable_reify_failed = ref 0
   let unkeyable_over_cap = ref 0
   let unkeyable_heap_guard = ref 0
+  let unkeyable_stack_overflow = ref 0
   let record_unkeyable = function
     | Open -> incr unkeyable_open
     | BoundUniv -> incr unkeyable_bound_univ
     | ReifyFailed -> incr unkeyable_reify_failed
     | OverCap -> incr unkeyable_over_cap
     | HeapGuard -> incr unkeyable_heap_guard
+    | StackOverflow -> incr unkeyable_stack_overflow
 
   type side_keyed = { h1 : int; h2 : int; sz : int; refs : ModPath.t list }
   type side_result = Keyed of side_keyed | Unkeyable of reason
@@ -582,7 +584,7 @@ module XDeclCache = struct
      shareable subset. Some: keyable; [refs] is every
      Const/Ind/Construct/Proj ModPath.t the term mentions, still to be
      checked against the library-import criterion by [refs_shareable]. *)
-  let classify_side lft t =
+  let classify_side_inner lft t =
     if not (heap_guard_ok ()) then Unkeyable HeapGuard
     else match (try `Ok (fterm_nodes max_nodes t) with Over_cap -> `Cap) with
     | `Cap -> Unkeyable OverCap
@@ -598,6 +600,17 @@ module XDeclCache = struct
                | `Cap -> Unkeyable OverCap
                | `Ok (h2, sz) -> Keyed { h1 = Constr.hash c; h2; sz; refs })
           | exception Not_shareable -> Unkeyable Open))
+
+  (* A term whose compact shape is small but whose nesting is very deep
+     (e.g. a long chain of sequential updates -- the same PlainInit shape
+     that drives the heap guard) can overflow the native OCaml stack in
+     [fterm_nodes]/[hash_and_size]/[scan]/[CClosure.to_constr] itself,
+     none of which are tail-recursive. Caught here, once per probe,
+     rather than left to kill the whole process: real case on A6 (64G
+     heap guard run, ~64,000,000 probes in). *)
+  let classify_side lft t =
+    try classify_side_inner lft t with Stack_overflow -> Unkeyable StackOverflow
+
 
   type entry = { verdict : bool; call : int }
 
@@ -769,10 +782,11 @@ module XDeclCache = struct
       in
       let top10 = List.filteri (fun i _ -> i < 10) top in
       Printf.eprintf
-        "ROCQ_CONV_XDECL_STATS probes=%d repeats=%d repeats_success=%d shareable_repeats_success=%d table_entries=%d table_words=%d max_nodes=%d max_heap_words=%d heap_guard_tripped=%b unkeyable_open=%d unkeyable_bound_univ=%d unkeyable_reify_failed=%d unkeyable_over_cap=%d unkeyable_heap_guard=%d\n%!"
+        "ROCQ_CONV_XDECL_STATS probes=%d repeats=%d repeats_success=%d shareable_repeats_success=%d table_entries=%d table_words=%d max_nodes=%d max_heap_words=%d heap_guard_tripped=%b unkeyable_open=%d unkeyable_bound_univ=%d unkeyable_reify_failed=%d unkeyable_over_cap=%d unkeyable_heap_guard=%d unkeyable_stack_overflow=%d\n%!"
         !probes !repeats !repeats_success !shareable_repeats_success
         (Tbl.length table) (approx_table_words ()) max_nodes max_heap_words !heap_guard_tripped
-        !unkeyable_open !unkeyable_bound_univ !unkeyable_reify_failed !unkeyable_over_cap !unkeyable_heap_guard;
+        !unkeyable_open !unkeyable_bound_univ !unkeyable_reify_failed !unkeyable_over_cap !unkeyable_heap_guard
+        !unkeyable_stack_overflow;
       Printf.eprintf
         "ROCQ_CONV_XDECL_WEIGHT key_cost_words=%.0f key_cost_cpu_seconds=%.6f repeat_outermost_count=%d repeat_alloc_words=%.0f repeat_cpu_seconds=%.6f\n%!"
         !key_cost_words !key_cost_cpu_seconds !repeat_outermost_count !repeat_alloc_words !repeat_cpu_seconds;
