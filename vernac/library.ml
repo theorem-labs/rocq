@@ -414,7 +414,7 @@ let compute_modes ~cmd_safe ~roots contents =
   while not (Queue.is_empty queue) do
     let dir = Queue.pop queue in
     let m = DirPath.Map.find dir contents in
-    Array.iter (fun (d, _) ->
+    Array.iter (fun (d, _, _, _) ->
         if not (DirPath.Set.mem d m.library_safe_deps) then mark d)
       m.library_deps
   done;
@@ -443,7 +443,7 @@ let check_closure_conflicts ~cmd_safe ~roots contents =
       if not (DirPath.Set.mem dir !visited) then begin
         visited := DirPath.Set.add dir !visited;
         let m = DirPath.Map.find dir contents in
-        Array.iter (fun (d, _) ->
+        Array.iter (fun (d, _, _, _) ->
             if not (DirPath.Set.mem d m.library_safe_deps) then visit d)
           m.library_deps
       end
@@ -621,11 +621,17 @@ let require_library_syntax_from_dirpath ~cmd_safe ~intern modrefl =
 (*s [save_library dir] ends library [dir] and save it to the disk. *)
 
 let current_deps () =
-  (* Only keep the roots of the dependency DAG *)
+  (* Only keep the roots of the dependency DAG -- D1's full transitive
+     closure (comp_transitive_deps/md_transitive_deps) lands separately
+     with commit 1 on sami/861-loc-free-identity; this stays byte-for-byte
+     the same filtering as stock so compute_modes/check_closure_conflicts
+     (above, unchanged) are unaffected (binary-equivalence-taiga#841 D1). *)
   let map (root, m) =
     if root then
       let _, m = try_find_library m in
-      Some (m.library_name, m.library_digests)
+      Some (m.library_name, m.library_digests,
+            Safe_typing.iface_of_library m.library_data.md_compiled,
+            Safe_typing.objects_digest_of_library m.library_data.md_compiled)
     else None
   in
   List.map_filter map !libraries_loaded_list
@@ -694,7 +700,7 @@ let save_library_struct ~output_native_objects dir =
     ; md_syntax_objects
     ; md_objects
     } in
-  if Array.exists (fun (d,_) -> DirPath.equal d dir) sd.md_deps then
+  if Array.exists (fun (d,_,_,_) -> DirPath.equal d dir) sd.md_deps then
     error_recursively_dependent_library dir;
   sd, md, vmlib, ast
 

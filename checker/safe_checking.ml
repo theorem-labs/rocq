@@ -43,7 +43,7 @@ let import senv opac clib digest =
   let mb = Safe_typing.module_of_library clib in
   let opac = Mod_checking.check_module env opac (Names.ModPath.MPfile dp) mb in
   let vmtab = Vmlibrary.inject (Vmlibrary.export vmtab) in
-  let (_,senv) = Safe_typing.import clib vmtab digest senv in senv, opac
+  let (_,senv) = Safe_typing.import_strict clib vmtab digest senv in senv, opac
 
 let import senv opac clib digest : _ * _ =
   NewProfile.profile "import"
@@ -59,4 +59,4 @@ let unsafe_import senv clib digest =
   let env = env_of_library senv clib in
   let vmtab, clib = compile_vm_library env clib in
   let vmtab = Vmlibrary.inject (Vmlibrary.export vmtab) in
-  let (_,senv) = Safe_typing.import clib vmtab digest senv in senv
+  let (_,senv) = Safe_typing.import_strict clib vmtab digest senv in senv

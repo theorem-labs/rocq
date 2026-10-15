@@ -1802,12 +1802,27 @@ let end_library ~output_native_objects dir =
   let { Lib.info; interp_objects = lib_stack; synterp_objects = lib_stack_syntax; } =
     Lib.end_compilation dir
   in
-  let mp,cenv,vmlib,ast = Global.export ~output_native_objects dir in
-  assert (ModPath.equal mp (MPfile dir));
   let drop_anticipate {Lib.substobjs; keepobjs; escapeobjs; anticipateobjs=_} =
     (substobjs, keepobjs, escapeobjs)
   in
-  cenv,(drop_anticipate lib_stack),(drop_anticipate lib_stack_syntax),vmlib,ast,info
+  (* binary-equivalence-taiga#841 D4: compute md_objects/md_syntax_objects
+     (Anticipate-dropped, matching exactly what is returned/serialized
+     below) BEFORE calling Global.export, so the objects digest -- and
+     commit 1's Dvo_iface, once it lands and consumes the same values --
+     sees the REQUIRE-leaf-free value that ends up on disk, never a
+     different one. WIP: not yet run through commit 1's shared Loc-erasing
+     normalization hook (lands with sami/861-loc-free-identity) -- this is
+     the raw, pre-normalization digest, sound but less precise (changes on
+     every length-changing edit, not just real Hints/Instances/Notations
+     changes) until rebased. *)
+  let md_objects = drop_anticipate lib_stack in
+  let md_syntax_objects = drop_anticipate lib_stack_syntax in
+  let objects_digest =
+    Digest.string (Marshal.to_string (md_syntax_objects, md_objects) [])
+  in
+  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest dir in
+  assert (ModPath.equal mp (MPfile dir));
+  cenv,md_objects,md_syntax_objects,vmlib,ast,info
 
 (** {6 Iterators} *)
 

@@ -604,10 +604,20 @@ let [_v_sfb;_v_struc;_v_sign;_v_mexpr;_v_impl;v_module;_v_modtype] : _ Vector.t 
 (** kernel/safe_typing *)
 
 let v_vodigest = v_sum_c ("module_impl",0, [| [|v_string|]; [|v_string;v_string|] |])
-let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest|])
+(* kernel/safe_typing's iface_table: a per-declaration (Id.t * Digest.t)
+   array (binary-equivalence-taiga#841 D1/D3). Field ORDER below must match
+   kernel/safe_typing.ml's library_info/compiled_library record field order
+   EXACTLY (BugFinderRedTeamV2 B1: Validate.validate + Obj.obj is an
+   unchecked cast once bytes pass this schema -- a same-arity, wrong-order
+   mistake here is invisible to the type checker and silently misreads the
+   library on load). *)
+let v_iface = v_array (v_pair v_id v_string)
+let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest;v_opt v_iface;v_string|])
 let v_flags = v_tuple "flags" [|v_bool|] (* Allow Rewrite Rules *)
 let v_compiled_lib =
-  v_tuple "compiled" [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps; v_flags|]
+  v_tuple "compiled"
+    [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps; v_flags;
+      v_opt v_iface; v_string|]
 
 (** Toplevel structures in a vo (see Cic.mli) *)
 

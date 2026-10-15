@@ -25,7 +25,19 @@ let (/) = Filename.concat
 let coq_version = "9.2+rc2"
 (* format: "%d%02d%d" major minor patch
    for pre-release version (eg 9.2+alpha), use the previous minor, and patch = 99 *)
-let vo_magic = 90199
+(* sami/841-usage-cutoff: +1000 over upstream's 90199, a reserved fork-only
+   range (binary-equivalence-taiga#841 "vo_magic"): this fork widens the
+   on-disk dependency/interface-table format (kernel/safe_typing.ml's
+   library_info, vernac/library.ml's md_deps/library_deps: 2-tuple ->
+   4-tuple) and compiled_library (adds comp_iface, comp_objects_digest).
+   v1 (sami/usage-cutoff) bumped to exactly 90200, which review flagged as
+   a real collision risk since that is upstream's own formula result for
+   9.2, not just a suspicious coincidence -- not repeated here. Loading a
+   pre-fork (or any other mismatched) .vo under this fork fails the
+   version check with a plain "bad version number" error instead of
+   silently misreading bytes under a wider static type (the original v1
+   bug this value's predecessor, 90200, was introduced to fix). *)
+let vo_magic = 91199
 let is_a_released_version = false
 
 (** Default OCaml binaries *)
