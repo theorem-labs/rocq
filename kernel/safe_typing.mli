@@ -15,6 +15,23 @@ type vodigest =
 
 val digest_match : actual:vodigest -> required:vodigest -> bool
 
+(** binary-equivalence-taiga#841 D1/D3/D4: see kernel/safe_typing.ml's doc
+    comments on [iface_table], [dep_ok], [check_required]/
+    [check_required_strict], and [export]/[import]/[import_strict] for the
+    full soundness argument. WIP on branch sami/841-usage-cutoff: D1's full
+    transitive-closure field ([comp_transitive_deps]) is not yet present
+    here -- it lands with commit 1 on sami/861-loc-free-identity, which
+    this branch rebases onto. Until then [comp_deps]/[dep_ok] operate over
+    direct roots only, same as stock, so this slice is independently
+    buildable but does NOT yet close the Blocker (two-levels-down) on its
+    own -- see #841's "Red team, round 1" section. *)
+type iface_table = (Id.t * Digest.t) array
+val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
+val dep_ok :
+  actual:vodigest -> required:vodigest ->
+  actual_iface:iface_table option -> required_iface:iface_table option ->
+  actual_objects_digest:Digest.t -> required_objects_digest:Digest.t -> bool
+
 (** {6 Safe environments } *)
 
 (** Since we are now able to type terms, we can define an abstract type
@@ -239,6 +256,8 @@ type compiled_library
 val dirpath_of_library : compiled_library -> DirPath.t
 val module_of_library : compiled_library -> Mod_declarations.module_body
 val replace_module_of_library : compiled_library -> Mod_declarations.module_body -> compiled_library
+val iface_of_library : compiled_library -> iface_table option
+val objects_digest_of_library : compiled_library -> Digest.t
 (** Used by the checker, which recompiles the VM bytecode of every constant
     instead of trusting the one serialized in the file. *)
 val univs_of_library : compiled_library -> Sorts.QContextSet.t * Univ.ContextSet.t
@@ -247,11 +266,18 @@ val check_flags_for_library : compiled_library -> safe_transformer0
 val start_library : DirPath.t -> ModPath.t safe_transformer
 
 val export :
-  output_native_objects:bool ->
+  output_native_objects:bool -> objects_digest:Digest.t ->
   safe_environment -> DirPath.t ->
     ModPath.t * compiled_library * Vmlibrary.compiled_library * Nativelib.native_library
 
 val import : compiled_library -> Vmlibrary.on_disk -> vodigest ->
+  ModPath.t safe_transformer
+
+(** The ONLY entry point [checker/safe_checking.ml] may call (D2): every
+    dependency is checked by whole-library digest equality alone, with
+    [dep_ok]'s relaxed branch not merely untaken but absent from this
+    function's call graph. *)
+val import_strict : compiled_library -> Vmlibrary.on_disk -> vodigest ->
   ModPath.t safe_transformer
 
 (** {6 Safe typing judgments } *)

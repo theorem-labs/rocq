@@ -107,7 +107,65 @@ let digest_match ~actual ~required =
   match actual, required with
   | Dvo_or_vi d1, Dvo_or_vi d2 -> String.equal d1 d2
 
-type library_info = DirPath.t * vodigest
+(** Per-declaration interface digest of one compiled library's exported
+    constants/inductives: for every top-level [SFBconst]/[SFBmind] entry, a
+    digest of everything a dependent could ever observe through it -- type,
+    universe context, typing flags, and the actual value when transparent --
+    deliberately excluding an opaque proof's own term and whether the
+    constant is [Undef] ([Admitted], no body) or [OpaqueDef] (whatever
+    handle [Qed] assigned it): a dependent can never unfold either one, so
+    neither is part of the exported interface. [None] means the library's
+    top level isn't a flat run of constants/inductives (a nested module,
+    module type, or a rewrite-rules block), so no relaxed check is
+    available for it: a dependent of such a library falls back to the
+    whole-library digest only, i.e. stock behavior. *)
+type iface_table = (Id.t * Digest.t) array
+
+(** [recorded] is what a dependent saw of a library at its own compile
+    time; [live] is that library's current table. Every entry the
+    dependent recorded must still be present with the same digest; extra
+    entries in [live] (declarations added since) are ignored -- that is
+    exactly what lets an unused addition skip invalidating existing
+    dependents. A name the dependent recorded that has since vanished (a
+    statement removed or renamed) fails the check. *)
+let iface_subset_ok ~recorded ~live =
+  let find id = Array.find_opt (fun (id', _) -> Id.equal id id') live in
+  Array.for_all (fun (id, d) -> match find id with
+      | Some (_, d') -> String.equal d d'
+      | None -> false)
+    recorded
+
+(** A dependency record as it is written to and read from disk: the
+    library's name, its whole-library digest, its per-declaration interface
+    table (if representable), and the digest of its exported vernac-object
+    state (Hints/Instances/Notations/Ltac2/Canonical Structures -- computed
+    by the vernac layer, which is the only layer that can see
+    [Declaremods.library_objects]; the kernel only ever stores and compares
+    the opaque [Digest.t] it is handed). Every library has SOME object
+    state (possibly empty), so this is never optional -- unlike
+    [iface_table option], which is genuinely absent for a library whose top
+    level isn't a flat constant/inductive run. *)
+type library_info = DirPath.t * vodigest * iface_table option * Digest.t
+
+(** The relaxed acceptance predicate, shared by every loader that is
+    allowed to use it (the kernel's own [check_required] below, and
+    vernac/library.ml's and topbin/rocqnative.ml's own
+    [intern_mandatory_library]): accept iff the whole-library digest
+    matches (stock, unconditionally sound), OR BOTH (a) every declaration
+    the dependent recorded still has an identical digest in the live
+    table, AND (b) the live library's exported-object digest is EXACTLY
+    (not a subset) what the dependent recorded -- any change to
+    Hints/Instances/Notations/Ltac2/Canonical Structures anywhere in the
+    library forces a rebuild, deliberately conservative. [coqchk] must
+    NEVER call this: see [check_required_strict] below, which is the
+    original digest-only check with nothing else reachable from it. *)
+let dep_ok ~actual ~required ~actual_iface ~required_iface
+    ~actual_objects_digest ~required_objects_digest =
+  digest_match ~actual ~required ||
+  ((match required_iface, actual_iface with
+    | Some recorded, Some live -> iface_subset_ok ~recorded ~live
+    | _ -> false) &&
+   Digest.equal required_objects_digest actual_objects_digest)
 
 (** Functor and funsig parameters, most recent first *)
 type module_parameters = (MBId.t * module_type_body) list
@@ -179,6 +237,17 @@ type compiled_library = {
   comp_sorts : Sorts.QContextSet.t;
   comp_deps : library_info array;
   comp_flags : permanent_flags;
+  (** [None] when the library's top level isn't a flat constant/inductive
+      run (see [iface_table]'s doc comment). *)
+  comp_iface : iface_table option;
+  (** Digest of this library's exported [Declaremods.library_objects]
+      (Hints/Instances/Notations/Ltac2/Canonical Structures), computed by
+      the vernac layer from the AS-EXPORTED value (post any
+      [Require (safe)]-style filtering, never re-derived from source) and
+      handed in through [export]'s [~objects_digest] parameter -- the
+      kernel treats it as an opaque [Digest.t] it stores and compares,
+      never interprets. *)
+  comp_objects_digest : Digest.t;
 }
 
 type reimport = compiled_library * Vmlibrary.on_disk * vodigest
@@ -186,6 +255,8 @@ type reimport = compiled_library * Vmlibrary.on_disk * vodigest
 type required_lib = {
   req_root : bool; (* true if a root of the dependency DAG *)
   req_digest : vodigest;
+  req_iface : iface_table option;
+  req_objects_digest : Digest.t;
 }
 
 (** Part of the safe_env at a section opening time to be backtracked *)
@@ -630,18 +701,56 @@ let check_empty_struct senv =
     with the correct digests. *)
 
 let check_required current_libs needed =
-  let check current (id, required) = match DirPath.Map.find_opt id current with
+  let check current (id, required, required_iface, required_objects_digest) =
+    match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
-  | Some { req_root; req_digest = actual } ->
-    if not (digest_match ~actual ~required) then
+  | Some { req_root; req_digest = actual; req_iface = actual_iface;
+           req_objects_digest = actual_objects_digest } ->
+    (* Fast path: the dependency is byte-identical to what this library was
+       compiled against. Fallback (see [dep_ok]): the dependency changed,
+       but everything this dependent could have observed through it --
+       its recorded [iface_table] subset and its exported-object digest --
+       still matches the dependency's current state, so the dependent's
+       own precompiled terms remain well-typed in the new environment.
+       NEVER used by coqchk: see [check_required_strict]. *)
+    if not (dep_ok ~actual ~required ~actual_iface ~required_iface
+              ~actual_objects_digest ~required_objects_digest) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
     else if req_root then
       (* the library is being transitively required, not a root anymore *)
-      DirPath.Map.set id { req_root = false; req_digest = actual } current
+      DirPath.Map.set id { req_root = false; req_digest = actual;
+                            req_iface = actual_iface;
+                            req_objects_digest = actual_objects_digest } current
     else
       (* nothing to do *)
+      current
+  in
+  Array.fold_left check current_libs needed
+
+(** The original, pre-fork digest-only check: no fallback branch exists in
+    this function at all (not merely unreached -- there is nothing here for
+    a future edit to accidentally re-enable). This is the ONLY check
+    [checker/safe_checking.ml] may call (via [import_strict] below); its
+    behavior against any tree is byte-for-byte what Rocq did before this
+    fork existed, which is the entire soundness argument for coqchk: see
+    binary-equivalence-taiga#841 "D2". *)
+let check_required_strict current_libs needed =
+  let check current (id, required, _required_iface, _required_objects_digest) =
+    match DirPath.Map.find_opt id current with
+  | None ->
+    CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
+  | Some { req_root; req_digest = actual; req_iface = actual_iface;
+           req_objects_digest = actual_objects_digest } ->
+    if not (digest_match ~actual ~required) then
+      CErrors.user_err Pp.(pr_sequence str
+        ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
+    else if req_root then
+      DirPath.Map.set id { req_root = false; req_digest = actual;
+                            req_iface = actual_iface;
+                            req_objects_digest = actual_objects_digest } current
+    else
       current
   in
   Array.fold_left check current_libs needed
@@ -1526,6 +1635,8 @@ let dirpath_of_library lib = lib.comp_name
 
 let module_of_library lib = lib.comp_mod
 let replace_module_of_library lib mb = { lib with comp_mod = mb }
+let iface_of_library lib = lib.comp_iface
+let objects_digest_of_library lib = lib.comp_objects_digest
 
 let univs_of_library lib = lib.comp_sorts, lib.comp_univs
 
@@ -1563,7 +1674,58 @@ let start_library dir senv =
     opaquetab = Opaqueproof.empty_opaquetab;
   }
 
-let export ~output_native_objects senv dir =
+(** Canonicalize a constant's body for interface-digest purposes. Both
+    [Undef] ([Admitted], no body at all) and [OpaqueDef] (a [Qed]'d proof,
+    stored as an opaque-table handle whose value is irrelevant here)
+    collapse to the same nullary marker: a dependent can unfold neither
+    one, so swapping one for the other -- the whole point of this cutoff
+    -- must not perturb the digest. [Def]/[Primitive]/[Symbol] are kept
+    as-is, since those bodies ARE visible to a dependent (conversion can
+    unfold a transparent [Def]). *)
+type canon_const_body =
+  | CBNoBody
+  | CBDef of Constr.t
+  | CBPrimitive of CPrimitives.t
+  | CBSymbol of bool
+
+let canon_const_body (cb : constant_body) : canon_const_body =
+  match cb.const_body with
+  | Undef _ | OpaqueDef _ -> CBNoBody
+  | Def v -> CBDef v
+  | Primitive p -> CBPrimitive p
+  | Symbol b -> CBSymbol b
+
+let iface_digest_of_const (cb : constant_body) : Digest.t =
+  Digest.string (Marshal.to_string
+    (cb.const_hyps, cb.const_univ_hyps, canon_const_body cb, cb.const_type,
+     cb.const_relevance, cb.const_universes, cb.const_inline_code,
+     cb.const_typing_flags)
+    [])
+
+(* Inductive declarations have no opaque component (constructors and
+   eliminators are always fully transparent), so their whole body is part
+   of the interface as-is. *)
+let iface_digest_of_mind (mib : mutual_inductive_body) : Digest.t =
+  Digest.string (Marshal.to_string mib [])
+
+let iface_digest_of_sfb = function
+  | SFBconst cb -> Some (iface_digest_of_const cb)
+  | SFBmind mib -> Some (iface_digest_of_mind mib)
+  (* A nested module/module type or a rewrite-rules block: no attempt to
+     give it a per-declaration interface digest here, so a library
+     containing one falls back to the whole-library digest entirely
+     (comp_iface = None below). *)
+  | SFBrules _ | SFBmodule _ | SFBmodtype _ -> None
+
+let iface_table_of_struct (sb : structure_body) : iface_table option =
+  try
+    Some (Array.of_list (List.map (fun (id, sfb) -> match iface_digest_of_sfb sfb with
+        | Some d -> (id, d)
+        | None -> raise Exit)
+        sb))
+  with Exit -> None
+
+let export ~output_native_objects ~objects_digest senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
   let str = NoFunctor (List.rev senv.revstruct) in
@@ -1576,8 +1738,42 @@ let export ~output_native_objects senv dir =
   let permanent_flags = {
     rewrite_rules_allowed = Environ.rewrite_rules_allowed senv.env;
   } in
-  let filter_dep (dp, { req_root; req_digest }) =
-    if req_root then Some (dp, req_digest) else None
+  (* Disqualify a library whose module carries non-empty retroknowledge
+     ([Register]/[Primitive]) from the relaxed path entirely: retroknowledge
+     lives inside [comp_mod] (set via [make_module_body] above), invisible
+     to both [comp_iface] (walks only [SFBconst]/[SFBmind]) and the vernac
+     objects digest (kernel has no visibility into [Declaremods]). A
+     retroknowledge-only change could otherwise pass both checks while
+     silently changing VM/native-compute semantics (OracleRedTeamV2,
+     binary-equivalence-taiga#841). Falling back to [None] here forces
+     [dep_ok]'s [digest_match]-only path for such a library, the same
+     "fall back to stock behavior when this mechanism can't represent
+     something" pattern already used for nested modules/module
+     types/rewrite-rules blocks below. In practice this only ever disarms
+     Corelib (the only thing that calls [Register]/[Primitive]), which is
+     toolchain-pinned and outside any agent's edit loop. #861's `Dvo_iface`
+     (the whole-library identity, commit 1) digests [comp_mod] wholesale
+     and so already covers retroknowledge on its own path (confirmed by
+     Plan861InterfaceReuse against kernel/modops.ml:169-170,195-197 and
+     checker/{safe_checking.ml:24,mod_checking.ml:317}) -- this
+     disqualification is needed only for THIS design's second, finer
+     per-declaration fallback layer, which Dvo_iface does not gate. *)
+  let has_retroknowledge = not (List.is_empty senv.local_retroknowledge) in
+  let comp_iface = if has_retroknowledge then None else match str with
+    | NoFunctor sb -> iface_table_of_struct sb
+    | MoreFunctor _ -> None
+  in
+  (* v2's D1 (full transitive closure, [comp_transitive_deps]/
+     [md_transitive_deps] as a SEPARATE field) lands as part of commit 1 on
+     `sami/861-loc-free-identity`; this slice keeps [comp_deps] root-only,
+     byte-for-byte the same filtering stock/v1 already use, so
+     [compute_modes]/[check_closure_conflicts] (which read this exact
+     field) are untouched and this slice is independently buildable and
+     testable before commit 1 exists. Rebasing onto commit 1 swaps this
+     block for the full-closure field without touching [compute_modes] at
+     all (binary-equivalence-taiga#841 "D1"). *)
+  let filter_dep (dp, { req_root; req_digest; req_iface; req_objects_digest }) =
+    if req_root then Some (dp, req_digest, req_iface, req_objects_digest) else None
   in
   let comp_deps = List.map_filter filter_dep (DirPath.Map.bindings senv.required) in
   let lib = {
@@ -1586,12 +1782,14 @@ let export ~output_native_objects senv dir =
     comp_univs = senv.univ;
     comp_sorts = senv.qualities;
     comp_deps = Array.of_list comp_deps;
-    comp_flags = permanent_flags
+    comp_flags = permanent_flags;
+    comp_iface;
+    comp_objects_digest = objects_digest;
   } in
   let vmlib = Vmlibrary.export @@ Environ.vm_library senv.env in
   mp, lib, vmlib, (ast, symbols)
 
-let import lib vmtab vodigest senv =
+let import_gen ~check_required lib vmtab vodigest senv =
   let senv = check_flags_for_library lib senv in
   let required = check_required senv.required lib.comp_deps in
   if DirPath.equal (ModPath.dp senv.modpath) lib.comp_name then
@@ -1623,7 +1821,9 @@ let import lib vmtab vodigest senv =
     if DirPath.Map.mem lib.comp_name required then
       (* should probably be an error, we are requiring the same library twice *)
       required
-    else DirPath.Map.add lib.comp_name { req_root = true; req_digest = vodigest } required
+    else DirPath.Map.add lib.comp_name
+        { req_root = true; req_digest = vodigest; req_iface = lib.comp_iface;
+          req_objects_digest = lib.comp_objects_digest } required
   in
   mp,
   { senv with
@@ -1635,6 +1835,16 @@ let import lib vmtab vodigest senv =
     loads = (mp,mb)::senv.loads;
     sections;
   }
+
+let import lib vmtab vodigest senv =
+  import_gen ~check_required lib vmtab vodigest senv
+
+(** The ONLY entry point [checker/safe_checking.ml] may call: every
+    dependency is checked by whole-library digest equality alone, with the
+    relaxed fallback not merely untaken but absent from this function's own
+    body (see [check_required_strict]'s doc comment). *)
+let import_strict lib vmtab vodigest senv =
+  import_gen ~check_required:check_required_strict lib vmtab vodigest senv
 
 (** {6 Interactive sections} *)
 

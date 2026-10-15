@@ -88,7 +88,7 @@ type library_disk = {
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t) array;
   md_ocaml : string;
   md_info : Library_info.t;
   (* Subset of the direct dependencies (i.e. of the dirpaths appearing in
@@ -103,7 +103,7 @@ type summary_disk = {
 type library_t = {
   library_name : compilation_unit_name;
   library_data : library_disk;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t) array;
   library_safe_deps : DirPath.Set.t;
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
@@ -343,10 +343,19 @@ and intern_library_deps ~intern (needed, contents) dir m =
       (needed, contents) m.library_deps in
   ((false, dir) :: needed, contents)
 
-and intern_mandatory_library ~intern caller (needed, contents) (dir,d) =
+and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_objects_digest) =
   let needed, contents = intern_library ~intern (needed, contents) dir in
-  let digest = digest_of_dep ~contents dir in
-  let () = if not (Safe_typing.digest_match ~actual:digest ~required:d) then
+  let digest, live_iface, live_objects_digest = digest_of_dep ~contents dir in
+  (* Shared predicate (binary-equivalence-taiga#841 D3): identical
+     acceptance rule to kernel/safe_typing.ml's own [check_required] and
+     topbin/rocqnative.ml's [intern_mandatory_library], never reimplemented
+     by hand here. *)
+  let ok =
+    Safe_typing.dep_ok ~actual:digest ~required:d
+      ~actual_iface:live_iface ~required_iface:d_iface
+      ~actual_objects_digest:live_objects_digest ~required_objects_digest:d_objects_digest
+  in
+  let () = if not ok then
     let from = library_full_filename caller in
     user_err
       (str "Compiled library " ++ DirPath.print caller ++
@@ -358,10 +367,12 @@ and intern_mandatory_library ~intern caller (needed, contents) (dir,d) =
 
 and digest_of_dep ~contents dir =
   match DirPath.Map.find_opt dir contents with
-  | Some m -> m.library_digests
+  | Some m -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled,
+              Safe_typing.objects_digest_of_library m.library_data.md_compiled
   | None ->
     match find_library dir with
-    | Some (_, m) -> m.library_digests
+    | Some (_, m) -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled,
+                     Safe_typing.objects_digest_of_library m.library_data.md_compiled
     | None ->
       anomaly Pp.(str "Missing library " ++ DirPath.print dir ++
                   str " while interning dependencies.")
