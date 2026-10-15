@@ -56,4 +56,11 @@ val declare : local:Libobject.locality ->
   Globnames.extended_global_reference UserWarn.with_qf option -> Id.t ->
   onlyparsing:bool -> Notation_term.interpretation -> unit
 
+(** binary-equivalence-taiga#841 round 7 (ab1): if [obj] is an
+    [ABBREVIATION] libobject, [Some (id, digest)] where [digest] covers
+    exactly what a dependent can observe through the abbreviation's own
+    short name -- see [Abbreviation.ml]'s doc comment on
+    [cutoff_abbrev_entry]. *)
+val cutoff_abbrev_entry : Libobject.obj -> (Id.t * Digest.t) option
+
 val import : int -> Libnames.full_path -> Globnames.abbreviation -> unit

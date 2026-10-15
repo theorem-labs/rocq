@@ -108,16 +108,21 @@ let digest_match ~actual ~required =
   | Dvo_or_vi d1, Dvo_or_vi d2 -> String.equal d1 d2
 
 (** Per-declaration interface digest of one compiled library's exported
-    constants/inductives: for every top-level [SFBconst]/[SFBmind] entry, a
-    digest of everything a dependent could ever observe through it -- type,
-    universe context, typing flags, and the actual value when transparent --
-    deliberately excluding an opaque proof's own term and whether the
-    constant is [Undef] ([Admitted], no body) or [OpaqueDef] (whatever
-    handle [Qed] assigned it): a dependent can never unfold either one, so
-    neither is part of the exported interface. [None] means the library's
-    top level isn't a flat run of constants/inductives (a nested module,
-    module type, or a rewrite-rules block), so no relaxed check is
-    available for it: a dependent of such a library falls back to the
+    constants/inductives, keyed by bare [Id.t]: for every [SFBconst]/
+    [SFBmind] entry anywhere in the library -- at the top level or nested
+    inside any number of [Module]/[Module Type]s, recursively, see
+    [iface_entries_of_sfb]'s doc comment -- a digest of everything a
+    dependent could ever observe through it -- type, universe context,
+    typing flags, and the actual value when transparent -- deliberately
+    excluding an opaque proof's own term and whether the constant is
+    [Undef] ([Admitted], no body) or [OpaqueDef] (whatever handle [Qed]
+    assigned it): a dependent can never unfold either one, so neither is
+    part of the exported interface. A rewrite-rules block or an unapplied
+    functor's own body gets a single opaque, exact-match-only entry
+    instead (same doc comment). [None] is reserved for a library this
+    mechanism cannot represent AT ALL (one with non-empty
+    retroknowledge, [Register]/[Primitive] -- see [export]'s own doc
+    comment on [has_retroknowledge]): such a library falls back to the
     whole-library digest only, i.e. stock behavior. *)
 type iface_table = (Id.t * Digest.t) array
 
@@ -244,41 +249,19 @@ type library_info =
     while only EXTRA, entirely NEW ids appear (from any library) is the
     ordinary, G1-intended "unused addition," explicitly allowed.
 
-    A library whose OWN [iface_table] is [None] (nested module) cannot be
-    enumerated into the per-id table at all, so a SEPARATE digest
-    ([closure_none_digest]) covers the sorted [(DirPath.t, vodigest)]
-    pairs of every None-iface entry in the closure: if such a library's
-    content changes (its own digest differs) or one is added/removed,
-    this digest changes and the check fails -- scoped to libraries that
-    ACTUALLY changed, so an untouched, unrelated nested-module library
-    anywhere in a large closure (e.g. the prelude) does not poison every
-    reuse decision. A name hidden inside such a library that collides
-    with something ADDED elsewhere (the deeper half of g7mod, Review841
-    round 5/"g7mod") is NOT covered by this digest (it does not change
-    when the OTHER library changes) -- flagged as a narrower residual
-    gap, same risk class as the still-open G8/D1 gap: a dev-loop signal
-    that can lie about what a fresh compile would do, never a path to an
-    unsound ACCEPT at grading time (grading always recompiles from
-    source; see the module-level soundness argument).
-
-    Tried and reverted (CutoffG7b, binary-equivalence-taiga#841): making
-    the "new [id] anywhere is an allowed addition" relaxation strict
-    (refuse ANY new [(dp, id)] pair, not just one colliding with an
-    already-tracked [id]) whenever the dependent's recorded closure
-    contains at least one None-iface library. Measured unsound in
-    practice, not merely theoretically conservative: the implicit
-    prelude itself contributes at least one None-iface library to EVERY
-    compile's closure, so this blanket condition is true for every
-    ordinary dependent, not just ones that deliberately use a nested
-    [Module] -- it regressed [unused_addition_still_reused],
-    [coqchk_strict_rejects_what_loader_accepts] and
-    [g7_shadowing_refused] (all now refuse an ordinary, non-colliding
-    addition), defeating the entire point of the cutoff for the common
-    case rather than narrowly covering the rare one. Closing this
-    residual gap for real needs enumerating names hidden inside a
-    None-iface library's own structure (which [iface_table_of_struct]'s
-    fallback deliberately does not attempt), not a blanket strictness
-    flag keyed off whether one exists anywhere in the closure. *)
+    A library whose OWN [iface_table] is [None] (non-empty
+    retroknowledge only -- see [iface_table]'s doc comment;
+    [iface_entries_of_sfb] now recurses into nested modules/module
+    types and folds a rewrite-rules block or unapplied functor into an
+    opaque PER-CHUNK entry of the SAME per-id table instead of forcing
+    this) cannot be enumerated into the per-id table at all, so a
+    SEPARATE digest ([closure_none_digest]) covers the sorted
+    [(DirPath.t, vodigest)] pairs of every such entry in the closure: if
+    such a library's content changes (its own digest differs) or one is
+    added/removed, this digest changes and the check fails -- scoped to
+    libraries that actually changed, so an untouched, unrelated
+    retroknowledge-bearing library anywhere in a large closure (e.g.
+    Corelib) does not poison every reuse decision. *)
 let flatten_closure (entries : (DirPath.t * vodigest * iface_table option) list) : closure_table * Digest.t =
   let triples =
     List.concat_map (fun (dp, _, iface) -> match iface with
@@ -918,15 +901,27 @@ let check_empty_struct senv =
     with the correct digests. *)
 
 let check_required current_libs needed =
-  (* G7 round 5: computed once per [check_required] call from the FULL
-     live closure (every dirpath currently loaded, not just this
-     library's own direct [needed] array) -- see [flatten_closure]'s doc
-     comment above. *)
+  (* binary-equivalence-taiga#841 round 7 (or1/or2): [actual_closure_none_digest]
+     stays GLOBAL (every None-iface entry anywhere in the consuming
+     process's [current_libs]) exactly as before -- restricting it to
+     just the dps a Some-iface closure_table recorded would silently
+     make it "empty" whenever NO None-iface library is in that recorded
+     set, wrongly MISmatching a recorded NON-empty digest (i.e. any
+     library whose closure includes a retroknowledge-bearing library,
+     which in practice is every ordinary compile, since Corelib's own
+     retroknowledge declarations are always transitively loaded) -- see
+     [flatten_closure]'s doc comment on retroknowledge for why this
+     digest exists at all. Deliberately NOT scoped the way
+     [actual_closure_names] now is below: an untouched, unrelated
+     retroknowledge-bearing library already leaves THIS digest
+     unchanged (only a CHANGE to one forces a mismatch), so the
+     remaining imprecision here is far narrower than the per-id one
+     [or1]/[or2] exist to close. *)
   let live_closure_list =
     DirPath.Map.bindings current_libs
     |> List.map (fun (dp, { req_digest; req_iface; _ }) -> (dp, req_digest, req_iface))
   in
-  let actual_closure_names, actual_closure_none_digest = flatten_closure live_closure_list in
+  let _, actual_closure_none_digest = flatten_closure live_closure_list in
   let check current (id, required, required_iface, required_objects_digest,
                       required_univs_digest, required_vernac_iface,
                       required_closure_names, required_closure_none_digest) =
@@ -947,6 +942,36 @@ let check_required current_libs needed =
        state, so the dependent's own precompiled terms remain well-typed
        in the new environment. NEVER used by coqchk: see
        [check_required_strict]. *)
+    (* binary-equivalence-taiga#841 round 7 (or1/or2): scope the LIVE
+       per-id closure table to exactly the [DirPath.t]s the DEPENDENT's
+       OWN recorded closure named, looked up fresh in [current] (the
+       SAME live map every other check here already uses) -- not every
+       library the CONSUMING process happens to have loaded elsewhere
+       (the previous, globally-scoped [live_closure_list] above). An
+       unrelated library loaded earlier in THIS SAME process (for an
+       entirely different root [Require]) that happens to share a bare
+       [Id.t] with something in [required_closure_names] is invisible to
+       THIS dependent's own fresh compile (it never requires that
+       library), so it must stay invisible here too -- the old,
+       globally-scoped version refused reuse purely because of WHAT ELSE
+       the consuming file happened to import, and in what order, never
+       because of anything about the dependent itself. A [dp] recorded
+       at compile time that is no longer loaded at all is simply dropped
+       from the live side here, same as any other declaration that
+       "vanished" -- [closure_subset_ok] already refuses that case on
+       its own. *)
+    let recorded_dps =
+      Array.fold_left (fun s (dp, _, _) -> DirPath.Set.add dp s)
+        DirPath.Set.empty required_closure_names
+    in
+    let scoped_live_list =
+      DirPath.Set.fold (fun dp acc ->
+          match DirPath.Map.find_opt dp current with
+          | Some { req_digest; req_iface; _ } -> (dp, req_digest, req_iface) :: acc
+          | None -> acc)
+        recorded_dps []
+    in
+    let actual_closure_names, _ = flatten_closure scoped_live_list in
     if not (dep_ok ~actual ~required ~actual_iface ~required_iface
               ~actual_objects_digest ~required_objects_digest
               ~actual_univs_digest ~required_univs_digest
@@ -1984,10 +2009,74 @@ let iface_digest_of_mind (mib : mutual_inductive_body) : Digest.t =
     check that keys off this table. Fix: emit one entry per constructor,
     in addition to the type's own entry, all keyed to the SAME whole-mib
     digest (a constructor's identity is part of the mib as a whole, same
-    as the type's). *)
-let iface_entries_of_sfb (id, sfb) : (Id.t * Digest.t) list option =
+    as the type's).
+
+    binary-equivalence-taiga#841 round 7 (g7mod): a label can also be a
+    nested [Module]/[Module Type], not just a leaf [SFBconst]/[SFBmind],
+    and the PREDECESSOR of this function bailed the WHOLE library to
+    [None] the moment it saw one, hiding every name nested inside it from
+    the G7 shadow check (see [flatten_closure]'s doc comment for why that
+    is unsound: a name hidden this way can be shadowed by a LATER
+    addition elsewhere with nothing to catch it). Fix: recurse into a
+    nested module/module type's own expanded signature ([mod_type],
+    which already reflects any ascribed restriction -- [Module M : T.
+    ... End M.] only exposes [T]'s labels, never the unrestricted body),
+    collecting its [SFBconst]/[SFBmind] entries the SAME way as a
+    top-level one, keyed by their bare (innermost) [Id.t] -- NOT a
+    qualified [M.x] path. This matches the shadow check's existing
+    approximation ([closure_table] is already keyed by bare [Id.t], never
+    a qualified name, since a NEW declaration can only create ambiguity
+    for an UNQUALIFIED/partially-qualified reference, never for one
+    that's fully qualified -- two different libraries can never share a
+    [DirPath.t], so a fully-qualified name is always unambiguous): a
+    nested [M.x] is folded into the very same per-id table a top-level
+    [x] would be, so either can be recognized as colliding with the
+    other, regardless of nesting depth or which side moved.
+
+    Two things remain genuinely unenumerable, and are NOT folded into the
+    per-id table as an ordinary name: a rewrite-rules block ([SFBrules],
+    which retargets an EXISTING [Constant.t] rather than naming a new
+    one, so there is no candidate [Id.t] to key an entry on) and an
+    unapplied functor's own body (a nested module/module type whose own
+    [mod_type] is [MoreFunctor _] -- its parameter-dependent content has
+    no fixed digest, and in any case nothing inside it is nameable from
+    outside without first supplying an argument: there is no [F.x]
+    syntax for an unapplied functor [F]; apply it to get a concrete
+    module, whose OWN expanded signature is enumerated normally wherever
+    THAT module is itself declared). Rather than bailing the WHOLE
+    library to [None] for either case the way the old code did, fold the
+    unenumerable chunk's own content digest into the SAME table under a
+    synthetic [Id.t] scoped to its exact nested path ([opaque_entry_id]):
+    [iface_subset_ok]/[closure_subset_ok] already refuse whenever a
+    recorded [(id, digest)] pair's digest changes or the id vanishes,
+    which is exactly "this unenumerable chunk's content changed or
+    disappeared" -- the SAME exact-match fallback the old whole-library
+    [None] gave this chunk, now scoped to just the chunk instead of
+    poisoning every ordinary, unrelated declaration sharing its
+    library. *)
+let opaque_entry_prefix = "0usage_cutoff_opaque_"
+(** Reserved prefix for a synthetic [Id.t] standing in for a chunk of a
+    library's structure that [iface_entries_of_sfb] cannot give a normal
+    per-name digest ([SFBrules], or a nested module/module type whose own
+    [mod_type] is a [MoreFunctor]). Starts with a digit: Rocq's lexer
+    classifies a digit as [IdentPart], never [Letter]/[IdentSep], so NO
+    identifier the parser ever accepts can start with one
+    ([Unicode.is_valid_ident_initial]) -- no real declaration, in this
+    library or any other, can ever collide with a key built from this
+    prefix. [Id.of_string_soft] still accepts it: the "invalid initial
+    character" refutation it trips is the non-fatal class ([strict=false]
+    only suppresses that one; a genuinely malformed UTF-8 byte sequence
+    would still raise). *)
+let opaque_entry_id (path : string) : Id.t =
+  Id.of_string_soft (opaque_entry_prefix ^ path)
+
+let rec iface_entries_of_struct (path : string) (sb : structure_body)
+    : (Id.t * Digest.t) list =
+  List.concat_map (fun (id, sfb) -> iface_entries_of_sfb path (id, sfb)) sb
+
+and iface_entries_of_sfb (path : string) (id, sfb) : (Id.t * Digest.t) list =
   match sfb with
-  | SFBconst cb -> Some [(id, iface_digest_of_const cb)]
+  | SFBconst cb -> [(id, iface_digest_of_const cb)]
   | SFBmind mib ->
     let d = iface_digest_of_mind mib in
     let names = ref [] in
@@ -1995,22 +2084,28 @@ let iface_entries_of_sfb (id, sfb) : (Id.t * Digest.t) list option =
         names := mip.mind_typename :: !names;
         Array.iter (fun c -> names := c :: !names) mip.mind_consnames)
       mib.mind_packets;
-    Some (List.map (fun n -> (n, d)) !names)
-  (* A nested module/module type or a rewrite-rules block: no attempt to
-     give it a per-declaration interface digest here, so a library
-     containing one falls back to the whole-library digest entirely
-     (comp_iface = None below). *)
-  | SFBrules _ | SFBmodule _ | SFBmodtype _ -> None
+    List.map (fun n -> (n, d)) !names
+  | SFBrules r ->
+    [(opaque_entry_id (path ^ Id.to_string id), Csha256.digest (Marshal.to_string r []))]
+  | SFBmodule mb ->
+    let sub_path = path ^ Id.to_string id in
+    let msig = mod_type mb in
+    (match msig with
+     | NoFunctor sb' -> iface_entries_of_struct (sub_path ^ ".") sb'
+     | MoreFunctor _ ->
+       [(opaque_entry_id sub_path, Csha256.digest (Marshal.to_string msig []))])
+  | SFBmodtype mtb ->
+    let sub_path = path ^ Id.to_string id in
+    let msig = mod_type mtb in
+    (match msig with
+     | NoFunctor sb' -> iface_entries_of_struct (sub_path ^ ".") sb'
+     | MoreFunctor _ ->
+       [(opaque_entry_id sub_path, Csha256.digest (Marshal.to_string msig []))])
 
 let iface_table_of_struct (sb : structure_body) : iface_table option =
-  try
-    Some (Array.of_list (List.concat_map (fun (id, sfb) -> match iface_entries_of_sfb (id, sfb) with
-        | Some l -> l
-        | None -> raise Exit)
-        sb))
-  with Exit -> None
+  Some (Array.of_list (iface_entries_of_struct "" sb))
 
-let export ~output_native_objects ~objects_digest ~vernac_iface senv dir =
+let export ~output_native_objects ~objects_digest ~vernac_iface ~extra_closure_names senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
   let str = NoFunctor (List.rev senv.revstruct) in
@@ -2048,6 +2143,21 @@ let export ~output_native_objects ~objects_digest ~vernac_iface senv dir =
     | NoFunctor sb -> iface_table_of_struct sb
     | MoreFunctor _ -> None
   in
+  (* binary-equivalence-taiga#841 round 7 (ab1): [extra_closure_names] is
+     the vernac layer's own contribution of (Id.t, Digest.t) entries for
+     names this library exports that the kernel's OWN structure_body walk
+     can never see -- currently just abbreviations
+     ([Declaremods.G1Partition.abbrev_iface_entries], sourced from
+     [Abbreviation.cutoff_abbrev_entry]). Folded directly into the SAME
+     [comp_iface] table an ordinary [SFBconst] would land in: that table
+     feeds BOTH [iface_subset_ok] (this library's own content changing
+     forces refusal) and [flatten_closure] (a LATER library's addition
+     colliding with this name is refused too) for free, with no separate
+     mechanism. Dropped when [comp_iface] is [None] (has_retroknowledge):
+     consistent with every other case this mechanism cannot represent,
+     already falling back to the sound, conservative whole-library
+     [digest_match] path. *)
+  let comp_iface = Option.map (fun tbl -> Array.append tbl extra_closure_names) comp_iface in
   (* G7 round 5: this library's (B's) own full transitive closure,
      flattened once here and attached to EVERY kept dependency entry
      below (the SAME value for each -- [dep_ok] treats it as a single

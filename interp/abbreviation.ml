@@ -112,13 +112,58 @@ let subst_abbreviation (subst,abbrev) =
 let classify_abbreviation abbrev =
   if abbrev.abbrev_local = Local then Dispose else Substitute
 
-let inAbbreviation : Id.t -> abbreviation -> obj =
-  declare_named_object {(default_object "ABBREVIATION") with
+(** binary-equivalence-taiga#841 round 7 (ab1): [declare_named_object_full]
+    rather than [declare_named_object], so [cutoff_abbrev_entry] below can
+    [Dyn.Easy.prj] against this object's own tag and read back the
+    abbreviation's own [Id.t] and semantic content directly -- same shape
+    as [Impargs.cutoff_implicits_targets]/
+    [Notation.cutoff_arguments_scope_target]. Produces the EXACT SAME
+    [obj] value [declare_named_object] would have (confirmed from
+    [Libobject]'s own implementation: [declare_named_object odecl] is
+    exactly [let tag = declare_named_object_full odecl in fun id v ->
+    Dyn.Dyn (tag, (id, v))], and [Dyn.Easy.inj x tag = Dyn.Dyn (tag, x)]),
+    so this is a representation-only change with no effect on caching,
+    loading, substitution or discharge. *)
+let objAbbreviation : (Id.t * abbreviation) Libobject.Dyn.tag =
+  declare_named_object_full {(default_object "ABBREVIATION") with
     cache_function = cache_abbreviation;
     load_function = load_abbreviation;
     open_function = filtered_open open_abbreviation;
     subst_function = subst_abbreviation;
     classify_function = classify_abbreviation }
+
+let inAbbreviation (id : Id.t) (abbrev : abbreviation) : obj =
+  Libobject.Dyn.Easy.inj (id, abbrev) objAbbreviation
+
+(** binary-equivalence-taiga#841 round 7 (ab1): an abbreviation
+    (`Notation foo := bar`) is a short NAME, resolvable and shadowable
+    exactly like a `Definition`, but it is not an [SFBconst]/[SFBmind]
+    and so is invisible to the kernel's own [Safe_typing.iface_table] --
+    a dependency that later adds a REAL declaration colliding with an
+    abbreviation's name was invisible to the G7 shadow check, since
+    nothing recorded the abbreviation's name as "already in use" in the
+    first place. Fix: hand [(Id.t, Digest.t)] entries for every
+    exported abbreviation to [Safe_typing.export]'s
+    [extra_closure_names] parameter (see
+    [Declaremods.G1Partition.abbrev_iface_entries]), which folds them
+    into the SAME per-library table as an ordinary top-level
+    declaration, so either side of a collision is caught regardless of
+    which one is the abbreviation. The digest covers exactly what a
+    dependent can observe by using the name: its expansion
+    ([abbrev_pattern]), whether it is parsing-only ([abbrev_onlyparsing],
+    affecting whether the name can be used in a term at all) and whether
+    it is active ([abbrev_activated]) -- deliberately excluding
+    [abbrev_local] (already filtered: [classify_abbreviation] disposes
+    of [Local] abbreviations before export, so only non-local ones ever
+    reach this walk), [abbrev_src] (a source location) and
+    [abbrev_user_warns] (a deprecation message), all presentation-only. *)
+let cutoff_abbrev_entry (obj : obj) : (Id.t * Digest.t) option =
+  match Libobject.Dyn.Easy.prj obj objAbbreviation with
+  | Some (id, abbrev) ->
+    let d = Csha256.digest (Marshal.to_string
+      (abbrev.abbrev_pattern, abbrev.abbrev_onlyparsing, abbrev.abbrev_activated) []) in
+    Some (id, d)
+  | None -> None
 
 let declare ~local user_warns id ~onlyparsing pat =
   let abbrev = {

@@ -1955,9 +1955,10 @@ module G1Partition = struct
       worked for CONSTANT) -- covers CONSTANT, INDUCTIVE types and
       constructors (ind1/ind2/g7ctor); PRIMPROJS stays wholesale excluded
       (see [DeclareInd]'s own classifier doc comment). *)
-  let vernac_iface_entries (objs : Libobject.t list) : (Names.Id.t * Digest.t) array =
+  let vernac_iface_entries (objs : Libobject.t list) : (Names.Id.t * Digest.t) array * (Names.Id.t * Digest.t) array =
     let env = Global.env () in
     let acc = ref [] in
+    let abbrev_acc = ref [] in
     let handle_atomic obj =
       match Libobject.cutoff_classify obj with
       | Some (Libobject.CutoffKeyed entries) ->
@@ -1967,7 +1968,15 @@ module G1Partition = struct
             let d = Csha256.digest (Marshal.to_string (base, impls, scopes) []) in
             acc := (id, d) :: !acc)
           entries
-      | Some Libobject.CutoffExcluded | None -> ()
+      | Some Libobject.CutoffExcluded | None ->
+        (* binary-equivalence-taiga#841 round 7 (ab1): an abbreviation is
+           not a [CutoffKeyed] target (it has no [GlobRef.t] -- see
+           [Abbreviation.cutoff_abbrev_entry]'s doc comment), so it is
+           checked separately here rather than through
+           [Libobject.cutoff_classify]. *)
+        (match Abbreviation.cutoff_abbrev_entry obj with
+         | Some (id, d) -> abbrev_acc := (id, d) :: !abbrev_acc
+         | None -> ())
     in
     let rec walk (o : Libobject.t) = match o with
       | Libobject.AtomicObject obj -> handle_atomic obj
@@ -1982,18 +1991,18 @@ module G1Partition = struct
       | Libobject.Ref _ -> ()
     in
     List.iter walk objs;
-    Array.of_list !acc
+    Array.of_list !acc, Array.of_list !abbrev_acc
 
   let partition dir (md_syntax_objects, md_objects : library_objects * library_objects) =
     let exact_syntax = filter_library_objects dir md_syntax_objects in
     let exact_objects = filter_library_objects dir md_objects in
     let exact_digest = Csha256.digest (Marshal.to_string (exact_syntax, exact_objects) []) in
     let (substobjs, keepobjs, escapeobjs) = md_objects in
-    let vernac_iface =
+    let vernac_iface, abbrev_iface =
       vernac_iface_entries
         (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
     in
-    (exact_digest, vernac_iface)
+    (exact_digest, vernac_iface, abbrev_iface)
 end
 
 
@@ -2016,10 +2025,10 @@ let end_library ~output_native_objects dir =
      edit to anything NOT excluded/subset-checked) until rebased. *)
   let md_objects = drop_anticipate lib_stack in
   let md_syntax_objects = drop_anticipate lib_stack_syntax in
-  let objects_digest, vernac_iface =
+  let objects_digest, vernac_iface, abbrev_iface =
     G1Partition.partition dir (md_syntax_objects, md_objects)
   in
-  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~vernac_iface dir in
+  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~vernac_iface ~extra_closure_names:abbrev_iface dir in
   assert (ModPath.equal mp (MPfile dir));
   cenv,md_objects,md_syntax_objects,vmlib,ast,info
 
