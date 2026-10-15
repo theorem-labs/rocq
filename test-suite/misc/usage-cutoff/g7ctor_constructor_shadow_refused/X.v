@@ -1,0 +1,1 @@
+Inductive t := c | d.

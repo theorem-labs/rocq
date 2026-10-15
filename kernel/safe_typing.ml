@@ -253,13 +253,32 @@ type library_info =
     ACTUALLY changed, so an untouched, unrelated nested-module library
     anywhere in a large closure (e.g. the prelude) does not poison every
     reuse decision. A name hidden inside such a library that collides
-    with something ADDED elsewhere (the deeper half of g7mod) is NOT
-    covered by this digest (it does not change when the OTHER library
-    changes) -- flagged as a narrower residual gap, same risk class as
-    the still-open G8/D1 gap: a dev-loop signal that can lie about what a
-    fresh compile would do, never a path to an unsound ACCEPT at grading
-    time (grading always recompiles from source; see the module-level
-    soundness argument). *)
+    with something ADDED elsewhere (the deeper half of g7mod, Review841
+    round 5/"g7mod") is NOT covered by this digest (it does not change
+    when the OTHER library changes) -- flagged as a narrower residual
+    gap, same risk class as the still-open G8/D1 gap: a dev-loop signal
+    that can lie about what a fresh compile would do, never a path to an
+    unsound ACCEPT at grading time (grading always recompiles from
+    source; see the module-level soundness argument).
+
+    Tried and reverted (CutoffG7b, binary-equivalence-taiga#841): making
+    the "new [id] anywhere is an allowed addition" relaxation strict
+    (refuse ANY new [(dp, id)] pair, not just one colliding with an
+    already-tracked [id]) whenever the dependent's recorded closure
+    contains at least one None-iface library. Measured unsound in
+    practice, not merely theoretically conservative: the implicit
+    prelude itself contributes at least one None-iface library to EVERY
+    compile's closure, so this blanket condition is true for every
+    ordinary dependent, not just ones that deliberately use a nested
+    [Module] -- it regressed [unused_addition_still_reused],
+    [coqchk_strict_rejects_what_loader_accepts] and
+    [g7_shadowing_refused] (all now refuse an ordinary, non-colliding
+    addition), defeating the entire point of the cutoff for the common
+    case rather than narrowly covering the rare one. Closing this
+    residual gap for real needs enumerating names hidden inside a
+    None-iface library's own structure (which [iface_table_of_struct]'s
+    fallback deliberately does not attempt), not a blanket strictness
+    flag keyed off whether one exists anywhere in the closure. *)
 let flatten_closure (entries : (DirPath.t * vodigest * iface_table option) list) : closure_table * Digest.t =
   let triples =
     List.concat_map (fun (dp, _, iface) -> match iface with

@@ -4,8 +4,8 @@
 # added declaration reusable in the first place -- without G1, this
 # scenario is already refused for an unrelated reason, the exact-equality
 # objects digest, and would never exercise G7's own code at all) and G7
-# itself (kernel/safe_typing.ml's `added_label_collision`/
-# `used_names_of_needed`, called from `dep_ok`).
+# itself (kernel/safe_typing.ml's `flatten_closure`/`closure_subset_ok`,
+# called from `dep_ok`).
 #
 # Review841's own "sh" experiment, lifted directly: X declares `f := 1`.
 # B does `Require Import X A.` and proves `b : f = 1 := eq_refl` -- at B's
@@ -71,7 +71,7 @@ if [ "$c_rc" -eq 0 ]; then
   echo "$c_out" >&2
   uc_fail "coqc C.v succeeded reusing B.vo after A added a declaration (f) that collides with a name B's own closure resolved (X.f) -- G7's whole point is this must be refused, since a fresh compile of B would now resolve f differently."
 fi
-echo "$c_out" | grep -q 'makes inconsistent assumptions over library' \
+echo "$c_out" | grep -q 'Inconsistent assumptions over module' \
   || uc_fail "coqc C.v refused the reuse (exit $c_rc) but not with the expected inconsistent-assumptions message -- got: $c_out"
 
 # Non-colliding addition must still reuse (G7 must not over-trigger).
