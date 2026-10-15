@@ -124,8 +124,12 @@ let digest_match ~actual ~required =
     either one, so neither is part of the exported interface. A
     rewrite-rules block or an unapplied functor's own body gets a single
     opaque, exact-match-only entry instead (same doc comment). A [Module
-    Type]'s own fields are excluded entirely (round 8/mt1; see that same
-    doc comment). [None] is reserved for a library this mechanism cannot
+    Type]'s own fields ARE included (round 9/mt1 reversed the earlier
+    exclusion), each basename-marked uncollidable with any real
+    identifier (see [modtype_entry_marker]'s doc comment); a [Module]'s
+    or [Module Type]'s own NAME is ALSO an entry here, unmarked (round 9
+    P1/mns1/mtns1 -- see [iface_entries_of_sfb]'s doc comment). [None] is
+    reserved for a library this mechanism cannot
     represent AT ALL (one with non-empty retroknowledge, [Register]/
     [Primitive] -- see [export]'s own doc comment on
     [has_retroknowledge]): such a library falls back to the whole-library
@@ -163,6 +167,27 @@ let basename_of_qualified_path (path : string) : Id.t =
     | None -> path
   in
   Id.of_string_soft base
+
+(** Whether the basename a qualified path reduces to is one of this
+    file's reserved, digit-leading markers ([opaque_entry_prefix] or
+    [modtype_entry_marker], defined below) -- used ONLY by
+    [flatten_closure] to EXCLUDE such entries from cross-library G7
+    shadow detection entirely (round 9 P3/mkc1: the marker only
+    guarantees uniqueness from any REAL identifier, never uniqueness
+    ACROSS different libraries that independently reuse the SAME marker
+    on their own, unrelated, coincidentally-same-named field -- two
+    unrelated module types in different libraries both naming a field
+    "x" produce the identical marked basename "0usage_cutoff_modtype_x",
+    which [flatten_closure]'s cross-library comparison would otherwise
+    treat as one library shadowing the other's "x", even though neither
+    library's dependent ever resolves a bare "x" to either module
+    type's abstract field). [iface_subset_ok] (the SAME-library check,
+    keyed by the FULL qualified path, never just the basename) is
+    unaffected: a marked field's own content changing within ITS
+    OWNING library is still refused exactly as before. *)
+let is_marked_basename (id : Id.t) : bool =
+  let s = Id.to_string id in
+  String.length s > 0 && (match s.[0] with '0' .. '9' -> true | _ -> false)
 
 (** A dependency record as it is written to and read from disk: the
     library's name, its whole-library digest, its per-declaration interface
@@ -285,11 +310,24 @@ type library_info =
     added/removed, this digest changes and the check fails -- scoped to
     libraries that actually changed, so an untouched, unrelated
     retroknowledge-bearing library anywhere in a large closure (e.g.
-    Corelib) does not poison every reuse decision. *)
+    Corelib) does not poison every reuse decision.
+
+    Round 9 P3/mkc1: a marked basename ([is_marked_basename], covering
+    both [opaque_entry_prefix] and [modtype_entry_marker]) is excluded
+    from [triples] below entirely, never merely relied on to not match --
+    the marker only guarantees uniqueness from a REAL identifier's
+    basename, not uniqueness ACROSS two unrelated libraries that
+    independently produce the SAME marked basename (e.g. two module
+    types in different libraries both naming a field "x"), which a
+    naive inclusion would wrongly treat as one shadowing the other. *)
 let flatten_closure (entries : (DirPath.t * vodigest * iface_table option) list) : closure_table * Digest.t =
   let triples =
     List.concat_map (fun (dp, _, iface) -> match iface with
-        | Some tbl -> Array.to_list (Array.map (fun (path, d) -> (dp, basename_of_qualified_path path, d)) tbl)
+        | Some tbl ->
+          Array.to_list tbl
+          |> List.filter_map (fun (path, d) ->
+              let id = basename_of_qualified_path path in
+              if is_marked_basename id then None else Some (dp, id, d))
         | None -> [])
       entries
   in
@@ -2164,6 +2202,32 @@ let mark_basename (marker : string) (path : string) : string =
   | Some i -> String.sub path 0 (i + 1) ^ marker ^ String.sub path (i + 1) (String.length path - i - 1)
   | None -> marker ^ path
 
+(** Reserved digest value for the entry [iface_entries_of_sfb] now adds
+    for a [Module]'s or [Module Type]'s own LABEL (round 9 P1/mns1/
+    mtns1: without an entry here, [flatten_closure]'s shadow table never
+    saw the module/module-type NAME itself, only fields nested inside
+    it, so a "Module M"/"Module Type T" reachable only transitively,
+    through a [Require Export] several hops down, could shadow a name a
+    dependent already resolved unqualified at its own compile time, with
+    nothing in [closure_subset_ok] to catch it -- see that function's
+    doc comment). The exact digest value here is NOT load-bearing for
+    soundness: [closure_subset_ok]/[iface_subset_ok] key on the full
+    [(dp, id)] pair, and the module's/module-type's OWN internal content
+    is independently covered by its recursively-produced field entries,
+    entirely unaffected by this entry. A single constant suffices --
+    deliberately NOT a content digest of the module's signature, which
+    would re-[Marshal]/re-hash the module's entire structure a second
+    time for every module in the tree, for no soundness benefit (every
+    real content change is already caught by the fields themselves
+    changing or vanishing). Unmarked (no [modtype_entry_marker]) even
+    for a [Module Type]'s own label: a module and a module type cannot
+    share a label within one structure, so the label can never collide
+    with a sibling field, and treating a module's and a module type's
+    OWN names the same way for shadow purposes is correct -- Rocq
+    resolves an unqualified name to either kind through the same
+    Nametab lookup. *)
+let module_label_digest = Csha256.digest "0usage_cutoff_module_label"
+
 let rec iface_entries_of_struct (path : string) (sb : structure_body)
     : (string * Digest.t) list =
   List.concat_map (fun (id, sfb) -> iface_entries_of_sfb path (id, sfb)) sb
@@ -2190,8 +2254,10 @@ and iface_entries_of_sfb (path : string) (id, sfb) : (string * Digest.t) list =
     List.map (fun n -> (qualify n, d)) !names
   | SFBrules r ->
     [(opaque_entry_key path id, Csha256.digest (Marshal.to_string r []))]
-  | SFBmodule mb -> entries_of_signature path id (mod_type mb)
+  | SFBmodule mb ->
+    (qualify id, module_label_digest) :: entries_of_signature path id (mod_type mb)
   | SFBmodtype mtb ->
+    (qualify id, module_label_digest) ::
     List.map (fun (k, d) -> (mark_basename modtype_entry_marker k, d))
       (entries_of_signature path id (mod_type mtb))
 
