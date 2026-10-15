@@ -783,13 +783,151 @@ module CustomEntries = EasyNoWarn(CustomEntriesV)()
 
 (* Push functions *********************************************************)
 
+(* perf-nametab-cache v2 (ROCQ-INTERNALS.md Section 17/19 follow-up): a
+   central interception point for replaying a library's own Nametab
+   contribution from a precomputed .vo fragment instead of via N individual
+   [push] calls during object replay.
+
+   v1 (unshipped) captured the fragment during the FILE'S OWN compile-time
+   vernacular interpretation (a passive, depth-scoped log of every [push]
+   made while compiling) and found -- by an exhaustive corpus-wide check,
+   not a sample -- that this computes a SYSTEMATICALLY different answer
+   (visibility [Until 1] vs. [Until 2] for the very same declarations) than
+   [Declaremods.Interp.register_library]'s own replay recursion, which is
+   what every ordinary [Require] actually calls. 212 of 213 checked
+   `Require`s diverged; 34,350 entries. Capturing "what compiling produced"
+   and replaying it later is unsound at its foundation: compiling and
+   replaying are different computations over the same data.
+
+   v2 (this design) captures the fragment from a GENUINE REPLAY instead: a
+   separate process, never having compiled this library itself, loads it
+   fresh (exactly as any ordinary consumer's first [Require] would -- same
+   [register_library] call, same dependency-closure loading, no shortcut),
+   and [library.ml]'s export-mode branch of [register_library] brackets
+   [capture_start]/[capture_stop] around exactly that one call. Because
+   [register_library]'s visibility computation is a pure function of the
+   library's own compiled data (confirmed by reading
+   [Declaremods.Interp.register_library]: the initial depth passed to
+   [load_module] is the literal constant 1, always, and the push sequence
+   is determined purely structurally over the library's own [library_objects]
+   -- no parameter names the requiring caller), a fragment captured this way
+   is BY CONSTRUCTION identical to what calling the exact same function
+   again, from any other process, on the exact same bytes, would produce.
+   There is no second, disagreeing code path left to diverge from: export
+   and ordinary consumption now go through the identical function. This is
+   also why v2 needs no separate invalidation scheme (v1's open question,
+   deferred to reusing another lever's digest machinery): the fragment
+   travels inside the very .vo file it was captured from
+   ([ObjFile.append_segment]), gated only by that file's own pre-existing,
+   unmodified magic-number/version/per-segment-hash checks -- if those pass,
+   the bytes [register_library] would replay today are, trivially, the same
+   bytes the fragment was captured from.
+
+   [loading_from_cache] suppresses the individual [push]/[push_abbreviation]
+   calls a cached library's object replay would otherwise still make (every
+   OTHER side effect of that replay -- kernel import, notations, hints,
+   module structure -- still runs unchanged, in original order; only the
+   redundant one-at-a-time Nametab inserts are skipped, replaced by one
+   [apply_cache] bulk-insert of the already-known-correct result). [capture]
+   is unrelated to [loading_from_cache] and is used for two different
+   purposes by [library.ml]: exporting a library for the first time (no
+   cache exists yet to suppress), and the [-d nametab-cache-verify]
+   instrument's from-scratch comparison replay (a cache DOES exist and IS
+   suppressed via [loading_from_cache], but the verify replay itself must
+   run uncached to have something to compare against). *)
+let loading_from_cache = ref false
+
+(* Red-team finding (NameCacheV2.WateryLadybug): a 3-tuple [cache_entry]
+   with no slot for [push]/[push_abbreviation]'s [?user_warns] parameter
+   silently dropped every #[deprecated(...)]/#[warn(...)] diagnostic for a
+   name consumed from a cache -- a real, reproducible divergence from
+   stock Rocq (a real replay re-derives [user_warns] from the declaration's
+   own data every time, via [declare.ml]'s [cst_warn], so it never loses
+   this; [apply_cache]'s old 3-field bulk-[push] had nothing to pass as
+   [?wdata]). Not a "resolves to the wrong global" bug -- the GlobRef
+   itself was always correct -- but a real, user-visible one, and exactly
+   the kind of gap a verify instrument whose own [cache_entry] shape also
+   omits this field cannot catch (both "cached" and "replayed" lists would
+   look identical even though the live [warntab] state after each
+   differs). Fixed by carrying the warning data through the cache like
+   every other part of a push, and comparing it too (see
+   [compare_user_warns] below). *)
+type cache_entry =
+  visibility * full_path * extended_global_reference
+  * extended_global_reference UserWarn.with_qf option
+
+let dbg_cache = CDebug.create ~name:"nametab-cache" ()
+
+let pr_visibility = function
+  | Until i -> Pp.(str "Until " ++ int i)
+  | Exactly i -> Pp.(str "Exactly " ++ int i)
+
+let pr_xref = function
+  | TrueGlobal gr -> Pp.(str "TrueGlobal(" ++ GlobRef.print gr ++ str ")")
+  | Abbrev kn -> Pp.(str "Abbrev(" ++ KerName.print kn ++ str ")")
+
+(* Captures every [push]/[push_abbreviation] call made during one bracketed
+   interval. Scoped by WHEN the bracket is open, not by call-stack depth:
+   the caller ([library.ml]) already guarantees the bracket spans exactly
+   one [register_library] call (either the export target's own, or the
+   verify instrument's from-scratch comparison replay), so there is no need
+   to separately filter out a nested dependency's own pushes the way v1's
+   depth-scoped [push_log] had to. *)
+let capture : cache_entry list ref option ref = ref None
+
+let capture_start () =
+  (match !capture with
+   | None -> ()
+   | Some _ -> CErrors.anomaly Pp.(str "Nametab.capture_start: nested capture"));
+  let r = ref [] in
+  capture := Some r;
+  r
+
+let capture_stop (r : cache_entry list ref) =
+  capture := None;
+  List.rev !r
+
 let push_abbreviation ?user_warns visibility sp kn =
-  XRefs.push ?wdata:user_warns visibility sp (Abbrev kn)
+  if not !loading_from_cache then begin
+    (match !capture with
+     | Some r -> r := (visibility, sp, Abbrev kn, user_warns) :: !r
+     | None -> ());
+    dbg_cache Pp.(fun () ->
+        str "push " ++ pr_visibility visibility ++ str " " ++ pr_path sp
+        ++ str " -> " ++ pr_xref (Abbrev kn));
+    XRefs.push ?wdata:user_warns visibility sp (Abbrev kn)
+  end
 
 let remove_abbreviation sp kn =
   XRefs.remove sp (Abbrev kn)
 
-let push ?user_warns vis sp kn = XRefs.push ?wdata:user_warns vis sp (TrueGlobal kn)
+let push ?user_warns vis sp kn =
+  if not !loading_from_cache then begin
+    (match !capture with
+     | Some r -> r := (vis, sp, TrueGlobal kn, user_warns) :: !r
+     | None -> ());
+    dbg_cache Pp.(fun () ->
+        str "push " ++ pr_visibility vis ++ str " " ++ pr_path sp
+        ++ str " -> " ++ pr_xref (TrueGlobal kn));
+    XRefs.push ?wdata:user_warns vis sp (TrueGlobal kn)
+  end
+
+(* Bulk-apply a previously captured fragment, in the order it was captured
+   in. Bypasses [loading_from_cache] entirely -- this is the direct
+   [XRefs.push] funnel, used once after a cached library's object replay
+   (with its own individual pushes silenced by [loading_from_cache]) has
+   finished. [lib] is a debug-only label threaded through so [-d
+   nametab-cache] can tell two libraries' entries apart. Passes the stored
+   [user_warns] back through as [?wdata], same as a real [push] would. *)
+let apply_cache ?(lib = "?") entries =
+  dbg_cache Pp.(fun () ->
+      str "apply_cache lib=" ++ str lib ++ str " count=" ++ int (List.length entries));
+  List.iter (fun (vis, sp, xref, user_warns) ->
+      dbg_cache Pp.(fun () ->
+          str "  apply lib=" ++ str lib ++ str " " ++ pr_visibility vis
+          ++ str " " ++ pr_path sp ++ str " -> " ++ pr_xref xref);
+      XRefs.push ?wdata:user_warns vis sp xref)
+    entries
 
 let push_modtype vis sp kn = ModTypes.push vis sp kn
 
@@ -798,6 +936,174 @@ let push_module vis dir mp = Modules.push vis dir mp
 let push_dir vis dir dir_ref = OpenMods.push vis dir dir_ref
 
 let push_universe vis sp univ = Univs.push vis sp univ
+
+(* --- Verify-mode soundness instrument (ROCQ-INTERNALS.md Section 19),
+   carried over from the v1 design (it needed no change -- it was already
+   designed to validate WHATEVER capture mechanism produced a fragment, not
+   specifically v1's): compares a cached fragment against a genuine
+   from-scratch replay, run from identical ambient [Summary] state, entry
+   for entry AND by live resolution (full-path lookup and shortest-qualid
+   printing). This is the acceptance gate for the v2 design: the claim is
+   that v2's capture is just "the output of calling the same function any
+   consumer calls," so this instrument, run corpus-wide, should find ZERO
+   divergence -- not a sampled Locate/About check (the methodology that
+   missed v1's bugs until this instrument was built). *)
+
+let verify_enabled, dbg_verify = CDebug.create_full ~name:"nametab-cache-verify" ()
+let verify_mode () = CDebug.get_flag verify_enabled
+
+let compare_visibility a b = match a, b with
+  | Until i, Until j -> Int.compare i j
+  | Exactly i, Exactly j -> Int.compare i j
+  | Until _, Exactly _ -> -1
+  | Exactly _, Until _ -> 1
+
+let compare_option cmp a b = match a, b with
+  | None, None -> 0
+  | None, Some _ -> -1
+  | Some _, None -> 1
+  | Some x, Some y -> cmp x y
+
+let rec compare_list cmp a b = match a, b with
+  | [], [] -> 0
+  | [], _ :: _ -> -1
+  | _ :: _, [] -> 1
+  | x :: xs, y :: ys ->
+    let c = cmp x y in
+    if c <> 0 then c else compare_list cmp xs ys
+
+(* Red-team finding (NameCacheV2.WateryLadybug): [compare_cache_entry] must
+   treat two entries with the same (visibility, path, xref) but DIFFERENT
+   [user_warns] as DIFFERENT -- otherwise [verify_cache_equivalence]'s
+   merge-walk would silently coalesce them as "the same entry" and never
+   report the warning-data loss that originally slipped past the v1-era
+   instrument. *)
+let compare_deprecation (a : Deprecation.t) (b : Deprecation.t) =
+  let c = compare_option String.compare a.Deprecation.since b.Deprecation.since in
+  if c <> 0 then c else compare_option String.compare a.Deprecation.note b.Deprecation.note
+
+let compare_deprecation_qf (a : extended_global_reference Deprecation.with_qf)
+    (b : extended_global_reference Deprecation.with_qf) =
+  let c = compare_deprecation a.Deprecation.depr b.Deprecation.depr in
+  if c <> 0 then c else
+    compare_option ExtRefOrdered.compare a.Deprecation.use_instead b.Deprecation.use_instead
+
+let compare_warn (a : UserWarn.warn) (b : UserWarn.warn) =
+  let c = String.compare a.UserWarn.note b.UserWarn.note in
+  if c <> 0 then c else String.compare a.UserWarn.cats b.UserWarn.cats
+
+let compare_user_warns
+    (a : extended_global_reference UserWarn.with_qf option)
+    (b : extended_global_reference UserWarn.with_qf option) =
+  compare_option
+    (fun (x : extended_global_reference UserWarn.with_qf) y ->
+       let c = compare_option compare_deprecation_qf x.UserWarn.depr_qf y.UserWarn.depr_qf in
+       if c <> 0 then c else compare_list compare_warn x.UserWarn.warn_qf y.UserWarn.warn_qf)
+    a b
+
+let compare_cache_entry (v1, sp1, x1, w1) (v2, sp2, x2, w2) =
+  let c = compare_full_path sp1 sp2 in
+  if c <> 0 then c else
+  let c = compare_visibility v1 v2 in
+  if c <> 0 then c else
+  let c = ExtRefOrdered.compare x1 x2 in
+  if c <> 0 then c else
+  compare_user_warns w1 w2
+
+let string_option_equal a b = match a, b with
+  | None, None -> true
+  | Some x, Some y -> String.equal x y
+  | _, _ -> false
+
+type verify_observation = {
+  vo_at_path : extended_global_reference option;
+  vo_shortest : string option;
+}
+
+let observe (_, sp, xref, _) =
+  let vo_at_path = try Some (XRefs.of_path sp) with Not_found -> None in
+  let vo_shortest =
+    try Some (Pp.string_of_ppcmds (pr_qualid (XRefs.shortest_qualid Id.Set.empty xref)))
+    with Not_found -> None
+  in
+  { vo_at_path; vo_shortest }
+
+let observation_equal o1 o2 =
+  (match o1.vo_at_path, o2.vo_at_path with
+   | None, None -> true
+   | Some x, Some y -> ExtRefOrdered.equal x y
+   | _, _ -> false)
+  && string_option_equal o1.vo_shortest o2.vo_shortest
+
+module VerifyKeyMap = Map.Make(struct
+    type t = full_path * extended_global_reference
+    let compare (p1, x1) (p2, x2) =
+      let c = compare_full_path p1 p2 in
+      if c <> 0 then c else ExtRefOrdered.compare x1 x2
+  end)
+
+(* [cached] is the fragment that was just bulk-applied to the live table
+   ([apply_cache]'s own argument, unchanged -- this IS what production just
+   did); [replayed] is a genuine full replay's own push sequence, captured
+   via [capture_start]/[capture_stop] while the live table was restored to
+   the EXACT ambient state both replays started from (see [library.ml]'s
+   [verify_register_library]). Fails loudly with every differing entry, not
+   just the first. *)
+let verify_cache_equivalence ~lib ~cached ~replayed ~cached_obs ~replayed_obs =
+  dbg_verify Pp.(fun () ->
+      str "verify lib=" ++ str lib
+      ++ str " cached=" ++ int (List.length cached)
+      ++ str " replayed=" ++ int (List.length replayed));
+  let sorted_cached = List.sort compare_cache_entry cached in
+  let sorted_replayed = List.sort compare_cache_entry replayed in
+  let rec diff_sorted acc l1 l2 = match l1, l2 with
+    | [], [] -> List.rev acc
+    | e :: r1, [] -> diff_sorted (("cache-only", e) :: acc) r1 []
+    | [], e :: r2 -> diff_sorted (("replay-only", e) :: acc) [] r2
+    | e1 :: r1, e2 :: r2 ->
+      let c = compare_cache_entry e1 e2 in
+      if Int.equal c 0 then diff_sorted acc r1 r2
+      else if c < 0 then diff_sorted (("cache-only", e1) :: acc) r1 (e2 :: r2)
+      else diff_sorted (("replay-only", e2) :: acc) (e1 :: r1) r2
+  in
+  let diffs = diff_sorted [] sorted_cached sorted_replayed in
+  let survey = match Sys.getenv_opt "NAMETAB_CACHE_VERIFY_SURVEY" with
+    | Some "1" -> true
+    | _ -> false
+  in
+  (match diffs with
+   | [] -> ()
+   | _ ->
+     let pr_one (kind, (vis, sp, xref, _)) =
+       Pp.(str "  [" ++ str kind ++ str "] " ++ pr_visibility vis ++ str " "
+           ++ pr_path sp ++ str " -> " ++ pr_xref xref)
+     in
+     let msg =
+       Pp.(str "nametab-cache-verify: " ++ str lib ++ str ": "
+           ++ int (List.length diffs)
+           ++ str " entries differ between the cached fragment and a genuine full replay"
+           ++ str " (cache-only = applied by the cache but a replay never produces it;"
+           ++ str " replay-only = a replay produces it but the cache omits it):" ++ fnl ()
+           ++ prlist_with_sep fnl pr_one diffs)
+     in
+     if survey then Feedback.msg_warning msg else CErrors.user_err msg);
+  let to_map obs =
+    List.fold_left (fun m ((_, sp, xref, _), o) -> VerifyKeyMap.add (sp, xref) o m)
+      VerifyKeyMap.empty obs
+  in
+  let cm = to_map cached_obs and rm = to_map replayed_obs in
+  VerifyKeyMap.iter (fun (sp, xref) o1 ->
+      match VerifyKeyMap.find_opt (sp, xref) rm with
+      | None -> ()
+      | Some o2 ->
+        if not (observation_equal o1 o2) then
+          let msg =
+            Pp.(str "nametab-cache-verify: " ++ str lib
+                ++ str ": " ++ pr_path sp ++ str " -> " ++ pr_xref xref
+                ++ str ": live resolution differs between the cached build and a genuine replay")
+          in
+          if survey then Feedback.msg_warning msg else CErrors.user_err msg)
+    cm
 
 (* Reverse locate functions ***********************************************)
 

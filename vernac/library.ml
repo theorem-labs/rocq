@@ -108,6 +108,13 @@ type library_t = {
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
   library_vm : Vmlibrary.on_disk;
+  (* perf-nametab-cache v2 (ROCQ-INTERNALS.md Section 17/19 follow-up): this
+     library's own Nametab contribution, captured from a genuine replay in
+     a separate process (never from this library's own compile) and stored
+     as the .vo's [seg_nametab] segment -- [[]] for a library compiled but
+     not yet exported, an in-memory library never written to disk, or a
+     .vo predating this cache. *)
+  library_nametab : Nametab.cache_entry list;
 }
 
 type load_status = FullLoaded | SafeLoaded
@@ -238,7 +245,7 @@ type seg_lib = library_disk
 type seg_proofs = Opaques.opaque_disk
 type seg_vm = Vmlibrary.compiled_library
 
-let mk_library sd md digests vm =
+let mk_library sd md digests vm nametab =
   {
     library_name     = sd.md_name;
     library_data     = md;
@@ -247,17 +254,32 @@ let mk_library sd md digests vm =
     library_digests  = digests;
     library_info     = sd.md_info;
     library_vm = vm;
+    library_nametab = nametab;
   }
 
-let mk_intern_library sum lib digest_lib proofs vm =
+let mk_intern_library sum lib digest_lib proofs vm nametab =
   add_opaque_table sum.md_name (ToFetch proofs);
   let open Safe_typing in
-  mk_library sum lib (Dvo_or_vi digest_lib) vm
+  mk_library sum lib (Dvo_or_vi digest_lib) vm nametab
 
 let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 let vm_seg : seg_vm ObjFile.id = Vmlibrary.vm_segment
+(* perf-nametab-cache v2 (ROCQ-INTERNALS.md Section 17/19 follow-up): a
+   standalone, ADDITIVE segment -- absent entirely from a .vo the normal
+   compile path writes (see [save_library_base], unchanged) and from any
+   .vo predating this cache, in which case [intern_from_file] below falls
+   back to [[]] (no cache for that library, full replay always, exactly
+   today's behavior). Never read by the checker (confirmed:
+   [checker/checkLibrary.ml]'s [intern_from_file] looks up exactly
+   [summary]/[library]/[opaques] by name and never enumerates "every
+   segment present," so an extra named segment it doesn't know about is
+   silently absent from its view, not an error) or by [topbin/rocqnative.ml]'s
+   own structural mirror -- neither needed a single change. Written not by
+   the compiler but by [ObjFile.append_segment], in a separate process,
+   strictly after the compile that wrote everything else in the file. *)
+let nametab_seg : Nametab.cache_entry list ObjFile.id = ObjFile.make_id "nametab"
 
 module Intern = struct
   module Provenance = struct
@@ -275,11 +297,16 @@ let intern_from_file file =
   let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
   let del_opaque, _ = in_delayed file ch ~segment:opaques_seg in
   let vmlib = Vmlibrary.load lsd.md_name ~file ch in
+  let nametab =
+    if CString.Map.mem nametab_seg.ObjFile.id (ObjFile.segments ch) then
+      fst (ObjFile.marshal_in_segment ch ~segment:nametab_seg)
+    else []
+  in
   ObjFile.close_in ch;
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
   register_library_filename lsd.md_name file;
   Library_info.warn_library_info ~transitive:true lsd.md_name lsd.md_info;
-  mk_intern_library lsd lmd digest_lmd del_opaque vmlib
+  mk_intern_library lsd lmd digest_lmd del_opaque vmlib nametab
 
 let intern_from_file file =
   let provenance = ("file", file) in
@@ -485,15 +512,87 @@ let native_name_from_filename f =
 
 (* Full-mode registration (object replay). *)
 
+(* perf-nametab-cache v2 (ROCQ-INTERNALS.md Section 17/19 follow-up): the
+   post-compile exporter. Set [ROCQ_NAMETAB_EXPORT] to a library's dotted
+   logical name (e.g. "Corelib.Init.Logic") before running a process whose
+   sole job is to [Require] that one library -- an ordinary compile of a
+   throwaway one-line "Require <Lib>." file does this; nothing else about
+   that process needs to be special. When [register_library] reaches
+   EXACTLY that library, it brackets a genuine replay with
+   [Nametab.capture_start]/[capture_stop] instead of registering it the
+   ordinary way, then appends the captured fragment to that library's own
+   .vo as a new [seg_nametab] segment via [ObjFile.append_segment]. Every
+   OTHER library this same process registers -- the export target's own
+   dependencies, loaded first by the ordinary mechanism below, using their
+   own cache if they already have one -- is unaffected. *)
+let export_target : DirPath.t option Lazy.t =
+  lazy (
+    match Sys.getenv_opt "ROCQ_NAMETAB_EXPORT" with
+    | None -> None
+    | Some s -> Some (DirPath.make (List.rev_map Id.of_string (String.split_on_char '.' s))))
+
+let nametab_cache_trusted m = not (CList.is_empty m.library_nametab)
+
+(* ROCQ-INTERNALS.md Section 19's exhaustive soundness instrument, reused
+   unchanged in spirit from the v1 design: under [-d nametab-cache-verify],
+   for every cached-eligible library, run the production cache-apply AND a
+   genuine, from-scratch full replay -- both starting from the IDENTICAL
+   ambient [Summary] state -- and hand both the push sequence and a
+   per-entry Nametab resolution snapshot to [Nametab.verify_cache_equivalence].
+   The live table ends up exactly where the production run alone would have
+   left it: this is purely an observational check, it never changes what
+   gets compiled. *)
+let verify_register_library m =
+  let l = m.library_data in
+  let lib = DirPath.to_string m.library_name in
+  let pre = Summary.Interp.freeze_summaries () in
+  Nametab.loading_from_cache := true;
+  Fun.protect
+    ~finally:(fun () -> Nametab.loading_from_cache := false)
+    (fun () ->
+       Declaremods.Interp.register_library
+         m.library_name l.md_compiled l.md_objects m.library_digests m.library_vm);
+  Nametab.apply_cache ~lib m.library_nametab;
+  let cached_obs = List.map (fun e -> (e, Nametab.observe e)) m.library_nametab in
+  let post_real = Summary.Interp.freeze_summaries () in
+  Summary.Interp.unfreeze_summaries pre;
+  let capture = Nametab.capture_start () in
+  Declaremods.Interp.register_library
+    m.library_name l.md_compiled l.md_objects m.library_digests m.library_vm;
+  let replayed = Nametab.capture_stop capture in
+  let replayed_obs = List.map (fun e -> (e, Nametab.observe e)) replayed in
+  Summary.Interp.unfreeze_summaries post_real;
+  Nametab.verify_cache_equivalence ~lib
+    ~cached:m.library_nametab ~replayed ~cached_obs ~replayed_obs
+
 let register_library m =
   let l = m.library_data in
-  Declaremods.Interp.register_library
-    m.library_name
-    l.md_compiled
-    l.md_objects
-    m.library_digests
-    m.library_vm
-  ;
+  (match Lazy.force export_target with
+   | Some d when DirPath.equal d m.library_name ->
+     let capture = Nametab.capture_start () in
+     Declaremods.Interp.register_library
+       m.library_name l.md_compiled l.md_objects m.library_digests m.library_vm;
+     let captured = Nametab.capture_stop capture in
+     let file = library_full_filename m.library_name in
+     ObjFile.append_segment ~file ~segment:nametab_seg captured;
+     Feedback.msg_info
+       Pp.(str "nametab-export: " ++ DirPath.print m.library_name
+           ++ str ": wrote " ++ int (List.length captured)
+           ++ str " entries to " ++ str file)
+   | _ ->
+     let use_cache = nametab_cache_trusted m in
+     if use_cache && Nametab.verify_mode () then
+       verify_register_library m
+     else begin
+       if use_cache then Nametab.loading_from_cache := true;
+       Fun.protect
+         ~finally:(fun () -> Nametab.loading_from_cache := false)
+         (fun () ->
+            Declaremods.Interp.register_library
+              m.library_name l.md_compiled l.md_objects m.library_digests m.library_vm);
+       if use_cache then
+         Nametab.apply_cache ~lib:(DirPath.to_string m.library_name) m.library_nametab
+     end);
   register_native_library m.library_name
 
 let register_library_syntax ~root m =
@@ -693,7 +792,7 @@ let save_library dir : library_t =
      safe when we work on-memory and compute the digest for the lib
      part, even if that's slow. Better safe than sorry. *)
   let digest = Marshal.to_string md [] |> Digest.string in
-  mk_library sd md (Dvo_or_vi digest) (Vmlibrary.inject vmlib)
+  mk_library sd md (Dvo_or_vi digest) (Vmlibrary.inject vmlib) []
 
 let save_library_to todo_proofs ~output_native_objects dir f =
   assert(

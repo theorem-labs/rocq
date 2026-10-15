@@ -205,3 +205,95 @@ let close_out { out_channel = ch; out_segments = seg } =
   let () = output_int64 ch pos in
   let () = flush ch in
   close_out ch
+
+(* perf-nametab-cache v2 (ROCQ-INTERNALS.md Section 17/19 follow-up): attach
+   a new segment to a .vo ALREADY WRITTEN AND CLOSED by [close_out], from a
+   process other than (and strictly after) the one that wrote it, without
+   reading, re-marshaling, or moving a single byte of any existing segment.
+
+   Copies the file's existing bytes up to the end of its last segment's
+   (data, hash) verbatim into a fresh temporary file (never touches the
+   original until the final rename), appends the new segment there with
+   the exact same marshal+hash discipline [marshal_out_segment] uses, and
+   writes a regenerated segment table (every old entry byte-for-byte
+   unchanged, plus the new one) and header pointer, then atomically renames
+   the temporary file over the original. If anything fails before the
+   rename, the original file is untouched. *)
+let append_segment (type a) ~file ~(segment : a id) (v : a) =
+  (* Red-team finding (NameCacheV2.WateryLadybug): the segment table and
+     the byte copy below must come from the SAME open file descriptor, not
+     two independent [open_in] calls -- two separate opens leave a TOCTOU
+     window a concurrent recompile of this exact library could land in
+     (the table read from the first open no longer matching the bytes the
+     second open copies). One handle, read start to finish, closes that
+     window: whatever [old_segs]/[old_end] describe is exactly what the
+     byte copy below reads back, because it is the same underlying file
+     descriptor's view, never re-opened in between. *)
+  let h = open_in ~file in
+  let old_segs = h.in_segments in
+  let () =
+    if CString.Map.mem segment.id old_segs then begin
+      close_in h;
+      CErrors.anomaly
+        Pp.(str "ObjFile.append_segment: segment " ++ str segment.id
+            ++ str " already present in " ++ str file)
+    end
+  in
+  (* End of the last segment's (data, hash): recomputed from the table
+     itself (not trusted from a single stored field) so a short/corrupt
+     old file is caught here rather than silently truncating live bytes. *)
+  let old_end =
+    CString.Map.fold
+      (fun _ s acc -> Int64.max acc (Int64.add s.pos (Int64.add s.len 16L)))
+      old_segs 0L
+  in
+  let tmp = file ^ ".nametab-append.tmp" in
+  let dst = open_trapping_failure tmp in
+  let () =
+    LargeFile.seek_in h.in_channel 0L;
+    let buf = Bytes.create 65536 in
+    let remaining = ref old_end in
+    while Int64.compare !remaining 0L > 0 do
+      let want = Int64.to_int (Int64.min !remaining 65536L) in
+      let n = Stdlib.input h.in_channel buf 0 want in
+      let () =
+        if n = 0 then begin
+          close_in h; Stdlib.close_out dst;
+          CErrors.anomaly
+            Pp.(str "ObjFile.append_segment: " ++ str file
+                ++ str " is shorter than its own segment table claims")
+        end
+      in
+      let () = Stdlib.output dst buf 0 n in
+      remaining := Int64.sub !remaining (Int64.of_int n)
+    done
+  in
+  let () = close_in h in
+  let pos = LargeFile.pos_out dst in
+  let () = assert (Int64.equal pos old_end) in
+  let () = Marshal.to_channel dst v [] in
+  let () = flush dst in
+  let pos' = LargeFile.pos_out dst in
+  let len = Int64.sub pos' pos in
+  let hash =
+    (* Same discipline as [marshal_out_segment]: hash the bytes back out of
+       the file rather than the in-memory value, so [marshal_in_segment]'s
+       own hash check reads back exactly what landed on disk. *)
+    let in_ch = Stdlib.open_in_bin tmp in
+    let () = LargeFile.seek_in in_ch pos in
+    let digest = Digest.channel in_ch (Int64.to_int len) in
+    let () = Stdlib.close_in in_ch in
+    digest
+  in
+  let () = Digest.output dst hash in
+  let new_seg = { name = segment.id; pos; len; hash } in
+  let all_segs = CString.Map.add segment.id new_seg old_segs in
+  let table_pos = LargeFile.pos_out dst in
+  let () = output_int32 dst (Int32.of_int (CString.Map.cardinal all_segs)) in
+  let () = CString.Map.iter (fun _ s -> output_segment_summary dst s) all_segs in
+  let () = flush dst in
+  let () = LargeFile.seek_out dst 8L in
+  let () = output_int64 dst table_pos in
+  let () = flush dst in
+  let () = Stdlib.close_out dst in
+  Sys.rename tmp file

@@ -209,6 +209,69 @@ val locate_abbreviation : qualid -> Globnames.abbreviation
 
 val remove_abbreviation : full_path -> Globnames.abbreviation -> unit
 
+(** {6 perf-nametab-cache v2 (ROCQ-INTERNALS.md Section 17/19 follow-up)} *)
+
+(** A library's own Nametab contribution, as captured from a genuine
+    [register_library] replay (not a recomputation): the exact sequence of
+    [(visibility, full_path, extended_global_reference, user_warns)]
+    tuples that replay's own [push]/[push_abbreviation] calls made, in
+    order -- including the [?user_warns] data a real replay re-derives
+    from each declaration every time, so a cached consumer still sees its
+    [#\[deprecated(...)\]]/[#\[warn(...)\]] diagnostics (red-team finding
+    NameCacheV2.WateryLadybug: a cache without this field silently and
+    permanently drops them). *)
+type cache_entry =
+  visibility * full_path * Globnames.extended_global_reference
+  * Globnames.extended_global_reference UserWarn.with_qf option
+
+val loading_from_cache : bool ref
+(** While [true], [push] and [push_abbreviation] are no-ops: the caller is
+    expected to bulk-apply an already-captured fragment via [apply_cache]
+    once the (otherwise unmodified) object replay this flag wraps has
+    finished. Every other [Libobject] side effect of that replay -- kernel
+    import, notations, hints, module structure -- still runs unchanged. *)
+
+val capture_start : unit -> cache_entry list ref
+(** Start capturing every [push]/[push_abbreviation] call (bypassing
+    [loading_from_cache] is the caller's job -- capture and suppression are
+    independent). Exactly one capture may be open at a time. *)
+
+val capture_stop : cache_entry list ref -> cache_entry list
+(** Stop the capture started with the given ref (must be the ref
+    [capture_start] returned) and return what was captured, in call order. *)
+
+val apply_cache : ?lib:string -> cache_entry list -> unit
+(** Bulk-apply a previously captured fragment, in the order it was
+    captured in -- the direct [XRefs.push] funnel, bypassing
+    [loading_from_cache]. [lib] is a debug-only label. *)
+
+val verify_mode : unit -> bool
+(** Whether [-d nametab-cache-verify] is enabled: see
+    [verify_cache_equivalence]. *)
+
+type verify_observation
+(** One cached (or replayed) entry's live resolution at the moment it was
+    observed: whether its exact [full_path] still resolves to its own
+    reference, and what [shortest_qualid] currently prints for that
+    reference. *)
+
+val observe : cache_entry -> verify_observation
+
+val verify_cache_equivalence :
+  lib:string ->
+  cached:cache_entry list -> replayed:cache_entry list ->
+  cached_obs:(cache_entry * verify_observation) list ->
+  replayed_obs:(cache_entry * verify_observation) list ->
+  unit
+(** The [-d nametab-cache-verify] soundness check (ROCQ-INTERNALS.md
+    Section 19): compares a cached fragment ([cached], already bulk-applied
+    to the live table by the caller) against a genuine from-scratch replay
+    ([replayed], captured via [capture_start]/[capture_stop] while the live
+    table was restored to the identical ambient state) entry-for-entry and
+    by live resolution. Fails loudly (or, under
+    [NAMETAB_CACHE_VERIFY_SURVEY=1], warns and continues) on every
+    divergence, not just the first. *)
+
 val global_of_path : full_path -> GlobRef.t
 
 val path_of_global : GlobRef.t -> full_path

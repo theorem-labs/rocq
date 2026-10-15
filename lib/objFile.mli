@@ -40,3 +40,14 @@ val marshal_out_binary : out_handle -> segment:'a id -> out_channel * (unit -> u
     [Stdlib.output_*] APIs should be used on [oc]. [stop ()] must be invoked in
     order to signal that all data was written to [oc] (which should not be used
     afterwards). Only after calling [stop] the other API can be used on [oh]. *)
+
+val append_segment : file:string -> segment:'a id -> 'a -> unit
+(** [append_segment ~file ~segment v] adds [v] as a new, additional segment
+    to a .vo ALREADY WRITTEN AND CLOSED by [close_out] -- from a process
+    other than, and strictly after, the one that wrote it. Does not read,
+    re-marshal, or move a single byte of any existing segment: only the
+    trailing segment-table and the header's table-pointer are regenerated
+    (in a fresh temporary file, atomically renamed over the original, so a
+    failure before the rename leaves [file] untouched). Raises an anomaly
+    if [file] already has a segment named [segment.id], or if [file] is
+    shorter than its own segment table claims. *)
