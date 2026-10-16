@@ -287,6 +287,9 @@ val univs_digest_of_library : compiled_library -> Digest.t
 (** Digest of this library's OWN [(comp_univs, comp_sorts)] pair
     (binary-equivalence-taiga#841 Review841 G2). *)
 val vernac_iface_of_library : compiled_library -> iface_table
+(** Transitive syntax digest of a library with no syntax-bearing objects;
+    [Declaremods] stores exactly this value for such a library. *)
+val no_transitive_syntax_digest : Digest.t
 (** G1/round-3: KEYED per-declaration vernac-interface digests. *)
 val closure_of_library : compiled_library -> closure_table * Digest.t
 (** G7 round 5: this library's own recorded full-closure flatten. *)
@@ -298,7 +301,7 @@ val check_flags_for_library : compiled_library -> safe_transformer0
 val start_library : DirPath.t -> ModPath.t safe_transformer
 
 val export :
-  output_native_objects:bool -> objects_digest:Digest.t -> exported_dirs:DirPath.t array -> alias_digest:Digest.t -> vernac_iface:iface_table ->
+  output_native_objects:bool -> objects_digest:Digest.t -> exported_dirs:DirPath.t array -> alias_digest:Digest.t -> transitive_objects_digest:Digest.t -> vernac_iface:iface_table ->
   extra_closure_names:iface_table ->
   safe_environment -> DirPath.t ->
     ModPath.t * compiled_library * Vmlibrary.compiled_library * Nativelib.native_library

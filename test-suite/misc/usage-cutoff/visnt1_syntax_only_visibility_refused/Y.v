@@ -1,0 +1,1 @@
+Notation "'zz'" := 2.

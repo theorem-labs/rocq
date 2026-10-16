@@ -617,18 +617,25 @@ let v_vodigest = v_sum_c ("module_impl",0, [| [|v_string|]; [|v_string;v_string|
    scopes, checked per-name like the kernel iface_table itself, replacing
    an earlier revision's unkeyed digest-array field of the same slot) --
    both appended at the end, same convention as the objects-digest
-   [v_string] before them. *)
+   [v_string] before them. [v_transitive_digests] is the round-16
+   objects/universes snapshot for every required library, including
+   non-root [Require Export] dependencies. *)
 let v_iface = v_array (v_pair v_id v_string)
 let v_closure = v_array (v_tuple "closure" [|v_dp;v_id;v_string|])
 let v_deps = v_array (v_tuple "dep" [|v_dp;v_vodigest;v_opt v_iface;v_string;v_string;v_iface;v_closure;v_string|])
 let v_flags = v_tuple "flags" [|v_bool|] (* Allow Rewrite Rules *)
 let v_dirpaths = v_array v_dp
 let v_alias_digests = v_array (v_pair v_dp v_string)
+let v_transitive_digests =
+  v_array (v_tuple "transitive digest" [|v_dp;v_string;v_string|])
+let v_transitive_vernac_ifaces = v_array (v_pair v_dp v_iface)
+
 let v_compiled_lib =
   v_tuple "compiled"
-    [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps; v_flags;
-      v_opt v_iface; v_string; v_dirpaths; v_string; v_string; v_iface; v_closure;
-      v_alias_digests; v_string; v_dirpaths|]
+    [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps;
+      v_transitive_digests; v_transitive_vernac_ifaces; v_flags;
+      v_opt v_iface; v_string; v_dirpaths; v_string; v_string; v_string; v_iface;
+      v_closure; v_alias_digests; v_string; v_dirpaths|]
 
 (** Toplevel structures in a vo (see Cic.mli) *)
 

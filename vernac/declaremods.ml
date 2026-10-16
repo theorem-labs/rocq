@@ -1873,7 +1873,7 @@ module G1Partition = struct
 
   let is_local dir gr =
     match modpath_of_gr gr with
-    | Some mp -> ModPath.equal mp (MPfile dir)
+    | Some mp -> ModPath.subpath (MPfile dir) mp
     | None -> false
 
   (* "IMPLICITS"/"ARGUMENTS-SCOPE" are EXCLUDED here (dropped from the
@@ -1995,6 +1995,43 @@ module G1Partition = struct
     in
     Csha256.digest (Marshal.to_string
       (paths md_syntax_objects, paths md_objects) [])
+
+  (* A transitive consumer needs exact syntax objects such as Notations and
+     Hints, but module wrappers themselves are represented by [comp_iface]
+     and the closure-name check. Flatten their contents so an unused Module
+     or Module Type addition does not poison every transitive dependent.
+     [ExportObject]s are left out: which libraries become visible is checked
+     precisely by [exported_dirs] and the closure visibility set, so a
+     disjoint [Require Export] must not change this digest. *)
+  let rec transitive_objects_of_object dir (o : Libobject.t) =
+    match o with
+    | Libobject.AtomicObject obj ->
+      (match classify dir obj with
+       | Exact -> [o]
+       | Excluded -> [])
+    | Libobject.ModuleObject (_, (_, alg))
+    | Libobject.ModuleTypeObject (_, (_, alg))
+    | Libobject.IncludeObject alg ->
+      transitive_objects_of_algebraic dir alg
+    | Libobject.KeepObject (_, { Libobject.keep_objects }) ->
+      List.concat_map (transitive_objects_of_object dir) keep_objects
+    | Libobject.EscapeObject (_, { Libobject.escape_objects }) ->
+      List.concat_map (transitive_objects_of_object dir) escape_objects
+    | Libobject.ExportObject _ -> []
+  and transitive_objects_of_algebraic dir = function
+    | Libobject.Objs l -> List.concat_map (transitive_objects_of_object dir) l
+    | Libobject.Ref _ -> []
+
+  let transitive_objects_digest dir (md_syntax_objects, md_objects) =
+    let flatten (substobjs, keepobjs, escapeobjs) =
+      List.concat_map (transitive_objects_of_object dir)
+        (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
+    in
+    match flatten md_syntax_objects, flatten md_objects with
+    | [], [] -> Safe_typing.no_transitive_syntax_digest
+    | syntax, objects ->
+      Csha256.digest (Marshal.to_string (syntax, objects) [])
+
   (** binary-equivalence-taiga#841 Review841 round 3 + round 5: the KEYED
       vernac-level interface table, checked by [Safe_typing.iface_subset_ok]
       exactly like the kernel's own [iface_table]. [Libobject.cutoff_classify]
@@ -2031,11 +2068,34 @@ module G1Partition = struct
       MutInd.to_string mind ^ "#" ^ string_of_int i ^ "#" ^ string_of_int j
     | GlobRef.VarRef id -> Id.to_string id
 
-  let vernac_iface_entries (objs : Libobject.t list) : (string * Digest.t) array * (string * Digest.t) array =
+  (* Digit-leading, so it can never be the start of an identifier: keys in
+     this namespace cannot collide with a [CutoffKeyed] declaration key. *)
+  let raw_arguments_key_prefix = "1args#"
+
+  let vernac_iface_entries dir (objs : Libobject.t list) : (string * Digest.t) array * (string * Digest.t) array =
     let env = Global.env () in
     let acc = ref [] in
     let abbrev_acc = ref [] in
+    let raw_args = ref [] in
     let handle_atomic obj =
+      (* Local [Arguments] objects are per-target state.  Collect their raw
+         bytes per target, so a changed existing field is rejected while a
+         new module type and all of its new fields remain an ignored
+         addition.  They are emitted below under [raw_arguments_key_prefix],
+         one folded digest per target: [iface_subset_ok] matches the first
+         entry with a given key, so a key must never carry two digests.
+         Foreign targets stay in the exact whole-object digest. *)
+      let raw_digest = Csha256.digest (Marshal.to_string obj []) in
+      let add_raw_target gr =
+        raw_args := (qualified_key_of_globref gr, raw_digest) :: !raw_args
+      in
+      (match Impargs.cutoff_implicits_targets obj with
+       | Some targets when List.for_all (is_local dir) targets ->
+         List.iter add_raw_target targets
+       | _ ->
+         match Notation.cutoff_arguments_scope_target obj with
+         | Some gr when is_local dir gr -> add_raw_target gr
+         | Some _ | None -> ());
       match Libobject.cutoff_classify obj with
       | Some (Libobject.CutoffKeyed entries) ->
         List.iter (fun (gr, _id, base) ->
@@ -2073,6 +2133,17 @@ module G1Partition = struct
       | Libobject.Ref _ -> ()
     in
     List.iter walk objs;
+    let raw_keys =
+      List.sort_uniq String.compare (List.map fst !raw_args)
+    in
+    List.iter (fun key ->
+        let ds =
+          List.rev !raw_args
+          |> List.filter_map (fun (k, d) -> if String.equal k key then Some d else None)
+        in
+        acc := (raw_arguments_key_prefix ^ key,
+                Csha256.digest (Marshal.to_string ds [])) :: !acc)
+      raw_keys;
     Array.of_list !acc, Array.of_list !abbrev_acc
 
   let partition dir (md_syntax_objects, md_objects : library_objects * library_objects) =
@@ -2081,12 +2152,13 @@ module G1Partition = struct
     let exact_digest = Csha256.digest (Marshal.to_string (exact_syntax, exact_objects) []) in
     let exported_dirs = exported_dirs (md_syntax_objects, md_objects) in
     let alias_digest = alias_digest (md_syntax_objects, md_objects) in
+    let transitive_digest = transitive_objects_digest dir (md_syntax_objects, md_objects) in
     let (substobjs, keepobjs, escapeobjs) = md_objects in
     let vernac_iface, abbrev_iface =
-      vernac_iface_entries
+      vernac_iface_entries dir
         (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
     in
-    (exact_digest, exported_dirs, alias_digest, vernac_iface, abbrev_iface)
+    (exact_digest, exported_dirs, alias_digest, transitive_digest, vernac_iface, abbrev_iface)
 end
 
 
@@ -2109,10 +2181,10 @@ let end_library ~output_native_objects dir =
      edit to anything NOT excluded/subset-checked) until rebased. *)
   let md_objects = drop_anticipate lib_stack in
   let md_syntax_objects = drop_anticipate lib_stack_syntax in
-  let objects_digest, exported_dirs, alias_digest, vernac_iface, abbrev_iface =
+  let objects_digest, exported_dirs, alias_digest, transitive_objects_digest, vernac_iface, abbrev_iface =
     G1Partition.partition dir (md_syntax_objects, md_objects)
   in
-  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~vernac_iface ~extra_closure_names:abbrev_iface dir in
+  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~transitive_objects_digest ~vernac_iface ~extra_closure_names:abbrev_iface dir in
   assert (ModPath.equal mp (MPfile dir));
   cenv,md_objects,md_syntax_objects,vmlib,ast,info
 

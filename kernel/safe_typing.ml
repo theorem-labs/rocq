@@ -592,6 +592,15 @@ type compiled_library = {
   comp_univs : Univ.ContextSet.t;
   comp_sorts : Sorts.QContextSet.t;
   comp_deps : library_info array;
+  (** Objects and universe digests for every library in [required], including
+      non-root dependencies reached through [Require Export].  This remains
+      separate from root-only [comp_deps], which drives safe-mode propagation. *)
+  comp_transitive_digests : (DirPath.t * Digest.t * Digest.t) array;
+  (** Per-name vernac state for every library in [required].  This covers
+      local implicits and argument scopes without treating a newly declared,
+      otherwise unused name as a whole-library syntax change. *)
+  comp_transitive_vernac_ifaces : (DirPath.t * iface_table) array;
+
   comp_flags : permanent_flags;
   (** [None] when the library's top level isn't a flat constant/inductive
       run (see [iface_table]'s doc comment). *)
@@ -609,6 +618,12 @@ type compiled_library = {
 
   (** Digest of module alias and Include targets. *)
   comp_alias_digest : Digest.t;
+
+  (** Projection of exported objects that can affect a transitive consumer's
+      syntax. Module wrappers are represented by [comp_iface]/the closure
+      table instead, so an unused module declaration remains reusable. *)
+  comp_transitive_objects_digest : Digest.t;
+
 
   (** Digest of this library's OWN [(comp_univs, comp_sorts)] pair, computed
       by the kernel itself at [export] time (unlike
@@ -640,6 +655,7 @@ type required_lib = {
   req_digest : vodigest;
   req_iface : iface_table option;
   req_objects_digest : Digest.t;
+  req_transitive_objects_digest : Digest.t;
   req_univs_digest : Digest.t;
   req_vernac_iface : iface_table;
   (** The live library's direct requirements, used only to find the closure
@@ -1152,6 +1168,23 @@ let closure_alias_digests_ok current_libs reachable recorded =
 let visibility_loses_recorded_name lost_visible recorded =
   Array.exists (fun (dp, _, _) -> DirPath.Set.mem dp lost_visible) recorded
 
+(** The transitive syntax digest of a library whose projection is empty:
+    no Notation, Hint, Ltac, Tactic Notation or foreign Arguments object.
+    [Declaremods] stores exactly this value for such a library, so a
+    library's syntax contribution can be tested without decoding objects. *)
+let no_transitive_syntax_digest = Csha256.digest "0usage_cutoff_no_syntax"
+
+(** A library that gains or loses export visibility changes which syntax a
+    fresh compile of B parses with, even when it defines no kernel name (the
+    case [visibility_adds_collision] cannot see). Refuse when any such
+    library carries syntax. Conservative: syntax B never used also refuses. *)
+let visibility_changes_syntax current_libs changed_visible =
+  DirPath.Set.exists (fun dp ->
+      match DirPath.Map.find_opt dp current_libs with
+      | Some { req_transitive_objects_digest = d; _ } ->
+        not (Digest.equal d no_transitive_syntax_digest)
+      | None -> true)
+    changed_visible
 
 
 let check_required ?self_dp current_libs needed =
@@ -1187,6 +1220,7 @@ let check_required ?self_dp current_libs needed =
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
            req_deps = actual_deps;
            req_objects_digest = actual_objects_digest;
+           req_transitive_objects_digest = actual_transitive_objects_digest;
            req_univs_digest = actual_univs_digest;
            req_alias_digest = actual_alias_digest;
            req_exported_dirs = actual_exported_dirs;
@@ -1230,6 +1264,7 @@ let check_required ?self_dp current_libs needed =
       DirPath.Map.set id { req_root = false; req_digest = actual;
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
+                            req_transitive_objects_digest = actual_transitive_objects_digest;
                             req_univs_digest = actual_univs_digest;
                             req_exported_dirs = actual_exported_dirs;
                             req_alias_digest = actual_alias_digest;
@@ -1240,6 +1275,38 @@ let check_required ?self_dp current_libs needed =
       current
   in
   Array.fold_left check current_libs needed
+(* Objects and universe constraints are observable through [Require Export]
+   even when the defining library is not a root dependency.  Keep this check
+   separate from [comp_deps], whose root-only shape is part of safe-mode
+   propagation. *)
+let check_transitive_digests current_libs needed =
+  Array.fold_left (fun current (id, required_transitive_objects_digest, required_univs_digest) ->
+      match DirPath.Map.find_opt id current with
+      | None ->
+        CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
+      | Some { req_transitive_objects_digest = actual_transitive_objects_digest;
+               req_univs_digest = actual_univs_digest; _ } ->
+        if Digest.equal required_transitive_objects_digest actual_transitive_objects_digest &&
+           Digest.equal required_univs_digest actual_univs_digest then
+          current
+        else
+          CErrors.user_err Pp.(pr_sequence str
+            ["Inconsistent assumptions over module"; DirPath.to_string id; "."]))
+    current_libs needed
+let check_transitive_vernac_ifaces current_libs needed =
+  Array.fold_left (fun current (id, required_vernac_iface) ->
+      match DirPath.Map.find_opt id current with
+      | None ->
+        CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
+      | Some { req_vernac_iface = actual_vernac_iface; _ } ->
+        if iface_subset_ok_vernac ~recorded:required_vernac_iface ~live:actual_vernac_iface then
+          current
+        else
+          CErrors.user_err Pp.(pr_sequence str
+            ["Inconsistent assumptions over module"; DirPath.to_string id; "."]))
+    current_libs needed
+
+
 
 (** The original, pre-fork digest-only check: no fallback branch exists in
     this function at all (not merely unreached -- there is nothing here for
@@ -1258,6 +1325,7 @@ let check_required_strict current_libs needed =
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
                             req_alias_digest = actual_alias_digest;
            req_objects_digest = actual_objects_digest;
+           req_transitive_objects_digest = actual_transitive_objects_digest;
            req_deps = actual_deps;
            req_exported_dirs = actual_exported_dirs;
            req_univs_digest = actual_univs_digest;
@@ -1269,6 +1337,7 @@ let check_required_strict current_libs needed =
       DirPath.Map.set id { req_root = false; req_digest = actual;
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
+                            req_transitive_objects_digest = actual_transitive_objects_digest;
                             req_univs_digest = actual_univs_digest;
                             req_alias_digest = actual_alias_digest;
                             req_deps = actual_deps;
@@ -2581,7 +2650,7 @@ and self_entries_of_sfb path (id, sfb) =
 let iface_table_of_struct (sb : structure_body) : iface_table option =
   Some (Array.of_list (iface_entries_of_struct "" sb))
 
-let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~vernac_iface ~extra_closure_names senv dir =
+let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~transitive_objects_digest ~vernac_iface ~extra_closure_names senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
   let str = NoFunctor (List.rev senv.revstruct) in
@@ -2710,6 +2779,18 @@ let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~
     else None
   in
   let comp_deps = List.map_filter filter_dep (DirPath.Map.bindings senv.required) in
+  let comp_transitive_digests =
+    DirPath.Map.bindings senv.required
+    |> List.map (fun (dp, { req_transitive_objects_digest; req_univs_digest; _ }) ->
+        dp, req_transitive_objects_digest, req_univs_digest)
+    |> Array.of_list
+  in
+  let comp_transitive_vernac_ifaces =
+    DirPath.Map.bindings senv.required
+    |> List.map (fun (dp, { req_vernac_iface; _ }) -> dp, req_vernac_iface)
+    |> Array.of_list
+  in
+
   (* binary-equivalence-taiga#841 Review841 G2: digest of this library's OWN
      global universe constraints/sort qualities, computed here (not handed
      in like [objects_digest]) since the kernel already has both values.
@@ -2727,9 +2808,12 @@ let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~
     comp_sorts = senv.qualities;
     comp_closure_visible_dps;
     comp_deps = Array.of_list comp_deps;
+    comp_transitive_vernac_ifaces;
+    comp_transitive_digests;
     comp_flags = permanent_flags;
     comp_iface;
     comp_objects_digest = objects_digest;
+    comp_transitive_objects_digest = transitive_objects_digest;
     comp_univs_digest;
     comp_vernac_iface = vernac_iface;
     comp_closure_names;
@@ -2776,6 +2860,7 @@ let import_gen ~check_required lib vmtab vodigest senv =
           req_objects_digest = lib.comp_objects_digest;
           req_alias_digest = lib.comp_alias_digest;
           req_exported_dirs = lib.comp_exported_dirs;
+          req_transitive_objects_digest = lib.comp_transitive_objects_digest;
           req_deps = lib.comp_deps;
           req_univs_digest = lib.comp_univs_digest;
           req_vernac_iface = lib.comp_vernac_iface } required
@@ -2804,11 +2889,15 @@ let import lib vmtab vodigest senv =
       let newly_visible = DirPath.Set.diff live_visible recorded_visible in
       let lost_visible = DirPath.Set.diff recorded_visible live_visible in
       if visibility_loses_recorded_name lost_visible lib.comp_closure_names ||
+         visibility_changes_syntax current
+           (DirPath.Set.union newly_visible lost_visible) ||
          not (closure_alias_digests_ok current reachable lib.comp_closure_alias_digests) ||
          visibility_adds_collision current newly_visible lib.comp_closure_names then
         CErrors.user_err Pp.(pr_sequence str
           ["Inconsistent assumptions over module"; DirPath.to_string lib.comp_name; "."])
-      else current)
+      else
+        let current = check_transitive_digests current lib.comp_transitive_digests in
+        check_transitive_vernac_ifaces current lib.comp_transitive_vernac_ifaces)
     lib vmtab vodigest senv
 
 (** The ONLY entry point [checker/safe_checking.ml] may call: every

@@ -64,7 +64,10 @@ let coq_version = "9.2+rc2"
 (* Round 18 follow-up: [compiled_library] also records module alias and
    Include target digests for its closure. Reject prior layouts before
    Marshal can read them under the new field order. *)
-let vo_magic = 91205
+(* Round 20: transitive objects/universe digests, a syntax-object projection
+   and per-name vernac snapshots for the closure widen [compiled_library]
+   again. Reject older records before Marshal can read them. *)
+let vo_magic = 91206
 let is_a_released_version = false
 
 (** Default OCaml binaries *)
