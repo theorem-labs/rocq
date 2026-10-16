@@ -70,6 +70,7 @@ let val_reduction = Val.create "reduction"
 let val_rewstrategy = Val.create "rewstrategy"
 let val_modpath = Val.create "modpath"
 let val_module_field = Val.create "module_field"
+let val_scheme_kind : string Val.tag = Val.create "scheme_kind"
 
 let extract_val (type a) (type b) (tag : a Val.tag) (tag' : b Val.tag) (v : b) : a =
 match Val.eq tag tag' with
@@ -475,6 +476,10 @@ let of_modpath c = of_ext val_modpath c
 let to_modpath c = to_ext val_modpath c
 let modpath = repr_ext val_modpath
 
+let of_scheme_kind c = of_ext val_scheme_kind c
+let to_scheme_kind c = to_ext val_scheme_kind c
+let scheme_kind = repr_ext val_scheme_kind
+
 let of_module_field c = of_ext val_module_field c
 let to_module_field c = to_ext val_module_field c
 let module_field = repr_ext val_module_field
@@ -496,4 +501,20 @@ let to_reference = let open Names.GlobRef in function
 let reference = {
   r_of = of_reference;
   r_to = to_reference;
+}
+
+let of_strategy_level = let open Conv_oracle in function
+| Expand -> ValInt 0
+| Opaque -> ValInt 1
+| Level n -> ValBlk (0, [| of_int n |])
+
+let to_strategy_level = let open Conv_oracle in function
+| ValInt 0 -> Expand
+| ValInt 1 -> Opaque
+| ValBlk (0, [| n |]) -> Level (to_int n)
+| _ -> assert false
+
+let strategy_level = {
+  r_of = of_strategy_level;
+  r_to = to_strategy_level;
 }

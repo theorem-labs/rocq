@@ -9,9 +9,21 @@
 (************************************************************************)
 
 Require Import Ltac2.Init.
+Require Import Ltac2.Std.
 
 (** Abstract type representing a transparency state. *)
 Ltac2 Type t.
+
+(** Strategy levels used by [with_strategy].
+    [Expand] corresponds to the [-oo] level (always unfold),
+    [Opaque] corresponds to the [+oo] level (never unfold),
+    and [Level n] corresponds to integer level [n]
+    (where [Level 0] is [transparent]). *)
+Ltac2 Type strategy_level := [
+| Expand
+| Opaque
+| Level (int)
+].
 
 (** [empty] is the empty transparency state (all constants are opaque). *)
 Ltac2 @ external empty : t :=
@@ -25,3 +37,11 @@ Ltac2 @ external full : t :=
     by, e.g., the [Strategy] command, or the [with_strategy] Ltac tactic. *)
 Ltac2 @ external current : unit -> t :=
   "rocq-runtime.plugins.ltac2" "current_transparent_state".
+
+(** [with_strategy lvl refs tac] temporarily sets the strategy level of
+    all references in [refs] to [lvl], executes [tac], and then restores
+    the original strategy levels. This is the Ltac2 analogue of the
+    [with_strategy] Ltac tactic and the [Strategy] vernacular command. *)
+Ltac2 @ external with_strategy :
+  strategy_level -> Std.reference list -> (unit -> 'a) -> 'a :=
+  "rocq-runtime.plugins.ltac2" "with_strategy".

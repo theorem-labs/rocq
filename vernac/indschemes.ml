@@ -414,7 +414,8 @@ let do_mutual_induction_scheme ~register ?(force_mutual=false) env ?(isrec=true)
       else match sort with
         | Qual (QConstant QType) -> Some (if dep then case_dep else case_nodep)
         | Qual (QConstant QProp) -> Some (if dep then casep_dep else casep_nodep)
-        | Set | Qual (QConstant QSProp | QVar _) ->
+        | Qual (QConstant QSProp) -> Some (if dep then scase_dep else scase_nodep)
+        | Set | Qual (QVar _) ->
           (* currently we don't have standard scheme kinds for this *)
           None
     in

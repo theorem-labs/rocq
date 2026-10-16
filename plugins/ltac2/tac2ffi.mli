@@ -216,9 +216,17 @@ val of_reference : GlobRef.t -> valexpr
 val to_reference : valexpr -> GlobRef.t
 val reference : GlobRef.t repr
 
+val of_strategy_level : Conv_oracle.level -> valexpr
+val to_strategy_level : valexpr -> Conv_oracle.level
+val strategy_level : Conv_oracle.level repr
+
 val of_modpath : ModPath.t -> valexpr
 val to_modpath : valexpr -> ModPath.t
 val modpath : ModPath.t repr
+
+val of_scheme_kind : string -> valexpr
+val to_scheme_kind : valexpr -> string
+val scheme_kind : string repr
 
 module ModField : sig
   type t =
