@@ -262,10 +262,12 @@ type closure_table = (DirPath.t * Id.t * Digest.t) array
 
 type library_info =
   DirPath.t * vodigest * iface_table option * Digest.t * Digest.t * iface_table
-  * closure_table * Digest.t
-(** The last two components ([closure_names]/[closure_none_digest], added
+  * closure_table * Digest.t * DirPath.t array
+(** Components 7 and 8 ([closure_names]/[closure_none_digest], added
     binary-equivalence-taiga#841 Review841 round 5) close g7exp/g7pre/
-    g7mod/g7ctor -- see [flatten_closure]'s doc comment below. *)
+    g7mod/g7ctor -- see [flatten_closure]'s doc comment below. The last
+    one (round 23) is the dependency's own loaded-library list IN LOAD
+    ORDER -- see [require_order_ok]. *)
 
 (** binary-equivalence-taiga#841 Review841 G7, round 5 (closing g7exp/
     g7pre/g7mod/g7ctor -- issuecomment-6189455137/round-4 review
@@ -504,15 +506,44 @@ let closure_subset_ok ?self_dp ~recorded ~live =
     extras ignored, same shape as (a)), AND (e) the live FULL CLOSURE's
     flat name table is still a superset-with-identical-digests of what
     the dependent recorded, AND (f) the live closure's None-iface-entry
-    digest is unchanged (G7, round 5). [coqchk] must NEVER call this: see
-    [check_required_strict] below, which is the original digest-only
+    digest is unchanged (G7, round 5), AND (g) the live library still
+    loads the libraries the dependent saw it load, in the same relative
+    order ([require_order_ok], round 23). [coqchk] must NEVER call this:
+    see [check_required_strict] below, which is the original digest-only
     check with nothing else reachable from it. *)
+
+(** A library's own loaded-library list decides which instance or hint a
+    proof search in ITS dependents resolves to: the most recently loaded
+    match wins. The list lives in the [.vo] summary, which no digest a
+    dependent compares ever covered, so a dependency that merely swapped
+    two [Require] lines looked unchanged while a fresh compile of the
+    dependent genuinely differed (speed-coord review plan-861c1-r1
+    finding R1-3, fixture [order_instance_priority_refused]).
+
+    Recorded order must be a SUBSEQUENCE of the live order, not equal to
+    it: a dependency that gains a requirement (a new [Require Export],
+    cx1/cx2/cx3) inserts entries without moving the ones the dependent
+    already saw, and those cases are reused by design -- a newly visible
+    library that carries syntax or collides with a recorded name is
+    refused by the visibility checks instead. A swap, or a removal, is not
+    a subsequence and is refused. *)
+let require_order_ok ~recorded ~live =
+  let n = Array.length live in
+  let rec walk i j =
+    if i >= Array.length recorded then true
+    else if j >= n then false
+    else if DirPath.equal recorded.(i) live.(j) then walk (i + 1) (j + 1)
+    else walk i (j + 1)
+  in
+  walk 0 0
+
 let dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
     ~actual_objects_digest ~required_objects_digest
     ~actual_univs_digest ~required_univs_digest
     ~actual_vernac_iface ~required_vernac_iface
     ~actual_closure_names ~required_closure_names
-    ~actual_closure_none_digest ~required_closure_none_digest =
+    ~actual_closure_none_digest ~required_closure_none_digest
+    ~actual_require_order ~required_require_order =
   digest_match ~actual ~required ||
   ((match required_iface, actual_iface with
     | Some recorded, Some live -> iface_subset_ok ~recorded ~live
@@ -521,7 +552,8 @@ let dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
    Digest.equal required_univs_digest actual_univs_digest &&
    iface_subset_ok_vernac ~recorded:required_vernac_iface ~live:actual_vernac_iface &&
    closure_subset_ok ?self_dp ~recorded:required_closure_names ~live:actual_closure_names &&
-   Digest.equal required_closure_none_digest actual_closure_none_digest)
+   Digest.equal required_closure_none_digest actual_closure_none_digest &&
+   require_order_ok ~recorded:required_require_order ~live:actual_require_order)
 
 (** binary-equivalence-taiga#841 round 23 (incmt1-3, aliasmt1,
     issuecomment-6206828826). [dep_ok] above tolerates ADDITIONS to a
@@ -680,6 +712,11 @@ type compiled_library = {
       this one copies into its own compiled form, each with the identity
       it was copied from. See [structural_deps_ok]. *)
   comp_structural_deps : structural_dep array;
+
+  (** Every library loaded while compiling this one, in load order
+      (binary-equivalence-taiga#841 round 23). Handed in by the vernac
+      layer, which owns that list; see [require_order_ok]. *)
+  comp_require_order : DirPath.t array;
 }
 
 type reimport = compiled_library * Vmlibrary.on_disk * vodigest
@@ -694,6 +731,7 @@ type required_lib = {
   req_transitive_objects_digest : Digest.t;
   req_univs_digest : Digest.t;
   req_vernac_iface : iface_table;
+  req_require_order : DirPath.t array;
   (** The live library's direct requirements, used only to find the closure
       reachable from a library being checked. *)
   req_deps : library_info array;
@@ -1151,10 +1189,10 @@ let reachable_required current_libs needed =
     match DirPath.Map.find_opt dp current_libs with
     | None -> seen
     | Some { req_deps; _ } ->
-      Array.fold_left (fun seen (child, _, _, _, _, _, _, _) -> visit seen child)
+      Array.fold_left (fun seen (child, _, _, _, _, _, _, _, _) -> visit seen child)
         seen req_deps
   in
-  Array.fold_left (fun seen (dp, _, _, _, _, _, _, _) -> visit seen dp)
+  Array.fold_left (fun seen (dp, _, _, _, _, _, _, _, _) -> visit seen dp)
     DirPath.Set.empty needed
 
 let visible_required current_libs roots =
@@ -1300,7 +1338,8 @@ let check_required ?self_dp current_libs needed =
   let reachable_dps = reachable_required current_libs needed in
   let check current (id, required, required_iface, required_objects_digest,
                       required_univs_digest, required_vernac_iface,
-                      required_closure_names, required_closure_none_digest) =
+                      required_closure_names, required_closure_none_digest,
+                      required_require_order) =
     match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
@@ -1311,7 +1350,8 @@ let check_required ?self_dp current_libs needed =
            req_univs_digest = actual_univs_digest;
            req_alias_digest = actual_alias_digest;
            req_exported_dirs = actual_exported_dirs;
-           req_vernac_iface = actual_vernac_iface } ->
+           req_vernac_iface = actual_vernac_iface;
+           req_require_order = actual_require_order } ->
     (* Fast path: the dependency is byte-identical to what this library was
        compiled against. Fallback (see [dep_ok]): the dependency changed,
        but everything this dependent could have observed through it --
@@ -1343,7 +1383,8 @@ let check_required ?self_dp current_libs needed =
               ~actual_univs_digest ~required_univs_digest
               ~actual_vernac_iface ~required_vernac_iface
               ~actual_closure_names ~required_closure_names
-              ~actual_closure_none_digest ~required_closure_none_digest) then
+              ~actual_closure_none_digest ~required_closure_none_digest
+              ~actual_require_order ~required_require_order) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
     else if req_root then
@@ -1356,7 +1397,8 @@ let check_required ?self_dp current_libs needed =
                             req_exported_dirs = actual_exported_dirs;
                             req_alias_digest = actual_alias_digest;
                             req_deps = actual_deps;
-                            req_vernac_iface = actual_vernac_iface } current
+                            req_vernac_iface = actual_vernac_iface;
+                            req_require_order = actual_require_order } current
     else
       (* nothing to do *)
       current
@@ -1405,7 +1447,8 @@ let check_transitive_vernac_ifaces current_libs needed =
 let check_required_strict current_libs needed =
   let check current (id, required, _required_iface, _required_objects_digest,
                       _required_univs_digest, _required_vernac_iface,
-                      _required_closure_names, _required_closure_none_digest) =
+                      _required_closure_names, _required_closure_none_digest,
+                      _required_require_order) =
     match DirPath.Map.find_opt id current with
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
@@ -1416,7 +1459,8 @@ let check_required_strict current_libs needed =
            req_deps = actual_deps;
            req_exported_dirs = actual_exported_dirs;
            req_univs_digest = actual_univs_digest;
-           req_vernac_iface = actual_vernac_iface } ->
+           req_vernac_iface = actual_vernac_iface;
+           req_require_order = actual_require_order } ->
     if not (digest_match ~actual ~required) then
       CErrors.user_err Pp.(pr_sequence str
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
@@ -1429,7 +1473,8 @@ let check_required_strict current_libs needed =
                             req_alias_digest = actual_alias_digest;
                             req_deps = actual_deps;
                             req_exported_dirs = actual_exported_dirs;
-                            req_vernac_iface = actual_vernac_iface } current
+                            req_vernac_iface = actual_vernac_iface;
+                            req_require_order = actual_require_order } current
     else
       current
   in
@@ -2320,6 +2365,7 @@ let iface_of_library lib = lib.comp_iface
 let objects_digest_of_library lib = lib.comp_objects_digest
 let univs_digest_of_library lib = lib.comp_univs_digest
 let vernac_iface_of_library lib = lib.comp_vernac_iface
+let require_order_of_library lib = lib.comp_require_order
 let closure_of_library lib = lib.comp_closure_names, lib.comp_closure_none_digest
 
 let univs_of_library lib = lib.comp_sorts, lib.comp_univs
@@ -2745,7 +2791,7 @@ and self_entries_of_sfb path (id, sfb) =
 let iface_table_of_struct (sb : structure_body) : iface_table option =
   Some (Array.of_list (iface_entries_of_struct "" sb))
 
-let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~transitive_objects_digest ~vernac_iface ~extra_closure_names ~structural_dirs senv dir =
+let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~transitive_objects_digest ~vernac_iface ~extra_closure_names ~structural_dirs ~require_order senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
   let str = NoFunctor (List.rev senv.revstruct) in
@@ -2867,10 +2913,11 @@ let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~
      block for the full-closure field without touching [compute_modes] at
      all (binary-equivalence-taiga#841 "D1"). *)
   let filter_dep (dp, { req_root; req_digest; req_iface; req_objects_digest;
-                         req_univs_digest; req_vernac_iface }) =
+                         req_univs_digest; req_vernac_iface; req_require_order }) =
     if req_root then Some (dp, req_digest, req_iface, req_objects_digest,
                             req_univs_digest, req_vernac_iface,
-                            comp_closure_names, comp_closure_none_digest)
+                            comp_closure_names, comp_closure_none_digest,
+                            req_require_order)
     else None
   in
   let comp_deps = List.map_filter filter_dep (DirPath.Map.bindings senv.required) in
@@ -2930,6 +2977,7 @@ let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~
     comp_closure_none_digest;
     comp_closure_alias_digests;
     comp_structural_deps;
+    comp_require_order = require_order;
   } in
   let vmlib = Vmlibrary.export @@ Environ.vm_library senv.env in
   mp, lib, vmlib, (ast, symbols)
@@ -2974,7 +3022,8 @@ let import_gen ~check_required lib vmtab vodigest senv =
           req_transitive_objects_digest = lib.comp_transitive_objects_digest;
           req_deps = lib.comp_deps;
           req_univs_digest = lib.comp_univs_digest;
-          req_vernac_iface = lib.comp_vernac_iface } required
+          req_vernac_iface = lib.comp_vernac_iface;
+          req_require_order = lib.comp_require_order } required
   in
   mp,
   { senv with
@@ -2990,7 +3039,7 @@ let import_gen ~check_required lib vmtab vodigest senv =
 let import lib vmtab vodigest senv =
   import_gen ~check_required:(fun current _needed ->
       let current = check_required ~self_dp:lib.comp_name current lib.comp_deps in
-      let roots = Array.map (fun (dp, _, _, _, _, _, _, _) -> dp) lib.comp_deps in
+      let roots = Array.map (fun (dp, _, _, _, _, _, _, _, _) -> dp) lib.comp_deps in
       let reachable = reachable_required current lib.comp_deps in
       let live_visible = visible_required current roots in
       let recorded_visible =

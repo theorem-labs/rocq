@@ -55,6 +55,7 @@ val dep_ok :
   actual_vernac_iface:iface_table -> required_vernac_iface:iface_table ->
   actual_closure_names:closure_table -> required_closure_names:closure_table ->
   actual_closure_none_digest:Digest.t -> required_closure_none_digest:Digest.t ->
+  actual_require_order:DirPath.t array -> required_require_order:DirPath.t array ->
   bool
 
 (** {6 Safe environments } *)
@@ -287,6 +288,10 @@ val univs_digest_of_library : compiled_library -> Digest.t
 (** Digest of this library's OWN [(comp_univs, comp_sorts)] pair
     (binary-equivalence-taiga#841 Review841 G2). *)
 val vernac_iface_of_library : compiled_library -> iface_table
+val require_order_of_library : compiled_library -> DirPath.t array
+(** Every library loaded while that one was compiled, in load order
+    (binary-equivalence-taiga#841 round 23); see [dep_ok]'s
+    [require_order] conjunct. *)
 (** Transitive syntax digest of a library with no syntax-bearing objects;
     [Declaremods] stores exactly this value for such a library. *)
 val no_transitive_syntax_digest : Digest.t
@@ -304,6 +309,7 @@ val export :
   output_native_objects:bool -> objects_digest:Digest.t -> exported_dirs:DirPath.t array -> alias_digest:Digest.t -> transitive_objects_digest:Digest.t -> vernac_iface:iface_table ->
   extra_closure_names:iface_table ->
   structural_dirs:DirPath.t array ->
+  require_order:DirPath.t array ->
   safe_environment -> DirPath.t ->
     ModPath.t * compiled_library * Vmlibrary.compiled_library * Nativelib.native_library
 

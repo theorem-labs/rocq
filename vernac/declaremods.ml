@@ -2194,22 +2194,23 @@ let end_library ~output_native_objects ~require_order dir =
     G1Partition.partition dir (md_syntax_objects, md_objects)
   in
   (* binary-equivalence-taiga#841 round 23 (speed-coord review plan-861c1-r1
-     finding R1-3, and the two fixtures it produced:
-     order_instance_priority_residual_gap, info_deprecated_attribute_residual_gap).
-     Two things a dependent's own compile observes used to live only in the
-     summary segment, which no digest covers: this library's file-level
-     attributes (a deprecation here makes a dependent built under
-     "+deprecated" fail), and the order its requirements were loaded in
-     (which decides which instance or hint a dependent's proof search
-     picks). Both are folded into the exact-compared objects digest, so a
-     change in either refuses every dependent, and changes this library's
-     own segment bytes as well. [No_sharing]: the digest has to be a
-     function of the value, never of how it was built. *)
+     finding R1-3, fixture info_deprecated_attribute_refused). This
+     library's file-level attributes live in the summary segment, which no
+     digest a dependent compares ever covered, so a dependency that gained
+     a deprecation looked unchanged while a dependent built under
+     "+deprecated" genuinely fails against it. Folded into the
+     exact-compared objects digest, so the change refuses every dependent
+     and alters this library's own segment bytes too. [No_sharing]: the
+     digest has to be a function of the value, never of how it was built.
+     The sibling half of R1-3, the order this library's own requirements
+     were loaded in, is NOT folded in here: it is recorded as
+     [require_order] and compared as a subsequence
+     ([Safe_typing.require_order_ok]), because a dependency that merely
+     GAINS a requirement must still be reusable (cx1/cx2/cx3). *)
   let objects_digest =
     Csha256.digest
-      (objects_digest ^ "\000usage_cutoff_summary\000"
-       ^ Marshal.to_string (List.map DirPath.to_string require_order, info)
-           [Marshal.No_sharing])
+      (objects_digest ^ "\000usage_cutoff_library_info\000"
+       ^ Marshal.to_string info [Marshal.No_sharing])
   in
   (* binary-equivalence-taiga#841 round 23: the libraries this one copies
      structurally. Every module expression this file interpreted named its
@@ -2224,7 +2225,7 @@ let end_library ~output_native_objects ~require_order dir =
     |> Array.of_list
   in
   Modintern.clear_structural_targets ();
-  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~transitive_objects_digest ~vernac_iface ~extra_closure_names:abbrev_iface ~structural_dirs dir in
+  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~transitive_objects_digest ~vernac_iface ~extra_closure_names:abbrev_iface ~structural_dirs ~require_order:(Array.of_list require_order) dir in
   assert (ModPath.equal mp (MPfile dir));
   cenv,md_objects,md_syntax_objects,vmlib,ast,info
 

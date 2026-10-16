@@ -95,7 +95,7 @@ type library_info
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t * DirPath.t array) array;
   md_ocaml : string;
   md_info : library_info;
 }
@@ -104,7 +104,7 @@ type library_t = {
   library_name : compilation_unit_name;
   library_file : string;
   library_data : Safe_typing.compiled_library;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t * DirPath.t array) array;
   library_digests : Safe_typing.vodigest;
   library_vm : Vmlibrary.on_disk;
 }
@@ -159,15 +159,16 @@ let rec intern_library (needed, contents) dir =
 and intern_library_deps libs dir m from =
   Array.fold_left (intern_mandatory_library dir from) libs m.library_deps
 
-and intern_mandatory_library caller from libs (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface,d_closure_names,d_closure_none_digest) =
+and intern_mandatory_library caller from libs (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface,d_closure_names,d_closure_none_digest,d_require_order) =
   let digest, (_, contents as libs) = intern_library libs dir in
-  let live_iface, live_objects_digest, live_univs_digest, live_vernac_iface =
+  let live_iface, live_objects_digest, live_univs_digest, live_vernac_iface, live_require_order =
     match DirPath.Map.find_opt dir contents with
     | Some m -> Safe_typing.iface_of_library m.library_data,
                 Safe_typing.objects_digest_of_library m.library_data,
                 Safe_typing.univs_digest_of_library m.library_data,
-                Safe_typing.vernac_iface_of_library m.library_data
-    | None -> None, Digest.string "", Digest.string "", [||]
+                Safe_typing.vernac_iface_of_library m.library_data,
+                Safe_typing.require_order_of_library m.library_data
+    | None -> None, Digest.string "", Digest.string "", [||], d_require_order
   in
   (* G7 round 5: the closure-wide conjunct needs the FULL transitive
      closure, only fully populated after this whole fold finishes -- see
@@ -188,6 +189,7 @@ and intern_mandatory_library caller from libs (dir,d,d_iface,d_objects_digest,d_
       ~actual_vernac_iface:live_vernac_iface ~required_vernac_iface:d_vernac_iface
       ~actual_closure_names:d_closure_names ~required_closure_names:d_closure_names
       ~actual_closure_none_digest:d_closure_none_digest ~required_closure_none_digest:d_closure_none_digest
+      ~actual_require_order:live_require_order ~required_require_order:d_require_order
   in
   if not ok then
     user_err (str "Compiled library " ++ DirPath.print caller ++

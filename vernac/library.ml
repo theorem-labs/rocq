@@ -88,7 +88,7 @@ type library_disk = {
 
 type summary_disk = {
   md_name : compilation_unit_name;
-  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t) array;
+  md_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t * DirPath.t array) array;
   md_ocaml : string;
   md_info : Library_info.t;
   (* Subset of the direct dependencies (i.e. of the dirpaths appearing in
@@ -103,7 +103,7 @@ type summary_disk = {
 type library_t = {
   library_name : compilation_unit_name;
   library_data : library_disk;
-  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t) array;
+  library_deps : (compilation_unit_name * Safe_typing.vodigest * Safe_typing.iface_table option * Digest.t * Digest.t * Safe_typing.iface_table * Safe_typing.closure_table * Digest.t * DirPath.t array) array;
   library_safe_deps : DirPath.Set.t;
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
@@ -343,9 +343,9 @@ and intern_library_deps ~intern (needed, contents) dir m =
       (needed, contents) m.library_deps in
   ((false, dir) :: needed, contents)
 
-and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface,d_closure_names,d_closure_none_digest) =
+and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_objects_digest,d_univs_digest,d_vernac_iface,d_closure_names,d_closure_none_digest,d_require_order) =
   let needed, contents = intern_library ~intern (needed, contents) dir in
-  let digest, live_iface, live_objects_digest, live_univs_digest, live_vernac_iface =
+  let digest, live_iface, live_objects_digest, live_univs_digest, live_vernac_iface, live_require_order =
     digest_of_dep ~contents dir
   in
   (* G7 round 5: the closure-wide conjunct of [dep_ok] needs the FULL
@@ -374,6 +374,7 @@ and intern_mandatory_library ~intern caller (needed, contents) (dir,d,d_iface,d_
       ~actual_vernac_iface:live_vernac_iface ~required_vernac_iface:d_vernac_iface
       ~actual_closure_names:d_closure_names ~required_closure_names:d_closure_names
       ~actual_closure_none_digest:d_closure_none_digest ~required_closure_none_digest:d_closure_none_digest
+      ~actual_require_order:live_require_order ~required_require_order:d_require_order
   in
   let () = if not ok then
     let from = library_full_filename caller in
@@ -390,13 +391,15 @@ and digest_of_dep ~contents dir =
   | Some m -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled,
               Safe_typing.objects_digest_of_library m.library_data.md_compiled,
               Safe_typing.univs_digest_of_library m.library_data.md_compiled,
-              Safe_typing.vernac_iface_of_library m.library_data.md_compiled
+              Safe_typing.vernac_iface_of_library m.library_data.md_compiled,
+              Safe_typing.require_order_of_library m.library_data.md_compiled
   | None ->
     match find_library dir with
     | Some (_, m) -> m.library_digests, Safe_typing.iface_of_library m.library_data.md_compiled,
                      Safe_typing.objects_digest_of_library m.library_data.md_compiled,
                      Safe_typing.univs_digest_of_library m.library_data.md_compiled,
-                     Safe_typing.vernac_iface_of_library m.library_data.md_compiled
+                     Safe_typing.vernac_iface_of_library m.library_data.md_compiled,
+                     Safe_typing.require_order_of_library m.library_data.md_compiled
     | None ->
       (* binary-equivalence-taiga#841 Review841 G8: a recorded dependency
          absent from the live closure is a legitimate "refuse this reuse"
@@ -447,7 +450,7 @@ let compute_modes ~cmd_safe ~roots contents =
   while not (Queue.is_empty queue) do
     let dir = Queue.pop queue in
     let m = DirPath.Map.find dir contents in
-    Array.iter (fun (d, _, _, _, _, _, _, _) ->
+    Array.iter (fun (d, _, _, _, _, _, _, _, _) ->
         if not (DirPath.Set.mem d m.library_safe_deps) then mark d)
       m.library_deps
   done;
@@ -476,7 +479,7 @@ let check_closure_conflicts ~cmd_safe ~roots contents =
       if not (DirPath.Set.mem dir !visited) then begin
         visited := DirPath.Set.add dir !visited;
         let m = DirPath.Map.find dir contents in
-        Array.iter (fun (d, _, _, _, _, _, _, _) ->
+        Array.iter (fun (d, _, _, _, _, _, _, _, _) ->
             if not (DirPath.Set.mem d m.library_safe_deps) then visit d)
           m.library_deps
       end
@@ -679,7 +682,8 @@ let current_deps () =
             Safe_typing.objects_digest_of_library m.library_data.md_compiled,
             Safe_typing.univs_digest_of_library m.library_data.md_compiled,
             Safe_typing.vernac_iface_of_library m.library_data.md_compiled,
-            closure_names, closure_none_digest)
+            closure_names, closure_none_digest,
+            Safe_typing.require_order_of_library m.library_data.md_compiled)
     else None
   in
   List.map_filter map !libraries_loaded_list
@@ -737,8 +741,8 @@ let save_library_struct ~output_native_objects dir =
   (* Every library loaded while compiling this one, in load order
      (binary-equivalence-taiga#841 round 23). [md_deps] below keeps the
      same order but lives in the summary segment, which no dependent ever
-     compares; [Declaremods.end_library] folds this list into the digest
-     dependents do compare. *)
+     compares; the kernel stores this list in the library itself, and a
+     dependent checks it with [Safe_typing.require_order_ok]. *)
   let require_order = List.map snd !libraries_loaded_list in
   let md_compiled, md_objects, md_syntax_objects, vmlib, ast, info =
     Declaremods.end_library ~output_native_objects ~require_order dir in
@@ -754,7 +758,7 @@ let save_library_struct ~output_native_objects dir =
     ; md_syntax_objects
     ; md_objects
     } in
-  if Array.exists (fun (d,_,_,_,_,_,_,_) -> DirPath.equal d dir) sd.md_deps then
+  if Array.exists (fun (d,_,_,_,_,_,_,_,_) -> DirPath.equal d dir) sd.md_deps then
     error_recursively_dependent_library dir;
   sd, md, vmlib, ast
 
