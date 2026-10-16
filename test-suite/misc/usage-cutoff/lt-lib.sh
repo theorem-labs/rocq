@@ -33,6 +33,8 @@ uc_direct_vernac() {
     uc_ok "$name correctly over-refused"
   else
     [ "$fresh_rc" -eq 0 ] || uc_fail "$name fresh B unexpectedly failed: $fresh_out"
+    [ "$c_rc" -eq 0 ] || uc_fail "$name refused a valid reuse: $c_out"
+    uc_same_interface "$work" "$name"
     uc_ok "$name correctly reused"
   fi
 }

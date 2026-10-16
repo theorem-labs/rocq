@@ -40,4 +40,5 @@ after_hash=$(uc_sha256 "$WORK/B.vo")
 uc_assert_eq "$after_hash" "$before_hash" \
   "B.vo's bytes changed after compiling C with a non-colliding addition to A -- B was silently recompiled rather than genuinely reused."
 
+uc_same_interface "$WORK" "g7mod_functor_moduletype_same_library_reused"
 uc_ok "non-colliding addition (g) correctly reused unchanged (sha256 $after_hash) with Y's own same-library Module Type/Module x collision"

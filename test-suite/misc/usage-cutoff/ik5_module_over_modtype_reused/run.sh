@@ -34,4 +34,5 @@ build A.v >>"$WORK/rebuild.log" 2>&1 || uc_fail "$NAME rebuild A (AFTER): $(cat 
 
 c_out=$(build C.v 2>&1); c_rc=$?
 [ "$c_rc" -eq 0 ] || { echo "$c_out" >&2; uc_fail "$NAME: coqc C.v was refused reusing B.vo -- expected to reuse (control)."; }
+uc_same_interface "$WORK" "ik5_module_over_modtype_reused"
 uc_ok "$NAME correctly reused: $(echo "$c_out" | tail -1)"

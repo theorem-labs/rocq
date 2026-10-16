@@ -38,4 +38,5 @@ after_hash=$(uc_sha256 "$WORK/B.vo")
 uc_assert_eq "$after_hash" "$before_hash" \
   "B.vo's bytes changed after compiling C -- B was silently recompiled rather than genuinely reused."
 
+uc_same_interface "$WORK" "g1_admitted_to_qed_reused" T
 uc_ok "B.vo reused unchanged (sha256 $after_hash) after compiling C, across A's Admitted->Qed edit: $(echo "$out" | tail -1)"

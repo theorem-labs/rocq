@@ -34,4 +34,5 @@ if [ "$c_rc" -ne 0 ]; then
   echo "$c_out" >&2
   uc_fail "coqc C.v was refused reusing B.vo after W added an unrelated, non-field-colliding Module Type U -- this control is expected to always reuse, with or without the P3 fix."
 fi
+uc_same_interface "$WORK" "mkc2_module_type_distinct_field_reused"
 uc_ok "unrelated, non-colliding Module Type U correctly reused: $(echo "$c_out" | tail -1)"

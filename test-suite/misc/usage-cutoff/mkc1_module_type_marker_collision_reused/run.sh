@@ -70,4 +70,5 @@ if [ "$c_rc" -ne 0 ]; then
   echo "$c_out" >&2
   uc_fail "coqc C.v was REFUSED reusing B.vo after W added an UNRELATED Module Type U whose field happens to share T's field name 'x' -- B never touches T, U, or 'x' at all, and a fresh compile succeeds, so this is an over-refusal: marked basenames from DIFFERENT module types must not collide with each other in the G7 shadow table."
 fi
+uc_same_interface "$WORK" "mkc1_module_type_marker_collision_reused"
 uc_ok "unrelated field-name-colliding Module Type U correctly reused: $(echo "$c_out" | tail -1)"

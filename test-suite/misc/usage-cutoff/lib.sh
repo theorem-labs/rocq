@@ -77,3 +77,17 @@ uc_coqc() {
 uc_sha256() {
   sha256sum "$1" | cut -d' ' -f1
 }
+
+# uc_same_interface WORK NAME [PREFIX] -- after a REUSED verdict, compare what a client
+# sees of B through the stale B.vo against a fresh compile of B.v: `Print
+# Module B` lists B's exported interface. A reuse whose interface differs from
+# a fresh build is a divergence even though fresh B compiles (round 21, sl4).
+uc_same_interface() {
+  local work=$1 name=$2 pfx=${3:-}
+  printf "%s\n" "Require ${pfx:+$pfx.}B." "Print Module ${pfx:+$pfx.}B." > "$work/IfaceProbe.v"
+  local stale fresh
+  stale=$(cd "$work" && uc_coqc -Q . "$pfx" IfaceProbe.v 2>&1) || uc_fail "$name interface probe failed on stale B: $stale"
+  ( cd "$work" && uc_coqc -Q . "$pfx" B.v ) >"$work/fresh-iface.log" 2>&1 || uc_fail "$name fresh B failed: $(cat "$work/fresh-iface.log")"
+  fresh=$(cd "$work" && uc_coqc -Q . "$pfx" IfaceProbe.v 2>&1) || uc_fail "$name interface probe failed on fresh B: $fresh"
+  [ "$stale" = "$fresh" ] || uc_fail "$name stale B exports a different interface than fresh B: stale=[$stale] fresh=[$fresh]"
+}

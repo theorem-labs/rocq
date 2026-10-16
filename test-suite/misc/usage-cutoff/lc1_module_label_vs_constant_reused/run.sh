@@ -64,4 +64,5 @@ if [ "$c_rc" -ne 0 ]; then
   echo "$c_out" >&2
   uc_fail "coqc C.v was REFUSED reusing B.vo after W added an UNRELATED constant foo -- modules and terms are separate Nametab namespaces, B's Import foo can never be confused with a term, and a fresh compile succeeds, so this is an over-refusal: a module's label must not share a shadow namespace with constants."
 fi
+uc_same_interface "$WORK" "lc1_module_label_vs_constant_reused"
 uc_ok "unrelated constant foo correctly reused despite sharing X's Module foo's name: $(echo "$c_out" | tail -1)"

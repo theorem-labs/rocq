@@ -65,4 +65,5 @@ after2_hash=$(uc_sha256 "$WORK/B.vo")
 uc_assert_eq "$after2_hash" "$before_hash" \
   "or2: B.vo's bytes changed after compiling C2 -- B was silently recompiled rather than genuinely reused."
 
+uc_same_interface "$WORK" "or_order_independent_reused"
 uc_ok "non-colliding addition (h) reused identically (sha256 $after1_hash) regardless of Z/B require order (or1 and or2 both pass)"

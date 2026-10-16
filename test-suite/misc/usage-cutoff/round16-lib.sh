@@ -51,6 +51,7 @@ uc_round16() {
     uc_ok "$name correctly over-refused"
   else
     [ "$c_rc" -eq 0 ] || uc_fail "$name refused a valid reuse: $c_out"
+    uc_same_interface "$work" "$name"
     uc_ok "$name correctly reused"
   fi
 }

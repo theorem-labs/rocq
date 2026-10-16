@@ -21,5 +21,6 @@ uc_unrelated_root() {
   [ "$fresh_rc" -eq 0 ] || uc_fail "$name fresh B unexpectedly failed: $fresh_out"
   c_out=$(build C.v 2>&1); c_rc=$?
   [ "$c_rc" -eq 0 ] || uc_fail "$name refused an unrelated root: $c_out"
+  uc_same_interface "$work" "$name"
   uc_ok "$name correctly reused"
 }

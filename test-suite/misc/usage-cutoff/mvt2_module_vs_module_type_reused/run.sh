@@ -34,4 +34,5 @@ build A.v >>"$WORK/rebuild.log" 2>&1 || uc_fail "rebuild A (AFTER): $(cat "$WORK
 
 c_out=$(build C.v 2>&1); c_rc=$?
 [ "$c_rc" -eq 0 ] || { echo "$c_out" >&2; uc_fail "coqc C.v was refused reusing B.vo after an unrelated Module Type N (different kind than X's module N) -- the kind tag must keep these from colliding (mvt2)."; }
+uc_same_interface "$WORK" "mvt2_module_vs_module_type_reused"
 uc_ok "unrelated same-named Module Type N (different kind) correctly reused: $(echo "$c_out" | tail -1)"
