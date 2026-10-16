@@ -2605,9 +2605,17 @@ and iface_entries_of_sfb (path : string) (id, sfb) : (string * Digest.t) list =
   | SFBmodule mb ->
     (mark_basename module_label_marker (qualify id), module_label_digest) :: entries_of_signature path id (mod_type mb)
   | SFBmodtype mtb ->
-    (mark_basename modtype_label_marker (qualify id), module_label_digest) ::
-    List.map (fun (k, d) -> (mark_basename modtype_entry_marker k, d))
-      (entries_of_signature path id (mod_type mtb))
+    (* A module type's label carries the digest of its whole signature
+       shape, not the constant [module_label_digest]. The per-field
+       entries below catch a changed or removed field, but the subset
+       check ignores an added key, and a field ADDED to a module type
+       invalidates every module a dependent sealed against it (mtc2,
+       tr2). Any change to the field list, including an addition, now
+       changes this exact-compared entry. *)
+    let fields = entries_of_signature path id (mod_type mtb) in
+    let shape = Csha256.digest (Marshal.to_string fields []) in
+    (mark_basename modtype_label_marker (qualify id), shape) ::
+    List.map (fun (k, d) -> (mark_basename modtype_entry_marker k, d)) fields
 
 (* The self closure records every basename B itself defines.  Module and
    module-type labels retain their kind markers so they match live entries,
