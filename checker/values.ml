@@ -355,7 +355,7 @@ let v_cst_def =
 
 let v_typing_flags =
   v_tuple "typing_flags"
-    [|v_bool; v_bool; v_bool;
+    [|v_bool; v_bool; v_bool; v_bool;
       v_oracle; v_bool; v_bool;
       v_bool; v_bool; v_bool; v_bool; v_bool|]
 
@@ -459,6 +459,7 @@ let v_one_ind = v_tuple "one_inductive_body"
     v_array v_int;
     v_wfp;
     v_relevance;
+    v_bool;
     v_int;
     v_int;
     v_vm_reloc_table|]

@@ -2054,6 +2054,14 @@ let () =
   declare_bool_option
     { optstage = Summary.Stage.Interp;
       optdepr  = None;
+      optkey   = ["Indices"; "Matter"];
+      optread  = (fun () -> (Global.typing_flags ()).Declarations.indices_matter);
+      optwrite = (fun b -> Global.set_indices_matter b) }
+
+let () =
+  declare_bool_option
+    { optstage = Summary.Stage.Interp;
+      optdepr  = None;
       optkey   = ["Definitional"; "UIP"];
       optread  = (fun () -> (Global.typing_flags ()).Declarations.allow_uip);
       optwrite = (fun b -> Global.set_typing_flags
@@ -2313,9 +2321,9 @@ let vernac_print =
     (* Prints all the axioms and section variables used by a term *)
     let st = Conv_oracle.get_transp_state (Environ.oracle env) in
     let grs = List.map smart_global rs in
-    let nassums =
+    let (theory, nassums) =
       Assumptions.assumptions opaque_access st ~add_opaque:o ~add_transparent:t grs in
-    Printer.pr_assumptionset env sigma nassums
+    Printer.pr_assumptionset env sigma theory nassums
   | PrintStrategy r -> no_state @@ fun () -> print_strategy r
   | PrintRegistered -> no_state print_registered
   | PrintRegisteredSchemes -> no_state print_registered_schemes

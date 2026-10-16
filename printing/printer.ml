@@ -1092,12 +1092,19 @@ let pr_goal_emacs ?(flags=current_combined()) ~proof gid sid =
 (* Printer function for sets of Assumptions.assumptions.
    It is used primarily by the Print Assumptions command. *)
 
+let { Goptions.get = print_all_assumptions } =
+  Goptions.declare_bool_option_and_ref
+    ~key:["Printing";"All";"Assumptions"]
+    ~value:false
+    ()
+
 type axiom =
   | Constant of Constant.t
   | Positive of MutInd.t
   | Guarded of GlobRef.t
   | TypeInType of GlobRef.t
   | UIP of MutInd.t
+  | IndicesNotMattering of MutInd.t
 
 type context_object =
   | Variable of Id.t (* A section variable or a Let definition *)
@@ -1115,7 +1122,8 @@ struct
     | Constant k1 , Constant k2 ->
       Constant.UserOrd.compare k1 k2
     | Positive m1 , Positive m2
-    | UIP m1, UIP m2 ->
+    | UIP m1, UIP m2
+    | IndicesNotMattering m1, IndicesNotMattering m2 ->
       MutInd.UserOrd.compare m1 m2
     | Guarded k1 , Guarded k2
     | TypeInType k1, TypeInType k2 ->
@@ -1128,6 +1136,8 @@ struct
     | _, Guarded _ -> 1
     | TypeInType _, _ -> -1
     | _, TypeInType _ -> 1
+    | UIP _, _ -> -1
+    | _, UIP _ -> 1
 
   let compare x y =
     match x , y with
@@ -1146,10 +1156,29 @@ end
 module ContextObjectSet = Set.Make (OrderedContextObject)
 module ContextObjectMap = Map.Make (OrderedContextObject)
 
-let pr_assumptionset ?(flags=current_combined()) env sigma s =
+type theory_assumptions = {
+  has_impredicative_set : bool;
+  has_rewrite_rules : bool;
+  has_type_in_type : bool;
+}
+
+let pr_assumptionset ?(flags=current_combined()) env sigma theory_info s =
+  let print_all = print_all_assumptions () in
+  let dominated_by_env ax =
+    match ax with
+    | IndicesNotMattering _ -> not print_all && not (indices_matter env)
+    | _ -> false
+  in
+  let s = ContextObjectMap.filter (fun k _v -> match k with
+    | Axiom (ax, _) -> not (dominated_by_env ax)
+    | _ -> true) s
+  in
+  let show_theory_impredicative_set = (print_all && theory_info.has_impredicative_set) || is_impredicative_set env in
+  let show_theory_rewrite_rules = (print_all && theory_info.has_rewrite_rules) || rewrite_rules_allowed env in
+  let show_theory_type_in_type = (print_all && theory_info.has_type_in_type) || type_in_type env in
   if ContextObjectMap.is_empty s &&
-       not (rewrite_rules_allowed env) &&
-       not (is_impredicative_set env) then
+       not show_theory_rewrite_rules &&
+       not show_theory_impredicative_set then
     str "Closed under the global context"
   else
     let safe_pr_constant env kn =
@@ -1192,6 +1221,8 @@ let pr_assumptionset ?(flags=current_combined()) env sigma s =
           hov 2 (safe_pr_global env gr ++ spc () ++ strbrk"relies on an unsafe hierarchy.")
       | UIP mind ->
           hov 2 (safe_pr_inductive env mind ++ spc () ++ strbrk"relies on definitional UIP.")
+      | IndicesNotMattering mind ->
+          hov 2 (safe_pr_inductive env mind ++ spc () ++ strbrk"relies on indices not mattering.")
     in
     let fold t typ accu =
       let (v, a, o, tr) = accu in
@@ -1227,17 +1258,17 @@ let pr_assumptionset ?(flags=current_combined()) env sigma s =
       ContextObjectMap.fold fold s ([], [], [], [])
     in
     let theory =
-      if is_impredicative_set env then
+      if show_theory_impredicative_set then
         [str "Set is impredicative"]
       else []
     in
     let theory =
-      if rewrite_rules_allowed env then
+      if show_theory_rewrite_rules then
         str "Rewrite rules are allowed (subject reduction might be broken)" :: theory
       else theory
     in
     let theory =
-      if type_in_type env then
+      if show_theory_type_in_type then
         str "Type hierarchy is collapsed (logic is inconsistent)" :: theory
       else theory
     in

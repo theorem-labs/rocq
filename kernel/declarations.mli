@@ -77,6 +77,9 @@ type typing_flags = {
   check_universes : bool;
   (** If [false] universe constraints are not checked *)
 
+  check_eliminations : bool;
+  (** If [false] sort elimination constraints are not checked. Breaks the system *)
+
   conv_oracle : Conv_oracle.oracle;
   (** Unfolding strategies for conversion *)
 
@@ -246,6 +249,10 @@ type one_inductive_body = {
 
     mind_relevance : Sorts.relevance;
     (* XXX this is redundant with mind_sort, is it actually worth keeping? *)
+
+    mind_relies_on_indices_not_mattering : bool;
+    (** true if this inductive relies on indices not mattering,
+        i.e. its behavior would change under -indices-matter. *)
 
 (** {8 Datas for bytecode compilation } *)
 

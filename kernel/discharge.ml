@@ -157,6 +157,7 @@ let cook_one_ind info cache ~params ~ntypes mip =
     mind_consnrealdecls = mip.mind_consnrealdecls;
     mind_recargs = mip.mind_recargs;
     mind_relevance = lift_relevance info mip.mind_relevance;
+    mind_relies_on_indices_not_mattering = mip.mind_relies_on_indices_not_mattering;
     mind_nb_constant = mip.mind_nb_constant;
     mind_nb_args = mip.mind_nb_args;
     mind_reloc_tbl = mip.mind_reloc_tbl;
