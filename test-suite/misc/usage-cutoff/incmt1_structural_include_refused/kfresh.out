@@ -1,0 +1,1 @@
+Module B := Struct Module Type T Module Type U Definition b : nat. End
