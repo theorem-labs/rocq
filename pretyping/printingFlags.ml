@@ -28,11 +28,21 @@ let raw_print = make_flag ["Printing";"All"] false
 (* XXX why does extern look at this flag? *)
 let print_universes = make_flag ["Printing";"Universes"] false
 
+(* detyping: like Printing Universes but anonymizes universe variables *)
+let print_sorts = make_flag ["Printing";"Sorts"] false
+
 (* detyping *)
 let { Goptions.get = print_sort_quality } =
   Goptions.declare_bool_option_and_ref
     ~key:["Printing";"Sort";"Qualities"]
     ~value:true
+    ()
+
+(* extern *)
+let { Goptions.get = print_anonymous_qvars } =
+  Goptions.declare_bool_option_and_ref
+    ~key:["Printing";"Sort";"Quality";"Variables";"Anonymously"]
+    ~value:false
     ()
 
 (* detyping *)
@@ -226,6 +236,7 @@ module PrintingConstructor = Goptions.MakeRefTable(PrintingRecordConstructor)
 module Detype = struct
   type t = {
     universes : bool;
+    sorts : bool;
     qualities : bool;
     relevances : bool;
     evar_instances : bool;
@@ -243,6 +254,7 @@ module Detype = struct
 
   let current_ignore_raw () = {
     universes = !print_universes;
+    sorts = !print_sorts;
     qualities = print_sort_quality();
     relevances = print_relevances();
     evar_instances = !print_evar_arguments;
@@ -337,6 +349,9 @@ module Extern = struct
     coercions : bool;
     parentheses : bool;
     notations : bool;
+    (* Print sort quality variables that have no name as "_" instead of
+       their raw (unparsable) α-names *)
+    anonymous_qvars : bool;
     raw_literals : bool;
     projections : bool;
     float : bool;
@@ -353,6 +368,7 @@ module Extern = struct
     coercions = !print_coercions;
     parentheses = !print_parentheses;
     notations = not !print_no_symbol;
+    anonymous_qvars = print_anonymous_qvars();
     raw_literals = !print_raw_literal;
     projections = !print_projections;
     float = print_float();
@@ -369,6 +385,7 @@ module Extern = struct
     coercions = true;
     raw_literals = true;
     notations = false;
+    anonymous_qvars = false;
     projections = false;
     factorize_eqns = FactorizeEqns.make_raw flags.factorize_eqns;
   }
