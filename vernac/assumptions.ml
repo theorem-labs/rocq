@@ -207,6 +207,123 @@ let no_discharge c =
   { Global.uncooked_body = c;
     Global.uncooked_bound = Id.Set.empty;
     Global.uncooked_context = [] }
+(** Reuse of traversals across queries.
+
+    A query walks the body and type of every object it reaches. A file that
+    runs many queries in one environment (one per lemma, say) walks the same
+    objects again and again, so the walk of an object is recorded and later
+    queries replay it.
+
+    Soundness invariant: for every object [o] and environment [E], the entry
+    for [o] under [E] is the pair of stock's [data] value for [o] and the edge
+    set of [o]:
+    - for an object with a body, its direct references (its value's set);
+    - for an axiom, the direct references of its type, which stock walks but
+      does not keep;
+    - for a member of a mutual block, the block's direct references plus
+      every inductive and constructor of the block.
+    An object is never recorded when its walk, including every walk nested in
+    it, records an empty-match context in [ax2ty] or meets an opaque body that
+    cannot be forced; a member of a mutual block is recorded only together
+    with its whole block. It is also recorded only once each of its edges has
+    an entry, so a replay can miss only at its root.
+
+    Replaying [o] writes [o]'s value into the query's [data], then replays
+    each edge, stopping at objects already in [data] as stock does. A replay
+    either completes, adding exactly the keys and values stock's walk of [o]
+    adds from the same [data] (the closure of [o] through edges, avoiding what
+    [data] holds, whatever the query visited first), or reaches an object
+    without an entry and is abandoned, keeping nothing, and [o] is walked the
+    stock way. A recorded object's walk never touches [ax2ty]. So every
+    query's final [data] and [ax2ty] equal stock's, by induction over the
+    traversal order, and so does the output of {!assumptions}, a fold over
+    them.
+
+    Entries hold for one environment, compared by physical equality of
+    [Global.env ()], plus the current module path (it decides how constants of
+    sealed modules are looked up, see [lookup_module_in_impl]) and the
+    opaque-proof accessor. Any difference clears every entry. *)
+
+let debug_memo = CDebug.create ~name:"assumptions-memo" ()
+
+type memo_entry = {
+  memo_obj : GlobRef.t;
+  memo_value : GlobRef.Set_env.t option;
+  memo_edges : GlobRef.Set_env.t;
+}
+
+let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref = ref None
+
+let memo_entries = ref (GlobRef.Map_env.empty : memo_entry GlobRef.Map_env.t)
+
+(** Counts the traversal steps whose effect depends on the query rather than
+    on the object walked: an empty-match context recorded in [ax2ty], and an
+    opaque body that cannot be forced. A walk during which it changes is not
+    recorded. *)
+let query_dependent = ref 0
+
+let sync_memo access =
+  let env = Global.env () in
+  let mp = Global.current_modpath () in
+  match !memo_key with
+  | Some (env', mp', access') when env' == env && ModPath.equal mp' mp && access' == access -> ()
+  | _ ->
+    memo_key := Some (env, mp, access);
+    memo_entries := GlobRef.Map_env.empty
+
+(* [Map_env] compares user names only: the entry is [obj]'s when the
+   canonical names agree too. *)
+let find_entry obj =
+  match GlobRef.Map_env.find_opt obj !memo_entries with
+  | Some e when GlobRef.CanOrd.equal e.memo_obj obj -> Some e
+  | _ -> None
+
+let has_entry obj = Option.has_some (find_entry obj)
+
+let add_entry value edges obj =
+  let e = { memo_obj = obj; memo_value = value; memo_edges = edges } in
+  memo_entries := GlobRef.Map_env.add obj e !memo_entries
+
+let record_block mind mib contents =
+  let members = Array.fold_left_i (fun n members oib ->
+      let ind = (mind, n) in
+      Array.fold_left_i (fun k members _ ->
+          GlobRef.Set_env.add (GlobRef.ConstructRef (ind, k+1)) members)
+        (GlobRef.Set_env.add (GlobRef.IndRef ind) members) oib.mind_consnames)
+      GlobRef.Set_env.empty mib.mind_packets
+  in
+  let cached r = GlobRef.Set_env.mem r members || has_entry r in
+  if GlobRef.Set_env.for_all cached contents then
+    let edges = GlobRef.Set_env.union contents members in
+    GlobRef.Set_env.iter (add_entry (Some contents) edges) members
+
+exception Miss
+
+(* [data0] is the query's [data] before the replay. An object in it is
+   skipped, as stock skips it. Every other object reached needs an entry for
+   that very object, canonical name included, even when this replay already
+   added an object with the same user name: so the objects a completed replay
+   reaches outside [data0] have one canonical name per user name, and the
+   order in which it reaches them cannot matter. *)
+let rec replay_into data0 obj data =
+  if GlobRef.Map_env.mem obj data0 then data
+  else match find_entry obj with
+  | None -> raise Miss
+  | Some e ->
+    if GlobRef.Map_env.mem obj data then data
+    else
+      GlobRef.Set_env.fold (replay_into data0) e.memo_edges
+        (GlobRef.Map_env.add obj e.memo_value data)
+
+(** [Some data'] when every object the replay reaches has an entry, where
+    [data'] is [data] plus the closure of [obj] with stock's values; [None]
+    otherwise. *)
+let replay obj data =
+  match replay_into data obj data with
+  | data ->
+    debug_memo Pp.(fun () -> str "replayed " ++ GlobRef.print obj);
+    Some data
+  | exception Miss -> None
 let get_constant_body access kn =
   let cb = lookup_constant kn in
   match cb.const_body with
@@ -220,7 +337,10 @@ let get_constant_body access kn =
          or the discharge cannot be left undone, and we pay for it *)
       match Global.force_proof access o with
       | c, _ -> Some (no_discharge c)
-      | exception e when CErrors.noncritical e -> None (* missing delayed body, e.g. in vok mode *)
+      | exception e when CErrors.noncritical e ->
+        (* missing delayed body, e.g. in vok mode *)
+        incr query_dependent;
+        None
 
 (** The nodes already walked in the term being traversed.
 
@@ -314,6 +434,7 @@ and traverse_node access gen bound (current:GlobRef.t) ctx accu t =
     (* non dependent match on an inductive with no constructors *)
     begin match Constr.kind c with
     | Const (kn, _) when not (Declareops.constant_has_body (lookup_constant kn)) ->
+      let () = incr query_dependent in
       let (curr, data, ax2ty) = accu in
       let obj = ConstRef kn in
       let already_in = GlobRef.Map_env.mem obj data in
@@ -334,7 +455,16 @@ and traverse_object access (curr, data, ax2ty) body obj =
   let data, ax2ty =
     let already_in = GlobRef.Map_env.mem obj data in
     if already_in then data, ax2ty
-    else match body () (* Beware: this can be very costly *) with
+    else match replay obj data with
+    | Some data -> data, ax2ty
+    | None -> walk_object access data ax2ty body obj
+  in
+  (GlobRef.Set_env.add obj curr, data, ax2ty)
+
+and walk_object access data ax2ty body obj =
+  let mark = !query_dependent in
+  let value, edges, data, ax2ty =
+    match body () (* Beware: this can be very costly *) with
     | None ->
       (* This is an axiom. Always traverse its type to find dependencies *)
       let data = GlobRef.Map_env.add obj None data in
@@ -342,14 +472,15 @@ and traverse_object access (curr, data, ax2ty) body obj =
       | GlobRef.ConstRef kn ->
         let cb = lookup_constant kn in
         let typ = cb.Declarations.const_type in
-        let _, data, ax2ty =
+        let type_refs, data, ax2ty =
           traverse access (fresh_gen ()) Id.Set.empty obj Context.Rel.empty
                    (GlobRef.Set_env.empty, data, ax2ty) typ in
-        data, ax2ty
+        None, type_refs, data, ax2ty
       (* VarRef, IndRef and ConstructRef don't need recursive type traversal.
          For VarRef (section variables), the dependencies are already tracked.
          For IndRef and ConstructRef, dependencies are handled by traverse_inductive *)
-      | GlobRef.VarRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _ -> data, ax2ty end
+      | GlobRef.VarRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _ ->
+        None, GlobRef.Set_env.empty, data, ax2ty end
     | Some body ->
       let bound = body.Global.uncooked_bound in
       (* a fresh number for this term, so that a node is only ever skipped
@@ -374,9 +505,13 @@ and traverse_object access (curr, data, ax2ty) body obj =
                    (contents,data,ax2ty) typ
         | _ -> (contents,data,ax2ty)
       in
-      GlobRef.Map_env.add obj (Some contents) data, ax2ty
+      Some contents, contents, GlobRef.Map_env.add obj (Some contents) data, ax2ty
   in
-  (GlobRef.Set_env.add obj curr, data, ax2ty)
+  let () =
+    if Int.equal mark !query_dependent && GlobRef.Set_env.for_all has_entry edges
+    then add_entry value edges obj
+  in
+  data, ax2ty
 
 (** Collects the references occurring in the declaration of mutual inductive
     definitions. All the constructors and names of a mutual inductive
@@ -392,47 +527,54 @@ and traverse_inductive access (curr, data, ax2ty) mind obj =
      (* recursive call: *) GlobRef.Set_env.mem firstind_ref curr ||
      (* already in: *) GlobRef.Map_env.mem firstind_ref data
    then data, ax2ty
-   else
-     (* Take into account potential recursivity of ind in itself *)
-     let curr = GlobRef.Set_env.add firstind_ref GlobRef.Set_env.empty in
-     let accu = (curr, data, ax2ty) in
-     let mib = lookup_mind mind in
-     (* Collects references of parameters *)
-     let param_ctx = mib.mind_params_ctxt in
-     let nparam = List.length param_ctx in
-     let gen = fresh_gen () in
-     let accu =
-       traverse_context access gen Id.Set.empty obj Context.Rel.empty accu
-         param_ctx in
-     (* For each inductive, collects references in their arity and in the type
-        of constructors*)
-     let (contents, data, ax2ty) = Array.fold_left (fun accu oib ->
-         let arity_wo_param =
-           List.rev (List.skipn nparam (List.rev oib.mind_arity_ctxt))
-         in
-         let accu =
-           traverse_context
-             access gen Id.Set.empty obj param_ctx accu arity_wo_param
-         in
-         Array.fold_left (fun accu cst_typ ->
-            let param_ctx, cst_typ_wo_param = Term.decompose_prod_n_decls nparam cst_typ in
-            traverse access gen Id.Set.empty obj param_ctx accu cst_typ_wo_param)
-          accu oib.mind_user_lc)
-       accu mib.mind_packets
-     in
-     (* Maps all these dependencies to inductives and constructors*)
-     let data =
-       let contents = GlobRef.Set_env.remove firstind_ref contents in
-       Array.fold_left_i (fun n data oib ->
-       let ind = (mind, n) in
-       let data = GlobRef.Map_env.add (GlobRef.IndRef ind) (Some contents) data in
-       Array.fold_left_i (fun k data _ ->
-         GlobRef.Map_env.add (GlobRef.ConstructRef (ind, k+1)) (Some contents) data
-       ) data oib.mind_consnames) data mib.mind_packets
-     in
-     (data, ax2ty)
+   else match replay obj data with
+   | Some data -> data, ax2ty
+   | None -> walk_inductive access data ax2ty mind obj
   in
   (GlobRef.Set_env.add obj curr, data, ax2ty)
+
+and walk_inductive access data ax2ty mind obj =
+  let firstind_ref = (GlobRef.IndRef (mind, 0)) in
+  let mark = !query_dependent in
+  (* Take into account potential recursivity of ind in itself *)
+  let curr = GlobRef.Set_env.add firstind_ref GlobRef.Set_env.empty in
+  let accu = (curr, data, ax2ty) in
+  let mib = lookup_mind mind in
+  (* Collects references of parameters *)
+  let param_ctx = mib.mind_params_ctxt in
+  let nparam = List.length param_ctx in
+  let gen = fresh_gen () in
+  let accu =
+    traverse_context access gen Id.Set.empty obj Context.Rel.empty accu
+      param_ctx in
+  (* For each inductive, collects references in their arity and in the type
+     of constructors*)
+  let (contents, data, ax2ty) = Array.fold_left (fun accu oib ->
+      let arity_wo_param =
+        List.rev (List.skipn nparam (List.rev oib.mind_arity_ctxt))
+      in
+      let accu =
+        traverse_context
+          access gen Id.Set.empty obj param_ctx accu arity_wo_param
+      in
+      Array.fold_left (fun accu cst_typ ->
+         let param_ctx, cst_typ_wo_param = Term.decompose_prod_n_decls nparam cst_typ in
+         traverse access gen Id.Set.empty obj param_ctx accu cst_typ_wo_param)
+        accu oib.mind_user_lc)
+    accu mib.mind_packets
+  in
+  (* Maps all these dependencies to inductives and constructors*)
+  let contents = GlobRef.Set_env.remove firstind_ref contents in
+  let data =
+    Array.fold_left_i (fun n data oib ->
+    let ind = (mind, n) in
+    let data = GlobRef.Map_env.add (GlobRef.IndRef ind) (Some contents) data in
+    Array.fold_left_i (fun k data _ ->
+      GlobRef.Map_env.add (GlobRef.ConstructRef (ind, k+1)) (Some contents) data
+    ) data oib.mind_consnames) data mib.mind_packets
+  in
+  let () = if Int.equal mark !query_dependent then record_block mind mib contents in
+  (data, ax2ty)
 
 (** Collects references in a rel_context. *)
 and traverse_context access gen bound current ctx accu ctxt =
@@ -451,6 +593,7 @@ and traverse_context access gen bound current ctx accu ctxt =
 let traverse access grs =
   let () = modcache := ModPath.Map.empty in
   let () = cache_init () in
+  let () = sync_memo access in
   let env = Global.env () in
   let ans = List.fold_left (fun accu gr ->
     let t, _ = UnivGen.fresh_global_instance env gr in
