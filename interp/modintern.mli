@@ -43,3 +43,15 @@ val intern_module_ast :
 (** Module interpretation, i.e. from module expression to typed module entry *)
 val interp_module_ast :
   env -> module_kind -> ModPath.t -> module_struct_expr -> module_struct_entry * Univ.ContextSet.t
+
+(** Every module path named by a module expression interpreted so far in
+    the library being compiled (binary-equivalence-taiga#841 round 23).
+    [Declaremods.end_library] turns these into the library's structural
+    dependencies: the libraries whose structure this one copies, and whose
+    whole exported interface it therefore depends on. *)
+val structural_targets : unit -> ModPath.t list
+
+(** Forget them, so the next library compiled by this process starts with
+    an empty record. Called by [Declaremods.end_library] once it has read
+    them. *)
+val clear_structural_targets : unit -> unit

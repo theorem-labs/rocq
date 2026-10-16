@@ -67,7 +67,11 @@ let coq_version = "9.2+rc2"
 (* Round 20: transitive objects/universe digests, a syntax-object projection
    and per-name vernac snapshots for the closure widen [compiled_library]
    again. Reject older records before Marshal can read them. *)
-let vo_magic = 91206
+(* Round 23: [compiled_library] gains [comp_structural_deps] (the libraries
+   whose structure it copies, each with the identity it copied). Widening
+   the record again: an older reader would run off the end of the block, so
+   the version check has to refuse those objects first. *)
+let vo_magic = 91207
 let is_a_released_version = false
 
 (** Default OCaml binaries *)

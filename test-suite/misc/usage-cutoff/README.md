@@ -110,3 +110,53 @@ proof body (Qed->Qed, unrelated to G1), rebuild (B should show REUSED),
 then run `make real-all` again immediately with nothing changed and check
 the stats log for a second REUSED entry (expected: none at all, second run
 should do zero work).
+
+## Round 23: structural copies, and the two summary-segment gaps
+
+A dependent that COPIES a library's structure depends on that library's
+whole exported interface, not on the names it happens to use. `Include A`,
+`Module K := A`, `Module K := A.M`, an `Include` inside a `Module` or a
+`Module Type`, a functor application whose argument gets Included, and a
+`with` constraint all put a snapshot of another library's field list into
+the dependent's own compiled form. Through round 22 those dependents were
+reused after the copied library gained a field, which is the hole
+documented in binary-equivalence-taiga#841 issuecomment-6206828826: a
+client of the copied name gets a `Not_found` anomaly against the stale
+object and compiles against a fresh one.
+
+The rule is now: every module path a module expression in the file names
+(recorded at the single place they are interpreted,
+`Modintern.interp_module_ast`) makes the library it belongs to a
+structural dependency, and reuse requires that library's whole-library
+digest AND an exact SHA-256 digest of its exported interface to be
+unchanged (`Safe_typing.structural_dep`). Nothing is shape-matched, so a
+module-expression form nobody thought of cannot slip through: it is
+recorded like the others. A sealing signature (`Module M : T.`) is
+recorded too, although it copies nothing; `withdef1_modtype_with_overrefused`
+pins that cost.
+
+| Fixture | Shape |
+|---|---|
+| `incmt1_structural_include_refused` | `Include A`, A gains a `Module Type` |
+| `incmt2_nested_include_refused` | `Module K. Include A. End K.` |
+| `incmt3_nested_modtype_include_refused` | `Module Type K. Include A. End K.` |
+| `aliasmt1_nested_alias_refused` | `Module K := A` |
+| `incdef1_structural_include_definition_refused` | `Include A`, A gains a `Definition` (the same hole at v1 and fd1fa9c65b) |
+| `aliasdef1_module_alias_definition_refused` | `Module K := A`, A gains a `Definition` |
+| `aliasnest1_nested_module_alias_refused` | `Module K := A.M` |
+| `transinc1_transitive_include_refused` | the copied library is not a direct requirement |
+| `functorarg1_functor_argument_copy_refused` | the copied library is a functor argument |
+| `withdef1_modtype_with_overrefused` | `with` constraint: sound over-refusal, pinned |
+| `pstring1_primitive_string_change_refused` | a `%pstring` literal change refuses (review R1-1) |
+
+The same round closes the two gaps the speed-coord review plan-861c1-r1
+raised as finding R1-3, which were open and documented through round 22.
+A library's require ORDER and its file-level ATTRIBUTES live in the `.vo`
+summary segment, which no digest a dependent compares ever read, so a
+dependent was reused after its dependency reordered its requirements (a
+fresh compile then resolves a different instance) or gained a deprecation
+attribute (a fresh compile under `+deprecated` then fails).
+`Declaremods.end_library` folds both into the exact-compared objects
+digest. `order_instance_priority_refused` and
+`info_deprecated_attribute_refused` were written as report-either-way
+probes; they now assert the refusal.

@@ -523,6 +523,37 @@ let dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
    closure_subset_ok ?self_dp ~recorded:required_closure_names ~live:actual_closure_names &&
    Digest.equal required_closure_none_digest actual_closure_none_digest)
 
+(** binary-equivalence-taiga#841 round 23 (incmt1-3, aliasmt1,
+    issuecomment-6206828826). [dep_ok] above tolerates ADDITIONS to a
+    dependency: an entry the dependent never recorded cannot have been
+    used by it. That reasoning holds for a dependent that REFERS to names
+    in [A] (it resolved the names it resolved, and a new one cannot change
+    that), and fails for a dependent that COPIES [A]'s structure: [Include
+    A], [Module K := A], [Include A] inside a [Module] or [Module Type], a
+    functor application, a [with Module] constraint. There the dependent's
+    own compiled form contains a snapshot of [A]'s whole field list, so a
+    field ADDED to [A] belongs in a fresh build of the dependent and is
+    missing from the stale one: a client of the copied name gets a
+    [Not_found] anomaly against the stale object and compiles against a
+    fresh one, and an implementation of a copied [Module Type] compiles
+    against the stale object and fails against a fresh one.
+
+    So a structurally copied dependency is not a usage relation at all: the
+    dependent depends on that library's ENTIRE exported interface. Each
+    entry records the copied library's own whole-library digest and an
+    exact digest of its exported interface, and reuse requires both to be
+    unchanged -- the stock rule for that one dependency, with no subset
+    tolerance anywhere in it.
+
+    The two digests are deliberately redundant. The whole-library digest is
+    MD5 ([Digest], stock Rocq's own dependency identity); the interface
+    identity is SHA-256 over values this fork computes
+    ([structural_identity] below). An agent controls the source bytes of
+    the libraries it builds, and a primitive-string literal carries
+    arbitrary bytes, so an identical-prefix MD5 collision pair is
+    constructible (speed-coord review plan-861c1-r1 finding R1-1); it does
+    not by itself satisfy this check. *)
+type structural_dep = DirPath.t * vodigest * Csha256.t
 (** Functor and funsig parameters, most recent first *)
 type module_parameters = (MBId.t * module_type_body) list
 
@@ -644,6 +675,11 @@ type compiled_library = {
 
   comp_closure_none_digest : Digest.t;
   comp_closure_visible_dps : DirPath.t array;
+
+  (** binary-equivalence-taiga#841 round 23: the libraries whose structure
+      this one copies into its own compiled form, each with the identity
+      it was copied from. See [structural_deps_ok]. *)
+  comp_structural_deps : structural_dep array;
 }
 
 type reimport = compiled_library * Vmlibrary.on_disk * vodigest
@@ -1186,6 +1222,57 @@ let visibility_changes_syntax current_libs changed_visible =
       | None -> true)
     changed_visible
 
+
+(** The exact identity of one library's exported interface, as seen by a
+    dependent that copied its structure (see [structural_dep]). Every value
+    folded in here is one the copying dependent's own compiled form
+    reproduces: the per-declaration table (ADDITIONS included, which is the
+    whole point -- this is equality, not [iface_subset_ok]), the exact
+    objects digest, the transitive-syntax digest, the universe/sort digest,
+    the alias digest, the export edges, and the keyed vernac table.
+
+    Serialised by hand, never through [Marshal]: [Marshal] shares equal
+    sub-values by pointer, so the same logical table can marshal to
+    different bytes depending on how it was built (fresh in this process,
+    or unmarshalled from a [.vo]), and the identity has to be a function of
+    the value alone. Every variable-length piece carries its own length, so
+    no two distinct interfaces can serialise to the same string. *)
+let structural_identity r =
+  let buf = Buffer.create 4096 in
+  let field s =
+    Buffer.add_string buf (string_of_int (String.length s));
+    Buffer.add_char buf ':';
+    Buffer.add_string buf s
+  in
+  let table tbl =
+    field (string_of_int (Array.length tbl));
+    Array.iter (fun (key, d) -> field key; field d) tbl
+  in
+  (match r.req_iface with
+   | None -> field "iface-none"
+   | Some tbl -> field "iface-some"; table tbl);
+  field r.req_objects_digest;
+  field r.req_transitive_objects_digest;
+  field r.req_univs_digest;
+  field r.req_alias_digest;
+  field (string_of_int (Array.length r.req_exported_dirs));
+  Array.iter (fun dp -> field (DirPath.to_string dp)) r.req_exported_dirs;
+  table r.req_vernac_iface;
+  Csha256.digest (Buffer.contents buf)
+
+(** Every library this one copied structurally must still be the library it
+    was copied from, whole: same [.vo] digest AND same exported interface.
+    A recorded library that is no longer loaded, or one recorded with the
+    empty digest (its identity was unresolvable at export time), can never
+    satisfy this -- the direction a missing answer has to fail in. *)
+let structural_deps_ok current_libs recorded =
+  Array.for_all (fun (dp, required_digest, required_identity) ->
+      match DirPath.Map.find_opt dp current_libs with
+      | None -> false
+      | Some r ->
+        digest_match ~actual:r.req_digest ~required:required_digest
+        && Csha256.equal required_identity (structural_identity r))
+    recorded
 
 let check_required ?self_dp current_libs needed =
   (* binary-equivalence-taiga#841 round 7 (or1/or2): [actual_closure_none_digest]
@@ -2658,7 +2745,7 @@ and self_entries_of_sfb path (id, sfb) =
 let iface_table_of_struct (sb : structure_body) : iface_table option =
   Some (Array.of_list (iface_entries_of_struct "" sb))
 
-let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~transitive_objects_digest ~vernac_iface ~extra_closure_names senv dir =
+let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~transitive_objects_digest ~vernac_iface ~extra_closure_names ~structural_dirs senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
   let str = NoFunctor (List.rev senv.revstruct) in
@@ -2798,6 +2885,21 @@ let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~
     |> List.map (fun (dp, { req_vernac_iface; _ }) -> dp, req_vernac_iface)
     |> Array.of_list
   in
+  (* binary-equivalence-taiga#841 round 23: the vernac layer hands in the
+     libraries whose structure this one copies (see [structural_dep] and
+     [Modintern.structural_targets]); the identity each was copied from is
+     read here, from the same [required_lib] record [structural_deps_ok]
+     re-reads at load time, so the two can never drift apart. A copied
+     library that is somehow not among this compile's requirements records
+     the empty digest, which no real library can match: a copy whose source
+     cannot be identified must refuse reuse, not skip the check. *)
+  let comp_structural_deps =
+    Array.map (fun dp ->
+        match DirPath.Map.find_opt dp senv.required with
+        | Some r -> (dp, r.req_digest, structural_identity r)
+        | None -> (dp, Dvo_or_vi "", Csha256.digest ""))
+      structural_dirs
+  in
 
   (* binary-equivalence-taiga#841 Review841 G2: digest of this library's OWN
      global universe constraints/sort qualities, computed here (not handed
@@ -2827,6 +2929,7 @@ let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~
     comp_closure_names;
     comp_closure_none_digest;
     comp_closure_alias_digests;
+    comp_structural_deps;
   } in
   let vmlib = Vmlibrary.export @@ Environ.vm_library senv.env in
   mp, lib, vmlib, (ast, symbols)
@@ -2900,6 +3003,7 @@ let import lib vmtab vodigest senv =
          visibility_changes_syntax current
            (DirPath.Set.union newly_visible lost_visible) ||
          not (closure_alias_digests_ok current reachable lib.comp_closure_alias_digests) ||
+         not (structural_deps_ok current lib.comp_structural_deps) ||
          visibility_adds_collision current newly_visible lib.comp_closure_names then
         CErrors.user_err Pp.(pr_sequence str
           ["Inconsistent assumptions over module"; DirPath.to_string lib.comp_name; "."])

@@ -1,1 +1,1 @@
-Definition z := 2.
+Definition z := 1.

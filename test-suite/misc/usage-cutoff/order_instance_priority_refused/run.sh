@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# binary-equivalence-taiga#841, plan-861-commit1 review round 1 finding
-# 861C1-R1-3 (load-order toy, `order/o1` vs `order/o2`,
-# /mnt/nvme/sami/speed/coord/r1-861c1/order/). KNOWN OPEN GAP, confirmed
-# reachable on THIS branch (round 7), not fixed by this round.
+# binary-equivalence-taiga#841, speed-coord review plan-861c1-r1 finding
+# R1-3 (load-order toy, `order/o1` vs `order/o2`). Was a documented open
+# gap through round 22; closed in round 23 and asserted here.
 #
 # `Cl.v` declares a typeclass `C`; `A.v`/`B.v` each declare a `#[global]
 # Instance` of `C` (compiled to an ordinary SFBconst each, so their OWN
@@ -13,30 +12,14 @@
 # `a` (v=0) under o2's. A fresh compile of K genuinely differs (confirmed
 # below): it succeeds against o1, fails against o2.
 #
-# D.vo's own kernel-visible content (comp_mod, comp_iface, closure_names/
-# closure_none_digest -- the FULL transitive closure is a DirPath.Map,
-# unordered) is IDENTICAL between o1 and o2: A and B's own digests don't
-# change, and D itself declares nothing beyond requiring them. So
-# `digest_match` (`vodigest`, "digest of the seg_lib part" -- the kernel
-# LIBRARY SEGMENT only, inherited unchanged from stock) already returns
-# TRUE for D between o1 and o2, which means `dep_ok`'s RELAXED fallback
-# (this fork's own code) is never even reached -- the stock fast path
-# alone accepts the swap. This is a STOCK gap (confirmed independently in
-# the plan-861-commit1 review: stock coqc/rocqchk both accept the same
-# swap), not something this fork's relaxed-reuse mechanism introduces or
-# widens.
-#
-# Root cause: `vodigest` covers only the kernel library segment, never
-# the `vernac/library.ml` SUMMARY's `md_deps` (an array in LOAD order,
-# which an unordered `DirPath.Map` erases) or `md_info` (see the sibling
-# `info_deprecated_attribute_residual_gap`). Fixing this means widening
-# what `vodigest`/`digest_match` cover in the first place, a stock-level
-# change bigger than anything this fork's dep_ok fallback can reach by
-# itself -- tracked as part of #861 commit 1's own interface (still being
-# written; do not build against it yet). Same risk class as the
-# documented G8/D1 gap: a dev-loop signal that can lie about what a fresh
-# compile would do, never a path to an unsound ACCEPT at grading time
-# (grading always recompiles from source).
+# What used to let the stale K through: D's load order lives in the
+# summary segment's `md_deps`, and every digest a dependent compares is
+# computed from the kernel library segment, where requirements are a
+# sorted map. Both `digest_match` and the relaxed fallback therefore saw
+# o1's D and o2's D as the same library. Round 23 folds the load order
+# (and the file-level attributes, see `info_deprecated_attribute_refused`)
+# into the exact-compared objects digest at `Declaremods.end_library`, so
+# D's own segment bytes differ and every dependent of D refuses.
 . ../lib.sh
 
 D=$(pwd)
@@ -83,9 +66,9 @@ cp "$WORK/D.vo.o2" "$WORK/D.vo"
 
 g_out=$(build G.v 2>&1)
 g_rc=$?
-if [ "$g_rc" -ne 0 ]; then
-  uc_ok "GAP CLOSED: coqc G.v now refuses to reuse K.vo when D's instance load order changed underneath it ($(echo "$g_out" | grep -im1 'inconsistent assumptions\|error')) -- update this fixture's header, it's no longer a residual gap."
-  exit 0
+if [ "$g_rc" -eq 0 ]; then
+  uc_fail "coqc G.v reused K.vo after D's instance load order changed underneath it, although a fresh K against the new D fails: $(echo "$fresh_out" | grep -im1 'error')"
 fi
-
-uc_ok "KNOWN RESIDUAL GAP (plan-861-commit1 R1-3, order/): coqc G.v wrongly reused K.vo after D's instance load order changed (a fresh K against the new D fails: $(echo "$fresh_out" | grep -im1 'error')) -- vodigest's library-segment-only scope misses md_deps order; see this file's header for why this fork's dep_ok relaxed fallback is not the cause and cannot close it alone."
+printf %s "$g_out" | grep -qi 'inconsistent assumptions' \
+  || uc_fail "G.v was refused for the wrong reason: $g_out"
+uc_ok "require-order change in D correctly refused the stale K.vo"

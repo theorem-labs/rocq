@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# binary-equivalence-taiga#841, plan-861-commit1 review round 1 finding
-# 861C1-R1-3 (library-info toy, `info/i1` vs `info/i2`,
-# /mnt/nvme/sami/speed/coord/r1-861c1/info/). KNOWN OPEN GAP, confirmed
-# reachable on THIS branch (round 7), not fixed by this round. Same root
-# cause as the sibling `order_instance_priority_residual_gap` -- see that
-# fixture's header for the full argument (vodigest covers only the kernel
-# library segment, never `vernac/library.ml`'s summary `md_info`; this
-# fork's dep_ok relaxed fallback is never even reached, since the stock
-# fast path `digest_match` already accepts the swap).
+# binary-equivalence-taiga#841, speed-coord review plan-861c1-r1 finding
+# R1-3 (library-info toy, `info/i1` vs `info/i2`). Was a documented open
+# gap through round 22; closed in round 23 and asserted here. Same root
+# cause and same fix as the sibling `order_instance_priority_refused`:
+# a library's file-level attributes live in the summary segment, which no
+# digest a dependent compares ever covered, and round 23 folds them into
+# the exact-compared objects digest at `Declaremods.end_library`.
 #
 # `D_i1.v`/`D_i2.v` both declare the SAME `Definition d := 0.`; i2 adds
 # `Attributes deprecated(note="x").` on it, a LIBRARY-FILE-level
@@ -59,9 +57,9 @@ cp "$WORK/D.vo.i2" "$WORK/D.vo"
 
 g_out=$(build G.v 2>&1)
 g_rc=$?
-if [ "$g_rc" -ne 0 ]; then
-  uc_ok "GAP CLOSED: coqc G.v now refuses to reuse K.vo when D gained a deprecation attribute underneath it ($(echo "$g_out" | grep -im1 'inconsistent assumptions\|error\|deprecated')) -- update this fixture's header, it's no longer a residual gap."
-  exit 0
+if [ "$g_rc" -eq 0 ]; then
+  uc_fail "coqc G.v reused K.vo after D gained a deprecation attribute underneath it, although a fresh K against the new D errors: $(echo "$fresh_out" | grep -im1 'deprecated')"
 fi
-
-uc_ok "KNOWN RESIDUAL GAP (plan-861-commit1 R1-3, info/): coqc G.v wrongly reused K.vo after D gained a deprecation attribute (a fresh K against the new D errors: $(echo "$fresh_out" | grep -im1 'deprecated')) -- vodigest's library-segment-only scope misses md_info; see this file's header for why this fork's dep_ok relaxed fallback is not the cause and cannot close it alone."
+printf %s "$g_out" | grep -qi 'inconsistent assumptions' \
+  || uc_fail "G.v was refused for the wrong reason: $g_out"
+uc_ok "library deprecation attribute on D correctly refused the stale K.vo"

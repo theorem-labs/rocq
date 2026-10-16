@@ -19,7 +19,7 @@ uc_structural_copy_refused() {
   for f in "$dir"/*.v; do cp "$f" "$work"/; done
   cp "$dir"/A0.v "$work/A.v"
   build() { ( cd "$work" && uc_coqc -Q . "" "$1" ); }
-  for f in X.v A.v B.v; do
+  for f in X.v A.v R.v B.v; do
     [ -f "$work/$f" ] || continue
     build "$f" >>"$work/setup.log" 2>&1 || uc_fail "$name setup $f: $(cat "$work/setup.log")"
   done

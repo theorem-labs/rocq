@@ -111,6 +111,45 @@ let intern_with_decl = function
 
 let loc_of_module l = l.CAst.loc
 
+(** binary-equivalence-taiga#841 round 23: every module path a module
+    expression in this file names. A module expression is the only way a
+    file copies another library's structure into its own compiled form:
+    [Module K := A], [Include A], [Module K. Include A. End K.], a functor
+    application [F X], a [with Module] constraint, and the signature in
+    [Module M : T]. All of them reach the kernel through
+    [interp_module_ast] below, which is why the record is taken here, at
+    the one funnel, rather than recovered afterwards from the stored
+    objects: [get_module_sobjs]'s [MEwith] case expands the copied objects
+    inline ([Objs], not [Ref]), losing the name of the library they came
+    from, and a functor argument appears only inside a substitution.
+
+    [Declaremods.end_library] turns these paths into the library's
+    structural dependency list, and clears the record for the next library
+    this process compiles. Loading a [.vo] never interprets a module
+    expression, so nothing accumulates here while a library is required.
+
+    Deliberately NOT a [Summary.ref]: the summary is saved and restored
+    around a module declaration, so a target named INSIDE a module (a
+    nested [Include A], and the body of [Module K := A] itself) would be
+    rolled back when the module closes, which is exactly the shape of the
+    round-22 hole. A plain reference can only ever over-record -- an
+    expression whose command later failed or was undone stays in the list
+    and costs a refusal, never a reuse. *)
+let structural_targets_ref = ref Names.ModPath.Set.empty
+
+let note_structural_target mp =
+  structural_targets_ref := Names.ModPath.Set.add mp !structural_targets_ref
+
+let rec note_module_expr : 'a. 'a Declarations.module_alg_expr -> unit = function
+  | MEident mp -> note_structural_target mp
+  | MEapply (me, mp) -> note_module_expr me; note_structural_target mp
+  | MEwith (me, WithMod (_, mp)) -> note_module_expr me; note_structural_target mp
+  | MEwith (me, WithDef _) -> note_module_expr me
+
+let structural_targets () = Names.ModPath.Set.elements !structural_targets_ref
+
+let clear_structural_targets () = structural_targets_ref := Names.ModPath.Set.empty
+
 (* Invariant : the returned kind is never ModAny, and it is
    equal to the input kind when this one isn't ModAny. *)
 
@@ -163,4 +202,7 @@ let rec interp_module_ast env kind base m cst = match m with
   MEwith(me,decl), cst
 
 let interp_module_ast env kind base m =
+  (* Record before interpreting: the paths are the same either way, and a
+     failure here never reaches [end_library]. *)
+  note_module_expr m;
   interp_module_ast env kind base m Univ.ContextSet.empty

@@ -171,8 +171,14 @@ end
 val start_library : library_name -> unit
 
 val end_library :
-  output_native_objects:bool -> library_name ->
+  output_native_objects:bool -> require_order:library_name list -> library_name ->
   Safe_typing.compiled_library * library_objects * library_objects * Vmlibrary.compiled_library * Nativelib.native_library * Library_info.t
+(** [require_order] is every library loaded while compiling this one, in
+    load order (binary-equivalence-taiga#841 round 23). It is part of what
+    a dependent observes through this library: the order instances and
+    hints were loaded in decides which one a fresh compile of the dependent
+    resolves to, and it is invisible to every other digest, since the
+    kernel sees requirements as a sorted map. *)
 
 (** append a function to be executed at end_library *)
 val append_end_library_hook : (unit -> unit) -> unit

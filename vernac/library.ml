@@ -734,8 +734,14 @@ let save_library_base f sum lib proofs vmlib =
 
 (* This is the basic vo save structure *)
 let save_library_struct ~output_native_objects dir =
+  (* Every library loaded while compiling this one, in load order
+     (binary-equivalence-taiga#841 round 23). [md_deps] below keeps the
+     same order but lives in the summary segment, which no dependent ever
+     compares; [Declaremods.end_library] folds this list into the digest
+     dependents do compare. *)
+  let require_order = List.map snd !libraries_loaded_list in
   let md_compiled, md_objects, md_syntax_objects, vmlib, ast, info =
-    Declaremods.end_library ~output_native_objects dir in
+    Declaremods.end_library ~output_native_objects ~require_order dir in
   let sd =
     { md_name = dir
     ; md_deps = Array.of_list (current_deps ())

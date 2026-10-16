@@ -630,12 +630,18 @@ let v_transitive_digests =
   v_array (v_tuple "transitive digest" [|v_dp;v_string;v_string|])
 let v_transitive_vernac_ifaces = v_array (v_pair v_dp v_iface)
 
+(* binary-equivalence-taiga#841 round 23: the structural dependency array,
+   last field of [compiled_library] -- (library, its whole-library digest,
+   its SHA-256 interface identity). *)
+let v_structural_deps =
+  v_array (v_tuple "structural dep" [|v_dp;v_vodigest;v_string|])
+
 let v_compiled_lib =
   v_tuple "compiled"
     [|v_dp; v_module; v_univ_context_set; v_sort_context_set; v_deps;
       v_transitive_digests; v_transitive_vernac_ifaces; v_flags;
       v_opt v_iface; v_string; v_dirpaths; v_string; v_string; v_string; v_iface;
-      v_closure; v_alias_digests; v_string; v_dirpaths|]
+      v_closure; v_alias_digests; v_string; v_dirpaths; v_structural_deps|]
 
 (** Toplevel structures in a vo (see Cic.mli) *)
 
