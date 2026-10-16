@@ -1149,6 +1149,10 @@ let closure_alias_digests_ok current_libs reachable recorded =
     recorded
 
 
+let visibility_loses_recorded_name lost_visible recorded =
+  Array.exists (fun (dp, _, _) -> DirPath.Set.mem dp lost_visible) recorded
+
+
 
 let check_required ?self_dp current_libs needed =
   (* binary-equivalence-taiga#841 round 7 (or1/or2): [actual_closure_none_digest]
@@ -2798,7 +2802,9 @@ let import lib vmtab vodigest senv =
           DirPath.Set.empty lib.comp_closure_visible_dps
       in
       let newly_visible = DirPath.Set.diff live_visible recorded_visible in
-      if not (closure_alias_digests_ok current reachable lib.comp_closure_alias_digests) ||
+      let lost_visible = DirPath.Set.diff recorded_visible live_visible in
+      if visibility_loses_recorded_name lost_visible lib.comp_closure_names ||
+         not (closure_alias_digests_ok current reachable lib.comp_closure_alias_digests) ||
          visibility_adds_collision current newly_visible lib.comp_closure_names then
         CErrors.user_err Pp.(pr_sequence str
           ["Inconsistent assumptions over module"; DirPath.to_string lib.comp_name; "."])
