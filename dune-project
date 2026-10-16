@@ -1,11 +1,11 @@
-(lang dune 3.8)
+(lang dune 3.21)
 (name rocq-prover)
 
 ; We use directory targets in documentation
 (using directory-targets 0.1)
 
 ; We need this for when we use the dune.disabled files instead of our rule_gen
-(using coq 0.8)
+(using rocq 0.11)
 
 (formatting
  (enabled_for ocaml))
@@ -20,6 +20,7 @@
 (homepage https://rocq-prover.org/)
 (documentation "https://rocq-prover.org/docs/")
 (version dev)
+(maintenance_intent "(any)")
 
 ; Note that we use rocq-runtime.opam.template to have dune add the correct opam
 ; prefix for configure
@@ -92,6 +93,15 @@ Feit-Thompson theorem or homotopy type theory) and teaching.
 
 This package includes compatibility binaries to call Rocq
 through previous Coq commands like coqc coqtop,..."))
+
+(package
+ (name coq)
+ (allow_empty)
+ (depends
+  (coq-core (= :version))
+  coq-stdlib
+  (coqide-server (= :version)))
+ (synopsis "Compatibility metapackage for Coq after the Rocq renaming"))
 
 (package
  (name rocq-core)
