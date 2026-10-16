@@ -12,10 +12,12 @@ uc_round16() {
   mkdir -p "$work"
   cp "$dir"/X.v "$dir"/A.v "$dir"/B.v "$dir"/C.v "$work"/
   test ! -f "$dir/Y.v" || cp "$dir/Y.v" "$work/Y.v"
+  test ! -f "$dir/Y2.v" || cp "$dir/Y2.v" "$work/Y2.v"
   cp "$dir/W0.v" "$work/W.v"
   build() { ( cd "$work" && uc_coqc -Q . "" "$1" ); }
   build X.v >"$work/setup.log" 2>&1 || uc_fail "$name setup X: $(cat "$work/setup.log")"
   test ! -f "$work/Y.v" || build Y.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup Y: $(cat "$work/setup.log")"
+  test ! -f "$work/Y2.v" || build Y2.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup Y2: $(cat "$work/setup.log")"
   build W.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup W0: $(cat "$work/setup.log")"
   build A.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup A: $(cat "$work/setup.log")"
   build B.v >>"$work/setup.log" 2>&1 || uc_fail "$name setup B: $(cat "$work/setup.log")"

@@ -298,7 +298,7 @@ val check_flags_for_library : compiled_library -> safe_transformer0
 val start_library : DirPath.t -> ModPath.t safe_transformer
 
 val export :
-  output_native_objects:bool -> objects_digest:Digest.t -> export_digest:Digest.t -> vernac_iface:iface_table ->
+  output_native_objects:bool -> objects_digest:Digest.t -> exported_dirs:DirPath.t array -> alias_digest:Digest.t -> vernac_iface:iface_table ->
   extra_closure_names:iface_table ->
   safe_environment -> DirPath.t ->
     ModPath.t * compiled_library * Vmlibrary.compiled_library * Nativelib.native_library

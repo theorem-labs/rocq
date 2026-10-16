@@ -58,10 +58,13 @@ let coq_version = "9.2+rc2"
    (the round-3 fix for the i1/i3/l1/d1 findings) -- same shape, different
    semantics, so a stale reader would silently misinterpret a name/digest
    pair as a bare digest string. Forces another hard version bump. *)
-(* Round 18: [compiled_library] stores export-object digests for its closure.
-   The serialized record widened, so reject older objects before Marshal can
-   interpret fields under the new layout. *)
-let vo_magic = 91204
+(* Round 18: [compiled_library] records direct export paths and the closure
+   visibility set. The serialized record widened, so old objects must fail
+   before Marshal can interpret them under the new field order. *)
+(* Round 18 follow-up: [compiled_library] also records module alias and
+   Include target digests for its closure. Reject prior layouts before
+   Marshal can read them under the new field order. *)
+let vo_magic = 91205
 let is_a_released_version = false
 
 (** Default OCaml binaries *)

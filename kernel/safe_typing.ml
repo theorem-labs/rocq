@@ -604,9 +604,11 @@ type compiled_library = {
       kernel treats it as an opaque [Digest.t] it stores and compares,
       never interprets. *)
   comp_objects_digest : Digest.t;
-  (** Digest of [ExportObject] entries only. It captures whether this library
-      makes an already reachable dependency visible to an importing client. *)
-  comp_export_digest : Digest.t;
+  (** Libraries this one directly makes visible through [Require Export]. *)
+  comp_exported_dirs : DirPath.t array;
+
+  (** Digest of module alias and Include targets. *)
+  comp_alias_digest : Digest.t;
 
   (** Digest of this library's OWN [(comp_univs, comp_sorts)] pair, computed
       by the kernel itself at [export] time (unlike
@@ -620,19 +622,21 @@ type compiled_library = {
       [export]'s [~vernac_iface] parameter, same provenance as
       [comp_objects_digest]. *)
   comp_vernac_iface : iface_table;
-  comp_closure_export_digests : (DirPath.t * Digest.t) array;
-
   (** G7 round 5: this library's full transitive closure, flattened. See
       [flatten_closure]'s doc comment. *)
   comp_closure_names : closure_table;
+  comp_closure_alias_digests : (DirPath.t * Digest.t) array;
+
   comp_closure_none_digest : Digest.t;
+  comp_closure_visible_dps : DirPath.t array;
 }
 
 type reimport = compiled_library * Vmlibrary.on_disk * vodigest
 
 type required_lib = {
-  req_export_digest : Digest.t;
+  req_alias_digest : Digest.t;
   req_root : bool; (* true if a root of the dependency DAG *)
+  req_exported_dirs : DirPath.t array;
   req_digest : vodigest;
   req_iface : iface_table option;
   req_objects_digest : Digest.t;
@@ -1101,20 +1105,54 @@ let reachable_required current_libs needed =
   Array.fold_left (fun seen (dp, _, _, _, _, _, _, _) -> visit seen dp)
     DirPath.Set.empty needed
 
-let closure_export_digests_ok current_libs reachable recorded =
-  Array.for_all (fun (dp, required_export_digest) ->
+let visible_required current_libs roots =
+  let rec visit seen dp =
+    if DirPath.Set.mem dp seen then seen else
+    let seen = DirPath.Set.add dp seen in
+    match DirPath.Map.find_opt dp current_libs with
+    | None -> seen
+    | Some { req_exported_dirs; _ } ->
+      Array.fold_left visit seen req_exported_dirs
+  in
+  Array.fold_left visit DirPath.Set.empty roots
+
+let basename_for_visibility id =
+  let s = Id.to_string id in
+  match strip_prefix module_label_marker s with
+  | Some base -> base
+  | None ->
+    match strip_prefix modtype_label_marker s with
+    | Some base -> base
+    | None -> s
+
+let visibility_adds_collision current_libs newly_visible recorded =
+  let live =
+    DirPath.Map.bindings current_libs
+    |> List.filter (fun (dp, _) -> DirPath.Set.mem dp newly_visible)
+    |> List.map (fun (dp, { req_digest; req_iface; _ }) -> dp, req_digest, req_iface)
+    |> flatten_closure |> fst
+  in
+  Array.exists (fun (live_dp, live_id, _) ->
+      Array.exists (fun (recorded_dp, recorded_id, _) ->
+          not (DirPath.equal live_dp recorded_dp) &&
+          String.equal (basename_for_visibility live_id) (basename_for_visibility recorded_id))
+        recorded)
+    live
+
+let closure_alias_digests_ok current_libs reachable recorded =
+  Array.for_all (fun (dp, required_alias_digest) ->
       if not (DirPath.Set.mem dp reachable) then true else
       match DirPath.Map.find_opt dp current_libs with
-      | Some { req_export_digest = actual_export_digest; _ } ->
-        Digest.equal required_export_digest actual_export_digest
+      | Some { req_alias_digest = actual_alias_digest; _ } ->
+        Digest.equal required_alias_digest actual_alias_digest
       | None -> false)
     recorded
 
-let error_export_visibility dir =
-  CErrors.user_err Pp.(pr_sequence str
-    ["Inconsistent assumptions over module"; DirPath.to_string dir; "."])
+
+
 let check_required ?self_dp current_libs needed =
   (* binary-equivalence-taiga#841 round 7 (or1/or2): [actual_closure_none_digest]
+
      stays GLOBAL (every None-iface entry anywhere in the consuming
      process's [current_libs]) exactly as before -- restricting it to
      just the dps a Some-iface closure_table recorded would silently
@@ -1145,8 +1183,9 @@ let check_required ?self_dp current_libs needed =
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
            req_deps = actual_deps;
            req_objects_digest = actual_objects_digest;
-           req_export_digest = actual_export_digest;
            req_univs_digest = actual_univs_digest;
+           req_alias_digest = actual_alias_digest;
+           req_exported_dirs = actual_exported_dirs;
            req_vernac_iface = actual_vernac_iface } ->
     (* Fast path: the dependency is byte-identical to what this library was
        compiled against. Fallback (see [dep_ok]): the dependency changed,
@@ -1187,8 +1226,9 @@ let check_required ?self_dp current_libs needed =
       DirPath.Map.set id { req_root = false; req_digest = actual;
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
-                            req_export_digest = actual_export_digest;
                             req_univs_digest = actual_univs_digest;
+                            req_exported_dirs = actual_exported_dirs;
+                            req_alias_digest = actual_alias_digest;
                             req_deps = actual_deps;
                             req_vernac_iface = actual_vernac_iface } current
     else
@@ -1212,9 +1252,10 @@ let check_required_strict current_libs needed =
   | None ->
     CErrors.user_err Pp.(pr_sequence str ["Reference to unknown module"; DirPath.to_string id; "."])
   | Some { req_root; req_digest = actual; req_iface = actual_iface;
-           req_export_digest = actual_export_digest;
+                            req_alias_digest = actual_alias_digest;
            req_objects_digest = actual_objects_digest;
            req_deps = actual_deps;
+           req_exported_dirs = actual_exported_dirs;
            req_univs_digest = actual_univs_digest;
            req_vernac_iface = actual_vernac_iface } ->
     if not (digest_match ~actual ~required) then
@@ -1222,11 +1263,12 @@ let check_required_strict current_libs needed =
         ["Inconsistent assumptions over module"; DirPath.to_string id; "."])
     else if req_root then
       DirPath.Map.set id { req_root = false; req_digest = actual;
-                            req_export_digest = actual_export_digest;
                             req_iface = actual_iface;
                             req_objects_digest = actual_objects_digest;
                             req_univs_digest = actual_univs_digest;
+                            req_alias_digest = actual_alias_digest;
                             req_deps = actual_deps;
+                            req_exported_dirs = actual_exported_dirs;
                             req_vernac_iface = actual_vernac_iface } current
     else
       current
@@ -2535,7 +2577,7 @@ and self_entries_of_sfb path (id, sfb) =
 let iface_table_of_struct (sb : structure_body) : iface_table option =
   Some (Array.of_list (iface_entries_of_struct "" sb))
 
-let export ~output_native_objects ~objects_digest ~export_digest ~vernac_iface ~extra_closure_names senv dir =
+let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~vernac_iface ~extra_closure_names senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
   let str = NoFunctor (List.rev senv.revstruct) in
@@ -2593,6 +2635,15 @@ let export ~output_native_objects ~objects_digest ~export_digest ~vernac_iface ~
      below (the SAME value for each -- [dep_ok] treats it as a single
      per-[check_required]-call constant, not per-entry data; storing it
      redundantly per entry avoids a second signature on [check_required]/
+  let direct_roots =
+    DirPath.Map.bindings senv.required
+    |> List.filter_map (fun (dp, { req_root; _ }) -> if req_root then Some dp else None)
+    |> Array.of_list
+  in
+  let comp_closure_visible_dps = visible_required senv.required direct_roots
+    |> DirPath.Set.elements |> Array.of_list
+  in
+
      [check_required_strict] for a single extra argument). See
      [flatten_closure]'s doc comment. *)
   (* binary-equivalence-taiga#841 round 14 (ik7/ik8, Main/reviewer): a
@@ -2623,11 +2674,20 @@ let export ~output_native_objects ~objects_digest ~export_digest ~vernac_iface ~
      |> List.map (fun (dp, { req_digest; req_iface; _ }) -> (dp, req_digest, req_iface)))
   in
   let comp_closure_names, comp_closure_none_digest = flatten_closure own_closure_list in
-  let comp_closure_export_digests =
+  let direct_roots =
     DirPath.Map.bindings senv.required
-    |> List.map (fun (dp, { req_export_digest; _ }) -> dp, req_export_digest)
+    |> List.filter_map (fun (dp, { req_root; _ }) -> if req_root then Some dp else None)
     |> Array.of_list
   in
+  let comp_closure_visible_dps = visible_required senv.required direct_roots
+    |> DirPath.Set.elements |> Array.of_list
+  in
+  let comp_closure_alias_digests =
+    DirPath.Map.bindings senv.required
+    |> List.map (fun (dp, { req_alias_digest; _ }) -> dp, req_alias_digest)
+    |> Array.of_list
+  in
+
 
   (* v2's D1 (full transitive closure, [comp_transitive_deps]/
      [md_transitive_deps] as a SEPARATE field) lands as part of commit 1 on
@@ -2639,7 +2699,7 @@ let export ~output_native_objects ~objects_digest ~export_digest ~vernac_iface ~
      block for the full-closure field without touching [compute_modes] at
      all (binary-equivalence-taiga#841 "D1"). *)
   let filter_dep (dp, { req_root; req_digest; req_iface; req_objects_digest;
-                         req_univs_digest; req_vernac_iface; _ }) =
+                         req_univs_digest; req_vernac_iface }) =
     if req_root then Some (dp, req_digest, req_iface, req_objects_digest,
                             req_univs_digest, req_vernac_iface,
                             comp_closure_names, comp_closure_none_digest)
@@ -2656,19 +2716,21 @@ let export ~output_native_objects ~objects_digest ~export_digest ~vernac_iface ~
   in
   let lib = {
     comp_name = dir;
+    comp_exported_dirs = exported_dirs;
     comp_mod = mb;
+    comp_alias_digest = alias_digest;
     comp_univs = senv.univ;
     comp_sorts = senv.qualities;
+    comp_closure_visible_dps;
     comp_deps = Array.of_list comp_deps;
     comp_flags = permanent_flags;
     comp_iface;
     comp_objects_digest = objects_digest;
-    comp_export_digest = export_digest;
     comp_univs_digest;
     comp_vernac_iface = vernac_iface;
     comp_closure_names;
     comp_closure_none_digest;
-    comp_closure_export_digests;
+    comp_closure_alias_digests;
   } in
   let vmlib = Vmlibrary.export @@ Environ.vm_library senv.env in
   mp, lib, vmlib, (ast, symbols)
@@ -2708,7 +2770,8 @@ let import_gen ~check_required lib vmtab vodigest senv =
     else DirPath.Map.add lib.comp_name
         { req_root = true; req_digest = vodigest; req_iface = lib.comp_iface;
           req_objects_digest = lib.comp_objects_digest;
-          req_export_digest = lib.comp_export_digest;
+          req_alias_digest = lib.comp_alias_digest;
+          req_exported_dirs = lib.comp_exported_dirs;
           req_deps = lib.comp_deps;
           req_univs_digest = lib.comp_univs_digest;
           req_vernac_iface = lib.comp_vernac_iface } required
@@ -2727,10 +2790,19 @@ let import_gen ~check_required lib vmtab vodigest senv =
 let import lib vmtab vodigest senv =
   import_gen ~check_required:(fun current _needed ->
       let current = check_required ~self_dp:lib.comp_name current lib.comp_deps in
+      let roots = Array.map (fun (dp, _, _, _, _, _, _, _) -> dp) lib.comp_deps in
       let reachable = reachable_required current lib.comp_deps in
-      if closure_export_digests_ok current reachable lib.comp_closure_export_digests then
-        current
-      else error_export_visibility lib.comp_name)
+      let live_visible = visible_required current roots in
+      let recorded_visible =
+        Array.fold_left (fun s dp -> DirPath.Set.add dp s)
+          DirPath.Set.empty lib.comp_closure_visible_dps
+      in
+      let newly_visible = DirPath.Set.diff live_visible recorded_visible in
+      if not (closure_alias_digests_ok current reachable lib.comp_closure_alias_digests) ||
+         visibility_adds_collision current newly_visible lib.comp_closure_names then
+        CErrors.user_err Pp.(pr_sequence str
+          ["Inconsistent assumptions over module"; DirPath.to_string lib.comp_name; "."])
+      else current)
     lib vmtab vodigest senv
 
 (** The ONLY entry point [checker/safe_checking.ml] may call: every

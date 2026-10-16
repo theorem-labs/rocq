@@ -1946,31 +1946,55 @@ module G1Partition = struct
     (List.filter_map (filter_atomic dir) substobjs,
      { Libobject.keep_objects = List.filter_map (filter_atomic dir) keepobjs.Libobject.keep_objects },
      { Libobject.escape_objects = List.filter_map (filter_atomic dir) escapeobjs.Libobject.escape_objects })
-  (* Export visibility is the only part of the vernac object stream needed by
-     the closure checker: a plain Require changing to Require Export changes
-     which already-reachable libraries contribute names to a fresh import. *)
-  let rec export_objects = function
-    | Libobject.ExportObject _ as o -> [o]
+  (* Export objects carry exactly the module paths made visible by Require
+     Export. Keep their root dirpaths as a graph edge, not as an opaque
+     whole-library digest, so adding a disjoint export remains reusable. *)
+  let rec export_dirs_of_object = function
+    | Libobject.ExportObject { Libobject.ExportObj.mpl } ->
+      List.map (fun (_, mp) -> ModPath.dp mp) mpl
     | Libobject.ModuleObject (_, (_, alg))
     | Libobject.ModuleTypeObject (_, (_, alg))
-    | Libobject.IncludeObject alg -> export_algebraic alg
+    | Libobject.IncludeObject alg -> export_dirs_of_algebraic alg
     | Libobject.KeepObject (_, { Libobject.keep_objects }) ->
-      List.concat_map export_objects keep_objects
+      List.concat_map export_dirs_of_object keep_objects
     | Libobject.EscapeObject (_, { Libobject.escape_objects }) ->
-      List.concat_map export_objects escape_objects
+      List.concat_map export_dirs_of_object escape_objects
     | Libobject.AtomicObject _ -> []
-  and export_algebraic = function
-    | Libobject.Objs l -> List.concat_map export_objects l
+  and export_dirs_of_algebraic = function
+    | Libobject.Objs l -> List.concat_map export_dirs_of_object l
     | Libobject.Ref _ -> []
 
-  let export_digest (md_syntax_objects, md_objects) =
-    let flatten (substobjs, keepobjs, escapeobjs) =
-      List.concat_map export_objects
-        (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
+  let exported_dirs (md_syntax_objects, md_objects) =
+    let dirs (substobjs, keepobjs, escapeobjs) =
+      substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects
+      |> List.concat_map export_dirs_of_object
+    in
+    DirPath.Set.elements (List.fold_left (fun s dp -> DirPath.Set.add dp s)
+      DirPath.Set.empty (dirs md_syntax_objects @ dirs md_objects)) |> Array.of_list
 
+  (* A module alias or Include changes which target's exports become visible.
+     Keep the referenced module paths in a separate digest so such a change
+     is checked without making every disjoint Require Export a refusal. *)
+  let rec alias_paths_of_object = function
+    | Libobject.ModuleObject (_, (_, alg))
+    | Libobject.ModuleTypeObject (_, (_, alg))
+    | Libobject.IncludeObject alg -> alias_paths_of_algebraic alg
+    | Libobject.KeepObject (_, { Libobject.keep_objects }) ->
+      List.concat_map alias_paths_of_object keep_objects
+    | Libobject.EscapeObject (_, { Libobject.escape_objects }) ->
+      List.concat_map alias_paths_of_object escape_objects
+    | Libobject.ExportObject _ | Libobject.AtomicObject _ -> []
+  and alias_paths_of_algebraic = function
+    | Libobject.Objs l -> List.concat_map alias_paths_of_object l
+    | Libobject.Ref (mp, _) -> [mp]
+
+  let alias_digest (md_syntax_objects, md_objects) =
+    let paths (substobjs, keepobjs, escapeobjs) =
+      substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects
+      |> List.concat_map alias_paths_of_object
     in
     Csha256.digest (Marshal.to_string
-      (flatten md_syntax_objects, flatten md_objects) [])
+      (paths md_syntax_objects, paths md_objects) [])
   (** binary-equivalence-taiga#841 Review841 round 3 + round 5: the KEYED
       vernac-level interface table, checked by [Safe_typing.iface_subset_ok]
       exactly like the kernel's own [iface_table]. [Libobject.cutoff_classify]
@@ -2055,13 +2079,14 @@ module G1Partition = struct
     let exact_syntax = filter_library_objects dir md_syntax_objects in
     let exact_objects = filter_library_objects dir md_objects in
     let exact_digest = Csha256.digest (Marshal.to_string (exact_syntax, exact_objects) []) in
-    let export_digest = export_digest (md_syntax_objects, md_objects) in
+    let exported_dirs = exported_dirs (md_syntax_objects, md_objects) in
+    let alias_digest = alias_digest (md_syntax_objects, md_objects) in
     let (substobjs, keepobjs, escapeobjs) = md_objects in
     let vernac_iface, abbrev_iface =
       vernac_iface_entries
         (substobjs @ keepobjs.Libobject.keep_objects @ escapeobjs.Libobject.escape_objects)
     in
-    (exact_digest, export_digest, vernac_iface, abbrev_iface)
+    (exact_digest, exported_dirs, alias_digest, vernac_iface, abbrev_iface)
 end
 
 
@@ -2084,10 +2109,10 @@ let end_library ~output_native_objects dir =
      edit to anything NOT excluded/subset-checked) until rebased. *)
   let md_objects = drop_anticipate lib_stack in
   let md_syntax_objects = drop_anticipate lib_stack_syntax in
-  let objects_digest, export_digest, vernac_iface, abbrev_iface =
+  let objects_digest, exported_dirs, alias_digest, vernac_iface, abbrev_iface =
     G1Partition.partition dir (md_syntax_objects, md_objects)
   in
-  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~export_digest ~vernac_iface ~extra_closure_names:abbrev_iface dir in
+  let mp,cenv,vmlib,ast = Global.export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~vernac_iface ~extra_closure_names:abbrev_iface dir in
   assert (ModPath.equal mp (MPfile dir));
   cenv,md_objects,md_syntax_objects,vmlib,ast,info
 
