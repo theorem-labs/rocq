@@ -226,7 +226,7 @@ let no_discharge c =
     it, records an empty-match context in [ax2ty] or meets an opaque body that
     cannot be forced; a member of a mutual block is recorded only together
     with its whole block. It is also recorded only once each of its edges has
-    an entry, so a replay can miss only at its root.
+    an entry, since a replay that reaches an object without one is abandoned.
 
     Replaying [o] writes [o]'s value into the query's [data], then replays
     each edge, stopping at objects already in [data] as stock does. A replay
