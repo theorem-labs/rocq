@@ -12,7 +12,15 @@
     - first string is the full filename, with only its extension removed
     - second string is the absolute version of the previous (via getcwd)
 *)
-type vAccu = (string * string) list
+type vAccu = { acc : (string * string) list; map : string list CString.Map.t }
+
+let add_vAccu (f, f') vAccu =
+  let acc = (f, f') :: vAccu.acc in
+  let old = try CString.Map.find f' vAccu.map with Not_found -> [] in
+  let map = CString.Map.add f' (f :: old) vAccu.map in
+  { acc; map }
+
+let empty_vAccu = { acc = []; map = CString.Map.empty }
 
 let filename_concat ~separator_hack dir name =
   if separator_hack
@@ -28,9 +36,9 @@ let canonize ~separator_hack vAccu f =
       (Loadpath.absolute_dir (Filename.dirname f))
       (Filename.basename f)
   in
-  match List.filter (fun (_,full) -> f' = full) vAccu with
-    | (f,_) :: _ -> f
-    | _ -> f
+  match CString.Map.find_opt f' vAccu.map with
+  | None | Some [] -> f
+  | Some (f :: _) -> f
 
 type what = Library | External
 let str_of_what = function Library -> "library" | External -> "external file"
@@ -151,6 +159,8 @@ module State = struct
   let loadpath x = x.loadpath
 end
 
+exception SyntaxErrorInFile of string
+
 (* recursive because of Load *)
 let rec find_dependencies ({State.vAccu; separator_hack; loadpath} as st) basename =
   (* Visited marks *)
@@ -174,14 +184,20 @@ let rec find_dependencies ({State.vAccu; separator_hack; loadpath} as st) basena
   (* Reading file contents *)
   let f = basename ^ ".v" in
   with_in_channel ~fname:f @@ fun chan ->
-  let buf = Lexing.from_channel chan in
+  (* For lexing efficiency purposes, we ignore the positions in this function.
+     This will force us to reparse the file in case of error to get a proper
+     location, but in practice such errors should be exceedingly rare with
+     rocqdep. This lexer is indeed basically able to handle random nonsense
+     thrown at it. *)
+  let buf = Lexing.from_channel ~with_positions:false chan in
   let open Lexer in
   let rec loop () =
     match coq_action buf with
     | exception Fin_fichier ->
       DepSet.elements !dependencies
-    | exception Syntax_error (i,j) ->
-      Error.cannot_parse f (i,j)
+    | exception Syntax_error _ ->
+      (* The locations are garbage due to with_positions:false, ignore them *)
+      raise (SyntaxErrorInFile f)
     | tok ->  match tok with
       | Require (from, strl) ->
         let from, strl = coq_to_stdlib from strl in
@@ -252,9 +268,28 @@ let rec find_dependencies ({State.vAccu; separator_hack; loadpath} as st) basena
   in
   loop ()
 
+(* Reparse the file to get the error location *)
+let get_parse_error f =
+  with_in_channel ~fname:f @@ fun chan ->
+  let buf = Lexing.from_channel chan in
+  let rec loop () = match Lexer.coq_action buf with
+  | _tok -> loop ()
+  | exception Lexer.Syntax_error (i, j) -> (i, j)
+  | exception Lexer.Fin_fichier ->
+    (* may technically happen due to race conditions, return a dummy value *)
+    (0, 0)
+  in
+  loop ()
+
+let find_dependencies st basename =
+  try find_dependencies st basename
+  with SyntaxErrorInFile f ->
+    let (i, j) = get_parse_error f in
+    Error.cannot_parse f (i, j)
+
 let compute_deps st =
   let mk_dep (name, _orig_path) = Dep_info.make ~name ~deps:(find_dependencies st name) in
-  st.vAccu |> CList.rev_map mk_dep
+  st.vAccu.acc |> CList.rev_map mk_dep
 
 let rec treat_file ~separator_hack vAccu old_dirname old_name =
   let name = Filename.basename old_name
@@ -289,7 +324,7 @@ let rec treat_file ~separator_hack vAccu old_dirname old_name =
        let name = file_name ~separator_hack base dirname in
        let filename_concat = filename_concat ~separator_hack in
        let absname = Loadpath.absolute_file_name ~filename_concat base dirname in
-       (name, absname) :: vAccu
+       add_vAccu (name, absname) vAccu
      | _ -> vAccu)
   | _ -> vAccu
 
@@ -323,7 +358,7 @@ let sort {State.vAccu; separator_hack; loadpath} =
         Format.printf "%s.v " file
     end
   in
-  List.iter (fun (name, _) -> loop name) vAccu
+  List.iter (fun (name, _) -> loop name) vAccu.acc
 
 let add_include st (rc, r, ln) =
   if rc then
@@ -359,4 +394,4 @@ let init ~make_separator_hack args =
   findlib_init ml_path;
   List.iter (add_include loadpath) args.Args.vo_path;
   Makefile.set_dyndep args.Args.dyndep;
-  rocqenv, { State.vAccu = []; loadpath; separator_hack = make_separator_hack }
+  rocqenv, { State.vAccu = empty_vAccu; loadpath; separator_hack = make_separator_hack }
