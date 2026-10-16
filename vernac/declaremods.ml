@@ -1930,7 +1930,16 @@ module G1Partition = struct
     | Libobject.ModuleObject (id, (mbids, alg)) ->
       Option.map (fun alg -> Libobject.ModuleObject (id, (mbids, alg))) (filter_algebraic dir alg)
     | Libobject.ModuleTypeObject (id, (mbids, alg)) ->
-      Option.map (fun alg -> Libobject.ModuleTypeObject (id, (mbids, alg))) (filter_algebraic dir alg)
+      (* A module type whose filtered body holds no Exact object contributes
+         nothing a dependent can observe through this digest: its fields and
+         their shape are in the keyed [comp_iface] label digest, and its name
+         is in the G7 closure. Keeping the empty wrapper made any unrelated
+         new Module Type refuse every dependent (mtunrel0). A module type
+         that carries exact syntax keeps its wrapper. *)
+      (match filter_algebraic dir alg with
+       | Some (Libobject.Objs []) -> None
+       | filtered ->
+         Option.map (fun alg -> Libobject.ModuleTypeObject (id, (mbids, alg))) filtered)
     | Libobject.IncludeObject alg ->
       Option.map (fun alg -> Libobject.IncludeObject alg) (filter_algebraic dir alg)
     | Libobject.KeepObject (id, { Libobject.keep_objects }) ->

@@ -4,15 +4,11 @@
 # field-name-colliding Module Type U (`Parameter x : nat`, matching X's
 # Module Type T) added DIRECTLY to A's own source, instead of reached
 # transitively through a dependency's `Require Export`. A fresh compile of
-# B still succeeds (B never touches T, U, or "x"), but the reuse is -- and
-# must remain -- REFUSED: this goes through A's own exact objects digest
-# (a new ModuleObject in A's own library_objects), unrelated to the P3
-# marker-collision bug mkc1 exercises and unaffected by its fix. A correct,
-# by-design, conservative over-refusal (D4's whole-table exact-equality
-# vernac-objects digest is not usage-based, per the repo's own "m3" note),
-# not a bug: it demonstrates P3 is specifically about the G7 shadow table
-# conflating two DIFFERENT libraries' marked entries, not a general defect
-# in how directly-added module types are handled.
+# B still succeeds (B never touches T, U, or "x"), so reuse is expected:
+# the field-name collision with X.T must not refuse it, and the stale B must
+# export the same interface as a fresh B. An empty filtered Module Type
+# wrapper no longer enters A's exact objects digest (mtunrel0, #841 round 21
+# review); before that, this case was refused there.
 . ../lib.sh
 
 D=$(pwd)
@@ -54,13 +50,9 @@ build C.v >>"$WORK/restore.log" 2>&1 || uc_fail "RESTORE: could not rebuild C.v 
 cp "$D/A_after.v" "$WORK/A.v"
 build A.v >"$WORK/rebuild.log" 2>&1 || uc_fail "REBUILD A (AFTER, direct Module Type U addition) failed unexpectedly: $(cat "$WORK/rebuild.log")"
 
-c_out=$(build C.v 2>&1)
-c_rc=$?
-if [ "$c_rc" -eq 0 ]; then
-  echo "$c_out" >&2
-  uc_fail "coqc C.v succeeded reusing B.vo after A directly added the field-colliding Module Type U -- expected a (correct, by-design) refusal via A's own exact objects digest, independent of the P3 fix."
-fi
-echo "$c_out" | grep -qi 'inconsistent assumptions' \
-  || uc_fail "coqc C.v refused the reuse (exit $c_rc) but not with the expected inconsistent-assumptions message -- got: $c_out"
+c_out=$(build C.v 2>&1) || uc_fail "coqc C.v refused a valid reuse after A directly added the field-colliding Module Type U: $c_out"
+uc_same_interface "$WORK" mto1
+fresh_c=$(build C.v 2>&1) || uc_fail "coqc C.v failed against a fresh B: $fresh_c"
+[ "$c_out" = "$fresh_c" ] || uc_fail "C output differs between stale and fresh B: stale=[$c_out] fresh=[$fresh_c]"
 
-uc_ok "direct Module Type U addition in A correctly refused reuse via A's own digest, though a fresh B still succeeds (correct, by-design over-refusal; control, unaffected by the P3 fix): $(echo "$c_out" | grep -im1 'inconsistent assumptions')"
+uc_ok "direct Module Type U addition in A correctly reused (fresh B succeeds); C output and B interface match a fresh build"
