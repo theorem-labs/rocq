@@ -13,8 +13,9 @@
 # - Thrash.v, ThrashBlock.v: an object, or an inductive block, whose user
 #   name already has an entry under another canonical name is not recorded,
 #   so the entry is not replaced;
-# - Bound.v: entries that weigh more than four times the heaviest query are
-#   cleared before the next query.
+# - Bound.v: entries that weigh more than twice the heaviest query are
+#   cleared before the next query; its clearings sit at the boundary, so the
+#   list also pins how recorded objects, replays and blocks are weighed.
 
 set -e
 

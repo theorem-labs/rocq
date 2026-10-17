@@ -273,7 +273,7 @@ let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref =
 
 let memo_entries = ref (GlobRef.Map_env.empty : memo_entry GlobRef.Map_env.t)
 
-let memo_factor = 4
+let memo_factor = 2
 
 (** The weight of [memo_entries], of the heaviest query in the environment
     before the current one, and of the current query (see the invariant).

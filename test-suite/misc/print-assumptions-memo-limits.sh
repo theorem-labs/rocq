@@ -48,16 +48,16 @@
 #
 # Memory kept between queries, with an 8 MiB stack and 1,000,000 KiB of
 # address space (ulimit -v 1000000):
-# - Retain192: 192 groups of 50 definitions with one 500-argument body
-#   F b0 ... b499, each group under a root G(g); G0 ... G191 are queried in
+# - Retain64: 64 groups of 100 definitions with one 1,000-argument body
+#   F b0 ... b999, each group under a root G(g); G0 ... G63 are queried in
 #   turn, so the queries share only F and the b's.
-# - BlockRetain192: the same with groups of 50 inductives whose constructors
+# - BlockRetain64: the same with groups of 100 inductives whose constructors
 #   take that body.
 # The walk without reuse drops each query's data before the next; the reuse
-# keeps entries, and clears them when they weigh more than four times the
+# keeps entries, and clears them when they weigh more than twice the
 # heaviest query. Measured on the dev and the release profile, both files
-# need 760 to 860 MiB of address space without reuse, 790 to 860 MiB with the
-# bounded reuse, and 1,150 to 1,310 MiB with a cache that keeps every entry
+# need 720 to 790 MiB of address space without reuse, 790 to 880 MiB with the
+# bounded reuse, and 1,240 to 1,280 MiB with a cache that keeps every entry
 # until the environment changes, which runs out here.
 #
 # OCaml 5 ignores ulimit -s (it runs OCaml code on its own stack), and the
@@ -286,10 +286,10 @@ $closed" ;;
   expect "$f" "$out" "$want"
 done
 
-retain 500 50 192 > Retain192.v
-blockretain 500 50 192 > BlockRetain192.v
-want=$(for ((g = 0; g < 192; g++)); do echo "Axioms:"; echo "ax : nat"; done)
-for f in Retain192 BlockRetain192; do
+retain 1000 100 64 > Retain64.v
+blockretain 1000 100 64 > BlockRetain64.v
+want=$(for ((g = 0; g < 64; g++)); do echo "Axioms:"; echo "ax : nat"; done)
+for f in Retain64 BlockRetain64; do
   out=$(ulimit -s 8192; ulimit -v 1000000; rocq c -q -R . P "$f.v" 2>&1) || true
   expect "$f" "$out" "$want"
 done
