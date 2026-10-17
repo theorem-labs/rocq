@@ -86,11 +86,18 @@ let get_ml_filename () =
   let prefix = Filename.chop_extension (Filename.basename filename) ^ "." in
   filename, prefix
 
-let write_ml_code fn ?(header=[]) code =
+let render_ml_code ?(header=[]) code =
   let header = open_header@header in
-  let ch_out = open_out fn in
-  let fmt = Format.formatter_of_out_channel ch_out in
+  let buf = Buffer.create 4096 in
+  let fmt = Format.formatter_of_buffer buf in
   List.iter (pp_global fmt) (header@code);
+  Format.pp_print_flush fmt ();
+  Buffer.contents buf
+
+let write_ml_code fn ?(header=[]) code =
+  let text = render_ml_code ~header code in
+  let ch_out = open_out fn in
+  output_string ch_out text;
   close_out ch_out
 
 let error_native_compiler_failed e =
@@ -155,8 +162,27 @@ let call_compiler ?profile:(profile=false) ml_filename =
     error_native_compiler_failed (Inr e)
 
 let compile fn code ~profile:profile =
-  write_ml_code fn code;
-  let r = call_compiler ~profile fn in
+  let text = render_ml_code code in
+  let link_filename = Dynlink.adapt_filename (Filename.chop_extension fn ^ ".cmo") in
+  let via_cache () =
+    Checkstats.time Checkstats.native_cache_hit (fun () ->
+        if Nativecache.fetch_to ~include_dirs:!include_dirs text ~dest:link_filename then
+          Some link_filename
+        else None)
+  in
+  let r =
+    match via_cache () with
+    | Some r -> r
+    | None ->
+      Nativecache.with_lock ~include_dirs:!include_dirs text (fun () ->
+          match via_cache () with
+          | Some r -> r (* another worker published while we waited for the lock *)
+          | None ->
+            write_ml_code fn text;
+            let r = Checkstats.time Checkstats.native_ocamlopt (fun () -> call_compiler ~profile fn) in
+            Nativecache.publish ~include_dirs:!include_dirs text ~compiled_file:r;
+            r)
+  in
   (* NB: to prevent reusing the same filename we MUST NOT remove the file until exit
      cf #15263 *)
   delay_cleanup_file fn;

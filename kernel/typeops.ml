@@ -386,14 +386,34 @@ let type_of_product env _name s1 s2 =
 *)
 
 let check_cast env c ct k expected_type =
+  let vm_conv () = Vconv.vm_conv CUMUL env ct expected_type in
+  let native_conv () =
+    let sigma = Genlambda.empty_evars env in
+    Nativeconv.native_conv CUMUL sigma env ct expected_type
+  in
   let ans = match k with
-    | VMcast ->
-      Vconv.vm_conv CUMUL env ct expected_type
+    | VMcast when Checkstats.debug_dual_check ->
+      (* Falsifier mode (BET-29): decide this VMcast both ways and abort
+         loudly on any disagreement. The checker's verdict stays the VM's,
+         exactly matching a stock run, so a clean pass here never depends
+         on native conversion being trustworthy -- only the abort does. *)
+      let vm_ans = Checkstats.time Checkstats.vm_conv vm_conv in
+      let native_ans = native_conv () in
+      if vm_ans <> native_ans then begin
+        incr Checkstats.dual_mismatches;
+        CErrors.anomaly
+          Pp.(str "native-conversion falsifier: VM and native disagreed on a VMcast (VM="
+              ++ str (match vm_ans with Result.Ok () -> "accept" | Result.Error () -> "reject")
+              ++ str ", native="
+              ++ str (match native_ans with Result.Ok () -> "accept" | Result.Error () -> "reject")
+              ++ str "). See theorem-labs/binary-equivalence-taiga issue 867.")
+      end;
+      vm_ans
+    | VMcast when Checkstats.native_as_vm -> native_conv ()
+    | VMcast -> Checkstats.time Checkstats.vm_conv vm_conv
     | DEFAULTcast ->
       default_conv CUMUL env ct expected_type
-    | NATIVEcast ->
-      let sigma = Genlambda.empty_evars env in
-      Nativeconv.native_conv CUMUL sigma env ct expected_type
+    | NATIVEcast -> native_conv ()
   in
   match ans with
   | Result.Ok () -> ()

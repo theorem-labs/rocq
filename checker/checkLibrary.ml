@@ -129,7 +129,9 @@ let check_one_lib admit senv (dir,m) =
          (str "Checking library: " ++ pr_dirpath dir);
        Safe_checking.import (fst senv) (snd senv) md dig)
   in
-    register_loaded_library m; senv
+    register_loaded_library m;
+    Checkstats.report_library (DirPath.to_string dir);
+    senv
 
 (*************************************************************************)
 (*s Load path. Mapping from physical to logical paths etc.*)
