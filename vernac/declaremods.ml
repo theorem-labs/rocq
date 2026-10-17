@@ -2171,7 +2171,7 @@ module G1Partition = struct
 end
 
 
-let end_library ~output_native_objects ~require_order dir =
+let end_library ~output_native_objects ~require_order ~safe_deps dir =
   end_library_hook();
   let { Lib.info; interp_objects = lib_stack; synterp_objects = lib_stack_syntax; } =
     Lib.end_compilation dir
@@ -2193,24 +2193,29 @@ let end_library ~output_native_objects ~require_order dir =
   let objects_digest, exported_dirs, alias_digest, transitive_objects_digest, vernac_iface, abbrev_iface =
     G1Partition.partition dir (md_syntax_objects, md_objects)
   in
-  (* binary-equivalence-taiga#841 round 23 (speed-coord review plan-861c1-r1
-     finding R1-3, fixture info_deprecated_attribute_refused). This
-     library's file-level attributes live in the summary segment, which no
-     digest a dependent compares ever covered, so a dependency that gained
-     a deprecation looked unchanged while a dependent built under
-     "+deprecated" genuinely fails against it. Folded into the
-     exact-compared objects digest, so the change refuses every dependent
-     and alters this library's own segment bytes too. [No_sharing]: the
-     digest has to be a function of the value, never of how it was built.
-     The sibling half of R1-3, the order this library's own requirements
-     were loaded in, is NOT folded in here: it is recorded as
-     [require_order] and compared as a subsequence
-     ([Safe_typing.require_order_ok]), because a dependency that merely
-     GAINS a requirement must still be reusable (cx1/cx2/cx3). *)
+  (* binary-equivalence-taiga#841 round 23. Two things a dependent's own
+     compile observes live only in the summary segment, which no digest a
+     dependent compares ever covered:
+     - this library's file-level attributes (speed-coord review
+       plan-861c1-r1 finding R1-3, info_deprecated_attribute_refused): a
+       dependency that gained a deprecation looked unchanged while a
+       dependent built under "+deprecated" fails against it;
+     - which of its requirements it loaded with [Require (safe)] (round-23
+       adversarial review, identity-safe-copy-aligned and
+       identity-safe-copy-instance-switch): a safe load skips the
+       requirement's global instances and hints, so switching a plain
+       [Require] to [Require (safe)] changes what a fresh dependent
+       resolves.
+     Both go into the exact-compared objects digest, so a change in either
+     refuses every dependent and alters this library's own segment bytes,
+     which is also what [Safe_typing.structural_identity] reads for a
+     dependent that copies this library. [No_sharing]: the digest has to
+     be a function of the value, never of how it was built. The load ORDER
+     is compared separately ([Safe_typing.require_order_ok]). *)
   let objects_digest =
     Csha256.digest
       (objects_digest ^ "\000usage_cutoff_library_info\000"
-       ^ Marshal.to_string info [Marshal.No_sharing])
+       ^ Marshal.to_string (info, List.map DirPath.to_string safe_deps) [Marshal.No_sharing])
   in
   (* binary-equivalence-taiga#841 round 23: the libraries this one copies
      structurally. Every module expression this file interpreted named its

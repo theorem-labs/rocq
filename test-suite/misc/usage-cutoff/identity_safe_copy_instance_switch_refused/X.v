@@ -1,0 +1,1 @@
+Class Pick := { pick : nat }.

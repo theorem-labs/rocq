@@ -45,6 +45,12 @@
 # `Require Y.`) exits 0; `rocqchk -norec A -norec B` on the exact same
 # on-disk tree exits non-zero with `User error: Inconsistent assumptions
 # over module A .`.
+# Round 23: the relaxed loader no longer accepts an added `Require Y` (a
+# dependency's loaded-library list must now be unchanged, see
+# kernel/safe_typing.ml `require_order_ok`), so the split is now an unused
+# ADDED definition `h` (A_after.v): the relaxed loader tolerates additions,
+# while A's whole-library segment digest, all rocqchk compares, changes.
+# The assertions below are unchanged.
 . ../lib.sh
 
 D=$(pwd)

@@ -1,2 +1,2 @@
 Definition g := 0.
-Require Y.
+Definition h := 1.

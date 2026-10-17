@@ -507,35 +507,31 @@ let closure_subset_ok ?self_dp ~recorded ~live =
     flat name table is still a superset-with-identical-digests of what
     the dependent recorded, AND (f) the live closure's None-iface-entry
     digest is unchanged (G7, round 5), AND (g) the live library still
-    loads the libraries the dependent saw it load, in the same relative
+    loads exactly the libraries the dependent saw it load, in the same
     order ([require_order_ok], round 23). [coqchk] must NEVER call this:
     see [check_required_strict] below, which is the original digest-only
     check with nothing else reachable from it. *)
 
 (** A library's own loaded-library list decides which instance or hint a
     proof search in ITS dependents resolves to: the most recently loaded
-    match wins. The list lives in the [.vo] summary, which no digest a
-    dependent compares ever covered, so a dependency that merely swapped
-    two [Require] lines looked unchanged while a fresh compile of the
-    dependent genuinely differed (speed-coord review plan-861c1-r1
-    finding R1-3, fixture [order_instance_priority_refused]).
+    match wins, and a [#[global]] instance or hint takes effect on a plain
+    [Require], with no [Import] and no export visibility. The list lives in
+    the [.vo] summary, which no digest a dependent compares ever covered,
+    so a dependency that swapped two [Require] lines looked unchanged while
+    a fresh compile of the dependent genuinely differed (speed-coord review
+    plan-861c1-r1 finding R1-3, fixture [order_instance_priority_refused]).
 
-    Recorded order must be a SUBSEQUENCE of the live order, not equal to
-    it: a dependency that gains a requirement (a new [Require Export],
-    cx1/cx2/cx3) inserts entries without moving the ones the dependent
-    already saw, and those cases are reused by design -- a newly visible
-    library that carries syntax or collides with a recorded name is
-    refused by the visibility checks instead. A swap, or a removal, is not
-    a subsequence and is refused. *)
+    The recorded list must EQUAL the live one. An earlier version accepted
+    any live list the recorded one was a subsequence of, so that a
+    dependency gaining a requirement stayed reusable; the round-23
+    adversarial review showed an inserted plain [Require] of a library
+    carrying a global instance or hint changes what a fresh dependent
+    resolves (order-hidden-global-instance and five siblings), and the
+    visibility checks never see a library that is not exported. Any change
+    to a dependency's loaded-library list now refuses its dependents. *)
 let require_order_ok ~recorded ~live =
-  let n = Array.length live in
-  let rec walk i j =
-    if i >= Array.length recorded then true
-    else if j >= n then false
-    else if DirPath.equal recorded.(i) live.(j) then walk (i + 1) (j + 1)
-    else walk i (j + 1)
-  in
-  walk 0 0
+  Array.length recorded = Array.length live
+  && Array.for_all2 DirPath.equal recorded live
 
 let dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
     ~actual_objects_digest ~required_objects_digest

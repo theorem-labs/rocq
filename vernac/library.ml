@@ -744,8 +744,9 @@ let save_library_struct ~output_native_objects dir =
      compares; the kernel stores this list in the library itself, and a
      dependent checks it with [Safe_typing.require_order_ok]. *)
   let require_order = List.map snd !libraries_loaded_list in
+  let safe_deps = DirPath.Set.elements (current_safe_deps ()) in
   let md_compiled, md_objects, md_syntax_objects, vmlib, ast, info =
-    Declaremods.end_library ~output_native_objects ~require_order dir in
+    Declaremods.end_library ~output_native_objects ~require_order ~safe_deps dir in
   let sd =
     { md_name = dir
     ; md_deps = Array.of_list (current_deps ())
