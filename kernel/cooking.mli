@@ -64,6 +64,19 @@ val abstract_as_type : cooking_cache -> types -> types
 
 val abstract_as_body : cooking_cache -> constr -> constr
 
+(** The expansion/substitution core of {!abstract_as_body}/{!abstract_as_type}
+    (steps 1-2 of the 4-step comment above [expand_subst0] in cooking.ml:
+    expand a reference to a generalized global by applying it to the section
+    subcontext it was abstracted over, substitute named universe variables by
+    de Bruijn ones), with no final generalization over the section variables
+    themselves. [c] must be given at the depth the final generalization would
+    put it at: 0 if [c] is the whole discharged judgment, or wrapped in [n]
+    extra binders first if [c] is a subterm found [n] real binders below the
+    root (the caller then strips those [n] binders back off the result). For
+    the rare subterm that must be cooked for printing without paying to cook
+    the whole surrounding term (e.g. Assumptions.ml's "used in" diagnostic). *)
+val expand_subst : cooking_cache -> constr -> constr
+
 val abstract_as_sort : cooking_cache -> Sorts.t -> Sorts.t
 
 val lift_mono_univs : cooking_info -> Univ.ContextSet.t -> cooking_info * Univ.ContextSet.t

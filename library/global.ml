@@ -183,6 +183,7 @@ type uncooked_proofterm = {
   uncooked_body : Constr.t;
   uncooked_bound : Names.Id.Set.t;
   uncooked_context : Constr.rel_context;
+  uncooked_expand : Constr.t -> Constr.t;
 }
 
 type indirect_accessor = {

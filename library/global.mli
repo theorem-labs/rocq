@@ -142,6 +142,16 @@ type uncooked_proofterm = {
   uncooked_body : Constr.t;
   uncooked_bound : Names.Id.Set.t;
   uncooked_context : Constr.rel_context;
+  uncooked_expand : Constr.t -> Constr.t;
+  (** Cooks an arbitrary subterm of [uncooked_body] the way the section
+      discharge would have, with no final abstraction over
+      [uncooked_context] (the caller supplies those binders itself -- see
+      {!Cooking.expand_subst}'s depth convention). [uncooked_body] itself is
+      never run through this: that is exactly the whole-term cost this
+      record exists to let a caller avoid paying. Reserved for a subterm a
+      caller must print verbatim, such as Assumptions.ml's "used in ... to
+      prove" diagnostic. The identity function when there was no discharge
+      to skip (see [no_discharge] in assumptions.ml). *)
 }
 
 type indirect_accessor = {
