@@ -216,9 +216,14 @@ let fold_with_full_binders g f n acc c =
       every inductive and constructor of the block.
     An object is never recorded when its walk, including every walk nested in
     it, records an empty-match context in [ax2ty] or meets an opaque body that
-    cannot be forced; a member of a mutual block is recorded only together
-    with its whole block. It is also recorded only once each of its edges has
-    an entry, since a replay that reaches an object without one is abandoned.
+    cannot be forced. An entry cannot reproduce the first: it stores no
+    [ax2ty], and the empty-match branch marks the axiom visited without
+    walking its type, so what the walk adds depends on the order the query
+    visits objects in. The second reads the opaque table
+    ([Library.access_opaque_table]), state outside the key below. A member of
+    a mutual block is recorded only together with its whole block. An object
+    is also recorded only once each of its edges has an entry, since a replay
+    that reaches an object without one is abandoned.
 
     Replaying [o] writes [o]'s value into the query's [data], then replays
     each edge, stopping at objects already in [data] as stock does. A replay
@@ -252,9 +257,9 @@ let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref =
 
 let memo_entries = ref (GlobRef.Map_env.empty : memo_entry GlobRef.Map_env.t)
 
-(** Counts the traversal steps whose effect depends on the query rather than
-    on the object walked: an empty-match context recorded in [ax2ty], and an
-    opaque body that cannot be forced. A walk during which it changes is not
+(** Counts the traversal steps an entry cannot reproduce: an empty-match
+    context recorded in [ax2ty], and an opaque body that cannot be forced (see
+    the invariant above for why). A walk during which it changes is not
     recorded. *)
 let query_dependent = ref 0
 
@@ -300,20 +305,28 @@ exception Miss
    that very object, canonical name included, even when this replay already
    added an object with the same user name: so the objects a completed replay
    reaches outside [data0] have one canonical name per user name, and the
-   order in which it reaches them cannot matter. *)
-let rec replay_into data0 obj data =
-  if GlobRef.Map_env.mem obj data0 then data
-  else match find_entry obj with
-  | None -> raise Miss
-  | Some e ->
-    if GlobRef.Map_env.mem obj data then data
-    else
-      GlobRef.Set_env.fold (replay_into data0) e.memo_edges
-        (GlobRef.Map_env.add obj e.memo_value data)
+   order in which it reaches them cannot matter. The objects still to visit
+   are kept in a list rather than on the stack: edges are followed in hash
+   order, so a recursive replay could go much deeper than stock's walk of the
+   same objects. *)
+let replay_into data0 obj data =
+  let rec loop data = function
+    | [] -> data
+    | obj :: todo ->
+      if GlobRef.Map_env.mem obj data0 then loop data todo
+      else match find_entry obj with
+      | None -> raise Miss
+      | Some e ->
+        if GlobRef.Map_env.mem obj data then loop data todo
+        else
+          let todo = GlobRef.Set_env.fold (fun r todo -> r :: todo) e.memo_edges todo in
+          loop (GlobRef.Map_env.add obj e.memo_value data) todo
+  in
+  loop data [obj]
 
-(** [Some data'] when every object the replay reaches has an entry, where
-    [data'] is [data] plus the closure of [obj] with stock's values; [None]
-    otherwise. *)
+(** [Some data'] when every object the replay reaches outside [data] has an
+    entry, where [data'] is [data] plus the closure of [obj], stopping at
+    objects already in [data], with stock's values; [None] otherwise. *)
 let replay obj data =
   match replay_into data obj data with
   | data ->
@@ -372,17 +385,16 @@ let rec traverse access (current:GlobRef.t) ctx accu t =
 | _ -> fold_with_full_binders
           Context.Rel.add (traverse access current) ctx accu t
 
+(* [walk_object] and [walk_inductive] are tail calls, so a walk uses no more
+   stack per object than stock's. *)
 and traverse_object access (curr, data, ax2ty) body obj =
-  let data, ax2ty =
-    let already_in = GlobRef.Map_env.mem obj data in
-    if already_in then data, ax2ty
-    else match replay obj data with
-    | Some data -> data, ax2ty
-    | None -> walk_object access data ax2ty body obj
-  in
-  (GlobRef.Set_env.add obj curr, data, ax2ty)
+  let curr = GlobRef.Set_env.add obj curr in
+  if GlobRef.Map_env.mem obj data then (curr, data, ax2ty)
+  else match replay obj data with
+  | Some data -> (curr, data, ax2ty)
+  | None -> walk_object access curr data ax2ty body obj
 
-and walk_object access data ax2ty body obj =
+and walk_object access curr data ax2ty body obj =
   let mark = !query_dependent in
   let value, edges, data, ax2ty =
     match body () (* Beware: this can be very costly *) with
@@ -422,7 +434,7 @@ and walk_object access data ax2ty body obj =
     if Int.equal mark !query_dependent && GlobRef.Set_env.for_all has_entry edges
     then add_entry value edges obj
   in
-  data, ax2ty
+  (curr, data, ax2ty)
 
 (** Collects the references occurring in the declaration of mutual inductive
     definitions. All the constructors and names of a mutual inductive
@@ -430,26 +442,24 @@ and walk_object access data ax2ty body obj =
     dependency between mutually defined inductives and constructors. *)
 and traverse_inductive access (curr, data, ax2ty) mind obj =
   let firstind_ref = (GlobRef.IndRef (mind, 0)) in
-  let data, ax2ty =
-   (* Invariant : I_0 \in data iff I_i \in data iff c_ij \in data
-      where I_0, I_1, ... are in the same mutual definition and c_ij
-      are all their constructors. *)
-   if
-     (* recursive call: *) GlobRef.Set_env.mem firstind_ref curr ||
-     (* already in: *) GlobRef.Map_env.mem firstind_ref data
-   then data, ax2ty
-   else match replay obj data with
-   | Some data -> data, ax2ty
-   | None -> walk_inductive access data ax2ty mind obj
-  in
-  (GlobRef.Set_env.add obj curr, data, ax2ty)
+  (* Invariant : I_0 \in data iff I_i \in data iff c_ij \in data
+     where I_0, I_1, ... are in the same mutual definition and c_ij
+     are all their constructors. *)
+  let recursive = GlobRef.Set_env.mem firstind_ref curr in
+  let curr = GlobRef.Set_env.add obj curr in
+  if
+    (* recursive call: *) recursive ||
+    (* already in: *) GlobRef.Map_env.mem firstind_ref data
+  then (curr, data, ax2ty)
+  else match replay obj data with
+  | Some data -> (curr, data, ax2ty)
+  | None -> walk_inductive access curr data ax2ty mind obj
 
-and walk_inductive access data ax2ty mind obj =
+and walk_inductive access curr data ax2ty mind obj =
   let firstind_ref = (GlobRef.IndRef (mind, 0)) in
   let mark = !query_dependent in
   (* Take into account potential recursivity of ind in itself *)
-  let curr = GlobRef.Set_env.add firstind_ref GlobRef.Set_env.empty in
-  let accu = (curr, data, ax2ty) in
+  let accu = (GlobRef.Set_env.add firstind_ref GlobRef.Set_env.empty, data, ax2ty) in
   let mib = lookup_mind mind in
   (* Collects references of parameters *)
   let param_ctx = mib.mind_params_ctxt in
@@ -482,7 +492,7 @@ and walk_inductive access data ax2ty mind obj =
     ) data oib.mind_consnames) data mib.mind_packets
   in
   let () = if Int.equal mark !query_dependent then record_block mind mib contents in
-  (data, ax2ty)
+  (curr, data, ax2ty)
 
 (** Collects references in a rel_context. *)
 and traverse_context access current ctx accu ctxt =
