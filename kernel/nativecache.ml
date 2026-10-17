@@ -133,7 +133,19 @@ let epoch_tag ~include_dirs =
 
 let key ~include_dirs source = Sha256.hex_digest (epoch_tag ~include_dirs ^ "\x00" ^ source)
 
-let object_path root k = root / String.sub k 0 2 / (k ^ ".cmxs")
+(* A cache entry is a DIRECTORY, not a single file: compiling [fn.native]
+   produces [fn.cmxs] (what gets Dynlinked) alongside [fn.cmi] and [fn.cmx],
+   which a LATER bundle in the same process needs on its [-I] path to
+   reference this one's constants (see [Nativecode.stabilize_prefix] for why
+   that reference is even content-stable across processes in the first
+   place). Caching only the [.cmxs] would make any later, genuinely-new
+   compile that depends on a cache-served bundle fail outright for a missing
+   [.cmi] -- publishing the whole sibling set under one atomic directory
+   rename keeps every cache hit as capable of being depended on as a fresh
+   compile would have been. *)
+let companion_exts = [ ".cmxs"; ".cmi"; ".cmx" ]
+
+let entry_dir root k = root / String.sub k 0 2 / k
 
 let lock_path root k = root / String.sub k 0 2 / (k ^ ".lock")
 
@@ -148,24 +160,31 @@ let stats_line () =
 
 (* --- public API ----------------------------------------------------------*)
 
-let cached_object ~include_dirs source =
+let cached_entry ~include_dirs source =
   match cache_root () with
   | None | Some "" -> None
   | Some root ->
     let k = key ~include_dirs source in
-    let p = object_path root k in
-    if Sys.file_exists p then Some p else None
+    let dir = entry_dir root k in
+    if Sys.file_exists (dir / "obj.cmxs") then Some dir else None
 
-let fetch_to ~include_dirs source ~dest =
-  match cached_object ~include_dirs source with
+let fetch_to ~include_dirs source ~dest_stem =
+  match cached_entry ~include_dirs source with
   | None ->
     incr misses;
     false
-  | Some src ->
+  | Some dir ->
     incr hits;
-    (if Sys.file_exists dest then Sys.remove dest);
-    (try Unix.link src dest
-     with Unix.Unix_error ((Unix.EXDEV | Unix.EPERM | Unix.ENOSYS), _, _) -> copy_file ~src ~dst:dest);
+    List.iter
+      (fun ext ->
+        let src = dir / ("obj" ^ ext) in
+        if Sys.file_exists src then begin
+          let dest = dest_stem ^ ext in
+          if Sys.file_exists dest then Sys.remove dest;
+          try Unix.link src dest
+          with Unix.Unix_error ((Unix.EXDEV | Unix.EPERM | Unix.ENOSYS), _, _) -> copy_file ~src ~dst:dest
+        end)
+      companion_exts;
     true
 
 let with_lock ~include_dirs source f =
@@ -184,16 +203,25 @@ let with_lock ~include_dirs source f =
         lock_wait := !lock_wait +. (Unix.gettimeofday () -. t0);
         Fun.protect ~finally:(fun () -> Unix.lockf fd Unix.F_ULOCK 0) f)
 
-let publish ~include_dirs source ~compiled_file =
+let publish ~include_dirs source ~compiled_stem =
   match cache_root () with
   | None | Some "" -> ()
   | Some root ->
     let k = key ~include_dirs source in
-    let dest = object_path root k in
+    let dest = entry_dir root k in
     mkdir_p (Filename.dirname dest);
     let tmp = Printf.sprintf "%s.tmp.%d.%d" dest (Unix.getpid ()) (Random.bits ()) in
-    copy_file ~src:compiled_file ~dst:tmp;
+    mkdir_p tmp;
+    List.iter
+      (fun ext ->
+        let src = compiled_stem ^ ext in
+        if Sys.file_exists src then copy_file ~src ~dst:(tmp / ("obj" ^ ext)))
+      companion_exts;
     (* Same-directory rename is atomic on a POSIX filesystem: a concurrent
-       reader either sees no file yet, or the complete object -- never a
-       partial write. *)
+       reader either sees no directory yet, or the complete sibling set --
+       never a partial one. [cached_entry] only trusts a directory once its
+       [.cmxs] is visible, and [.cmxs] is always the last file written into
+       [tmp] above relative to iteration order is irrelevant: the directory
+       itself is invisible under [dest] until this rename. *)
+    (try Unix.rmdir dest with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
     Unix.rename tmp dest

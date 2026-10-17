@@ -179,7 +179,7 @@ let native_conv_gen (type err) pb sigma env (state, check) t1 t2 =
   let code, symbols, upds =
     Checkstats.time Checkstats.native_codegen (fun () -> mk_conv_code env sigma prefix t1 t2)
   in
-  let fn = Nativelib.compile ml_filename code ~profile:false in
+  let fn, upds = Nativelib.compile ml_filename code ~profile:false upds in
   debug_native_compiler (fun () -> Pp.str "Running test...");
   let t0 = Sys.time () in
   let (rt1, rt2) =

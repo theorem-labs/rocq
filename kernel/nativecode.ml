@@ -2281,6 +2281,25 @@ type linkable_code = global list * symbols * code_location_updates
 
 let empty_updates = Mindmap_env.empty, Cmap_env.empty
 
+(* BET #867/BET-29 native-conversion cache: [compile_deps] stamps every newly
+   compiled constant/inductive with whatever [prefix] the caller passed in
+   (normally derived from a random temp filename, see [Nativelib.get_ml_filename]).
+   That prefix is never read back for THIS bundle's own generated text (every
+   [Gconstant]/[Gind] this bundle defines uses the literal "" prefix, see
+   [compile_constant]/[compile_mind]); it only becomes visible later, when a
+   DIFFERENT bundle in the same process references one of these now-linked
+   constants ([get_const_prefix]/[Lconst], [get_mind_prefix]) and prints it as
+   "<prefix>const_<name>". A random prefix there makes that later bundle's
+   generated text -- and so its cache key -- depend on which process compiled
+   this one first. [stabilize_prefix] replaces the recorded prefix on every
+   entry of [upds] with a caller-supplied one (expected to be a hash of this
+   bundle's own generated text) so two processes that compile the identical
+   bundle always record the identical prefix, and so can compile identical
+   LATER bundles against it too. *)
+let stabilize_prefix prefix (mind_updates, const_updates) =
+  let rewrite u = { u with upd_prefix = prefix } in
+  (Mindmap_env.map rewrite mind_updates, Cmap_env.map rewrite const_updates)
+
 let compile_mind_deps cenv env prefix
     (comp_stack, (mind_updates, const_updates) as init) mind =
   let mib,nameref,_ = lookup_mind_key mind env in
