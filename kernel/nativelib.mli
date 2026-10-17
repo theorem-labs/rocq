@@ -24,10 +24,15 @@ val load_obj : (string -> unit) ref
 
 val get_ml_filename : unit -> string * string
 
-(** [compile file code ~profile] will compile native [code] to [file],
-   and return the name of the object file; this name depends on
-   whether are in byte mode or not; file is expected to be .ml file *)
-val compile : string -> Nativecode.global list -> profile:bool -> string
+(** [compile file code ~profile upds] will compile native [code] to [file],
+   and return the name of the object file (this name depends on
+   whether we are in byte mode or not; file is expected to be a .ml file)
+   together with [upds] rewritten so every entry's recorded link prefix is a
+   function of [code]'s own content rather than [file]'s random name (BET
+   #867/BET-29: needed for the compile cache to match across processes). *)
+val compile :
+  string -> Nativecode.global list -> profile:bool -> Nativecode.code_location_updates ->
+  string * Nativecode.code_location_updates
 
 type native_library = Nativecode.global list * Nativevalues.symbols
 

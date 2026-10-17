@@ -169,12 +169,13 @@ let call_compiler ?profile:(profile=false) ml_filename =
   with Unix.Unix_error (e,_,_) ->
     error_native_compiler_failed (Inr e)
 
-let compile fn code ~profile:profile =
+let compile fn code ~profile:profile upds =
   let text = render_ml_code code in
-  let link_filename = Dynlink.adapt_filename (Filename.chop_extension fn ^ ".cmo") in
+  let stem = Filename.chop_extension fn in
+  let link_filename = Dynlink.adapt_filename (stem ^ ".cmo") in
   let via_cache () =
     Checkstats.time Checkstats.native_cache_hit (fun () ->
-        if Nativecache.fetch_to ~include_dirs:!include_dirs text ~dest:link_filename then
+        if Nativecache.fetch_to ~include_dirs:!include_dirs text ~dest_stem:stem then
           Some link_filename
         else None)
   in
@@ -188,13 +189,20 @@ let compile fn code ~profile:profile =
           | None ->
             write_text_file fn text;
             let r = Checkstats.time Checkstats.native_ocamlopt (fun () -> call_compiler ~profile fn) in
-            Nativecache.publish ~include_dirs:!include_dirs text ~compiled_file:r;
+            Nativecache.publish ~include_dirs:!include_dirs text ~compiled_stem:stem;
             r)
   in
+  (* The recorded "linked at" prefix for every constant/inductive this bundle
+     just defined must be a function of this bundle's own content, not of
+     [fn]'s random temp name: otherwise a LATER bundle that references one of
+     these constants embeds a different, process-specific qualifier every
+     run, and can never match a cached entry even when its own content is
+     otherwise identical. See Nativecode.stabilize_prefix. *)
+  let upds = Nativecode.stabilize_prefix (Sha256.hex_digest text ^ ".") upds in
   (* NB: to prevent reusing the same filename we MUST NOT remove the file until exit
      cf #15263 *)
   delay_cleanup_file fn;
-  r
+  r, upds
 
 type native_library = Nativecode.global list * Nativevalues.symbols
 

@@ -499,7 +499,7 @@ let native_norm env sigma c ty =
     let time_info = Format.sprintf "native_compute: Conversion to native code done in %.5f" (tnc1 -. tnc0) in
     if print_timing then Feedback.msg_info (Pp.str time_info);
     let tc0 = Unix.gettimeofday () in
-    let fn = Nativelib.compile ml_filename code ~profile:profile in
+    let fn, upd = Nativelib.compile ml_filename code ~profile:profile upd in
     let tc1 = Unix.gettimeofday () in
     let time_info = Format.sprintf "native_compute: Compilation done in %.5f" (tc1 -. tc0) in
     if print_timing then Feedback.msg_info (Pp.str time_info);

@@ -45,15 +45,20 @@ val enabled : unit -> bool
     compile happens. *)
 val epoch_tag : include_dirs:string list -> string
 
-(** [cached_object ~include_dirs source] returns the path of an
-    already-compiled object for exactly this generated OCaml source under
-    the current epoch, if the cache holds one. *)
-val cached_object : include_dirs:string list -> string -> string option
+(** [cached_entry ~include_dirs source] returns the directory of an
+    already-compiled entry (holding [obj.cmxs] and, when they exist,
+    [obj.cmi] / [obj.cmx]) for exactly this generated OCaml source under the
+    current epoch, if the cache holds one. *)
+val cached_entry : include_dirs:string list -> string -> string option
 
-(** [fetch_to ~include_dirs source ~dest] is [cached_object] followed by
-    materializing a usable copy of the cached object at [dest] (hardlink
-    when possible, else a byte copy). Returns [true] on a hit. *)
-val fetch_to : include_dirs:string list -> string -> dest:string -> bool
+(** [fetch_to ~include_dirs source ~dest_stem] is [cached_entry] followed by
+    materializing each cached sibling file (([.cmxs]/[.cmi]/[.cmx])) at
+    [dest_stem] with that extension appended (hardlink when possible, else a
+    byte copy) -- the same set and paths a fresh [ocamlopt -shared] compile
+    of [dest_stem ^ ".native"] would have produced, so a LATER compile in the
+    same process that needs this bundle's [.cmi] finds it exactly where it
+    would after a real compile. Returns [true] on a hit. *)
+val fetch_to : include_dirs:string list -> string -> dest_stem:string -> bool
 
 (** [with_lock ~include_dirs source f] runs [f] while holding an exclusive,
     cross-process lock scoped to this exact source's cache key (a POSIX
@@ -61,19 +66,20 @@ val fetch_to : include_dirs:string list -> string -> dest:string -> bool
     if the holder dies or is killed -- no stale-lock cleanup is needed).
     Concurrent [-j] workers compiling the same not-yet-cached source
     therefore block on each other instead of both running [ocamlopt].
-    Callers MUST re-run {!cached_object} (or {!fetch_to}) after acquiring
+    Callers MUST re-run {!cached_entry} (or {!fetch_to}) after acquiring
     the lock: another worker may have published the entry while this one
     was waiting. When the cache is disabled this is just [f ()]. *)
 val with_lock : include_dirs:string list -> string -> (unit -> 'a) -> 'a
 
-(** [publish ~include_dirs source ~compiled_file] atomically makes
-    [compiled_file]'s current bytes available to {!cached_object} /
-    {!fetch_to} for this exact source under the current epoch (write to a
-    same-directory temp file, then [rename], so a concurrent reader never
-    observes a partial file). Idempotent: publishing the same source twice
-    is safe, since by the safety invariant any two publishes for the same
-    key were compiled from byte-identical source under the same epoch. *)
-val publish : include_dirs:string list -> string -> compiled_file:string -> unit
+(** [publish ~include_dirs source ~compiled_stem] atomically makes whichever
+    of [compiled_stem ^ ".cmxs"/".cmi"/".cmx"] exist available to
+    {!cached_entry} / {!fetch_to} for this exact source under the current
+    epoch (copy into a fresh temp directory, then [rename] the directory, so
+    a concurrent reader never observes a partial sibling set). Idempotent:
+    publishing the same source twice is safe, since by the safety invariant
+    any two publishes for the same key were compiled from byte-identical
+    source under the same epoch. *)
+val publish : include_dirs:string list -> string -> compiled_stem:string -> unit
 
 (** One-line summary of this process's hits / misses / lock-wait time, for
     the harness's native-conversion report. *)

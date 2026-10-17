@@ -55,6 +55,12 @@ type linkable_code = global list * symbols * code_location_updates
 
 val empty_updates : code_location_updates
 
+(** Replace the recorded link prefix on every entry with [prefix] (expected:
+    a hash of this bundle's own generated text). See the comment at its
+    definition in nativecode.ml for why this matters for cross-process
+    compile-cache determinism. *)
+val stabilize_prefix : string -> code_location_updates -> code_location_updates
+
 val register_native_file : string -> unit
 
 val is_loaded_native_file : string -> bool
