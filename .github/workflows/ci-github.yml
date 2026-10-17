@@ -11,17 +11,19 @@ concurrency:
   cancel-in-progress: true
 
 # The theorem-labs fork is built and run on Linux only, in the BET grader
-# image, whose opam switch is OCaml 4.14 (flambda). The 4.14 entry covers that
-# compiler; the OCaml 5 entry keeps the fork building on current OCaml. macOS
-# and Windows are not targets of this fork and are not in the matrix.
+# image, whose opam switch is ocaml-variants.4.14.2+options with
+# ocaml-option-flambda. The first entry installs exactly that compiler (dune's
+# release flags -O3 -unbox-closures act only under flambda); the OCaml 5 entry
+# keeps the fork building on current OCaml. macOS and Windows are not targets
+# of this fork and are not in the matrix.
 jobs:
   build:
     strategy:
       matrix:
         include:
-          - name: Linux (OCaml 4.14)
+          - name: Linux (OCaml 4.14.2 flambda)
             os: ubuntu-latest
-            ocaml: 4.14
+            ocaml: ocaml-variants.4.14.2+options,ocaml-option-flambda
             test_disabled:
             packages: ./coqide-server.opam ./rocq*.opam
           - name: Linux (latest OCaml)
