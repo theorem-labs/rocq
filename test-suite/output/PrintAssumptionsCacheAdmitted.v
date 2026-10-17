@@ -1,6 +1,6 @@
 (* Print Assumptions reuses traversals across queries in one environment.
-   A lemma whose only Admitted dependency is reached through a constant an
-   earlier query already traversed. *)
+   An Admitted lemma is an axiom, and it must still be reported when it is
+   reached only through a constant an earlier query already traversed. *)
 
 Lemma adm : nat. Proof. exact 0. Admitted.
 Definition mid := adm + 1.

@@ -12,8 +12,8 @@ Definition g := f + 1.
 Print Assumptions g.
 (* Same environment: [g] is replayed. *)
 Print Assumptions g.
-(* Sentences that do not declare anything keep the environment, as in the
-   Checker's lemma pins, which interleave Set, Check and Print Assumptions. *)
+(* Sentences that do not declare anything, such as Set, Check and Unset,
+   keep the environment. *)
 Set Printing All. Check f. Unset Printing All.
 (* [f] was walked by the first query. *)
 Print Assumptions f.
@@ -31,9 +31,11 @@ Module M.
   Print Assumptions g.
 End M.
 
-(* Set Debug "all" does not make the cache print anything on standard
-   output. Closing [M] changed the environment: the first query walks, the
-   second replays [g]. *)
-Set Debug "all,-vernacinterp,-misc".
+(* With every debug flag on, the replay notice still goes only to standard
+   error: the script checks that standard output is the same with and without
+   ROCQ_DEBUG_ASSUMPTIONS_MEMO. "-misc" because that flag makes the document
+   manager run the external program dot. Closing [M] changed the environment:
+   the first query walks, the second replays [g]. *)
+Set Debug "all,-misc".
 Print Assumptions g.
 Print Assumptions g.
