@@ -1,51 +1,141 @@
 #!/usr/bin/env bash
 # Print Assumptions reuses traversals across queries in one environment. The
-# reuse must not use more stack or memory than the walk it replaces: on long
-# chains, on a second query over a wide tree of long chains, and on a second
-# query of a very wide inductive, it answers wherever the walk without reuse
-# answers. The files are generated here, compiled with -R . P as real
-# libraries are, and run with an 8 MiB stack.
+# reuse must not cost more time, stack or memory than the walk it replaces.
+# The files are generated here and compiled with -R . P, as real libraries
+# are.
 #
-# Chain50000, Chain72500: Definition x(k) := S x(k-1) over Axiom A, one query.
-# Fan100000: that chain to 100,000, then a balanced tree of [f a b := a] over
-#   x10, x20, ..., x100000, queried twice; the second query is a replay.
-# IndChain31500: Inductive I(k) := c(k) : I(k-1) -> I(k) over Axiom B, one
-#   query. MixChain25500: Definition e(k) := J(k-1) alternating with
+# Time: one user name reached under two canonical names. A chain of 8,000
+# definitions over a constant of a module alias is queried alternately with a
+# constant whose implementation, read through a sealed functor application,
+# reaches the same user name under the other canonical name.
+# - Flip8000: c(k) := S c(k-1) over M2.bar with M2 := M, queried with P2.bar
+#   for P2 := N M2.
+# - AliasChain8000: y(k) := S y(k-1) over MA.c with MA := M, queried with
+#   z := Q.c for Q := F MA.
+# Compiling each file must take at most three times the CPU time of compiling
+# it without its queries, plus one second; the walk without reuse takes about
+# as long either way. A cache that replaces the entry recorded under one
+# canonical name by one under the other makes every later replay of the chain
+# go down to that name and miss, at each level: about ten times as long here.
+# Measuring both compilations in the same run makes the check independent of
+# the machine's speed.
+#
+# Stack and memory, with an 8 MiB stack (ulimit -s 8192) and 2 GB of address
+# space (ulimit -v 2000000):
+# - Chain50000, Chain72500: Definition x(k) := S x(k-1) over Axiom A.
+# - Fan100000: that chain to 100,000, then a balanced tree of [f a b := a]
+#   over x10, x20, ..., x100000, queried twice; the second query is a replay.
+# - IndChain28000: Inductive I(k) := c(k) : I(k-1) -> I(k) over Axiom B.
+# - MixChain23000: Definition e(k) := J(k-1) alternating with
 #   Inductive J(k) := k(k) : e(k) -> J(k).
-# Wide40000: one inductive with 40,000 constructors, queried twice, under
-#   ulimit -v 2000000 (2 GB). Stock and this branch need about 0.8 GB; a
-#   replay that pushes a block's shared edges once per member runs out even
-#   at 4 GB.
+# - Wide40000: one inductive with 40,000 constructors, queried twice. The
+#   walk without reuse needs about 0.8 GB of address space; a replay that
+#   pushes a block's shared edges once per member runs out even at 4 GB.
+# Every size answers without reuse on the dev profile (what `make world` and
+# CI build) and on the release profile (-O3, as `dune build -p` builds),
+# whose larger frames lower the inductive limits to about 29,000 inductives
+# and 23,750 mixed links. The definition chains catch a non-tail call into
+# the walk, which overflows from about 47,500 definitions on the dev profile,
+# and Fan100000's second query a recursive replay. A walk frame one slot
+# larger than without reuse shortens the inductive limits on the dev profile
+# to about 30,750 and 24,900 only, which a size that answers on the release
+# profile cannot catch: frame sizes are checked on the object code (objdump),
+# not by this script.
 #
-# The limits depend on the build. Measured with the dev profile (what
-# `make world` and CI build) and ulimit -s 8192, the walk without reuse
-# answers definition chains up to about 74,650, inductive chains up to about
-# 32,650 and mixed chains up to about 26,130. Each size above is below that,
-# and above where a walk that holds more stack per level runs out: a non-tail
-# call into the definition walk overflows from about 47,500 definitions, a
-# recursive replay overflows on Fan100000's second query, and an inductive
-# walk with one more frame slot overflows from about 30,750 inductives and
-# 24,900 mixed links. The release profile (-O3) lowers the inductive limits
-# of the walk without reuse to about 29,030 and 23,760, so this script is
-# meant for dev builds.
-#
-# OCaml 5 ignores ulimit -s (it runs OCaml code on its own stack), so these
-# limits do not apply there, and the memory cap was measured on OCaml 4 only:
-# the script skips, rather than pass on files that cannot overflow.
+# OCaml 5 ignores ulimit -s (it runs OCaml code on its own stack), and the
+# memory cap was measured on OCaml 4 only: the stack and memory cases are
+# skipped there, rather than pass on files that cannot overflow.
 
 set -e
 
 export PATH=$BIN:$PATH
+export LC_ALL=C
 
 case $(rocq --version) in
-  *"compiled with OCaml 4."*) ;;
-  *) echo "Skipping: not built with OCaml 4, whose stack and memory limits this script is measured against."; exit 0 ;;
+  *"compiled with OCaml 4."*) ocaml4=true ;;
+  *) ocaml4=false ;;
 esac
 
 cd misc
 rm -rf print-assumptions-memo-limits/_test
 mkdir -p print-assumptions-memo-limits/_test
 cd print-assumptions-memo-limits/_test
+
+status=0
+
+# Prints the output of $2 when it differs from $3, and fails.
+expect() {
+  if [ "$2" != "$3" ]; then
+    echo "$1: unexpected output:"
+    echo "$2"
+    status=1
+  fi
+}
+
+flip() {
+  echo "Axiom foo : nat."
+  echo "Module Type T. Parameter bar : nat. End T."
+  echo "Module M : T. Module Hide. Definition x := foo. End Hide. Definition bar := Hide.x. End M."
+  echo "Module M2 := M."
+  echo "Module N (X : T) : T. Definition y := X.bar. Definition bar := y. End N."
+  echo "Module P2 := N M2."
+  echo "Definition c0 := M2.bar."
+  for ((k = 1; k <= $1; k++)); do echo "Definition c$k := S c$((k - 1))."; done
+  for _ in 1 2; do echo "Print Assumptions c$1."; echo "Print Assumptions P2.bar."; done
+}
+
+aliaschain() {
+  echo "Axiom ax : nat."
+  echo "Module Type T. Parameter c : nat. End T."
+  echo "Module M : T. Definition c := ax. End M."
+  echo "Module MA := M."
+  echo "Module F (X : T) : T. Definition c := X.c. End F."
+  echo "Module Q := F MA."
+  echo "Definition y0 := MA.c."
+  for ((k = 1; k <= $1; k++)); do echo "Definition y$k := S y$((k - 1))."; done
+  echo "Definition z := Q.c."
+  for _ in 1 2; do echo "Print Assumptions y$1."; echo "Print Assumptions z."; done
+}
+
+# Compiles $1 under a CPU cap, leaving its output in $1.log, and prints its
+# CPU seconds (user + system).
+cpu() {
+  local TIMEFORMAT='%U %S' t
+  t=$( { time (ulimit -t 300; rocq c -q -R . P "$1" > "$1.log" 2>&1); } 2>&1 ) || true
+  awk -v t="$t" 'BEGIN { split(t, a, " "); printf "%.2f", a[1] + a[2] }'
+}
+
+flip 8000 > Flip8000.v
+aliaschain 8000 > AliasChain8000.v
+
+for f in Flip8000 AliasChain8000; do
+  grep -v '^Print Assumptions' "$f.v" > "${f}NoQuery.v"
+  full=$(cpu "$f.v")
+  base=$(cpu "${f}NoQuery.v")
+  case $f in
+    Flip*) axiom='foo : nat' ;;
+    *) axiom='ax : nat' ;;
+  esac
+  want="Axioms:
+$axiom
+Axioms:
+$axiom
+Axioms:
+$axiom
+Axioms:
+$axiom"
+  expect "$f" "$(cat "$f.v.log")" "$want"
+  expect "${f}NoQuery" "$(cat "${f}NoQuery.v.log")" ""
+  if ! awk -v f="$full" -v b="$base" 'BEGIN { exit !(f <= 3 * b + 1) }'; then
+    echo "$f: ${full}s of CPU, against ${base}s without its queries"
+    status=1
+  fi
+done
+
+if ! $ocaml4; then
+  echo "Skipping the stack and memory cases: not built with OCaml 4, whose limits they are measured against."
+  exit $status
+fi
 
 chain() {
   echo "Axiom A : nat."
@@ -99,8 +189,8 @@ leaves=()
 for ((k = 10; k <= 100000; k += 10)); do leaves+=("x$k"); done
 { chain 100000; printf 'Definition R := '; tree "${leaves[@]}"; echo "."
   echo "Print Assumptions R."; echo "Print Assumptions R."; } > Fan100000.v
-indchain 31500 > IndChain31500.v
-mixchain 25500 > MixChain25500.v
+indchain 28000 > IndChain28000.v
+mixchain 23000 > MixChain23000.v
 wide 40000 > Wide40000.v
 
 axiom_a='Axioms:
@@ -109,8 +199,7 @@ axiom_b='Axioms:
 B : Type'
 closed='Closed under the global context'
 
-status=0
-for f in Chain50000 Chain72500 Fan100000 IndChain31500 MixChain25500 Wide40000; do
+for f in Chain50000 Chain72500 Fan100000 IndChain28000 MixChain23000 Wide40000; do
   out=$(ulimit -s 8192; ulimit -v 2000000; rocq c -q -R . P "$f.v" 2>&1) || true
   case $f in
     Fan100000) want="$axiom_a
@@ -120,10 +209,6 @@ $axiom_a" ;;
 $closed" ;;
     *) want=$axiom_a ;;
   esac
-  if [ "$out" != "$want" ]; then
-    echo "$f: unexpected output:"
-    echo "$out"
-    status=1
-  fi
+  expect "$f" "$out" "$want"
 done
 exit $status

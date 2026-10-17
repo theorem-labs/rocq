@@ -1,13 +1,13 @@
 [assumptions-memo] replayed Memo.Canon.M.d
 [assumptions-memo] replayed Corelib.Init.Nat.add
-[assumptions-memo] replayed Memo.Canon.M.d
-[assumptions-memo] replayed Memo.Canon.M.c
+[assumptions-memo] replayed Memo.Canon.MA.d
+[assumptions-memo] replayed Memo.Canon.S.f
 [assumptions-memo] replayed Memo.Canon.Z.g
 [assumptions-memo] replayed Corelib.Init.Nat.add
 [assumptions-memo] replayed Memo.Canon.M.c
 [assumptions-memo] replayed Memo.Canon.MA.c
 [assumptions-memo] replayed Memo.Canon.P.c
-[assumptions-memo] replayed Memo.Canon.Q.d
+[assumptions-memo] replayed Memo.Canon.MA.d
 [assumptions-memo] replayed Memo.Canon.R.e
 [assumptions-memo] replayed Memo.Canon.S.f
 [assumptions-memo] replayed Memo.Canon.V.g
@@ -18,7 +18,7 @@
 [assumptions-memo] replayed Memo.Canon.M.c
 [assumptions-memo] replayed Memo.Canon.MA.c
 [assumptions-memo] replayed Memo.Canon.P.c
-[assumptions-memo] replayed Memo.Canon.Q.d
+[assumptions-memo] replayed Memo.Canon.MA.d
 [assumptions-memo] replayed Memo.Canon.R.e
 [assumptions-memo] replayed Memo.Canon.S.f
 [assumptions-memo] replayed Memo.Canon.V.g

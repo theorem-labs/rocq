@@ -8,7 +8,9 @@
 # - Debug.v: when the environment changes;
 # - Opaque.v: walks that meet a Qed body that cannot be read (-vok against
 #   Lib's .vos);
-# - Canon.v: entries recorded under another canonical name.
+# - Canon.v: entries recorded under another canonical name;
+# - Thrash.v: an object whose user name already has an entry, under another
+#   canonical name, is not recorded, so the entry is not replaced.
 
 set -e
 
@@ -17,7 +19,7 @@ export PATH=$BIN:$PATH
 cd misc/print-assumptions-memo
 rm -rf _test
 mkdir _test
-cp Debug.v Debug.err Lib.v Opaque.v Opaque.err Canon.v Canon.err _test
+cp Debug.v Debug.err Lib.v Opaque.v Opaque.err Canon.v Canon.err Thrash.v Thrash.err _test
 cd _test
 
 rocq c -q -R . Memo -vos Lib.v
@@ -34,3 +36,4 @@ check() {
 check Debug
 check Opaque -vok
 check Canon
+check Thrash

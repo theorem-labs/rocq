@@ -1,5 +1,6 @@
 (* Print Assumptions reuses traversals across queries in one environment.
-   A Require in the middle of a file changes the environment. *)
+   Queries before and after a Require in the middle of a file give the same
+   answers as without reuse. *)
 
 Axiom ax : nat.
 Definition d := ax.

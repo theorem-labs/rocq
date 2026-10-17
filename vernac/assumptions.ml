@@ -207,11 +207,11 @@ let fold_with_full_binders g f n acc c =
     queries replay it.
 
     Soundness invariant: for every object [o] and environment [E], the entry
-    for [o] under [E] is the pair of stock's [data] value for [o] and the edge
-    set of [o]:
+    for [o] under [E] is the pair of the [data] value the walk gives [o] and
+    the edge set of [o]:
     - for an object with a body, its direct references (its value's set);
-    - for an axiom, the direct references of its type, which stock walks but
-      does not keep;
+    - for an axiom, the direct references of its type, which the walk visits
+      but does not keep;
     - for a member of a mutual block, the block's direct references plus
       every inductive and constructor of the block.
     An object is never recorded when its walk, including every walk nested in
@@ -223,20 +223,22 @@ let fold_with_full_binders g f n acc c =
     ([Library.access_opaque_table]), state outside the key below; no input is
     known where caching such a walk would change the output, so excluding it
     is a precaution that only costs reuse. A member of a mutual block is
-    recorded only together with its whole block. An object
-    is also recorded only once each of its edges has an entry, since a replay
-    that reaches an object without one is abandoned.
+    recorded only together with its whole block. An object is also recorded
+    only once each of its edges has an entry, and only while no entry has its
+    user name ([fresh]). Entries are never replaced, so every edge of every
+    entry keeps an entry until the environment changes, and a replay can miss
+    only at the object it starts from.
 
     Replaying [o] writes [o]'s value into the query's [data], then replays
-    each edge, stopping at objects already in [data] as stock does. A replay
-    either completes, adding exactly the keys and values stock's walk of [o]
-    adds from the same [data] (the closure of [o] through edges, avoiding what
-    [data] holds, whatever the query visited first), or reaches an object
-    without an entry and is abandoned, keeping nothing, and [o] is walked the
-    stock way. A recorded object's walk never touches [ax2ty]. So every
-    query's final [data] and [ax2ty] equal stock's, by induction over the
-    traversal order, and so does the output of {!assumptions}, a fold over
-    them.
+    each edge, stopping at objects already in [data] as the walk does. A
+    replay either completes, adding exactly the keys and values the walk of
+    [o] adds from the same [data] (the closure of [o] through edges, avoiding
+    what [data] holds, whatever the query visited first), or reaches an
+    object without an entry and is abandoned, keeping nothing, and [o] is
+    walked. A recorded object's walk never touches [ax2ty]. So every query's
+    final [data] and [ax2ty] equal those of the walk without reuse, by
+    induction over the traversal order, and so does the output of
+    {!assumptions}, a fold over them.
 
     Entries hold for one environment, compared by physical equality of
     [Global.env ()], plus the current module path (it decides how constants of
@@ -246,7 +248,7 @@ let fold_with_full_binders g f n acc c =
 (* ROCQ_DEBUG_ASSUMPTIONS_MEMO=1, read once at startup, reports each completed
    replay on standard error. It is not a [CDebug] flag: [Set Debug "all"] sets
    every one of those, and their messages go to the command's output, which
-   must stay stock's byte for byte. *)
+   must not change. *)
 let debug_memo = Sys.getenv_opt "ROCQ_DEBUG_ASSUMPTIONS_MEMO" = Some "1"
 
 type memo_entry = {
@@ -269,7 +271,7 @@ let unreplayable_steps = ref 0
     innermost first. It lives here rather than in a local of
     [walk_inductive]: a local that is live across the recursive traversal
     takes a slot in the frame, and each inductive on the walk path holds one
-    such frame, so stack use per level would exceed stock's. *)
+    such frame, so stack use per level would grow. *)
 let inductive_marks = ref ([] : int list)
 
 let sync_memo access =
@@ -282,13 +284,13 @@ let sync_memo access =
     memo_entries := GlobRef.Map_env.empty
 
 (* [Map_env] compares user names only: the entry is [obj]'s when the
-   canonical names agree too, since stock's value for a constant with no body
-   in the environment is looked up through its canonical name
+   canonical names agree too, since the value the walk gives a constant with
+   no body in the environment is looked up through its canonical name
    ([lookup_constant_in_impl]). Module aliases, functor applications and
    [Include] do reach objects whose canonical names differ under one user
    name, but no input is known where an entry under the other canonical name
-   would change the output, so the check is a precaution that only costs
-   reuse. *)
+   would change the output, so the check is a precaution. It only costs
+   reuse: the other canonical name is walked, and is not recorded ([fresh]). *)
 let find_entry obj =
   match GlobRef.Map_env.find_opt obj !memo_entries with
   | Some e when GlobRef.CanOrd.equal e.memo_obj obj -> Some e
@@ -296,7 +298,18 @@ let find_entry obj =
 
 let has_entry obj = Option.has_some (find_entry obj)
 
-let add_entry value edges obj =
+(* An object whose user name already has an entry, under another canonical
+   name, is not recorded: entries are never replaced until the environment
+   changes (see the invariant). Replacing the entry would leave the entries
+   that reach it without an entry for that edge; each replay through them
+   would go down to it and miss, and the walk that follows would replay every
+   level below again, quadratic in the depth of a chain. *)
+let fresh obj = not (GlobRef.Map_env.mem obj !memo_entries)
+
+(* Inlined into [walk_object]: the call would add a frame at the bottom of the
+   deepest walk, under [Map_env.add], and so shorten the longest chain that
+   fits in the stack. *)
+let[@inline always] add_entry value edges obj =
   let e = { memo_obj = obj; memo_value = value; memo_edges = edges } in
   memo_entries := GlobRef.Map_env.add obj e !memo_entries
 
@@ -309,28 +322,29 @@ let record_block mind mib contents =
       GlobRef.Set_env.empty mib.mind_packets
   in
   let cached r = GlobRef.Set_env.mem r members || has_entry r in
-  if GlobRef.Set_env.for_all cached contents then
+  if GlobRef.Set_env.for_all fresh members && GlobRef.Set_env.for_all cached contents then
     let edges = GlobRef.Set_env.union contents members in
     GlobRef.Set_env.iter (add_entry (Some contents) edges) members
 
 exception Miss
 
 (* [data0] is the query's [data] before the replay. An object in it is
-   skipped, as stock skips it. Every other object reached needs an entry for
-   that very object, canonical name included, even when this replay already
-   added an object with the same user name: so the objects a completed replay
-   reaches outside [data0] have one canonical name per user name, and the
-   order in which it reaches them cannot matter. The objects still to visit
-   are kept in a list rather than on the stack: edges are followed in hash
-   order, so a recursive replay could go much deeper than stock's walk of the
-   same objects.
+   skipped, as the walk skips it. Every other object reached needs an entry
+   for that very object, canonical name included, even when this replay
+   already added an object with the same user name: so the objects a
+   completed replay reaches outside [data0] have one canonical name per user
+   name, and the order in which it reaches them cannot matter. The objects
+   still to visit are kept in a list rather than on the stack: edges are
+   followed in hash order, so a recursive replay could go much deeper than
+   the walk of the same objects.
 
    The members of a mutual block share one edge set ([record_block]), which
    holds every member. It is pushed once per replay: pushing it again would
-   only revisit objects already visited, each then either in [data] or
-   skipped, and for a block of n members it would push n^2 objects. [pushed]
-   maps each block whose edges were pushed to that set, and only the same set
-   (physically) is skipped. *)
+   only revisit objects already visited, and for a block of n members it
+   would push n^2 objects. [pushed] holds the blocks whose edges were pushed.
+   All the entries of a block come from one [record_block] and are never
+   replaced, so every member of a block that a replay reaches has that same
+   edge set. *)
 let replay_into data0 obj data =
   let rec loop pushed data = function
     | [] -> data
@@ -346,28 +360,22 @@ let replay_into data0 obj data =
             | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> Some mind
             | GlobRef.VarRef _ | GlobRef.ConstRef _ -> None
           in
-          let already_pushed = match block with
-            | Some mind ->
-              begin match Mindmap_env.find_opt mind pushed with
-              | Some edges -> edges == e.memo_edges
-              | None -> false
-              end
-            | None -> false
-          in
-          if already_pushed then loop pushed data todo
-          else
+          match block with
+          | Some mind when Mindmap_env.Set.mem mind pushed -> loop pushed data todo
+          | _ ->
             let pushed = match block with
-              | Some mind -> Mindmap_env.add mind e.memo_edges pushed
+              | Some mind -> Mindmap_env.Set.add mind pushed
               | None -> pushed
             in
             let todo = GlobRef.Set_env.fold (fun r todo -> r :: todo) e.memo_edges todo in
             loop pushed data todo
   in
-  loop Mindmap_env.empty data [obj]
+  loop Mindmap_env.Set.empty data [obj]
 
 (** [Some data'] when every object the replay reaches outside [data] has an
     entry, where [data'] is [data] plus the closure of [obj], stopping at
-    objects already in [data], with stock's values; [None] otherwise. *)
+    objects already in [data], with the values the walk would add; [None]
+    otherwise. *)
 let replay obj data =
   match replay_into data obj data with
   | data ->
@@ -427,9 +435,9 @@ let rec traverse access (current:GlobRef.t) ctx accu t =
           Context.Rel.add (traverse access current) ctx accu t
 
 (* [walk_object] and [walk_inductive] are entered by tail calls, which the
-   compiler checks ([@ocaml.tailcall]); with [walk_inductive]'s mark kept in
-   [inductive_marks], the frames these walks hold per object are the same size
-   as stock's. *)
+   compiler checks ([@ocaml.tailcall]): a walk holds one frame per object, as
+   it would without reuse, and [walk_inductive] keeps its mark in
+   [inductive_marks] rather than in that frame. *)
 and traverse_object access (curr, data, ax2ty) body obj =
   let curr = GlobRef.Set_env.add obj curr in
   if GlobRef.Map_env.mem obj data then (curr, data, ax2ty)
@@ -474,7 +482,8 @@ and walk_object access curr data ax2ty body obj =
       Some contents, contents, GlobRef.Map_env.add obj (Some contents) data, ax2ty
   in
   let () =
-    if Int.equal mark !unreplayable_steps && GlobRef.Set_env.for_all has_entry edges
+    if Int.equal mark !unreplayable_steps && fresh obj
+       && GlobRef.Set_env.for_all has_entry edges
     then add_entry value edges obj
   in
   (curr, data, ax2ty)
