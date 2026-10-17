@@ -5,20 +5,24 @@
 # are.
 #
 # Time: one user name reached under two canonical names. A chain of 8,000
-# definitions over a constant of a module alias is queried alternately with a
+# definitions over an object of a module alias is queried alternately with a
 # constant whose implementation, read through a sealed functor application,
 # reaches the same user name under the other canonical name.
 # - Flip8000: c(k) := S c(k-1) over M2.bar with M2 := M, queried with P2.bar
 #   for P2 := N M2.
 # - AliasChain8000: y(k) := S y(k-1) over MA.c with MA := M, queried with
 #   z := Q.c for Q := F MA.
+# - BlockChain8000: the same with an inductive in place of the constant:
+#   z(k) := S z(k-1) over a match on MA.c0, queried with Q.d, whose
+#   implementation matches on X.c0.
 # Compiling each file must take at most three times the CPU time of compiling
 # it without its queries, plus one second; the walk without reuse takes about
 # as long either way. A cache that replaces the entry recorded under one
-# canonical name by one under the other makes every later replay of the chain
-# go down to that name and miss, at each level: about ten times as long here.
-# Measuring both compilations in the same run makes the check independent of
-# the machine's speed.
+# canonical name by one under the other, for a constant or for the members of
+# an inductive block, makes every later replay of the chain go down to that
+# name and miss, at each level: about ten times as long here. Measuring both
+# compilations in the same run makes the check independent of the machine's
+# speed.
 #
 # Stack and memory, with an 8 MiB stack (ulimit -s 8192) and 2 GB of address
 # space (ulimit -v 2000000):
@@ -97,6 +101,19 @@ aliaschain() {
   for _ in 1 2; do echo "Print Assumptions y$1."; echo "Print Assumptions z."; done
 }
 
+blockchain() {
+  echo "Axiom ax : nat."
+  echo "Module Type T. Inductive I := c0 : nat -> I. End T."
+  echo "Module M : T. Inductive I := c0 : nat -> I. End M."
+  echo "Module MA := M."
+  echo "Module Type T2. Parameter d : nat. End T2."
+  echo "Module F (X : T) : T2. Definition d := match X.c0 ax with X.c0 k => k end. End F."
+  echo "Module Q := F MA."
+  echo "Definition z0 := match MA.c0 ax with MA.c0 k => k end."
+  for ((k = 1; k <= $1; k++)); do echo "Definition z$k := S z$((k - 1))."; done
+  for _ in 1 2; do echo "Print Assumptions z$1."; echo "Print Assumptions Q.d."; done
+}
+
 # Compiles $1 under a CPU cap, leaving its output in $1.log, and prints its
 # CPU seconds (user + system).
 cpu() {
@@ -107,8 +124,9 @@ cpu() {
 
 flip 8000 > Flip8000.v
 aliaschain 8000 > AliasChain8000.v
+blockchain 8000 > BlockChain8000.v
 
-for f in Flip8000 AliasChain8000; do
+for f in Flip8000 AliasChain8000 BlockChain8000; do
   grep -v '^Print Assumptions' "$f.v" > "${f}NoQuery.v"
   full=$(cpu "$f.v")
   base=$(cpu "${f}NoQuery.v")
