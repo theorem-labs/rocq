@@ -1,45 +1,96 @@
 #!/usr/bin/env bash
-# The VM's binary-number acceleration is an execution optimization only: coqchk must accept the
-# same VM-cast proofs with it enabled, and the test must exercise every installed fast path.
+# The VM's binary-number acceleration is an execution optimization only. This
+# test compiles fixed expected results without the fast path, then makes
+# rocqchk check the same VM casts with bytecode and with every registered C
+# operation. Their checker reports must be identical after removing fast-path
+# diagnostics.
 set -eu
-export PATH="$BIN:$PATH"
+PATH="$BIN:$PATH"
 
 d=$(mktemp -d)
-trap 'rm -rf "$d"' EXIT
-cat > "$d/FastBin.v" <<'EOF'
-From Stdlib Require Import ZArith NArith PArith.
+trap 'find -- "$d" -depth -delete' EXIT
 
-Definition x := 1234567890123%positive.
-Definition y := 987654321011%positive.
-Definition zx := Zpos x.
-Definition zy := Zpos y.
+# The oracle is generated independently with Python arbitrary-precision
+# integers. The corpus includes xH, deep xO and xI chains, deterministic random
+# positives, both Z signs, and a positive beyond the C fast path's depth limit.
+python3 - "$d/FastBin.v" <<'PY'
+import random
+import sys
 
-Lemma compare_cont_vm : Pos.compare_cont Eq x y = Gt.
-Proof. vm_compute. reflexivity. Qed.
+out = open(sys.argv[1], "w", encoding="utf-8")
+write = out.write
+write("From Stdlib Require Import ZArith NArith PArith.\n\n")
 
-Lemma eqb_vm : Pos.eqb x y = false.
-Proof. vm_compute. reflexivity. Qed.
+rng = random.Random(0xF457B1)
+values = [
+    1,
+    2,
+    3,
+    (1 << 63) - 1,
+    1 << 63,
+    (1 << 64) - 1,
+    1 << 64,
+    (1 << 64) + 1,
+    (1 << 127) - 1,
+    1 << 127,
+    1 << 128,
+    (1 << 128) - 1,
+    1 << 256,
+    (1 << 257) - 1,
+]
+values.extend(rng.getrandbits(bits) | (1 << (bits - 1)) | 1 for bits in (5, 37, 65, 129, 257))
 
-Lemma add_vm : Pos.add x y = 2222222211134%positive.
-Proof. vm_compute. reflexivity. Qed.
+for i, value in enumerate(values):
+    write(f"Definition p{i} := {value}%positive.\n")
+write("\n")
 
-Lemma mul_vm : Pos.mul 12345%positive 6789%positive = 83810205%positive.
-Proof. vm_compute. reflexivity. Qed.
+def comparison(x, y):
+    return "Lt" if x < y else "Gt" if x > y else "Eq"
 
-Lemma zcompare_vm : Z.compare zx zy = Gt.
-Proof. vm_compute. reflexivity. Qed.
+def z_literal(value):
+    return f"({value})%Z"
 
-Lemma zeqb_vm : Z.eqb zx zy = false.
-Proof. vm_compute. reflexivity. Qed.
+pairs = [(i, (i * 7 + 3) % len(values)) for i in range(len(values))]
+for i, j in pairs:
+    x, y = values[i], values[j]
+    r = ("Eq", "Lt", "Gt")[i % 3]
+    write(f"Definition compare_cont_{i} : Pos.compare_cont {r} p{i} p{j} = "
+          f"{r if x == y else comparison(x, y)} := eq_refl.\n")
+    write(f"Definition eqb_{i} : Pos.eqb p{i} p{j} = "
+          f"{'true' if x == y else 'false'} := eq_refl.\n")
 
-Lemma nat_eqb_vm : Nat.eqb 12345 6789 = false.
-Proof. vm_compute. reflexivity. Qed.
+    zx = x if i % 3 == 0 else -x
+    zy = y if i % 2 == 0 else -y
+    write(f"Definition zcompare_{i} : Z.compare {z_literal(zx)} {z_literal(zy)} = "
+          f"{comparison(zx, zy)} := eq_refl.\n")
 
-Lemma nat_leb_vm : Nat.leb 6789 12345 = true.
-Proof. vm_compute. reflexivity. Qed.
-EOF
+write("Definition zcompare_zero : Z.compare 0%Z (Zpos p0) = Lt := eq_refl.\n")
+
+deep = 1 << 4096
+write(f"Definition p_too_deep := {deep}%positive.\n")
+write("Definition eqb_too_deep : Pos.eqb p_too_deep p_too_deep = true := eq_refl.\n")
+out.close()
+PY
+
 rocq c -bytecode-compiler yes -Q "$d" "" "$d/FastBin.v"
-rocqchk -bytecode-compiler yes -Q "$d" "" FastBin
-ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 rocqchk -bytecode-compiler yes -Q "$d" "" FastBin \
-  > "$d/fastbin.out" 2> "$d/fastbin.err"
-grep -Eq 'FASTBIN hits=[1-9][0-9]* fallbacks=[0-9]+' "$d/fastbin.err"
+rocqchk_args=(-bytecode-compiler yes -Q "$d" "")
+if [ -n "${ROCQCHK_COQLIB:-}" ]; then
+  rocqchk_args=(-coqlib "$ROCQCHK_COQLIB" "${rocqchk_args[@]}")
+fi
+if ! rocqchk "${rocqchk_args[@]}" FastBin > "$d/bytecode.out" 2> "$d/bytecode.err"; then
+  cat "$d/bytecode.err" >&2
+  exit 1
+fi
+if ! ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 rocqchk "${rocqchk_args[@]}" FastBin \
+  > "$d/fastbin.out" 2> "$d/fastbin.err"; then
+  cat "$d/fastbin.err" >&2
+  exit 1
+fi
+
+grep -v '^FASTBIN ' "$d/fastbin.err" > "$d/fastbin.clean.err"
+diff -u "$d/bytecode.out" "$d/fastbin.out"
+diff -u "$d/bytecode.err" "$d/fastbin.clean.err"
+for op in 0 1; do
+  grep -Eq "^FASTBIN op=$op hits=[1-9][0-9]* fallbacks=[0-9]+$" "$d/fastbin.err"
+done
+grep -Eq '^FASTBIN op=1 hits=[1-9][0-9]* fallbacks=[1-9][0-9]*$' "$d/fastbin.err"
