@@ -160,8 +160,60 @@ let call_compiler ?profile:(profile=false) ml_filename =
     ["-impl"; ml_filename] in
   let ocamlfind = Boot.Env.ocamlfind () in
   debug_native_compiler (fun () -> Pp.str (ocamlfind ^ " " ^ (String.concat " " args)));
+  (* BET #867/BET-29 diagnostic: on a non-zero ocamlopt exit, preserve exactly
+     what failed (the generated source, the argv, and ocamlopt's own output)
+     under ROCQCHK_NATIVE_FAILDIR, if set. A successful compile captures
+     nothing extra: ocamlopt's output is still replayed to this process's own
+     stdout/stderr afterward, so visible behavior on success is unchanged. *)
+  let capture_failure () =
+    match Sys.getenv_opt "ROCQCHK_NATIVE_FAILDIR" with
+    | None -> ()
+    | Some dir ->
+      (try
+         let dest = Filename.concat dir (Printf.sprintf "%d-%.0f" (Unix.getpid ()) (Unix.gettimeofday () *. 1000.)) in
+         let rec mkdir_p d =
+           if d = "" || d = "." || d = "/" || Sys.file_exists d then ()
+           else begin
+             mkdir_p (Filename.dirname d);
+             try Unix.mkdir d 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+           end
+         in
+         mkdir_p dest;
+         let copy src name =
+           if Sys.file_exists src then begin
+             let ic = open_in_bin src and oc = open_out_bin (Filename.concat dest name) in
+             (try while true do output_char oc (input_char ic) done with End_of_file -> ());
+             close_in ic; close_out oc
+           end
+         in
+         copy ml_filename "source.native";
+         copy (ml_filename ^ ".ocamlopt.out") "ocamlopt.stdout";
+         copy (ml_filename ^ ".ocamlopt.err") "ocamlopt.stderr";
+         let oc = open_out (Filename.concat dest "argv.txt") in
+         output_string oc (ocamlfind ^ " " ^ String.concat " " args ^ "\n");
+         close_out oc
+       with _ -> ())
+  in
   try
-    let res = CUnix.sys_command ocamlfind args in
+    let out_path = ml_filename ^ ".ocamlopt.out" and err_path = ml_filename ^ ".ocamlopt.err" in
+    let out_fd = Unix.openfile out_path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
+    let err_fd = Unix.openfile err_path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
+    let pid = Unix.create_process ocamlfind (Array.of_list (ocamlfind :: args)) Unix.stdin out_fd err_fd in
+    Unix.close out_fd; Unix.close err_fd;
+    let (_, res) = Unix.waitpid [] pid in
+    let replay path ch =
+      if Sys.file_exists path then begin
+        let ic = open_in_bin path in
+        (try while true do output_char ch (input_char ic) done with End_of_file -> ());
+        close_in ic
+      end
+    in
+    replay out_path stdout; replay err_path stderr;
+    (match res with
+     | Unix.WEXITED 0 -> ()
+     | Unix.WEXITED _ | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> capture_failure ());
+    (try Sys.remove out_path with Sys_error _ -> ());
+    (try Sys.remove err_path with Sys_error _ -> ());
     match res with
     | Unix.WEXITED 0 -> link_filename
     | Unix.WEXITED _n | Unix.WSIGNALED _n | Unix.WSTOPPED _n ->
