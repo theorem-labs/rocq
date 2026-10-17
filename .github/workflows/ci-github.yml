@@ -12,10 +12,11 @@ concurrency:
 
 # The theorem-labs fork is built and run on Linux only, in the BET grader
 # image, whose opam switch is ocaml-variants.4.14.2+options with
-# ocaml-option-flambda. The first entry installs exactly that compiler (dune's
-# release flags -O3 -unbox-closures act only under flambda); the OCaml 5 entry
-# keeps the fork building on current OCaml. macOS and Windows are not targets
-# of this fork and are not in the matrix.
+# ocaml-option-flambda. The first entry installs exactly that compiler. CI
+# builds with dune's dev profile (`make world`), so the release-only
+# -O3 -unbox-closures that the grader's `dune build -p` applies are not
+# exercised here. The OCaml 5 entry keeps the fork building on current OCaml.
+# macOS and Windows are not targets of this fork and are not in the matrix.
 jobs:
   build:
     strategy:
