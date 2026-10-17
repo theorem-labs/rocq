@@ -25,14 +25,33 @@ README is `README.md`.
 ## Relationship to the previous history
 
 The changes were first developed as 74 commits on top of the base: 71
-changes and 3 merge commits. This branch regroups the same changes into
-eleven topical commits. The tree of the eleventh commit is byte-identical
-to the tree of the previous pinned revision, `b0adcb1504104884549a51972e6374601e84600e`
-(tree `3574f897d55ed7d4c1eb1793c02e0c2daba5e26a`). The final commit adds
-only this file. Building this branch produces exactly what the previous
-revision produced.
+changes and 3 merge commits. This branch regroups those changes into ten
+topical commits. It leaves out the commits that made up one change, the
+cumulativity change described below. The final commit adds only this
+file.
 
 Each commit message lists the original commits it regroups.
+
+### The dropped cumulativity change
+
+The previous pinned revision,
+`b0adcb1504104884549a51972e6374601e84600e`, carried one more change: a
+kernel change that lets cumulative sort-polymorphic inductives use
+`Prop <= Type` (a port of rocq-prover/rocq#21773, which was closed
+upstream without being merged). That change makes the logic
+inconsistent. With it, `False` is provable using only the axiom
+`classic`.
+
+This branch leaves that change out. It is the only difference between
+the two revisions: applying that one change to the last code commit of
+this branch gives exactly the tree of `b0adcb15`
+(tree `3574f897d55ed7d4c1eb1793c02e0c2daba5e26a`). Two smaller fixes
+were part of the same change and are also left out. They reported a bad
+sort quality variance as an error rather than an anomaly, and let the
+variance check unfold definitions.
+
+`b0adcb15` contains the unsound change. Do not use it. Use this branch
+instead.
 
 ## What each commit adds
 
@@ -47,12 +66,11 @@ been merged yet.
 | 3 | Backport kernel and vernacular fixes from Rocq 9.3 | #21531, #21774, #21779, #21825, #22164: in 9.3.0. Earlier or alternative versions of #22221, #21952, #22061, which are in 9.3.0 |
 | 4 | Ltac2: scheme lookup, `with_strategy`, and `in_context` helpers | #21658, #21881, #21762: in 9.3.0. `in_context` / `map_in_context` (#22060, #22062): closed upstream, not merged |
 | 5 | Unification: recheck casts after evar inversion (two flags, off by default) | #21740: open |
-| 6 | Kernel: cumulative sort-polymorphic inductives support `Prop <= Type` | #21773: closed upstream, not merged |
-| 7 | Kernel: faster module subtyping and module substitution | #22281: closed upstream, not merged. Substitution deferral: specific to this branch |
-| 8 | Printing: `Printing Sorts`, `Printing Reversible`, anonymous quality variables | #22155: open. #22283: merged for 9.4, not in 9.3.0. #22310: open |
-| 9 | `Require (safe)` | #22291: open, milestone 9.4 |
-| 10 | Report `check_eliminations` bypasses in `Print Assumptions` and `rocqchk` | #22294: open, milestone 9.4 |
-| 11 | `rocqchk` validation fixes | #22361, #22363, #22353: in 9.3.0. This branch carries an earlier revision of #22353 |
+| 6 | Kernel: faster module subtyping and module substitution | #22281: closed upstream, not merged. Substitution deferral: specific to this branch |
+| 7 | Printing: `Printing Sorts`, `Printing Reversible`, anonymous quality variables | #22155: open. #22283: merged for 9.4, not in 9.3.0. #22310: open |
+| 8 | `Require (safe)` | #22291: open, milestone 9.4 |
+| 9 | Report `check_eliminations` bypasses in `Print Assumptions` and `rocqchk` | #22294: open, milestone 9.4 |
+| 10 | `rocqchk` validation fixes | #22361, #22363, #22353: in 9.3.0. This branch carries an earlier revision of #22353 |
 
 All pull request numbers refer to <https://github.com/rocq-prover/rocq>.
 
@@ -78,28 +96,24 @@ All pull request numbers refer to <https://github.com/rocq-prover/rocq>.
    evar inversion were not checked (rocq-prover/rocq#21733). The fix is
    guarded by the flags `Unification Recheck Casts` and
    `Unification Full Retyping`, both off by default.
-6. **Sort cumulativity** for cumulative sort-polymorphic inductives, plus
-   two fixes: a bad sort quality variance is reported as an error rather
-   than an anomaly, and the variance check allows delta unfolding.
-   Upstream closed the original pull request without merging it.
-7. **Module performance.** Chains of `<+` over functor module types took
+6. **Module performance.** Chains of `<+` over functor module types took
    quadratic time (rocq-prover/rocq#22279). Module substitution
    composition is deferred, and `rocqchk` validates the persisted form.
-8. **Printing** options for output that can be read back in: sort
+7. **Printing** options for output that can be read back in: sort
    structure without internal level names, reversible printing that
    escalates printing options until the output reparses to an equal term,
    and `_` for unnamed sort quality variables.
-9. **`Require (safe)`** loads a library and its dependencies with only
+8. **`Require (safe)`** loads a library and its dependencies with only
    their kernel-level content and fully qualified names. No plugins,
    notations, hints or flag settings are replayed, so loading a library
    cannot change the state the loading document runs in beyond adding
    that content. Safe-loading
    propagates to the dependencies of libraries compiled with it.
    `Import` and `Export` are supported.
-10. **Assumption reporting.** Declarations whose sort elimination
-    constraints were not checked are now reported, both by
-    `Print Assumptions` and by `rocqchk`.
-11. **`rocqchk`.** It accepts the string primitives in VM data
+9. **Assumption reporting.** Declarations whose sort elimination
+   constraints were not checked are now reported, both by
+   `Print Assumptions` and by `rocqchk`.
+10. **`rocqchk`.** It accepts the string primitives in VM data
     validation, validates every library named on the command line
     regardless of argument order, and compiles VM bytecode itself instead
     of trusting the bytecode serialized in the `.vo` file.
