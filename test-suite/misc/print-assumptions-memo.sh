@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # ROCQ_DEBUG_ASSUMPTIONS_MEMO=1 reports each reuse of a Print Assumptions
 # traversal on standard error, and only there: standard output is the same
-# with the variable set or unset, Set Debug "all" included.
+# with the variable set or unset, Set Debug "all,-misc" included.
+#
+# Each file's expected list of reuses (<file>.err) pins which objects are
+# reused, so it also pins the cases the reuse leaves out:
+# - Debug.v: when the environment changes;
+# - Opaque.v: walks that meet a Qed body that cannot be read (-vok against
+#   Lib's .vos);
+# - Canon.v: entries recorded under another canonical name.
 
 set -e
 
@@ -10,11 +17,20 @@ export PATH=$BIN:$PATH
 cd misc/print-assumptions-memo
 rm -rf _test
 mkdir _test
-cp Debug.v Debug.err _test
+cp Debug.v Debug.err Lib.v Opaque.v Opaque.err Canon.v Canon.err _test
 cd _test
 
-rocq c -q Debug.v > plain.out 2> plain.err
-ROCQ_DEBUG_ASSUMPTIONS_MEMO=1 rocq c -q Debug.v > debug.out 2> debug.err
-diff -u --strip-trailing-cr Debug.err debug.err
-diff -u plain.out debug.out
-diff -u /dev/null plain.err
+rocq c -q -R . Memo -vos Lib.v
+
+check() {
+  local f=$1; shift
+  rocq c -q -R . Memo "$@" "$f.v" > "$f.plain.out" 2> "$f.plain.err"
+  ROCQ_DEBUG_ASSUMPTIONS_MEMO=1 rocq c -q -R . Memo "$@" "$f.v" > "$f.debug.out" 2> "$f.debug.err"
+  diff -u --strip-trailing-cr "$f.err" "$f.debug.err"
+  diff -u "$f.plain.out" "$f.debug.out"
+  diff -u /dev/null "$f.plain.err"
+}
+
+check Debug
+check Opaque -vok
+check Canon
