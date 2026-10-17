@@ -13,6 +13,12 @@
 #define _ROCQ_FIX_CODE_
 
 #include <caml/mlvalues.h>
+
+/* Scratch instrumentation (bytecode-VM lane profile, never shipped): -DROCQ_OPCOUNT builds the
+   interpreter switch-based, and it counts every dispatch by (previous opcode, opcode). */
+#ifdef ROCQ_OPCOUNT
+#undef THREADED_CODE
+#endif
 void * rocq_stat_alloc (asize_t sz);
 
 #ifdef THREADED_CODE

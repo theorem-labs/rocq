@@ -14,6 +14,7 @@
    for fast computation of bounded (31bits) integers */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <stdint.h>
 #include <math.h>
@@ -282,6 +283,22 @@ value rocq_subst_instance(value arg, value tosubst)
   return caml_callback2_exn(*closure_f, arg, tosubst);
 }
 
+#ifdef ROCQ_OPCOUNT
+static unsigned long long rocq_opcount[STOP + 1][STOP + 1];
+static int rocq_opprev = STOP;
+
+static void rocq_opcount_dump(void)
+{
+  const char *file = getenv("ROCQ_OPCOUNT_FILE");
+  FILE *f = file ? fopen(file, "w") : NULL;
+  if (f == NULL) return;
+  for (int i = 0; i <= STOP; i++)
+    for (int j = 0; j <= STOP; j++)
+      if (rocq_opcount[i][j]) fprintf(f, "%d %d %llu\n", i, j, rocq_opcount[i][j]);
+  fclose(f);
+}
+#endif
+
 /* The interpreter itself */
 
 value rocq_interprete
@@ -320,6 +337,9 @@ value rocq_interprete
 #ifdef THREADED_CODE
     rocq_init_thread_code(rocq_jumptable, rocq_Jumptbl_base);
 #endif
+#ifdef ROCQ_OPCOUNT
+    atexit(rocq_opcount_dump);
+#endif
     CAMLreturn(Val_unit);
   }
 #if defined(THREADED_CODE) && defined(ARCH_SIXTYFOUR) && !defined(ARCH_CODE32)
@@ -338,6 +358,10 @@ value rocq_interprete
 #else
   while(1) {
     curr_instr = *pc++;
+#ifdef ROCQ_OPCOUNT
+    rocq_opcount[rocq_opprev][curr_instr]++;
+    rocq_opprev = curr_instr;
+#endif
     switch(curr_instr) {
 #endif
 /* Basic stack operations */
