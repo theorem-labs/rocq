@@ -10,14 +10,20 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
-# The theorem-labs fork is built and run on Linux only (the BET grader image).
-# macOS and Windows fail identically on the fork's own base, for reasons that
-# never reach that image, so they are not part of this fork's matrix.
+# The theorem-labs fork is built and run on Linux only, in the BET grader
+# image, whose opam switch is OCaml 4.14 (flambda). The 4.14 entry covers that
+# compiler; the OCaml 5 entry keeps the fork building on current OCaml. macOS
+# and Windows are not targets of this fork and are not in the matrix.
 jobs:
   build:
     strategy:
       matrix:
         include:
+          - name: Linux (OCaml 4.14)
+            os: ubuntu-latest
+            ocaml: 4.14
+            test_disabled:
+            packages: ./coqide-server.opam ./rocq*.opam
           - name: Linux (latest OCaml)
             os: ubuntu-latest
             ocaml: 5
