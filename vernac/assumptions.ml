@@ -236,7 +236,11 @@ let fold_with_full_binders g f n acc c =
     sealed modules are looked up, see [lookup_module_in_impl]) and the
     opaque-proof accessor. Any difference clears every entry. *)
 
-let debug_memo = CDebug.create ~name:"assumptions-memo" ()
+(* ROCQ_DEBUG_ASSUMPTIONS_MEMO=1, read once at startup, reports each completed
+   replay on standard error. It is not a [CDebug] flag: [Set Debug "all"] sets
+   every one of those, and their messages go to the command's output, which
+   must stay stock's byte for byte. *)
+let debug_memo = Sys.getenv_opt "ROCQ_DEBUG_ASSUMPTIONS_MEMO" = Some "1"
 
 type memo_entry = {
   memo_obj : GlobRef.t;
@@ -313,7 +317,9 @@ let rec replay_into data0 obj data =
 let replay obj data =
   match replay_into data obj data with
   | data ->
-    debug_memo Pp.(fun () -> str "replayed " ++ GlobRef.print obj);
+    if debug_memo then
+      Printf.eprintf "[assumptions-memo] replayed %s\n%!"
+        (Pp.string_of_ppcmds (Pp.h (GlobRef.print obj)));
     Some data
   | exception Miss -> None
 

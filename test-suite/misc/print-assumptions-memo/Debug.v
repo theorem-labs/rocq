@@ -1,14 +1,12 @@
 (* Print Assumptions reuses traversals across queries in one environment.
-   The "assumptions-memo" debug flag reports each object whose traversal is
-   replayed from an earlier query, so this file checks that the global
-   environment stays physically the same across consecutive queries in
+   With ROCQ_DEBUG_ASSUMPTIONS_MEMO=1 each replay of an earlier query's
+   traversal is reported on standard error, so this file checks that the
+   global environment stays physically the same across consecutive queries in
    batch mode, and that replays happen only when it does. *)
 
 Axiom ax : nat.
 Definition f := ax.
 Definition g := f + 1.
-
-Set Debug "assumptions-memo".
 
 (* Nothing cached yet: no replay. *)
 Print Assumptions g.
@@ -32,3 +30,10 @@ Module M.
   Print Assumptions g.
   Print Assumptions g.
 End M.
+
+(* Set Debug "all" does not make the cache print anything on standard
+   output. Closing [M] changed the environment: the first query walks, the
+   second replays [g]. *)
+Set Debug "all,-vernacinterp,-misc".
+Print Assumptions g.
+Print Assumptions g.
