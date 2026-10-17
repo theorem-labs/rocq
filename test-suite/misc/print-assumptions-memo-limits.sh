@@ -46,8 +46,22 @@
 # profile cannot catch: frame sizes are checked on the object code (objdump),
 # not by this script.
 #
+# Memory kept between queries, with an 8 MiB stack and 1,000,000 KiB of
+# address space (ulimit -v 1000000):
+# - Retain192: 192 groups of 50 definitions with one 500-argument body
+#   F b0 ... b499, each group under a root G(g); G0 ... G191 are queried in
+#   turn, so the queries share only F and the b's.
+# - BlockRetain192: the same with groups of 50 inductives whose constructors
+#   take that body.
+# The walk without reuse drops each query's data before the next; the reuse
+# keeps entries, and clears them when they weigh more than four times the
+# heaviest query. Measured on the dev and the release profile, both files
+# need 760 to 860 MiB of address space without reuse, 790 to 860 MiB with the
+# bounded reuse, and 1,150 to 1,310 MiB with a cache that keeps every entry
+# until the environment changes, which runs out here.
+#
 # OCaml 5 ignores ulimit -s (it runs OCaml code on its own stack), and the
-# memory cap was measured on OCaml 4 only: the stack and memory cases are
+# memory caps were measured on OCaml 4 only: the stack and memory cases are
 # skipped there, rather than pass on files that cannot overflow.
 
 set -e
@@ -201,6 +215,48 @@ wide() {
   echo "Print Assumptions wide."
 }
 
+# Q groups of M definitions with one shared body, F b0 ... b(K-1), and a root
+# G(g) over its group's definitions; G0 ... G(Q-1) are queried in turn, so the
+# queries share only F and the b's.
+retain() {
+  local k=$1 m=$2 q=$3 g j args xs bs zeros
+  xs=$(seq -f 'x%g' 0 $((k - 1)) | tr '\n' ' ')
+  bs=$(seq -f 'b%g' 0 $((k - 1)) | tr '\n' ' ')
+  zeros=$(yes 0 | head -n $((k - m)) | tr '\n' ' ')
+  echo "Axiom ax : nat."
+  echo "Definition F (${xs}: nat) : nat := 0."
+  seq -f 'Definition b%g := ax.' 0 $((k - 1))
+  echo "Abbreviation BIG := (F ${bs% })."
+  for ((g = 0; g < q; g++)); do
+    args=""
+    for ((j = 0; j < m; j++)); do echo "Definition d${g}_$j := BIG."; args+="d${g}_$j "; done
+    echo "Definition G$g := F $args${zeros% }."
+  done
+  for ((g = 0; g < q; g++)); do echo "Print Assumptions G$g."; done
+}
+
+# The same with inductive blocks: group g holds M inductives whose
+# constructors take a BIG, and G(g) is their product.
+blockretain() {
+  local k=$1 m=$2 q=$3 g j xs bs prod
+  xs=$(seq -f 'x%g' 0 $((k - 1)) | tr '\n' ' ')
+  bs=$(seq -f 'b%g' 0 $((k - 1)) | tr '\n' ' ')
+  echo "Unset Elimination Schemes."
+  echo "Axiom ax : nat."
+  echo "Definition F (${xs}: nat) : Set := nat."
+  seq -f 'Definition b%g := ax.' 0 $((k - 1))
+  echo "Abbreviation BIG := (F ${bs% })."
+  for ((g = 0; g < q; g++)); do
+    prod=""
+    for ((j = 0; j < m; j++)); do
+      echo "Inductive I${g}_$j : Set := c${g}_$j : BIG -> I${g}_$j."
+      prod+="I${g}_$j * "
+    done
+    echo "Definition G$g := (${prod% \* })%type."
+  done
+  for ((g = 0; g < q; g++)); do echo "Print Assumptions G$g."; done
+}
+
 { chain 50000; echo "Print Assumptions x50000."; } > Chain50000.v
 { chain 72500; echo "Print Assumptions x72500."; } > Chain72500.v
 leaves=()
@@ -227,6 +283,14 @@ $axiom_a" ;;
 $closed" ;;
     *) want=$axiom_a ;;
   esac
+  expect "$f" "$out" "$want"
+done
+
+retain 500 50 192 > Retain192.v
+blockretain 500 50 192 > BlockRetain192.v
+want=$(for ((g = 0; g < 192; g++)); do echo "Axioms:"; echo "ax : nat"; done)
+for f in Retain192 BlockRetain192; do
+  out=$(ulimit -s 8192; ulimit -v 1000000; rocq c -q -R . P "$f.v" 2>&1) || true
   expect "$f" "$out" "$want"
 done
 exit $status

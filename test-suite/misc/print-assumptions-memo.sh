@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ROCQ_DEBUG_ASSUMPTIONS_MEMO=1 reports each reuse of a Print Assumptions
-# traversal on standard error, and only there: standard output is the same
-# with the variable set or unset, Set Debug "all,-misc" included.
+# traversal, and each clearing of the entries by the weight bound, on
+# standard error, and only there: standard output is the same with the
+# variable set or unset, Set Debug "all,-misc" included.
 #
 # Each file's expected list of reuses (<file>.err) pins which objects are
 # reused, so it also pins the cases the reuse leaves out:
@@ -11,7 +12,9 @@
 # - Canon.v: entries recorded under another canonical name;
 # - Thrash.v, ThrashBlock.v: an object, or an inductive block, whose user
 #   name already has an entry under another canonical name is not recorded,
-#   so the entry is not replaced.
+#   so the entry is not replaced;
+# - Bound.v: entries that weigh more than four times the heaviest query are
+#   cleared before the next query.
 
 set -e
 
@@ -20,7 +23,8 @@ export PATH=$BIN:$PATH
 cd misc/print-assumptions-memo
 rm -rf _test
 mkdir _test
-cp Debug.v Debug.err Lib.v Opaque.v Opaque.err Canon.v Canon.err Thrash.v Thrash.err ThrashBlock.v ThrashBlock.err _test
+cp Debug.v Debug.err Lib.v Opaque.v Opaque.err Canon.v Canon.err Thrash.v Thrash.err ThrashBlock.v ThrashBlock.err \
+  Bound.v Bound.err _test
 cd _test
 
 rocq c -q -R . Memo -vos Lib.v
@@ -39,3 +43,4 @@ check Opaque -vok
 check Canon
 check Thrash
 check ThrashBlock
+check Bound

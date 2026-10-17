@@ -225,9 +225,9 @@ let fold_with_full_binders g f n acc c =
     is a precaution that only costs reuse. A member of a mutual block is
     recorded only together with its whole block. An object is also recorded
     only once each of its edges has an entry, and only while no entry has its
-    user name ([fresh]). Entries are never replaced, so every edge of every
-    entry keeps an entry until the environment changes, and a replay can miss
-    only at the object it starts from.
+    user name ([user_name_unrecorded]). Entries are never replaced, so every
+    edge of every entry keeps an entry until the entries are cleared, and a
+    replay can miss only at the object it starts from.
 
     Replaying [o] writes [o]'s value into the query's [data], then replays
     each edge, stopping at objects already in [data] as the walk does. A
@@ -243,23 +243,46 @@ let fold_with_full_binders g f n acc c =
     Entries hold for one environment, compared by physical equality of
     [Global.env ()], plus the current module path (it decides how constants of
     sealed modules are looked up, see [lookup_module_in_impl]) and the
-    opaque-proof accessor. Any difference clears every entry. *)
+    opaque-proof accessor. Any difference clears every entry.
+
+    The entries are also cleared, at the start of a query, when they weigh
+    more than [memo_factor] times the heaviest query so far in the
+    environment. An entry weighs one plus the size of its edge set, and a
+    block's edge set, which all its members share, counts once. A query weighs
+    the entries it records plus the entries it replays, counted the same way:
+    about the size of the [data] it builds. So when a query starts, the
+    entries weigh at most [memo_factor] times the heaviest earlier query, and
+    during the query they grow by at most its own weight. Clearing is always
+    sound: it only costs reuse. *)
 
 (* ROCQ_DEBUG_ASSUMPTIONS_MEMO=1, read once at startup, reports each completed
-   replay on standard error. It is not a [CDebug] flag: [Set Debug "all"] sets
-   every one of those, and their messages go to the command's output, which
-   must not change. *)
+   replay, and each clearing of the entries by the weight bound, on standard
+   error. It is not a [CDebug] flag: [Set Debug "all"] sets every one of
+   those, and their messages go to the command's output, which must not
+   change. *)
 let debug_memo = Sys.getenv_opt "ROCQ_DEBUG_ASSUMPTIONS_MEMO" = Some "1"
 
 type memo_entry = {
   memo_obj : GlobRef.t;
   memo_value : GlobRef.Set_env.t option;
   memo_edges : GlobRef.Set_env.t;
+  memo_size : int;  (** cardinal of [memo_edges] *)
 }
 
 let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref = ref None
 
 let memo_entries = ref (GlobRef.Map_env.empty : memo_entry GlobRef.Map_env.t)
+
+let memo_factor = 4
+
+(** The weight of [memo_entries], of the heaviest query in the environment
+    before the current one, and of the current query (see the invariant).
+    Weights are added before the entries they count, and the entries are
+    cleared before their weight, so an interrupted update can only overstate
+    the weight. *)
+let memo_weight = ref 0
+let memo_heaviest = ref 0
+let query_weight = ref 0
 
 (** Counts the traversal steps an entry cannot reproduce: an empty-match
     context recorded in [ax2ty], and an opaque body that cannot be forced (see
@@ -278,10 +301,20 @@ let sync_memo access =
   let env = Global.env () in
   let mp = Global.current_modpath () in
   match !memo_key with
-  | Some (env', mp', access') when env' == env && ModPath.equal mp' mp && access' == access -> ()
+  | Some (env', mp', access') when env' == env && ModPath.equal mp' mp && access' == access ->
+    memo_heaviest := max !memo_heaviest !query_weight;
+    query_weight := 0;
+    if !memo_weight > memo_factor * !memo_heaviest then begin
+      memo_entries := GlobRef.Map_env.empty;
+      memo_weight := 0;
+      if debug_memo then Printf.eprintf "[assumptions-memo] cleared\n%!"
+    end
   | _ ->
-    memo_key := Some (env, mp, access);
-    memo_entries := GlobRef.Map_env.empty
+    memo_entries := GlobRef.Map_env.empty;
+    memo_weight := 0;
+    memo_heaviest := 0;
+    query_weight := 0;
+    memo_key := Some (env, mp, access)
 
 (* [Map_env] compares user names only: the entry is [obj]'s when the
    canonical names agree too, since the value the walk gives a constant with
@@ -290,7 +323,8 @@ let sync_memo access =
    [Include] do reach objects whose canonical names differ under one user
    name, but no input is known where an entry under the other canonical name
    would change the output, so the check is a precaution. It only costs
-   reuse: the other canonical name is walked, and is not recorded ([fresh]). *)
+   reuse: the other canonical name is walked, and is not recorded
+   ([user_name_unrecorded]). *)
 let find_entry obj =
   match GlobRef.Map_env.find_opt obj !memo_entries with
   | Some e when GlobRef.CanOrd.equal e.memo_obj obj -> Some e
@@ -303,16 +337,24 @@ let has_entry obj = Option.has_some (find_entry obj)
    changes (see the invariant). Replacing the entry would leave the entries
    that reach it without an entry for that edge; each replay through them
    would go down to it and miss, and the walk that follows would replay every
-   level below again, quadratic in the depth of a chain. *)
-let fresh obj = not (GlobRef.Map_env.mem obj !memo_entries)
+   level below again, quadratic in the depth of a chain. Unlike [has_entry],
+   this compares user names only. *)
+let user_name_unrecorded obj = not (GlobRef.Map_env.mem obj !memo_entries)
 
 (* Inlined into [walk_object]: the call would add a frame at the bottom of the
    deepest walk, under [Map_env.add], and so shorten the longest chain that
    fits in the stack. *)
 let[@inline always] add_entry value edges obj =
-  let e = { memo_obj = obj; memo_value = value; memo_edges = edges } in
+  let size = GlobRef.Set_env.cardinal edges in
+  memo_weight := !memo_weight + 1 + size;
+  query_weight := !query_weight + 1 + size;
+  let e = { memo_obj = obj; memo_value = value; memo_edges = edges; memo_size = size } in
   memo_entries := GlobRef.Map_env.add obj e !memo_entries
 
+(* The members are added to a new map, which is assigned once: a block
+   recorded in part (a [Timeout] or an interrupt during the loop) would keep
+   its other members from ever being recorded ([user_name_unrecorded]), and
+   every replay that reaches one of them would miss deep in the graph. *)
 let record_block mind mib contents =
   let members = Array.fold_left_i (fun n members oib ->
       let ind = (mind, n) in
@@ -322,11 +364,23 @@ let record_block mind mib contents =
       GlobRef.Set_env.empty mib.mind_packets
   in
   let cached r = GlobRef.Set_env.mem r members || has_entry r in
-  if GlobRef.Set_env.for_all fresh members && GlobRef.Set_env.for_all cached contents then
+  if GlobRef.Set_env.for_all user_name_unrecorded members
+     && GlobRef.Set_env.for_all cached contents then
     let edges = GlobRef.Set_env.union contents members in
-    GlobRef.Set_env.iter (add_entry (Some contents) edges) members
+    let size = GlobRef.Set_env.cardinal edges in
+    let weight = GlobRef.Set_env.cardinal members + size in
+    memo_weight := !memo_weight + weight;
+    query_weight := !query_weight + weight;
+    memo_entries := GlobRef.Set_env.fold (fun obj entries ->
+        let e = { memo_obj = obj; memo_value = Some contents; memo_edges = edges; memo_size = size } in
+        GlobRef.Map_env.add obj e entries) members !memo_entries
 
 exception Miss
+
+(** The weight of the replay in progress, counted as in [record_block]. A
+    global rather than an argument of [loop], so that the replay at the bottom
+    of the deepest walk takes no more stack. *)
+let replay_weight = ref 0
 
 (* [data0] is the query's [data] before the replay. An object in it is
    skipped, as the walk skips it. Every other object reached needs an entry
@@ -355,6 +409,7 @@ let replay_into data0 obj data =
       | Some e ->
         if GlobRef.Map_env.mem obj data then loop pushed data todo
         else
+          let () = incr replay_weight in
           let data = GlobRef.Map_env.add obj e.memo_value data in
           let block = match obj with
             | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> Some mind
@@ -367,6 +422,7 @@ let replay_into data0 obj data =
               | Some mind -> Mindmap_env.Set.add mind pushed
               | None -> pushed
             in
+            let () = replay_weight := !replay_weight + e.memo_size in
             let todo = GlobRef.Set_env.fold (fun r todo -> r :: todo) e.memo_edges todo in
             loop pushed data todo
   in
@@ -377,8 +433,10 @@ let replay_into data0 obj data =
     objects already in [data], with the values the walk would add; [None]
     otherwise. *)
 let replay obj data =
+  let () = replay_weight := 0 in
   match replay_into data obj data with
   | data ->
+    query_weight := !query_weight + !replay_weight;
     if debug_memo then
       Printf.eprintf "[assumptions-memo] replayed %s\n%!"
         (Pp.string_of_ppcmds (Pp.h (GlobRef.print obj)));
@@ -482,7 +540,7 @@ and walk_object access curr data ax2ty body obj =
       Some contents, contents, GlobRef.Map_env.add obj (Some contents) data, ax2ty
   in
   let () =
-    if Int.equal mark !unreplayable_steps && fresh obj
+    if Int.equal mark !unreplayable_steps && user_name_unrecorded obj
        && GlobRef.Set_env.for_all has_entry edges
     then add_entry value edges obj
   in
