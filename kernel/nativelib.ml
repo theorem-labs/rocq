@@ -100,6 +100,14 @@ let write_ml_code fn ?(header=[]) code =
   output_string ch_out text;
   close_out ch_out
 
+(* Write already-rendered source bytes (as returned by [render_ml_code])
+   directly, without re-running the pretty-printer: used by [compile] so the
+   bytes it hashes for the cache are exactly the bytes it writes to disk. *)
+let write_text_file fn text =
+  let ch_out = open_out fn in
+  output_string ch_out text;
+  close_out ch_out
+
 let error_native_compiler_failed e =
   let msg = match e with
   | Inl (Unix.WEXITED 127) -> Pp.(strbrk "The OCaml compiler was not found. Make sure it is installed, together with findlib.")
@@ -178,7 +186,7 @@ let compile fn code ~profile:profile =
           match via_cache () with
           | Some r -> r (* another worker published while we waited for the lock *)
           | None ->
-            write_ml_code fn text;
+            write_text_file fn text;
             let r = Checkstats.time Checkstats.native_ocamlopt (fun () -> call_compiler ~profile fn) in
             Nativecache.publish ~include_dirs:!include_dirs text ~compiled_file:r;
             r)
