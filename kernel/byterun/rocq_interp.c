@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <signal.h>
 #include <stdint.h>
+#include <limits.h>
 #include <math.h>
 
 #define CAML_INTERNALS
@@ -23,6 +24,178 @@
 #include <caml/signals.h>
 #include <caml/version.h>
 #include <caml/callback.h>
+#include <caml/fail.h>
+#include <caml/gc.h>
+#define ROCQ_FASTBIN_MAX 16384
+
+struct rocq_fastbin_entry {
+  value closure;
+  int op;
+  int arity;
+};
+
+static struct rocq_fastbin_entry rocq_fastbins[ROCQ_FASTBIN_MAX];
+static int rocq_fastbin_len = 0;
+static int rocq_fastbin_compare_pos(value x, value y, int depth, int *out)
+{
+  int bx, by, cx, cy;
+  value nx, ny;
+  if (depth == 4096) return 0;
+  if (!Is_block(x)) {
+    if (Long_val(x) != 0) return 0;
+    bx = -1; nx = Val_unit;
+  } else if (Wosize_val(x) == 1 && (Tag_val(x) == 1 || Tag_val(x) == 2)) {
+    bx = Tag_val(x) == 1; nx = Field(x, 0);
+  } else return 0;
+  if (!Is_block(y)) {
+    if (Long_val(y) != 0) return 0;
+    by = -1; ny = Val_unit;
+  } else if (Wosize_val(y) == 1 && (Tag_val(y) == 1 || Tag_val(y) == 2)) {
+    by = Tag_val(y) == 1; ny = Field(y, 0);
+  } else return 0;
+  if (bx == -1 && by == -1) { *out = 0; return 1; }
+  if (bx == -1) { *out = -1; return 1; }
+  if (by == -1) { *out = 1; return 1; }
+  if (!rocq_fastbin_compare_pos(nx, ny, depth + 1, out)) return 0;
+  if (*out == 0) *out = bx == by ? 0 : (bx ? 1 : -1);
+  return 1;
+}
+
+static int rocq_fastbin_decode_z(value x, value *mag, int *sign)
+{
+  if (!Is_block(x)) {
+    if (Long_val(x) != 0) return 0;
+    *sign = 0; *mag = Val_unit; return 1;
+  }
+  if (Wosize_val(x) != 1 || (Tag_val(x) != 1 && Tag_val(x) != 2)) return 0;
+  *sign = Tag_val(x) == 1 ? 1 : -1;
+  *mag = Field(x, 0);
+  return 1;
+}
+
+static int rocq_fastbin_nat_count(value x, int *out)
+{
+  int n = 0;
+  while (Is_block(x)) {
+    if (n == INT_MAX || Wosize_val(x) != 1 || Tag_val(x) != 1) return 0;
+    x = Field(x, 0); n++;
+  }
+  if (Long_val(x) != 0) return 0;
+  *out = n; return 1;
+}
+
+static int rocq_fastbin_eval(int op, value *sp, value *out)
+{
+  int c, sx, sy, nx, ny;
+  value x, y, r, mx, my;
+  switch (op) {
+  case 0: /* Pos.compare_cont r x y */
+    r = sp[2]; x = sp[1]; y = sp[0];
+    if (!rocq_fastbin_compare_pos(x, y, 0, &c)) return 0;
+    *out = c == 0 ? r : Val_int(c < 0 ? 1 : 2);
+    return 1;
+  case 1: /* Pos.eqb x y */
+    if (!rocq_fastbin_compare_pos(sp[1], sp[0], 0, &c)) return 0;
+    *out = Val_int(c == 0 ? 0 : 1);
+    return 1;
+  case 6: /* Z.compare x y */
+  case 7: /* Z.eqb x y */
+  case 8: /* Z.leb x y */
+  case 9: /* Z.ltb x y */
+    if (!rocq_fastbin_decode_z(sp[1], &mx, &sx)
+        || !rocq_fastbin_decode_z(sp[0], &my, &sy)) return 0;
+    if (sx != sy) c = sx < sy ? -1 : 1;
+    else if (sx == 0) c = 0;
+    else {
+      if (!rocq_fastbin_compare_pos(mx, my, 0, &c)) return 0;
+      if (sx < 0) c = -c;
+    }
+    if (op == 6) *out = Val_int(c < 0 ? 1 : c > 0 ? 2 : 0);
+    else if (op == 7) *out = Val_int(c == 0 ? 0 : 1);
+    else if (op == 8) *out = Val_int(c <= 0 ? 0 : 1);
+    else *out = Val_int(c < 0 ? 0 : 1);
+    return 1;
+  case 10: /* Nat.eqb x y */
+  case 11: /* Nat.leb x y */
+    if (!rocq_fastbin_nat_count(sp[1], &nx)
+        || !rocq_fastbin_nat_count(sp[0], &ny)) return 0;
+    *out = Val_int(op == 10 ? (nx == ny ? 0 : 1) : (nx <= ny ? 0 : 1));
+    return 1;
+  default:
+    return 0;
+  }
+}
+static unsigned long long rocq_fastbin_hits = 0;
+static unsigned long long rocq_fastbin_fallbacks = 0;
+static int rocq_fastbin_stats = 0;
+
+static int rocq_fastbin_find(value closure, int *op, int *arity)
+{
+  int i;
+  for (i = 0; i < rocq_fastbin_len; i++) {
+    if (rocq_fastbins[i].closure == closure) {
+      *op = rocq_fastbins[i].op;
+      *arity = rocq_fastbins[i].arity;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void rocq_fastbin_dump(void)
+{
+  if (rocq_fastbin_stats)
+    fprintf(stderr, "FASTBIN hits=%llu fallbacks=%llu registered=%d\n",
+      rocq_fastbin_hits, rocq_fastbin_fallbacks, rocq_fastbin_len);
+}
+
+value rocq_vmfast_register(value closure, value op, value arity)
+{
+  int i;
+  if (rocq_fastbin_len == ROCQ_FASTBIN_MAX)
+    caml_failwith("Rocq VM fastbin registry is full");
+  for (i = 0; i < rocq_fastbin_len; i++)
+    if (rocq_fastbins[i].closure == closure) return Val_unit;
+  rocq_fastbins[rocq_fastbin_len].closure = closure;
+  caml_register_global_root(&rocq_fastbins[rocq_fastbin_len].closure);
+  rocq_fastbins[rocq_fastbin_len].op = Int_val(op);
+  rocq_fastbins[rocq_fastbin_len].arity = Int_val(arity);
+  rocq_fastbin_len++;
+  return Val_unit;
+}
+
+#define Rocq_fastbin_try() do {                                                \
+  int rocq_fastbin_op__, rocq_fastbin_arity__;                                 \
+  value rocq_fastbin_out__;                                                    \
+  if (rocq_fastbin_find(rocq_env, &rocq_fastbin_op__, &rocq_fastbin_arity__)   \
+      && rocq_extra_args + 1 == rocq_fastbin_arity__) {                        \
+    if (getenv("ROCQ_VM_FASTBIN_TRACE") != NULL)                              \
+      fprintf(stderr, "FASTBIN try op=%d arity=%d extra=%ld\n",                \
+        rocq_fastbin_op__, rocq_fastbin_arity__, rocq_extra_args);             \
+    if (rocq_fastbin_eval(rocq_fastbin_op__, sp, &rocq_fastbin_out__)) {       \
+      if (getenv("ROCQ_VM_FASTBIN_TRACE") != NULL)                             \
+        fprintf(stderr, "FASTBIN success op=%d\n", rocq_fastbin_op__);         \
+      accu = rocq_fastbin_out__;                                               \
+      rocq_fastbin_hits++;                                                     \
+      rocq_extra_args -= rocq_fastbin_arity__ - 1;                             \
+      sp += rocq_fastbin_arity__;                                              \
+      if (rocq_extra_args > 0) {                                               \
+        rocq_extra_args--;                                                     \
+        pc = Code_val(accu);                                                   \
+        rocq_env = accu;                                                       \
+        goto check_stack;                                                      \
+      } else {                                                                 \
+        pc = LoadRA(sp[0]);                                                    \
+        rocq_env = sp[1];                                                      \
+        rocq_extra_args = Long_val(sp[2]);                                     \
+        sp += 3;                                                               \
+        Next;                                                                  \
+      }                                                                        \
+    } else {                                                                   \
+      rocq_fastbin_fallbacks++;                                                \
+    }                                                                          \
+  }                                                                            \
+} while (0)
 
 #include "rocq_instruct.h"
 #include "rocq_fix_code.h"
@@ -289,6 +462,7 @@ value rocq_interprete
 {
   /* rocq_accu is not allocated on the OCaml heap */
   CAMLparam2(rocq_atom_tbl, rocq_global_data);
+  int rocq_fastbin_call = 0;
 
   /*Declaration des variables */
 #ifdef PC_REG
@@ -320,6 +494,8 @@ value rocq_interprete
 #ifdef THREADED_CODE
     rocq_init_thread_code(rocq_jumptable, rocq_Jumptbl_base);
 #endif
+    rocq_fastbin_stats = getenv("ROCQ_VM_FASTBIN_STATS") != NULL;
+    if (rocq_fastbin_stats) atexit(rocq_fastbin_dump);
     CAMLreturn(Val_unit);
   }
 #if defined(THREADED_CODE) && defined(ARCH_SIXTYFOUR) && !defined(ARCH_CODE32)
@@ -523,6 +699,7 @@ value rocq_interprete
         rocq_extra_args = *pc - 1;
         pc = Code_val(accu);
         rocq_env = accu;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
       Instruct(APPLY1) {
@@ -542,6 +719,7 @@ value rocq_interprete
         pc = Code_val(accu);
         rocq_env = accu;
         rocq_extra_args = 0;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
 
@@ -561,6 +739,7 @@ value rocq_interprete
         pc = Code_val(accu);
         rocq_env = accu;
         rocq_extra_args = 1;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
 
@@ -583,6 +762,7 @@ value rocq_interprete
         pc = Code_val(accu);
         rocq_env = accu;
         rocq_extra_args = 2;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
 
@@ -603,6 +783,7 @@ value rocq_interprete
         pc = Code_val(accu);
         rocq_env = accu;
         rocq_extra_args = 3;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
 
@@ -640,6 +821,8 @@ value rocq_interprete
         }
       }
 #endif
+      if (rocq_fastbin_call) Rocq_fastbin_try();
+      rocq_fastbin_call = 0;
       Next;
 
       Instruct(ENSURESTACKCAPACITY) {
@@ -666,6 +849,7 @@ value rocq_interprete
         pc = Code_val(accu);
         rocq_env = accu;
         rocq_extra_args += nargs - 1;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
       Instruct(APPTERM1) {
@@ -675,6 +859,7 @@ value rocq_interprete
         sp[0] = arg1;
         pc = Code_val(accu);
         rocq_env = accu;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
       Instruct(APPTERM2) {
@@ -687,6 +872,7 @@ value rocq_interprete
         pc = Code_val(accu);
         rocq_env = accu;
         rocq_extra_args += 1;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
       Instruct(APPTERM3) {
@@ -701,6 +887,7 @@ value rocq_interprete
         pc = Code_val(accu);
         rocq_env = accu;
         rocq_extra_args += 2;
+        rocq_fastbin_call = 1;
         goto check_stack;
       }
 

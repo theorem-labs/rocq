@@ -41,6 +41,7 @@ let rec compile_structure env vmtab mp res struc =
   let fold (env, vmtab, accu) (lab, sfb) = match sfb with
   | SFBconst cb ->
     let c = Mod_subst.constant_of_delta_kn res (KerName.make mp lab) in
+    Vmfastbin.capture_reference c cb.const_body;
     let vmtab, cb = compile_constant_bytecode env vmtab cb in
     Environ.add_constant c cb env, vmtab, (lab, SFBconst cb) :: accu
   | SFBmind mib ->
