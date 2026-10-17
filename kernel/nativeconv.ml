@@ -176,19 +176,23 @@ let warn_no_native_compiler =
 let native_conv_gen (type err) pb sigma env (state, check) t1 t2 =
   Nativelib.link_libraries ();
   let ml_filename, prefix = Nativelib.get_ml_filename () in
-  let code, symbols, upds = mk_conv_code env sigma prefix t1 t2 in
+  let code, symbols, upds =
+    Checkstats.time Checkstats.native_codegen (fun () -> mk_conv_code env sigma prefix t1 t2)
+  in
   let fn = Nativelib.compile ml_filename code ~profile:false in
   debug_native_compiler (fun () -> Pp.str "Running test...");
   let t0 = Sys.time () in
-  let (rt1, rt2) = Nativelib.execute_library ~prefix fn symbols upds in
+  let (rt1, rt2) =
+    Checkstats.time Checkstats.native_load_run (fun () -> Nativelib.execute_library ~prefix fn symbols upds)
+  in
   let rt1 = Option.get rt1 and rt2 = Option.get rt2 in
-  let t1 = Sys.time () in
-  let time_info = Format.sprintf "Evaluation done in %.5f@." (t1 -. t0) in
+  let t1' = Sys.time () in
+  let time_info = Format.sprintf "Evaluation done in %.5f@." (t1' -. t0) in
   debug_native_compiler (fun () -> Pp.str time_info);
   (* TODO change 0 when we can have de Bruijn *)
   let exception Error of err in
   let box = { fail = fun e -> raise (Error e) } in
-  try Result.Ok (pi1 (conv_val env pb 0 rt1 rt2 (state, check, box)))
+  try Result.Ok (pi1 (Checkstats.time Checkstats.native_compare (fun () -> conv_val env pb 0 rt1 rt2 (state, check, box))))
   with
   | NotConvertible -> Result.Error None
   | Error e -> Result.Error (Some e)

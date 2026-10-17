@@ -21,6 +21,9 @@
  (package rocq-runtime)
  (modules rocqchk)
  (flags :standard -open Coq_checklib)
+ ; BET #867/BET-29: native-conversion code Dynlinks a .cmxs that references
+ ; kernel units not otherwise referenced by this executable.
+ (link_flags -linkall)
  (libraries coq_checklib))
 
 (executable
@@ -30,6 +33,7 @@
  (package coq-core)
  (modules coqchk)
  (flags :standard -open Coq_checklib)
+ (link_flags -linkall)
  (libraries coq_checklib))
 
 (executable

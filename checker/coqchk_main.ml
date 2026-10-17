@@ -161,7 +161,25 @@ let make_senv () =
   let senv = Safe_typing.set_indices_matter !indices_matter senv in
   let senv = Safe_typing.set_VM !enable_vm senv in
   let senv = Safe_typing.set_allow_sprop true senv in (* be smarter later *)
-  Safe_typing.set_native_compiler false senv
+  (* BET #867/BET-29: when native conversion is enabled in the checker
+     (either deciding VM casts natively, or the debug falsifier that
+     decides them both ways), the generated code is compiled against
+     ROCQCHK_NATIVE_INCLUDE (colon-separated: this build's own kernel
+     native .cmi/.cmx directories) and nothing is pre-loaded from a
+     [.coq-native] directory -- every constant the native conversion
+     reaches is compiled on demand (or fetched from ROCQCHK_NATIVE_CACHE)
+     and reused for the rest of this process by Rocq's existing
+     already-linked tracking. *)
+  if Checkstats.native_enabled then begin
+    (match Sys.getenv_opt "ROCQCHK_NATIVE_INCLUDE" with
+     | Some dirs -> Nativelib.include_dirs := String.split_on_char ':' dirs
+     | None ->
+       CErrors.user_err
+         Pp.(str "ROCQCHK_NATIVE_CONV/ROCQCHK_NATIVE_DEBUG_DUAL requires ROCQCHK_NATIVE_INCLUDE \
+                  (colon-separated kernel native .cmi/.cmx directories)."));
+    Nativelib.get_load_paths := (fun () -> [])
+  end;
+  Safe_typing.set_native_compiler Checkstats.native_enabled senv
 
 let admit_list = ref ([] : CheckLibrary.object_file list)
 let add_admit s =
