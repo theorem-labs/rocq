@@ -413,7 +413,7 @@ let group_closure (t : closure_table) : (DirPath.t * Digest.t) list Id.Map.t =
     of kind, by design -- see that constant's own doc comment) makes the
     borrowed digest-equality half of the check trivially satisfied, so
     folding introduces no spurious content-mismatch false positive. *)
-let closure_subset_ok ?self_dp ~recorded ~live =
+let closure_subset_ok ~self_dp ~recorded ~live =
   let rec_grouped = group_closure recorded in
   let live_grouped = group_closure live in
   (* binary-equivalence-taiga#841 round 15 (Main/reviewer, sf1/sf2/sf6):
@@ -533,7 +533,7 @@ let require_order_ok ~recorded ~live =
   Array.length recorded = Array.length live
   && Array.for_all2 DirPath.equal recorded live
 
-let dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
+let dep_ok ~self_dp ~actual ~required ~actual_iface ~required_iface
     ~actual_objects_digest ~required_objects_digest
     ~actual_univs_digest ~required_univs_digest
     ~actual_vernac_iface ~required_vernac_iface
@@ -547,7 +547,7 @@ let dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
    Digest.equal required_objects_digest actual_objects_digest &&
    Digest.equal required_univs_digest actual_univs_digest &&
    iface_subset_ok_vernac ~recorded:required_vernac_iface ~live:actual_vernac_iface &&
-   closure_subset_ok ?self_dp ~recorded:required_closure_names ~live:actual_closure_names &&
+   closure_subset_ok ~self_dp ~recorded:required_closure_names ~live:actual_closure_names &&
    Digest.equal required_closure_none_digest actual_closure_none_digest &&
    require_order_ok ~recorded:required_require_order ~live:actual_require_order)
 
@@ -1374,7 +1374,7 @@ let check_required ?self_dp current_libs needed =
         reachable_dps []
     in
     let actual_closure_names, _ = flatten_closure scoped_live_list in
-    if not (dep_ok ?self_dp ~actual ~required ~actual_iface ~required_iface
+    if not (dep_ok ~self_dp ~actual ~required ~actual_iface ~required_iface
               ~actual_objects_digest ~required_objects_digest
               ~actual_univs_digest ~required_univs_digest
               ~actual_vernac_iface ~required_vernac_iface
@@ -2909,7 +2909,7 @@ let export ~output_native_objects ~objects_digest ~exported_dirs ~alias_digest ~
      block for the full-closure field without touching [compute_modes] at
      all (binary-equivalence-taiga#841 "D1"). *)
   let filter_dep (dp, { req_root; req_digest; req_iface; req_objects_digest;
-                         req_univs_digest; req_vernac_iface; req_require_order }) =
+                         req_univs_digest; req_vernac_iface; req_require_order; _ }) =
     if req_root then Some (dp, req_digest, req_iface, req_objects_digest,
                             req_univs_digest, req_vernac_iface,
                             comp_closure_names, comp_closure_none_digest,

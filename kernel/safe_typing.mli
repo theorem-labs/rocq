@@ -45,9 +45,9 @@ val iface_subset_ok : recorded:iface_table -> live:iface_table -> bool
 type closure_table = (DirPath.t * Id.t * Digest.t) array
 val flatten_closure :
   (DirPath.t * vodigest * iface_table option) list -> closure_table * Digest.t
-val closure_subset_ok : ?self_dp:DirPath.t -> recorded:closure_table -> live:closure_table -> bool
+val closure_subset_ok : self_dp:DirPath.t option -> recorded:closure_table -> live:closure_table -> bool
 val dep_ok :
-  ?self_dp:DirPath.t ->
+  self_dp:DirPath.t option ->
   actual:vodigest -> required:vodigest ->
   actual_iface:iface_table option -> required_iface:iface_table option ->
   actual_objects_digest:Digest.t -> required_objects_digest:Digest.t ->
