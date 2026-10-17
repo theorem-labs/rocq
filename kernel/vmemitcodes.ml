@@ -261,8 +261,10 @@ let patch_int tp reloc =
 let patch (tp, pl) f =
   let f r = f (Reloc.to_reloc tp.tp_reloc r) in
   let reloc = CArray.map_left f pl.reloc_infos in
+  Vmstat.time Vmstat.link (fun () ->
   let buff = patch_int tp reloc in
-  tcode_of_code buff, tp.tp_fv
+  Vmstat.last_code_len := Bytes.length buff;
+  tcode_of_code buff, tp.tp_fv)
 
 (* Buffering of bytecode *)
 

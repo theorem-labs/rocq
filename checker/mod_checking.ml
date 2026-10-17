@@ -41,7 +41,8 @@ let rec compile_structure env vmtab mp res struc =
   let fold (env, vmtab, accu) (lab, sfb) = match sfb with
   | SFBconst cb ->
     let c = Mod_subst.constant_of_delta_kn res (KerName.make mp lab) in
-    let vmtab, cb = compile_constant_bytecode env vmtab cb in
+    Vmstat.note_compiled (Constant.to_string (Constant.make1 (Constant.canonical c)));
+    let vmtab, cb = Vmstat.time Vmstat.import_compile (fun () -> compile_constant_bytecode env vmtab cb) in
     Environ.add_constant c cb env, vmtab, (lab, SFBconst cb) :: accu
   | SFBmind mib ->
     let mind = Mod_subst.mind_of_delta_kn res (KerName.make mp lab) in
@@ -156,6 +157,7 @@ let check_constant_declaration env opac kn cb opacify =
   | Some _ | None -> opac
 
 let check_constant_declaration env opac kn cb opacify =
+  Vmstat.current := Constant.to_string kn;
   let opac = NewProfile.profile "check_constant" ~args:(fun () ->
       [("name", `String (Constant.to_string kn))])
       (fun () -> check_constant_declaration env opac kn cb opacify)

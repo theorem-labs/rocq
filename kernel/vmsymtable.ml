@@ -280,7 +280,8 @@ let rec slot_for_getglobal env sigma kn envcache table =
     | BCdefined (_, index, patches) ->
       let code = index () in
       let code = (code, patches) in
-      let v = eval_to_patch env sigma code envcache table in
+      Vmstat.note_linked (Constant.to_string (Constant.make1 (Constant.canonical kn)));
+      let v = eval_to_patch ~kind:"const" ~label:(lazy (Constant.to_string kn)) env sigma code envcache table in
       set_global v table
     | BCalias kn' -> slot_for_getglobal env sigma kn' envcache table
     | BCconstant -> set_global (val_of_constant kn) table
@@ -314,7 +315,7 @@ and slot_for_fv env sigma fv envcache table =
       | Some v -> v
       end
 
-and eval_to_patch env sigma code envcache table =
+and eval_to_patch ~kind ~label env sigma code envcache table =
   let slots = function
     | Reloc_annot a -> slot_for_annot a table
     | Reloc_const sc -> slot_for_str_cst sc table
@@ -322,6 +323,7 @@ and eval_to_patch env sigma code envcache table =
     | Reloc_caml_prim op -> slot_for_caml_prim op table
   in
   let tc, fv = patch code slots in
+  Vmstat.note_code tc kind label;
   let vm_env =
     (* Environment should look like a closure, so free variables start at slot 2. *)
     let a = Array.make (Array.length fv + 2) crazy_val in
@@ -334,12 +336,13 @@ and eval_to_patch env sigma code envcache table =
     a
   in
   let global = get_global_data !table in
-  let v = rocq_interprete tc crazy_val (get_atom_rel ()) global (inj_env vm_env) 0 in
+  let acc = if kind = "const" then Vmstat.interp_const else Vmstat.interp_term in
+  let v = Vmstat.time acc (fun () -> rocq_interprete tc crazy_val (get_atom_rel ()) global (inj_env vm_env) 0) in
   v
 
 and val_of_constr env sigma c envcache table =
-  match compile ~fail_on_error:true env sigma c with
-  | Some (_, code, patch) -> eval_to_patch env sigma (code, patch) envcache table
+  match Vmstat.time Vmstat.term_compile (fun () -> compile ~fail_on_error:true env sigma c) with
+  | Some (_, code, patch) -> eval_to_patch ~kind:"term" ~label:(lazy !Vmstat.current) env sigma (code, patch) envcache table
   | None -> assert false
 
 let global_table =
@@ -363,4 +366,5 @@ let val_of_constr env sigma c =
   v
 
 let vm_interp code v env k =
-  rocq_interprete code v (get_atom_rel ()) (get_global_data !global_table) env k
+  Vmstat.time Vmstat.interp_readback (fun () ->
+  rocq_interprete code v (get_atom_rel ()) (get_global_data !global_table) env k)

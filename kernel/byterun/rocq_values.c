@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <caml/config.h>
 #include <caml/memory.h>
+#include <caml/alloc.h>
 #include "rocq_fix_code.h"
 #include "rocq_instruct.h"
 #include "rocq_memory.h"
@@ -91,6 +92,11 @@ value rocq_offset_tcode(value code,value offset){
 value rocq_int_tcode(value pc, value offset) {
   code_t code = Code_val(pc);
   return Val_int(*((code_t) code + Int_val(offset)));
+}
+
+/* Scratch instrumentation (Vmstat): the address of a block of threaded code. */
+value rocq_tcode_address(value code) {
+  return caml_copy_nativeint((intnat) Code_val(code));
 }
 
 value rocq_tcode_array(value tcodes) {
