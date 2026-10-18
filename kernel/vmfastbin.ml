@@ -13,7 +13,9 @@ type operation =
   | Pos_compare_cont
   | Pos_eqb
 
-let enabled = Sys.getenv_opt "ROCQ_VM_FASTBIN" = Some "1"
+(* On by default. [ROCQ_VM_FASTBIN=0] keeps every call on the bytecode, which
+   is how the differential test obtains its reference run. *)
+let enabled = Sys.getenv_opt "ROCQ_VM_FASTBIN" <> Some "0"
 
 let anchors = [
   "Corelib.BinNums.PosDef.Pos.compare_cont", Pos_compare_cont;

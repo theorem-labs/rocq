@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The VM's binary-number acceleration is an execution optimization only. This
-# test compiles fixed expected results without the fast path, then makes
-# rocqchk check the same VM casts with bytecode and with every registered C
-# operation. Their checker reports must be identical after removing fast-path
-# diagnostics.
+# test compiles fixed expected results, then makes rocqchk check the same VM
+# casts twice: with ROCQ_VM_FASTBIN=0 (bytecode only) and with the default
+# (every registered C operation). Their checker reports must be identical
+# after removing fast-path diagnostics.
 set -eu
 PATH="$BIN:$PATH"
 
@@ -111,11 +111,11 @@ rocqchk_args=(-bytecode-compiler yes -Q "$d" "")
 if [ -n "${ROCQCHK_COQLIB:-}" ]; then
   rocqchk_args=(-coqlib "$ROCQCHK_COQLIB" "${rocqchk_args[@]}")
 fi
-if ! rocqchk "${rocqchk_args[@]}" FastBin > "$d/bytecode.out" 2> "$d/bytecode.err"; then
+if ! ROCQ_VM_FASTBIN=0 rocqchk "${rocqchk_args[@]}" FastBin > "$d/bytecode.out" 2> "$d/bytecode.err"; then
   cat "$d/bytecode.err" >&2
   exit 1
 fi
-if ! ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 rocqchk "${rocqchk_args[@]}" FastBin \
+if ! ROCQ_VM_FASTBIN_STATS=1 rocqchk "${rocqchk_args[@]}" FastBin \
   > "$d/fastbin.out" 2> "$d/fastbin.err"; then
   cat "$d/fastbin.err" >&2
   exit 1
