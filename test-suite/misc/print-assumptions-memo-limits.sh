@@ -502,8 +502,9 @@ for f in Coll20000 FunCopies; do
   full=$(cpu "$f.v")
   base=$(cpu "${f}NoQuery.v")
   expect "${f}NoQuery" "$(cat "${f}NoQuery.v.log")" ""
-  # Both queries print the same lines: one per axiom, and a header.
+  # Both queries print the same lines: one header and one line per axiom each.
   expect "$f" "$(wc -l < "$f.v.log")" 40002
+  expect "$f" "$(head -n 20001 "$f.v.log" | md5sum)" "$(tail -n 20001 "$f.v.log" | md5sum)"
   if ! awk -v f="$full" -v b="$base" 'BEGIN { exit !(f <= 1.5 * b + 1) }'; then
     echo "$f: ${full}s of CPU, against ${base}s without its queries"
     status=1

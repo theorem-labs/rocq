@@ -1,0 +1,64 @@
+Axioms:
+zz : (fun _ : nat => nat) (add 0 0)
+ax0 : nat
+aa : (fun _ : nat => nat) ((add 0 <: X -> nat) 0)
+Axioms:
+zz : (fun _ : nat => nat) (add 0 0)
+ax0 : nat
+aa : (fun _ : nat => nat) ((add 0 <: X -> nat) 0)
+Axioms:
+yy : (fun _ : nat => nat) ((add 0 <: X1 -> nat) 0)
+ww : (fun _ : nat => nat) (add 0 0)
+ax1 : nat
+Axioms:
+yy : (fun _ : nat => nat) ((add 0 <: X1 -> nat) 0)
+ww : (fun _ : nat => nat) (add 0 0)
+ax1 : nat
+Axioms:
+b1 : (f 0 <: (fun _ : Prop => Y) A1 -> nat) 0 = 0
+b0 : (f 0 <: (fun _ : Prop => Y) A0 -> nat) 0 = 0
+A1 : Prop
+A0 : Prop
+Axioms:
+b1 : (f 0 <: (fun _ : Prop => Y) A1 -> nat) 0 = 0
+b0 : (f 0 <: (fun _ : Prop => Y) A0 -> nat) 0 = 0
+A1 : Prop
+A0 : Prop
+Transparent constants:
+g :
+f 0 0 = 0 -> True
+f :
+nat -> Y -> nat
+Y :
+Set
+R :
+True
+Axioms:
+b1 : (f 0 <: (fun _ : Prop => Y) A1 -> nat) 0 = 0
+b0 : (f 0 <: (fun _ : Prop => Y) A0 -> nat) 0 = 0
+A1 : Prop
+A0 : Prop
+Transparent constants:
+g :
+f 0 0 = 0 -> True
+f :
+nat -> Y -> nat
+Y :
+Set
+R :
+True
+Axioms:
+b1 : (f 0 <: (fun _ : Prop => Y) A1 -> nat) 0 = 0
+b0 : (f 0 <: (fun _ : Prop => Y) A0 -> nat) 0 = 0
+A1 : Prop
+A0 : Prop
+Axioms:
+v3 : (fun _ : nat => nat) (add 0 0)
+v2 : (fun _ : nat => nat) ((add 0 : X2 -> nat) 0)
+v1 : (fun _ : nat => nat) ((add 0 <: X2 -> nat) 0)
+ax2 : nat
+Axioms:
+v3 : (fun _ : nat => nat) (add 0 0)
+v2 : (fun _ : nat => nat) ((add 0 : X2 -> nat) 0)
+v1 : (fun _ : nat => nat) ((add 0 <: X2 -> nat) 0)
+ax2 : nat
