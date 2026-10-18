@@ -1,30 +1,34 @@
 (* Two types that differ only in a cast at the head of an application, which
-   the walk reads (it visits the type of the cast) and a comparison that
-   flattens applications and looks through casts does not. The second query of
-   each pair replays one type after the other, and must print the references
-   that only the cast's type contains, in either order. *)
+   the traversal reads (it visits the type of the cast) and a comparison that
+   flattens applications and looks through casts does not.
 
-Axiom ax0 : nat.
-Definition X : Set := (fun _ : nat => nat) ax0.
+   The second query of each pair replays what the first recorded. A replay
+   folds the references of a root from the largest name to the smallest (it
+   pushes them on a list in increasing order), so the types of the axioms are
+   folded in decreasing name order, not in source order. A wrongly merged pair
+   loses the references of the type folded second, so a section can only show
+   the bug when each of its two types has a reference the other lacks, or when
+   the type folded second has one the first lacks.
+
+   Each section is independent of the others. *)
+
 Definition add (a b : nat) : nat := b.
 
-(* The cast first, then the plain type. *)
+(* ---- 1 ---- A plain type folded first (name [zz], the larger) and a cast
+   folded second ([aa]): merged, the replay loses [ax0], which only the cast
+   mentions. *)
+Axiom ax0 : nat.
+Definition X : Set := (fun _ : nat => nat) ax0.
 Axiom zz : (fun _ : nat => nat) (add 0 0).
 Axiom aa : (fun _ : nat => nat) ((add 0 <: X -> nat) 0).
 Definition r1 : nat := (fun _ _ : nat => 0) aa zz.
 Print Assumptions r1.
 Print Assumptions r1.
 
-(* The plain type first, then the cast. *)
-Axiom ax1 : nat.
-Definition X1 : Set := (fun _ : nat => nat) ax1.
-Axiom yy : (fun _ : nat => nat) ((add 0 <: X1 -> nat) 0).
-Axiom ww : (fun _ : nat => nat) (add 0 0).
-Definition r2 : nat := (fun _ _ : nat => 0) ww yy.
-Print Assumptions r2.
-Print Assumptions r2.
-
-(* Print All Dependencies, a cast whose type is a Prop-valued function. *)
+(* ---- 2 ---- Two casts, each naming a reference the other lacks ([A0] and
+   [A1]), with the axiom naming the larger reference sorted first and then the
+   smaller. Merged, the type folded second loses its reference whichever it
+   is. *)
 Definition Y := nat.
 Definition f (n : nat) : Y -> nat := fun _ => n.
 Definition g (p : f 0 0 = 0) : True := I.
@@ -35,16 +39,30 @@ Axiom b1 : (f 0 <: (((fun _ : Prop => Y) A1) -> nat)) 0 = 0.
 Definition R : True := let _ := g b0 in let _ := g b1 in I.
 Print Assumptions R.
 Print Assumptions R.
-Print All Dependencies R.
-Print All Dependencies R.
 
-(* The cast kinds: a cast with [<:] (VM) and one with [:] (default), whose kinds
-   the key does not tell apart, since the walk does not read them. *)
-Axiom ax2 : nat.
-Definition X2 : Set := (fun _ : nat => nat) ax2.
-Axiom v1 : (fun _ : nat => nat) ((add 0 <: X2 -> nat) 0).
-Axiom v2 : (fun _ : nat => nat) ((add 0 : X2 -> nat) 0).
-Axiom v3 : (fun _ : nat => nat) (add 0 0).
-Definition r3 : nat := (fun _ _ _ : nat => 0) v3 v2 v1.
-Print Assumptions r3.
-Print Assumptions r3.
+(* The same with the axioms named in the opposite order: [c0] names [B1] and
+   [c1] names [B0]. *)
+Axiom B0 : Prop.
+Axiom B1 : Prop.
+Axiom c0 : (f 0 <: (((fun _ : Prop => Y) B1) -> nat)) 0 = 0.
+Axiom c1 : (f 0 <: (((fun _ : Prop => Y) B0) -> nat)) 0 = 0.
+Definition R' : True := let _ := g c0 in let _ := g c1 in I.
+Print Assumptions R'.
+Print Assumptions R'.
+
+(* ---- 3 ---- The same under Print All Dependencies, in both naming orders. *)
+Axiom C0 : Prop.
+Axiom C1 : Prop.
+Axiom d0 : (f 0 <: (((fun _ : Prop => Y) C0) -> nat)) 0 = 0.
+Axiom d1 : (f 0 <: (((fun _ : Prop => Y) C1) -> nat)) 0 = 0.
+Definition S : True := let _ := g d0 in let _ := g d1 in I.
+Print All Dependencies S.
+Print All Dependencies S.
+
+Axiom D0 : Prop.
+Axiom D1 : Prop.
+Axiom e0 : (f 0 <: (((fun _ : Prop => Y) D1) -> nat)) 0 = 0.
+Axiom e1 : (f 0 <: (((fun _ : Prop => Y) D0) -> nat)) 0 = 0.
+Definition S' : True := let _ := g e0 in let _ := g e1 in I.
+Print All Dependencies S'.
+Print All Dependencies S'.

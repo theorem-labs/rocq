@@ -321,129 +321,23 @@ let rec fold_refs_of_type f acc t =
   | Constr.Construct (cst, _) -> f (ConstructRef cst) acc
   | _ -> fold_with_full_binders (fun _ () -> ()) (fun () acc t -> fold_refs_of_type f acc t) () acc t
 
-(** Types of constants without a body, by what the walk reads of them: two
-    terms are one key when the walk reads the same references in the same
-    structure, which is what [eq_walked] compares, arm by arm as
-    [fold_with_full_binders] reads a term: no application is flattened and no
-    cast is looked through (the walk reads the type of a cast, also at the head
-    of an application, and a flattened comparison would not), a [Const], [Ind]
-    or [Construct] is the same only when both its user name and its canonical
-    name agree ([Constr.equal] compares the canonical name alone, and would
-    merge two user names of one object, which [data] tells apart), and
-    only what the walk never reads is ignored: binder names, universe
-    instances, sorts, the kind of a cast, the strategy and relevance
-    annotations of a match, the name of a projection, the recursion indices of
-    a fixpoint. Variables are compared by name and de Bruijn indices by value,
-    as the empty-match condition reads them. [hash_walked] reads the same
-    fields and no others, so equal keys hash equally. *)
-let rec eq_walked a b =
-  a == b ||
-  (match Constr.kind a, Constr.kind b with
-   | Constr.Rel i, Constr.Rel j -> Int.equal i j
-   | Constr.Meta i, Constr.Meta j -> Int.equal i j
-   | Constr.Var x, Constr.Var y -> Id.equal x y
-   | Constr.Sort _, Constr.Sort _ -> true
-   | Constr.Int i, Constr.Int j -> Uint63.equal i j
-   | Constr.Float x, Constr.Float y -> Float64.equal x y
-   | Constr.String x, Constr.String y -> Pstring.equal x y
-   | Constr.Const (c1, _), Constr.Const (c2, _) ->
-     Constant.UserOrd.equal c1 c2 && Constant.CanOrd.equal c1 c2
-   | Constr.Ind (i1, _), Constr.Ind (i2, _) ->
-     Ind.UserOrd.equal i1 i2 && Ind.CanOrd.equal i1 i2
-   | Constr.Construct (k1, _), Constr.Construct (k2, _) ->
-     Construct.UserOrd.equal k1 k2 && Construct.CanOrd.equal k1 k2
-   | Constr.Cast (c1, _, t1), Constr.Cast (c2, _, t2) -> eq_walked c1 c2 && eq_walked t1 t2
-   | Constr.Prod (_, t1, c1), Constr.Prod (_, t2, c2)
-   | Constr.Lambda (_, t1, c1), Constr.Lambda (_, t2, c2) -> eq_walked t1 t2 && eq_walked c1 c2
-   | Constr.LetIn (_, b1, t1, c1), Constr.LetIn (_, b2, t2, c2) ->
-     eq_walked b1 b2 && eq_walked t1 t2 && eq_walked c1 c2
-   | Constr.App (c1, l1), Constr.App (c2, l2) -> eq_walked c1 c2 && eq_walked_array l1 l2
-   | Constr.Proj (_, _, c1), Constr.Proj (_, _, c2) -> eq_walked c1 c2
-   | Constr.Case (ci1, _, pms1, ((_, p1), _), iv1, c1, bl1),
-     Constr.Case (ci2, _, pms2, ((_, p2), _), iv2, c2, bl2) ->
-     (* The walk expands a match through the declaration of its inductive,
-        which is the same for the same inductive, the same parameters and the
-        same (names aside) return clause and branches. *)
-     Ind.UserOrd.equal ci1.Constr.ci_ind ci2.Constr.ci_ind
-     && Ind.CanOrd.equal ci1.Constr.ci_ind ci2.Constr.ci_ind
-     && eq_walked_array pms1 pms2 && eq_walked p1 p2
-     && (match iv1, iv2 with
-         | Constr.NoInvert, Constr.NoInvert -> true
-         | Constr.CaseInvert { indices = i1 }, Constr.CaseInvert { indices = i2 } ->
-           eq_walked_array i1 i2
-         | (Constr.NoInvert | Constr.CaseInvert _), _ -> false)
-     && eq_walked c1 c2
-     && Int.equal (Array.length bl1) (Array.length bl2)
-     && (let rec loop i = i >= Array.length bl1
-                          || (eq_walked (snd bl1.(i)) (snd bl2.(i)) && loop (i + 1)) in
-         loop 0)
-   | Constr.Fix (_, (_, tl1, bl1)), Constr.Fix (_, (_, tl2, bl2))
-   | Constr.CoFix (_, (_, tl1, bl1)), Constr.CoFix (_, (_, tl2, bl2)) ->
-     eq_walked_array tl1 tl2 && eq_walked_array bl1 bl2
-   | Constr.Array (_, t1, d1, ty1), Constr.Array (_, t2, d2, ty2) ->
-     eq_walked_array t1 t2 && eq_walked d1 d2 && eq_walked ty1 ty2
-   | _ -> false)
-
-and eq_walked_array a b =
-  Int.equal (Array.length a) (Array.length b)
-  && (let rec loop i = i >= Array.length a || (eq_walked a.(i) b.(i) && loop (i + 1)) in
-      loop 0)
-
-let hash_walked t =
-  let mix h x = (h * 65599 + x) land max_int in
-  let rec go h t =
-    match Constr.kind t with
-    | Constr.Rel i -> mix (mix h 1) i
-    | Constr.Meta i -> mix (mix h 2) i
-    | Constr.Var x -> mix (mix h 3) (Id.hash x)
-    | Constr.Sort _ -> mix h 4
-    | Constr.Int i -> mix (mix h 5) (Uint63.hash i)
-    | Constr.Float x -> mix (mix h 6) (Float64.hash x)
-    | Constr.String x -> mix (mix h 7) (Pstring.hash x)
-    | Constr.Const (c, _) -> mix (mix (mix h 8) (Constant.UserOrd.hash c)) (Constant.CanOrd.hash c)
-    | Constr.Ind (i, _) -> mix (mix (mix h 9) (Ind.UserOrd.hash i)) (Ind.CanOrd.hash i)
-    | Constr.Construct (k, _) -> mix (mix (mix h 10) (Construct.UserOrd.hash k)) (Construct.CanOrd.hash k)
-    | Constr.Cast (c, _, ty) -> go (go (mix h 11) c) ty
-    | Constr.Prod (_, ty, c) -> go (go (mix h 12) ty) c
-    | Constr.Lambda (_, ty, c) -> go (go (mix h 13) ty) c
-    | Constr.LetIn (_, b, ty, c) -> go (go (go (mix h 14) b) ty) c
-    | Constr.App (c, l) -> go_array (go (mix h 15) c) l
-    | Constr.Proj (_, _, c) -> go (mix h 16) c
-    | Constr.Case (ci, _, pms, ((_, p), _), iv, c, bl) ->
-      let h = mix (mix (mix h 17) (Ind.UserOrd.hash ci.Constr.ci_ind)) (Ind.CanOrd.hash ci.Constr.ci_ind) in
-      let h = go (go_array h pms) p in
-      let h = match iv with Constr.NoInvert -> h | Constr.CaseInvert { indices } -> go_array (mix h 18) indices in
-      let h = go h c in
-      Array.fold_left (fun h (_, b) -> go h b) h bl
-    | Constr.Fix (_, (_, tl, bl)) -> go_array (go_array (mix h 19) tl) bl
-    | Constr.CoFix (_, (_, tl, bl)) -> go_array (go_array (mix h 20) tl) bl
-    | Constr.Array (_, tl, d, ty) -> go (go (go_array (mix h 21) tl) d) ty
-    | Constr.Evar _ -> mix h 22
-  and go_array h a = Array.fold_left go h a in
-  go 0 t
-
-module TypeTbl = Hashtbl.Make (struct
-    type t = Constr.t
-    let equal = eq_walked
-    let hash = hash_walked
-  end)
-
 (** The entries and their weight (see the invariant), in one immutable value
     that is assigned once per update: an interrupted update leaves the entries
     and the weight as they were. [verified] is a table, not part of that
     atomicity: it holds the types of constants without a body whose
-    references all have an entry (one key being what [eq_walked] says). Entries
-    are never replaced, so that stays true until the value is replaced by a
-    fresh one ([fresh_memo]), which leaves the table of the old value behind.
-    A type is entered once, however many equal copies there are, so the table
-    does not grow with the copies a sealed functor makes anew in each query. *)
+    references all have an entry, one key being what {!WalkedTerm.Tbl} says
+    (the same references in the same structure). Entries are never replaced,
+    so that stays true until the value is replaced by a fresh one
+    ([fresh_memo]), which leaves the table of the old value behind. A type is
+    entered once, however many equal copies there are, so the table does not
+    grow with the copies a sealed functor makes anew in each query. *)
 type memo = {
   entries : memo_entry GlobRef.Map_env.t;
   weight : int;
-  verified : unit TypeTbl.t;
+  verified : unit WalkedTerm.Tbl.t;
 }
 
-let fresh_memo () = { entries = GlobRef.Map_env.empty; weight = 0; verified = TypeTbl.create 16 }
+let fresh_memo () = { entries = GlobRef.Map_env.empty; weight = 0; verified = WalkedTerm.Tbl.create 16 }
 
 let memo = ref (fresh_memo ())
 
@@ -599,12 +493,7 @@ let replay_into data0 obj data =
      type of a constant without a body, which are collected here: [queued]
      holds the references that were queued from types, and one is not queued
      again, so the list holds at most the distinct references of the types
-     reached, besides the counted sets. The type of many constants is one
-     term up to what the walk does not read (kernel hash-consing, module
-     substitution): one already folded in this replay ([folded], keyed by
-     [eq_walked], however many types there are) is not folded again, its
-     references are queued. *)
-  let folded = ref None in
+     reached, besides the counted sets. *)
   let queued = ref Queued.empty in
   let push r todo =
     let q = Queued.add r !queued in
@@ -638,14 +527,7 @@ let replay_into data0 obj data =
               loop pushed data (GlobRef.Set_env.fold (fun r todo -> r :: todo) refs todo)
             | Type_of kn ->
               let typ = (lookup_constant kn).Declarations.const_type in
-              let table = match !folded with
-                | Some t -> t
-                | None -> let t = TypeTbl.create 16 in folded := Some t; t
-              in
-              if TypeTbl.mem table typ then loop pushed data todo
-              else
-                let () = TypeTbl.replace table typ () in
-                loop pushed data (fold_refs_of_type push todo typ)
+              loop pushed data (fold_refs_of_type push todo typ)
   in
   loop Mindmap_env.Set.empty data [obj]
 
@@ -695,11 +577,11 @@ let[@inline never] pop_type obj =
    constant without a body whose type was popped last ([last_type], tagged
    with the object itself, compared physically), [edges] are the references of
    that type, since a walk that reaches this check met no empty match. The
-   types of many such constants are one key of [TypeTbl] (equal for the walk),
-   and the references of a type do not depend on the constant: entries are
-   never replaced, so a type whose references all had an entry keeps them until
-   the entries are cleared. Such a type is entered in [memo.verified], keyed
-   by [eq_walked], which does not depend on how many types there are, and the
+   types of many such constants are one key of [WalkedTerm.Tbl] (equal for the
+   walk), and the references of a type do not depend on the constant: entries
+   are never replaced, so a type whose references all had an entry keeps them
+   until the entries are cleared. Such a type is entered in [memo.verified],
+   which does not depend on how many types there are, and the
    check is skipped for the constants that share it. No environment lookup is
    made here, and a constant with a body is never tagged. The object is passed
    rather than the value, so that the walk's frame is as it would be without
@@ -708,11 +590,11 @@ let[@inline never] pop_type obj =
    [walk_object]). *)
 let[@inline never] type_verified obj =
   let (o, typ) = !last_type in
-  o == obj && TypeTbl.mem !memo.verified typ
+  o == obj && WalkedTerm.Tbl.mem !memo.verified typ
 
 let[@inline never] note_verified obj =
   let (o, typ) = !last_type in
-  if o == obj then TypeTbl.replace !memo.verified typ ()
+  if o == obj then WalkedTerm.Tbl.replace !memo.verified typ ()
 
 let[@inline never] edges_have_entries obj edges =
   type_verified obj
