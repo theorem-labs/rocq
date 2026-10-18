@@ -502,5 +502,4 @@ let main () =
   let senv = init() in
   let senv, opac = run senv in
   Check_stat.stats (Safe_typing.env_of_safe_env senv) opac;
-  if Sys.getenv_opt "ROCQ_VM_TRACE" = Some "1" then Vmvalues.trace_dump ();
   exit 0

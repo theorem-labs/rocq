@@ -18,7 +18,6 @@
 #include <stdint.h>
 #include <math.h>
 #include <string.h>
-#include <inttypes.h>
 
 #define CAML_INTERNALS
 #include <caml/memory.h>
@@ -60,8 +59,6 @@ static void rocq_superinstr_dump(void)
     code_t grab__ = pc + 3;                                                    \
     if (rec_pos__ <= rocq_extra_args && !Is_accu(sp[rec_pos__])                \
         && Is_instruction(grab__, GRAB) && rocq_extra_args >= grab__[1]) {    \
-      rocq_trace_opcode(*pc);                                                 \
-      rocq_trace_opcode(*grab__);                                              \
       rocq_env = rocq_env + (Int_val(Field(rocq_env, 1)) - 2) * sizeof(value);\
       rocq_extra_args -= grab__[1];                                           \
       pc = grab__ + 2;                                                         \
@@ -123,7 +120,7 @@ sp is a local copy of the global variable extern_sp. */
 #  ifdef DEBUG
 #    define Next goto next_instr
 #  else
-#    define Next do { rocq_trace_opcode(*pc); goto *(void *)(rocq_jumptbl_base + *pc++); } while (0)
+#    define Next goto *(void *)(rocq_jumptbl_base + *pc++)
 #  endif
 #else
 #  define Instruct(name) case name:
@@ -263,36 +260,6 @@ if (sp - num_args < rocq_stack_threshold) {                                     
    but Is_accu is only used in places where closures cannot occur. */
 #define Is_accu(v) (Is_block(v) && Tag_val(v) == Closure_tag)
 
-#ifdef ROCQ_VM_TRACE
-static int rocq_vm_trace = 0;
-static uint64_t rocq_vm_trace_count = 0;
-static uint64_t rocq_vm_trace_hash = UINT64_C(1469598103934665603);
-
-#define rocq_trace_opcode(op) do {                                            \
-  if (rocq_vm_trace) {                                                        \
-    rocq_vm_trace_hash ^= (uint64_t)(op);                                     \
-    rocq_vm_trace_hash *= UINT64_C(1099511628211);                            \
-    rocq_vm_trace_count++;                                                    \
-  }                                                                           \
-} while (0)
-
-static void rocq_trace_dump(void)
-{
-  if (rocq_vm_trace)
-    fprintf(stderr, "SUPERTRACE count=%" PRIu64 " hash=%" PRIu64 "\n",
-      rocq_vm_trace_count, rocq_vm_trace_hash);
-}
-#else
-#define rocq_trace_opcode(op) ((void)0)
-#endif
-
-value rocq_trace_dump_now(value unit)
-{
-#ifdef ROCQ_VM_TRACE
-  rocq_trace_dump();
-#endif
-  return Val_unit;
-}
 
 #define CheckPrimArgs(cond, apply_lbl) do{         \
     if (cond) pc++;                                \
@@ -397,9 +364,6 @@ value rocq_interprete
     rocq_superinstr_stats = getenv("ROCQ_VM_SUPERINSTR_STATS") != NULL;
     rocq_superinstr_enabled = superinstr == NULL || strcmp(superinstr, "0") != 0;
     if (rocq_superinstr_stats) atexit(rocq_superinstr_dump);
-#ifdef ROCQ_VM_TRACE
-    rocq_vm_trace = getenv("ROCQ_VM_TRACE") != NULL;
-#endif
     CAMLreturn(Val_unit);
   }
 #if defined(THREADED_CODE) && defined(ARCH_SIXTYFOUR) && !defined(ARCH_CODE32)
@@ -414,7 +378,6 @@ value rocq_interprete
   CHECK_STACK(0);
 
 #ifdef THREADED_CODE
-  rocq_trace_opcode(*pc);
   goto *(void *)(rocq_jumptbl_base + *pc++); /* Jump to the first instruction */
 #else
   while(1) {
@@ -745,6 +708,7 @@ value rocq_interprete
         for (i = nargs - 1; i >= 0; i--) newsp[i] = sp[i];
         sp = newsp;
         pc = Code_val(accu);
+        rocq_env = accu;
         rocq_extra_args += nargs - 1;
         goto check_stack;
       }
@@ -752,6 +716,7 @@ value rocq_interprete
         value arg1 = sp[0];
         print_instr("APPTERM1");
         sp = sp + *pc - 1;
+        sp[0] = arg1;
         pc = Code_val(accu);
         rocq_env = accu;
         goto check_stack;
@@ -852,7 +817,6 @@ value rocq_interprete
           rocq_env = rocq_env + (Int_val(Field(rocq_env, 1)) - 2) * sizeof(value);
           if (rocq_superinstr_enabled && Is_instruction(pc, GRAB)) {
             int required;
-            rocq_trace_opcode(*pc);
             pc++;
             required = *pc++;
             if (rocq_superinstr_stats) rocq_superinstr_grabrec_grab++;
@@ -1164,12 +1128,10 @@ value rocq_interprete
           pc += pc[index];
         }
         if (rocq_superinstr_enabled && Is_instruction(pc, GETFIELD0)) {
-          rocq_trace_opcode(*pc);
           accu = Field(accu, 0);
           pc++;
           if (rocq_superinstr_stats) rocq_superinstr_switch_getfield0++;
           if (Is_instruction(pc, PUSH)) {
-            rocq_trace_opcode(*pc);
             *--sp = accu;
             pc++;
             if (rocq_superinstr_stats) rocq_superinstr_getfield0_push++;
@@ -1191,7 +1153,6 @@ value rocq_interprete
         print_instr("GETFIELD0");
         accu = Field(accu, 0);
         if (rocq_superinstr_enabled && Is_instruction(pc, PUSH)) {
-          rocq_trace_opcode(*pc);
           *--sp = accu;
           pc++;
           if (rocq_superinstr_stats) rocq_superinstr_getfield0_push++;

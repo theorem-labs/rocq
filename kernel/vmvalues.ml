@@ -366,7 +366,6 @@ external is_accumulate : tcode -> bool = "rocq_is_accumulate_code"
 external int_tcode : tcode -> int -> int = "rocq_int_tcode"
 external accumulate : unit -> tcode = "rocq_accumulate"
 external set_bytecode_field : Obj.t -> int -> tcode -> unit = "rocq_set_bytecode_field"
-external trace_dump : unit -> unit = "rocq_trace_dump_now"
 let accumulate = accumulate ()
 
 let whd_val (v: values) =

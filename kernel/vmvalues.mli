@@ -86,7 +86,6 @@ type vswitch = {
   }
 
 external mkAccuCode : int -> tcode = "rocq_makeaccu"
-val trace_dump : unit -> unit
 
 val fun_code : vfun -> tcode
 val fix_code : vfix -> tcode
