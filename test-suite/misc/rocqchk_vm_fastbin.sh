@@ -19,7 +19,7 @@ import sys
 
 out = open(sys.argv[1], "w", encoding="utf-8")
 write = out.write
-write("From Stdlib Require Import ZArith NArith PArith.\n\n")
+write("From Stdlib Require Import ZArith NArith PArith.\nLocal Open Scope positive_scope.\n\n")
 
 rng = random.Random(0xF457B1)
 values = [
@@ -43,6 +43,25 @@ values.extend(rng.getrandbits(bits) | (1 << (bits - 1)) | 1 for bits in (5, 37, 
 for i, value in enumerate(values):
     write(f"Definition p{i} := {value}%positive.\n")
 write("\n")
+write("""
+Module ShadowPos.
+Fixpoint compare_cont (r:comparison) (x y:positive) {struct y} : comparison :=
+  match x, y with
+  | p~1, q~1 => compare_cont r p q
+  | p~1, q~0 => compare_cont Gt p q
+  | p~1, 1 => Gt
+  | p~0, q~1 => compare_cont Lt p q
+  | p~0, q~0 => compare_cont r p q
+  | p~0, 1 => Gt
+  | 1, q~1 => Gt
+  | 1, q~0 => Lt
+  | 1, 1 => r
+  end.
+End ShadowPos.
+Definition shadow_compare : ShadowPos.compare_cont Eq 1 3%positive = Gt :=
+  ltac:(vm_compute; reflexivity).
+
+""")
 
 def comparison(x, y):
     return "Lt" if x < y else "Gt" if x > y else "Eq"
@@ -54,20 +73,28 @@ pairs = [(i, (i * 7 + 3) % len(values)) for i in range(len(values))]
 for i, j in pairs:
     x, y = values[i], values[j]
     r = ("Eq", "Lt", "Gt")[i % 3]
+    write(f"Definition compare_cont_kernel_{i} : Pos.compare_cont {r} p{i} p{j} = "
+          f"{r if x == y else comparison(x, y)} := eq_refl.\n")
     write(f"Definition compare_cont_{i} : Pos.compare_cont {r} p{i} p{j} = "
           f"{r if x == y else comparison(x, y)} := ltac:(vm_compute; reflexivity).\n")
+    write(f"Definition eqb_kernel_{i} : Pos.eqb p{i} p{j} = "
+          f"{'true' if x == y else 'false'} := eq_refl.\n")
     write(f"Definition eqb_{i} : Pos.eqb p{i} p{j} = "
           f"{'true' if x == y else 'false'} := ltac:(vm_compute; reflexivity).\n")
 
     zx = x if i % 3 == 0 else -x
     zy = y if i % 2 == 0 else -y
+    write(f"Definition zcompare_kernel_{i} : Z.compare {z_literal(zx)} {z_literal(zy)} = "
+          f"{comparison(zx, zy)} := eq_refl.\n")
     write(f"Definition zcompare_{i} : Z.compare {z_literal(zx)} {z_literal(zy)} = "
           f"{comparison(zx, zy)} := ltac:(vm_compute; reflexivity).\n")
 
+write("Definition zcompare_zero_kernel : Z.compare 0%Z (Zpos p0) = Lt := eq_refl.\n")
 write("Definition zcompare_zero : Z.compare 0%Z (Zpos p0) = Lt := ltac:(vm_compute; reflexivity).\n")
 
 deep = 1 << 4096
 write(f"Definition p_too_deep := {deep}%positive.\n")
+write("Definition eqb_too_deep_kernel : Pos.eqb p_too_deep p_too_deep = true := eq_refl.\n")
 write("Definition eqb_too_deep : Pos.eqb p_too_deep p_too_deep = true := ltac:(vm_compute; reflexivity).\n")
 out.close()
 PY
