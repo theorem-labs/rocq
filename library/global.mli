@@ -138,8 +138,25 @@ val exists_objlabel  : Id.t -> bool
 val constant_of_delta_kn : KerName.t -> Constant.t
 val mind_of_delta_kn : KerName.t -> MutInd.t
 
+type uncooked_proofterm = {
+  uncooked_body : Constr.t;
+  uncooked_bound : Names.Id.Set.t;
+  uncooked_context : Constr.rel_context;
+  uncooked_expand : Constr.t -> Constr.t;
+  (** Cooks an arbitrary subterm of [uncooked_body] the way the section
+      discharge would have, with no final abstraction over
+      [uncooked_context] (the caller supplies those binders itself -- see
+      {!Cooking.expand_subst}'s depth convention). [uncooked_body] itself is
+      never run through this: that is exactly the whole-term cost this
+      record exists to let a caller avoid paying. Reserved for a subterm a
+      caller must print verbatim, such as Assumptions.ml's "used in ... to
+      prove" diagnostic. The identity function when there was no discharge
+      to skip (see [no_discharge] in assumptions.ml). *)
+}
+
 type indirect_accessor = {
   access_proof : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm option;
+  access_uncooked_proof : Opaqueproof.opaque -> uncooked_proofterm option;
 }
 
 val force_proof : indirect_accessor -> Opaqueproof.opaque -> Opaqueproof.opaque_proofterm

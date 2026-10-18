@@ -1,0 +1,8 @@
+Axioms:
+bad : False
+used in usedin_univ to prove
+ pk T = pk T
+Axioms:
+bad : False
+used in usedin_univ to prove
+ pk@{Var(0)} T = pk@{Var(0)} T

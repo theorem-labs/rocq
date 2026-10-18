@@ -1,0 +1,4 @@
+Axioms:
+usedin_admit_tactic : forall u : nat, k u = k u
+Axioms:
+usedin_admitted_command : forall u : nat, k u = k u
