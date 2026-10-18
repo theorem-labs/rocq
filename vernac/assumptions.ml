@@ -211,11 +211,11 @@ let fold_with_full_binders g f n acc c =
     the edge set of [o]:
     - for an object with a body, its direct references (its value's set, the
       very set [data] holds);
-    - for a constant without a body (axiom, parameter, primitive, symbol), no
-      set: the walk visits the references in its type and keeps none, so the
-      entry only says that the edges are the references of the type, which a
-      replay collects again ([type_refs]) from the type that
-      [lookup_constant] finds, as the walk does;
+    - for a constant without a body (axiom, parameter, primitive, symbol,
+      [Admitted] lemma), the references in its type, which the walk visits
+      but does not keep: the entry stores no set and a replay collects them
+      again ([fold_refs_of_type]) from the type that [lookup_constant] finds,
+      as the walk does;
     - for a member of a mutual block, the block's direct references plus
       every inductive and constructor of the block.
     An object is never recorded when its walk, including every walk nested in
@@ -251,22 +251,27 @@ let fold_with_full_binders g f n acc c =
 
     The entries are also cleared, at the start of a query, when they weigh
     more than [memo_factor] times the heaviest query so far in the
-    environment. An entry weighs one plus the size of its edge set, and a
-    block's edge set, which all its members share, counts once. A query weighs
-    the entries it records plus the entries it replays, counted the same way:
-    about the size of the [data] it builds.
+    environment. An entry weighs one plus the size of the set it keeps: none
+    for a constant without a body, and a block's set, which all its members
+    share, counts once. A query weighs the entries it records plus the
+    objects it replays and the sets they push, counted the same way: about
+    the size of the [data] it builds.
 
-    What an entry keeps is what [data] keeps for the object, or less: the set
-    of an object with a body is the very set [data] holds for it, shared, not
-    copied; a constant without a body keeps nothing, as [data] maps it to
-    [None]; a block keeps one set for all its members, the set [data] holds
-    for each of them plus the members. So the entries a query records are
-    about as large as the [data] it builds, whatever the objects are: many
-    constants without a body whose types name many objects cost no more than
-    [data] does, where a set per constant would have multiplied that. When a
-    query starts, the entries weigh at most [memo_factor] times the heaviest
-    earlier query, and during the query they grow by at most its own weight.
-    Clearing is always sound: it only costs reuse. *)
+    What the entries keep is about as much as [data] keeps for the same
+    objects: the set of an object with a body is the very set [data] holds
+    for it, shared, not copied; a constant without a body keeps nothing,
+    where [data] keeps [None]; a block keeps one set for all its members,
+    its references plus its members, one more set than [data] holds. So the
+    entries a query records weigh at most about twice the [data] it builds,
+    whatever the objects are: many constants without a body whose types name
+    many objects cost no more than [data] does, where a set per constant
+    would have multiplied that. A replay keeps the objects it still has to
+    visit in a list, and queues each reference of the types it collects once
+    ([queued] in [replay_into]), so that list holds each object at most once
+    for those references and its length is bounded by the objects the replay
+    reaches. When a query starts, the entries weigh at most [memo_factor]
+    times the heaviest earlier query, and during the query they grow by at
+    most its own weight. Clearing is always sound: it only costs reuse. *)
 
 (* ROCQ_DEBUG_ASSUMPTIONS_MEMO=1, read once at startup, reports each completed
    replay, and each clearing of the entries by the weight bound, on standard
@@ -277,16 +282,20 @@ let debug_memo = Sys.getenv_opt "ROCQ_DEBUG_ASSUMPTIONS_MEMO" = Some "1"
 
 (** The edges of an entry: the objects its walk reaches directly. *)
 type memo_edges =
-  | Direct of GlobRef.Set_env.t
+  | Direct of { refs : GlobRef.Set_env.t; size : int }
+      (** a set of references and its cardinal *)
   | Type_of of Constant.t
       (** the references in the type of a constant without a body, collected
-          from the type when needed *)
+          from the type when needed: nothing is stored *)
+
+let edges_size = function
+  | Direct { size; _ } -> size
+  | Type_of _ -> 0
 
 type memo_entry = {
   memo_obj : GlobRef.t;
   memo_value : GlobRef.Set_env.t option;
   memo_edges : memo_edges;
-  memo_size : int;  (** cardinal of the set of [Direct], 0 for [Type_of] *)
 }
 
 let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref = ref None
@@ -295,13 +304,19 @@ let memo_factor = 2
 
 (** The entries and their weight (see the invariant), in one immutable value
     that is assigned once per update: an interrupted update leaves the entries
-    and the weight as they were. *)
+    and the weight as they were. [verified] holds the last few types of
+    constants without a body whose references all have an entry: entries are
+    never replaced, so that stays true until the value is replaced by
+    [memo_empty]. Kernel hash-consing makes the types of many constants one
+    physical term, which a check of the references would otherwise repeat for
+    each. *)
 type memo = {
   entries : memo_entry GlobRef.Map_env.t;
   weight : int;
+  verified : Constr.t list;
 }
 
-let memo_empty = { entries = GlobRef.Map_env.empty; weight = 0 }
+let memo_empty = { entries = GlobRef.Map_env.empty; weight = 0; verified = [] }
 
 let memo = ref memo_empty
 
@@ -367,20 +382,25 @@ let has_entry obj = Option.has_some (find_entry obj)
    this compares user names only. *)
 let user_name_unrecorded obj = not (GlobRef.Map_env.mem obj !memo.entries)
 
+(* The entry for [obj] recording [edges], the set the walk found: it keeps the
+   set itself, unless [obj] is a constant without a body, where [data] keeps
+   nothing and the entry keeps the constant instead (see the invariant). *)
+let[@inline never] make_entry value edges obj =
+  let memo_edges = match value, obj with
+    | None, GlobRef.ConstRef kn -> Type_of kn
+    | _ -> Direct { refs = edges; size = GlobRef.Set_env.cardinal edges }
+  in
+  { memo_obj = obj; memo_value = value; memo_edges }
+
 (* Inlined into [walk_object]: the call would add a frame at the bottom of the
    deepest walk, under [Map_env.add], and so shorten the longest chain that
-   fits in the stack. [edges] is the set the walk found: the entry keeps it,
-   unless [obj] is a constant without a body, where [data] keeps nothing and
-   the entry keeps the constant instead (see the invariant). *)
+   fits in the stack. *)
 let[@inline always] add_entry value edges obj =
-  let memo_edges, size = match value, obj with
-    | None, GlobRef.ConstRef kn -> Type_of kn, 0
-    | _ -> Direct edges, GlobRef.Set_env.cardinal edges
-  in
-  query_weight := !query_weight + 1 + size;
-  let e = { memo_obj = obj; memo_value = value; memo_edges; memo_size = size } in
+  let e = make_entry value edges obj in
+  let weight = 1 + edges_size e.memo_edges in
+  query_weight := !query_weight + weight;
   let m = !memo in
-  memo := { entries = GlobRef.Map_env.add obj e m.entries; weight = m.weight + 1 + size }
+  memo := { m with entries = GlobRef.Map_env.add obj e m.entries; weight = m.weight + weight }
 
 (* The members are added to a new map, which is assigned once, with the
    weight: a block recorded in part (a [Timeout] or an interrupt during the
@@ -403,11 +423,12 @@ let record_block mind mib contents =
     let weight = GlobRef.Set_env.cardinal members + size in
     query_weight := !query_weight + weight;
     let m = !memo in
+    let memo_edges = Direct { refs = edges; size } in
     let entries = GlobRef.Set_env.fold (fun obj entries ->
-        let e = { memo_obj = obj; memo_value = Some contents; memo_edges = Direct edges; memo_size = size } in
+        let e = { memo_obj = obj; memo_value = Some contents; memo_edges } in
         GlobRef.Map_env.add obj e entries) members m.entries
     in
-    memo := { entries; weight = m.weight + weight }
+    memo := { m with entries; weight = m.weight + weight }
 
 exception Miss
 
@@ -416,23 +437,25 @@ exception Miss
     of the deepest walk takes no more stack. *)
 let replay_weight = ref 0
 
-(** The references in a type, as [traverse] finds them with an empty
-    accumulator: the objects it meets, not their dependencies. For a constant
-    without a body this is what the walk gives as the edges of the constant,
-    the walk of a recorded object never meeting an empty match. *)
-let rec type_refs ctx acc t =
+(** Folds [f] over the references in a type, in the order [traverse] meets
+    them: it must collect exactly the objects [traverse] adds to the set of
+    references of a type (the [Var], [Const], [Ind] and [Construct] arms of
+    [traverse], and the sub-terms [fold_with_full_binders] gives it), for a
+    replay of a constant without a body to reach what its walk reached. A
+    walk that meets the empty-match arm of [traverse] is never recorded. *)
+let rec fold_refs_of_type f acc t =
   let open GlobRef in
   match Constr.kind t with
-  | Constr.Var id -> Set_env.add (VarRef id) acc
-  | Constr.Const (kn, _) -> Set_env.add (ConstRef kn) acc
-  | Constr.Ind (ind, _) -> Set_env.add (IndRef ind) acc
-  | Constr.Construct (cst, _) -> Set_env.add (ConstructRef cst) acc
-  | _ -> fold_with_full_binders Context.Rel.add type_refs ctx acc t
+  | Constr.Var id -> f (VarRef id) acc
+  | Constr.Const (kn, _) -> f (ConstRef kn) acc
+  | Constr.Ind (ind, _) -> f (IndRef ind) acc
+  | Constr.Construct (cst, _) -> f (ConstructRef cst) acc
+  | _ -> fold_with_full_binders (fun _ () -> ()) (fun () acc t -> fold_refs_of_type f acc t) () acc t
 
-let memo_edge_refs = function
-  | Direct edges -> edges
-  | Type_of kn ->
-    type_refs Context.Rel.empty GlobRef.Set_env.empty (lookup_constant kn).Declarations.const_type
+(** Sets of references ordered by canonical name, unlike [GlobRef.Set_env]: a
+    reference with the same user name and another canonical name is another
+    element, as it is for [find_entry]. *)
+module Queued = Stdlib.Set.Make (GlobRef.CanOrd)
 
 (* [data0] is the query's [data] before the replay. An object in it is
    skipped, as the walk skips it. Every other object reached needs an entry
@@ -452,14 +475,26 @@ let memo_edge_refs = function
    replaced, so every member of a block that a replay reaches has that same
    edge set. *)
 let replay_into data0 obj data =
-  let rec loop pushed data = function
+  (* The weight counts the references of a [Direct] set, but not those of the
+     type of a constant without a body, which are collected here: [queued]
+     holds the references that were queued from types, and one is not queued
+     again, so the list holds at most the distinct references of the types
+     reached, besides the counted sets. The type of many constants is one
+     physical term (kernel hash-consing): one already folded in this replay
+     ([types], the last few) is not folded again, its references are queued. *)
+  let queued = ref Queued.empty in
+  let push r todo =
+    let q = Queued.add r !queued in
+    if q == !queued then todo else (queued := q; r :: todo)
+  in
+  let rec loop pushed types data = function
     | [] -> data
     | obj :: todo ->
-      if GlobRef.Map_env.mem obj data0 then loop pushed data todo
+      if GlobRef.Map_env.mem obj data0 then loop pushed types data todo
       else match find_entry obj with
       | None -> raise Miss
       | Some e ->
-        if GlobRef.Map_env.mem obj data then loop pushed data todo
+        if GlobRef.Map_env.mem obj data then loop pushed types data todo
         else
           let () = incr replay_weight in
           let data = GlobRef.Map_env.add obj e.memo_value data in
@@ -468,17 +503,24 @@ let replay_into data0 obj data =
             | GlobRef.VarRef _ | GlobRef.ConstRef _ -> None
           in
           match block with
-          | Some mind when Mindmap_env.Set.mem mind pushed -> loop pushed data todo
+          | Some mind when Mindmap_env.Set.mem mind pushed -> loop pushed types data todo
           | _ ->
             let pushed = match block with
               | Some mind -> Mindmap_env.Set.add mind pushed
               | None -> pushed
             in
-            let () = replay_weight := !replay_weight + e.memo_size in
-            let todo = GlobRef.Set_env.fold (fun r todo -> r :: todo) (memo_edge_refs e.memo_edges) todo in
-            loop pushed data todo
+            match e.memo_edges with
+            | Direct { refs; size } ->
+              let () = replay_weight := !replay_weight + size in
+              loop pushed types data (GlobRef.Set_env.fold (fun r todo -> r :: todo) refs todo)
+            | Type_of kn ->
+              let typ = (lookup_constant kn).Declarations.const_type in
+              if List.memq typ types then loop pushed types data todo
+              else
+                let types = typ :: (match types with a :: b :: c :: _ -> [a; b; c] | l -> l) in
+                loop pushed types data (fold_refs_of_type push todo typ)
   in
-  loop Mindmap_env.Set.empty data [obj]
+  loop Mindmap_env.Set.empty [] data [obj]
 
 (** [Some data'] when every object the replay reaches outside [data] has an
     entry, where [data'] is [data] plus the closure of [obj], stopping at
@@ -508,6 +550,43 @@ let get_constant_body access kn =
       incr unreplayable_steps;
       None
 
+(* Whether each reference in [edges] of [obj] has an entry. The type of many
+   constants without a body is one physical term (kernel hash-consing), and
+   the references of a type do not depend on the constant: entries are never
+   replaced, so a type whose references all had an entry keeps them until the
+   entries are cleared, and the types of the last few such constants are
+   remembered ([memo.verified]) rather than checked again for each. For such
+   a constant [edges] are the references of its type, since a walk that
+   reaches this check met no empty match.
+
+   The type is read again from [obj] here, rather than passed along, so that
+   it is not live across the walk of the type, which would add a slot to the
+   frame of [walk_object]; and the three functions are not inlined, for the
+   same reason. *)
+let[@inline never] type_verified obj =
+  match obj with
+  | GlobRef.ConstRef kn ->
+    let cb = lookup_constant kn in
+    not (Declareops.constant_has_body cb) && List.memq cb.Declarations.const_type !memo.verified
+  | _ -> false
+
+let[@inline never] note_verified obj =
+  match obj with
+  | GlobRef.ConstRef kn ->
+    let cb = lookup_constant kn in
+    if not (Declareops.constant_has_body cb) then
+      let m = !memo in
+      memo := { m with verified = cb.Declarations.const_type :: (match m.verified with a :: b :: c :: _ -> [a; b; c] | l -> l) }
+  | _ -> ()
+
+let[@inline never] edges_have_entries obj edges =
+  type_verified obj
+  || (GlobRef.Set_env.for_all has_entry edges && (note_verified obj; true))
+
+(* The [Var], [Const], [Ind] and [Construct] arms below and the empty-match
+   arm are mirrored by [fold_refs_of_type], which a replay of a constant
+   without a body uses in place of this walk of its type: a change to what
+   these arms collect must be made there too. *)
 let rec traverse access (current:GlobRef.t) ctx accu t =
   let open GlobRef in
   let open Constr in
@@ -593,7 +672,7 @@ and walk_object access curr data ax2ty body obj =
   in
   let () =
     if Int.equal mark !unreplayable_steps && user_name_unrecorded obj
-       && GlobRef.Set_env.for_all has_entry edges
+       && edges_have_entries obj edges
     then add_entry value edges obj
   in
   (curr, data, ax2ty)

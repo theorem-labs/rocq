@@ -1,7 +1,8 @@
 (* The entries are cleared at the start of a query when they weigh more than
    twice the heaviest earlier query in the environment. An entry weighs one
-   plus the size of its edge set, and a block's shared edge set counts once; a
-   query weighs what it records plus what it replays, counted the same way.
+   plus the size of the set it keeps (none for a constant without a body), and
+   a block's shared set counts once; a query weighs what it records plus what
+   it replays, counted the same way.
    Each part starts after declarations, which clear the entries and every
    weight. The numbers below are the entries' weight at the start of each
    query. Each part places a clearing, or the absence of one, at the
