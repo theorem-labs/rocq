@@ -581,8 +581,9 @@ let[@inline never] pop_type obj =
    walk), and the references of a type do not depend on the constant: entries
    are never replaced, so a type whose references all had an entry keeps them
    until the entries are cleared. Such a type is entered in [memo.verified],
-   which does not depend on how many types there are, and the
-   check is skipped for the constants that share it. No environment lookup is
+   keyed by the comparison of [WalkedTerm.Tbl], which does not depend on how
+   many types there are, and the check is skipped for the constants that share
+   it. No environment lookup is
    made here, and a constant with a body is never tagged. The object is passed
    rather than the value, so that the walk's frame is as it would be without
    this function; the three functions are small and not inlined for the same

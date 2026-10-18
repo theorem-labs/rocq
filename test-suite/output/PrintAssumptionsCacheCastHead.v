@@ -3,20 +3,23 @@
    flattens applications and looks through casts does not.
 
    The second query of each pair replays what the first recorded. A replay
-   folds the references of a root from the largest name to the smallest (it
-   pushes them on a list in increasing order), so the types of the axioms are
-   folded in decreasing name order, not in source order. A wrongly merged pair
-   loses the references of the type folded second, so a section can only show
-   the bug when each of its two types has a reference the other lacks, or when
-   the type folded second has one the first lacks.
+   folds the references of a root in the order of [GlobRef.Set_env], which is
+   hash order (it sorts by name only among references with one hash), so the
+   types of the axioms are folded in an order that is neither source order nor
+   name order. A wrongly merged pair loses the references of the type folded
+   second, so a section shows the bug in either order only when each of its
+   two types has a reference the other lacks (sections 2 and 3). Section 1
+   compares a plain type with a cast of it, whose references include the plain
+   type's, so it shows the bug only when the plain type is folded first.
 
    Each section is independent of the others. *)
 
 Definition add (a b : nat) : nat := b.
 
-(* ---- 1 ---- A plain type folded first (name [zz], the larger) and a cast
-   folded second ([aa]): merged, the replay loses [ax0], which only the cast
-   mentions. *)
+(* ---- 1 ---- A plain type ([zz]) and a cast ([aa]): merged, the replay loses
+   [ax0], which only the cast mentions, if it folds [zz] before [aa]. It does
+   with the current hash order of these two names, and a rename could change
+   that, which is why sections 2 and 3 do not depend on it. *)
 Axiom ax0 : nat.
 Definition X : Set := (fun _ : nat => nat) ax0.
 Axiom zz : (fun _ : nat => nat) (add 0 0).
@@ -26,9 +29,9 @@ Print Assumptions r1.
 Print Assumptions r1.
 
 (* ---- 2 ---- Two casts, each naming a reference the other lacks ([A0] and
-   [A1]), with the axiom naming the larger reference sorted first and then the
-   smaller. Merged, the type folded second loses its reference whichever it
-   is. *)
+   [A1]), with the axiom naming the larger reference first in the source and
+   then the smaller. Merged, the type folded second loses its reference
+   whichever it is. *)
 Definition Y := nat.
 Definition f (n : nat) : Y -> nat := fun _ => n.
 Definition g (p : f 0 0 = 0) : True := I.
