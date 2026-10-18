@@ -177,7 +177,9 @@ let make_senv () =
        CErrors.user_err
          Pp.(str "ROCQCHK_NATIVE_CONV/ROCQCHK_NATIVE_DEBUG_DUAL requires ROCQCHK_NATIVE_INCLUDE \
                   (colon-separated kernel native .cmi/.cmx directories)."));
-    Nativelib.get_load_paths := (fun () -> [])
+    Nativelib.get_load_paths := (fun () -> []);
+    (* before any -j worker forks, so that all of them share one cache *)
+    Nativelib.init_cache ()
   end;
   Safe_typing.set_native_compiler Checkstats.native_enabled senv
 

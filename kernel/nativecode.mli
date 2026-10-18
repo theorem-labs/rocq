@@ -50,16 +50,44 @@ val get_instance : symbols -> int -> UVars.Instance.t
 
 val get_proj : symbols -> int -> inductive * int
 
-type code_location_updates
-type linkable_code = global list * symbols * code_location_updates
+(** A constant or inductive whose native code is not loaded yet. *)
+type plan_item
 
-val empty_updates : code_location_updates
+val describe_item : plan_item -> string
 
-(** Replace the recorded link prefix on every entry with [prefix] (expected:
-    a hash of this bundle's own generated text). See the comment at its
-    definition in nativecode.ml for why this matters for cross-process
-    compile-cache determinism. *)
-val stabilize_prefix : string -> code_location_updates -> code_location_updates
+(** Canonical name of the item (the kernel name of the constant or
+    inductive). *)
+val item_key : plan_item -> string
+
+(** Name under which the item's code defines its main value, as it appears in
+    the generated source. Two items with different [item_key] and the same
+    [item_def_name] would shadow each other. *)
+val item_def_name : plan_item -> string
+
+(** [plan_deps env sigma ts]: every constant and inductive reachable from
+    [ts] whose code is not loaded, each once, with its dependency level
+    (inductives and constants without dependencies are level 0, a constant
+    is 1 + the highest level it refers to). Ordered by (level, name), a
+    function of the set of items only; items of one level never refer to
+    each other. *)
+val plan_deps : env -> Genlambda.evars -> constr list -> (int * plan_item) list
+
+(** A compilation unit under construction: its own name/symbol environment. *)
+type unit_builder
+
+val new_unit : unit -> unit_builder
+
+(** The first global of every unit (binds [symbols_tbl]). *)
+val unit_header : global
+
+(** The globals defining the item, in definition order. *)
+val unit_add_item : unit_builder -> env -> Genlambda.evars -> plan_item -> global list
+
+val unit_symbols : unit_builder -> symbols
+
+(** [link_items items prefix]: from now on the code of every item is referred
+    to as [prefix ^ name] (the unit that defines them is loaded). *)
+val link_items : plan_item list -> string -> unit
 
 val register_native_file : string -> unit
 
@@ -74,15 +102,16 @@ val compile_mind_field : cenv -> ModPath.t -> Id.t ->
 val compile_rewrite_rules : env -> Id.t ->
   global list -> rewrite_rules_body -> global list
 
-val mk_conv_code : env -> Genlambda.evars -> string -> constr -> constr -> linkable_code
-val mk_norm_code : env -> Genlambda.evars -> string -> constr -> linkable_code
+(** [mk_conv_code env sigma t1 t2] is the code of the cast's own unit and its
+    symbol table. Every dependency of [t1] and [t2] must already be linked
+    ({!Nativelib.link_dependencies}); an anomaly is raised otherwise. *)
+val mk_conv_code : env -> Genlambda.evars -> constr -> constr -> global list * symbols
+val mk_norm_code : env -> Genlambda.evars -> constr -> global list * symbols
 
 val mk_library_header : Nativevalues.symbols -> global list
 
 val mod_uid_of_dirpath : DirPath.t -> string
 
 val link_info_of_dirpath : DirPath.t -> link_info
-
-val update_locations : code_location_updates -> unit
 
 val add_header_comment : global list -> string -> global list

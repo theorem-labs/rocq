@@ -68,8 +68,15 @@ let native_cache_hit = make "native_cache_hit" (* materializing an already-compi
 let native_ocamlopt = make "native_ocamlopt" (* a true cache miss: child CPU is ocamlopt itself *)
 let native_load_run = make "native_load_run"
 let native_compare = make "native_compare"
-
 let dual_mismatches = ref 0
+
+(* A forked worker starts from the counters of the process that forked it;
+   it resets them so that what it reports is its own work. *)
+let reset () =
+  List.iter (fun a -> a.calls <- 0; a.self <- 0.; a.child <- 0.) !all;
+  dual_mismatches := 0;
+  Nativecache.reset_stats ()
+
 
 let report tag =
   if stats_enabled then begin

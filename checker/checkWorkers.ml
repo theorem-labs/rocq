@@ -108,6 +108,7 @@ let run_worker parent (tasks : task array) =
   let code =
     try
       tune_gc ();
+      Checkstats.reset ();
       Array.iter (fun (kn, check) ->
           (* Nobody is waiting for the result any more. *)
           if Unix.getppid () <> parent then Unix._exit 1;
@@ -119,6 +120,7 @@ let run_worker parent (tasks : task array) =
       (try !error_printer (CheckError (!current, e)) with _ -> ());
       CErrors.exit_code e
   in
+  (try Checkstats.report "worker" with _ -> ());
   (try flush_output () with _ -> ());
   (* Not [exit]: the at_exit functions of the main process must not run
      here. *)

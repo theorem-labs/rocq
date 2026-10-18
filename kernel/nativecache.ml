@@ -10,10 +10,6 @@
 
 let ( / ) = Filename.concat
 
-let cache_root () = Sys.getenv_opt "ROCQCHK_NATIVE_CACHE"
-
-let enabled () = match cache_root () with Some d -> d <> "" | None -> false
-
 (* --- small filesystem helpers ------------------------------------------ *)
 
 let read_file path =
@@ -31,8 +27,14 @@ let rec mkdir_p dir =
     try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
   end
 
-(* Copy [src] to [dst] byte-for-byte (used when a hardlink is not possible,
-   e.g. the cache and the destination are on different filesystems). *)
+let rec remove_tree path =
+  if Sys.is_directory path then begin
+    Array.iter (fun f -> remove_tree (path / f)) (Sys.readdir path);
+    Unix.rmdir path
+  end
+  else Sys.remove path
+
+(* Copy [src] to [dst] byte-for-byte. *)
 let copy_file ~src ~dst =
   let ic = open_in_bin src in
   Fun.protect
@@ -52,6 +54,8 @@ let copy_file ~src ~dst =
           in
           loop ()))
 
+let absolute d = if Filename.is_relative d then Sys.getcwd () / d else d
+
 (* Hash every regular file reachable under [dir], combined with its path
    relative to [dir], so the epoch changes if any byte of the kernel's
    native [.cmi]/[.cmx] tree this build compiles against changes. Directory
@@ -67,10 +71,14 @@ let hash_tree dir =
          a)
     else entries := (rel, Sha256.hex_digest (read_file abs)) :: !entries
   in
-  (if Sys.file_exists dir then walk "" dir);
+  walk "" dir;
   let entries = List.sort (fun (a, _) (b, _) -> String.compare a b) !entries in
   String.concat "\n" (List.map (fun (rel, h) -> rel ^ " " ^ h) entries)
 
+(* --- epoch: everything that can change what a given source compiles to - *)
+
+(* An unreadable component of the epoch is an error, never a fixed marker: a
+   marker would let two different toolchains share one epoch. *)
 let read_process_stdout argv =
   let ic = Unix.open_process_args_in (List.hd argv) (Array.of_list argv) in
   let buf = Buffer.create 256 in
@@ -79,71 +87,52 @@ let read_process_stdout argv =
        Buffer.add_channel buf ic 1
      done
    with End_of_file -> ());
-  ignore (Unix.close_process_in ic);
+  (match Unix.close_process_in ic with
+   | Unix.WEXITED 0 -> ()
+   | _ -> CErrors.user_err Pp.(str "native cache: cannot run " ++ str (String.concat " " argv)));
   Buffer.contents buf
 
-let try_read_process_stdout argv = try read_process_stdout argv with _ -> "<unavailable>"
-
-(* --- epoch: everything that can change what a given source compiles to - *)
-
-let epoch_cache : string option ref = ref None
-
-(* Resolve the on-disk path of the running coqchk binary itself, so a
-   different Rocq/kernel build (different [nativecode.ml], different
-   OCaml runtime it was linked against) always gets a fresh epoch. Falls
-   back gracefully: an epoch component we fail to read becomes a fixed
-   marker string instead of raising, so a misconfigured environment fails
-   CLOSED (an unreachable, ever-missing epoch -> every lookup misses ->
-   plain recompilation, i.e. exactly today's behavior) rather than crashing
-   the checker or, worse, silently reusing an unrelated epoch. *)
 let self_binary_digest () =
-  try
-    let path =
-      if Sys.file_exists "/proc/self/exe" then Unix.readlink "/proc/self/exe" else Sys.executable_name
-    in
-    Sha256.hex_digest (read_file path)
-  with _ -> "<self-unavailable>"
+  let path =
+    if Sys.file_exists "/proc/self/exe" then Unix.readlink "/proc/self/exe" else Sys.executable_name
+  in
+  Sha256.hex_digest (read_file path)
 
-let ocamlfind_digest () =
-  try Sha256.hex_digest (read_file (Boot.Env.ocamlfind ())) with _ -> "<ocamlfind-unavailable>"
-
-let compute_epoch ~include_dirs =
+let compute_epoch ~include_dirs ~flags =
+  let ocamlfind = Boot.Env.ocamlfind () in
   let parts =
     [
       "self=" ^ self_binary_digest ();
-      "ocamlfind_bin=" ^ ocamlfind_digest ();
-      "ocamlopt_version=" ^ try_read_process_stdout [ Boot.Env.ocamlfind (); "ocamlopt"; "-version" ];
+      "ocamlfind_bin=" ^ Sha256.hex_digest (read_file ocamlfind);
+      "ocamlopt_version=" ^ read_process_stdout [ ocamlfind; "ocamlopt"; "-version" ];
       "ocaml_version=" ^ Sys.ocaml_version;
-      "backend=" ^ (match Sys.backend_type with Sys.Native -> "native" | Sys.Bytecode -> "bytecode" | Sys.Other s -> s);
-      "flags=-rectypes -w a -Oclassic -shared";
+      "flags=" ^ String.concat " " flags;
     ]
-    @ List.map (fun d -> "include_dir[" ^ d ^ "]=" ^ hash_tree d) (List.sort String.compare include_dirs)
+    @ List.map (fun d -> "include_dir[" ^ d ^ "]=" ^ hash_tree d) include_dirs
   in
   Sha256.hex_digest (String.concat "\n" parts)
 
-let epoch_tag ~include_dirs =
-  match !epoch_cache with
-  | Some e -> e
-  | None ->
-    let e = compute_epoch ~include_dirs in
-    epoch_cache := Some e;
-    e
+(* --- layout ------------------------------------------------------------- *)
 
-(* --- content-addressed layout ------------------------------------------ *)
+(* One cache entry is one compilation UNIT of the native conversion's
+   dependency closure (or one cast's own unit). Its key covers the epoch, the
+   unit's generated source and the digests of the compiled artifacts of every
+   earlier unit that source names ([deps]): the source mentions an earlier
+   unit only by module name, and a compile against a different
+   [.cmi]/[.cmx] of that module would link inconsistently, so the artifacts
+   themselves are part of the key. The unit's OCaml module name is derived
+   from the key, so two different artifacts can never share a name. *)
+let module_name_len = 40
 
-let key ~include_dirs source = Sha256.hex_digest (epoch_tag ~include_dirs ^ "\x00" ^ source)
+let module_name key = "Coq_native" ^ String.sub key 0 module_name_len
 
-(* A cache entry is a DIRECTORY, not a single file: compiling [fn.native]
-   produces [fn.cmxs] (what gets Dynlinked) alongside [fn.cmi] and [fn.cmx],
-   which a LATER bundle in the same process needs on its [-I] path to
-   reference this one's constants (see [Nativecode.stabilize_prefix] for why
-   that reference is even content-stable across processes in the first
-   place). Caching only the [.cmxs] would make any later, genuinely-new
-   compile that depends on a cache-served bundle fail outright for a missing
-   [.cmi] -- publishing the whole sibling set under one atomic directory
-   rename keeps every cache hit as capable of being depended on as a fresh
-   compile would have been. *)
-let companion_exts = [ ".cmxs"; ".cmi"; ".cmx" ]
+let object_ext = if Dynlink.is_native then ".cmxs" else ".cmo"
+
+(* An entry is a DIRECTORY holding the loadable object next to the interface
+   files a later unit needs on its [-I] path to reference this one's
+   constants. It is published by one atomic directory rename, so a reader
+   sees all of it or nothing. *)
+let companion_exts = if Dynlink.is_native then [ ".cmxs"; ".cmi"; ".cmx" ] else [ ".cmo"; ".cmi" ]
 
 let entry_dir root k = root / String.sub k 0 2 / k
 
@@ -155,73 +144,128 @@ let hits = ref 0
 let misses = ref 0
 let lock_wait = ref 0.
 
+let reset_stats () =
+  hits := 0;
+  misses := 0;
+  lock_wait := 0.
+
 let stats_line () =
   Printf.sprintf "NATIVECACHE hits=%d misses=%d lock_wait_s=%.3f" !hits !misses !lock_wait
 
+let note_miss () = incr misses
+
+(* --- the cache root -----------------------------------------------------*)
+
+type state = { root : string; epoch : string; run : string }
+
+let state : state option ref = ref None
+
+let get () =
+  match !state with
+  | Some s -> s
+  | None -> CErrors.anomaly (Pp.str "Nativecache.init was not called before the first native conversion.")
+
+let root () = (get ()).root
+
+(* [ROCQCHK_NATIVE_CACHE] names the shared cache directory. Without it the
+   checker still needs one (every unit is loaded from its entry directory, so
+   that the artifacts a later unit compiled against are exactly the ones
+   loaded): a private one is made and removed at exit by the process that
+   made it. [init] must run before the [-j] workers fork so that they share it. *)
+let init ~include_dirs ~flags =
+  match !state with
+  | Some _ -> ()
+  | None ->
+    let root =
+      match Sys.getenv_opt "ROCQCHK_NATIVE_CACHE" with
+      | Some d when d <> "" ->
+        let d = absolute d in
+        mkdir_p d;
+        d
+      | _ ->
+        let d = CUnix.mktemp_dir "Coq_native_cache" "" in
+        let owner = Unix.getpid () in
+        at_exit (fun () -> if Unix.getpid () = owner then try remove_tree d with _ -> ());
+        d
+    in
+    (* One id per run, shared with the workers through the environment: a
+       failure marker only means something within the run that wrote it. *)
+    let run =
+      match Sys.getenv_opt "ROCQCHK_NATIVE_RUN" with
+      | Some r when r <> "" -> r
+      | _ ->
+        Random.self_init ();
+        let r = Printf.sprintf "%d-%d" (Unix.getpid ()) (Random.bits ()) in
+        Unix.putenv "ROCQCHK_NATIVE_RUN" r;
+        r
+    in
+    state := Some { root; epoch = compute_epoch ~include_dirs ~flags; run }
+
+let key ~text ~deps = Sha256.hex_digest ((get ()).epoch ^ "\x00" ^ deps ^ "\x00" ^ text)
+
 (* --- public API ----------------------------------------------------------*)
 
-let cached_entry ~include_dirs source =
-  match cache_root () with
-  | None | Some "" -> None
-  | Some root ->
-    let k = key ~include_dirs source in
-    let dir = entry_dir root k in
-    if Sys.file_exists (dir / "obj.cmxs") then Some dir else None
-
-let fetch_to ~include_dirs source ~dest_stem =
-  match cached_entry ~include_dirs source with
-  | None ->
-    incr misses;
-    false
-  | Some dir ->
+let lookup key =
+  let dir = entry_dir (root ()) key in
+  if Sys.file_exists (dir / (module_name key ^ object_ext)) then begin
     incr hits;
-    List.iter
-      (fun ext ->
-        let src = dir / ("obj" ^ ext) in
-        if Sys.file_exists src then begin
-          let dest = dest_stem ^ ext in
-          if Sys.file_exists dest then Sys.remove dest;
-          try Unix.link src dest
-          with Unix.Unix_error ((Unix.EXDEV | Unix.EPERM | Unix.ENOSYS), _, _) -> copy_file ~src ~dst:dest
-        end)
-      companion_exts;
-    true
+    Some dir
+  end
+  else None
 
-let with_lock ~include_dirs source f =
-  match cache_root () with
-  | None | Some "" -> f ()
-  | Some root ->
-    let k = key ~include_dirs source in
-    let lp = lock_path root k in
-    mkdir_p (Filename.dirname lp);
-    let fd = Unix.openfile lp [ Unix.O_CREAT; Unix.O_RDWR ] 0o644 in
-    Fun.protect
-      ~finally:(fun () -> Unix.close fd)
-      (fun () ->
-        let t0 = Unix.gettimeofday () in
-        Unix.lockf fd Unix.F_LOCK 0;
-        lock_wait := !lock_wait +. (Unix.gettimeofday () -. t0);
-        Fun.protect ~finally:(fun () -> Unix.lockf fd Unix.F_ULOCK 0) f)
+let with_lock key f =
+  let lp = lock_path (root ()) key in
+  mkdir_p (Filename.dirname lp);
+  let fd = Unix.openfile lp [ Unix.O_CREAT; Unix.O_RDWR ] 0o644 in
+  Fun.protect
+    ~finally:(fun () -> Unix.close fd)
+    (fun () ->
+      let t0 = Unix.gettimeofday () in
+      Unix.lockf fd Unix.F_LOCK 0;
+      lock_wait := !lock_wait +. (Unix.gettimeofday () -. t0);
+      Fun.protect ~finally:(fun () -> Unix.lockf fd Unix.F_ULOCK 0) f)
 
-let publish ~include_dirs source ~compiled_stem =
-  match cache_root () with
-  | None | Some "" -> ()
-  | Some root ->
-    let k = key ~include_dirs source in
-    let dest = entry_dir root k in
-    mkdir_p (Filename.dirname dest);
-    let tmp = Printf.sprintf "%s.tmp.%d.%d" dest (Unix.getpid ()) (Random.bits ()) in
-    mkdir_p tmp;
-    List.iter
-      (fun ext ->
-        let src = compiled_stem ^ ext in
-        if Sys.file_exists src then copy_file ~src ~dst:(tmp / ("obj" ^ ext)))
-      companion_exts;
-    (* Same-directory rename is atomic on a POSIX filesystem: a concurrent
-       reader either sees no directory yet, or the complete sibling set --
-       never a partial one. [cached_entry] only trusts a directory once its
-       [.cmxs] is visible, and [.cmxs] is always the last file written into
-       [tmp] above relative to iteration order is irrelevant: the directory
-       itself is invisible under [dest] until this rename. *)
-    (try Unix.rmdir dest with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
-    Unix.rename tmp dest
+let marker_path key = (root ()) / String.sub key 0 2 / (key ^ ".failed." ^ (get ()).run)
+
+let failure_of key =
+  let p = marker_path key in
+  if Sys.file_exists p then Some (read_file p) else None
+
+let record_failure key msg =
+  let p = marker_path key in
+  mkdir_p (Filename.dirname p);
+  let oc = open_out_bin p in
+  output_string oc msg;
+  close_out oc
+
+let scratch key =
+  let dir = Printf.sprintf "%s.tmp.%d.%d" (entry_dir (root ()) key) (Unix.getpid ()) (Random.bits ()) in
+  mkdir_p dir;
+  dir
+
+let publish key ~scratch =
+  let name = module_name key in
+  let dest = entry_dir (root ()) key in
+  Array.iter
+    (fun f -> if not (List.exists (fun ext -> f = name ^ ext) companion_exts) then Sys.remove (scratch / f))
+    (Sys.readdir scratch);
+  List.iter
+    (fun ext ->
+      if not (Sys.file_exists (scratch / (name ^ ext))) then
+        CErrors.user_err Pp.(str "native unit " ++ str name ++ str " compiled without producing " ++ str ext))
+    companion_exts;
+  (* Same-directory rename is atomic on POSIX. An entry that already exists
+     (published by a process that did not hold the lock) wins: every user, in
+     every process, then loads that one set of artifacts. *)
+  (try Unix.rename scratch dest
+   with Unix.Unix_error ((Unix.ENOTEMPTY | Unix.EEXIST), _, _) -> remove_tree scratch);
+  dest
+
+let discard_scratch scratch = try remove_tree scratch with _ -> ()
+
+let artifact_digest ~dir ~name =
+  Sha256.hex_digest
+    (String.concat "\x00"
+       (List.map
+          (fun ext -> read_file (dir / (name ^ ext)))
+          (List.filter (fun e -> e <> object_ext) companion_exts)))

@@ -8,79 +8,85 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(** A content-addressed, cross-process compile cache for the checker's
-    native-conversion code. coqchk's native conversion ({!Nativeconv}) always
-    regenerates the small OCaml source for a cast's own code and its runtime
-    symbol table ({!Nativecode.mk_conv_code}: cheap, and still run on every
-    hit or miss); this module caches only the expensive step, handing
-    [ocamlfind opt -shared] its own previous output instead of re-running it
-    when the EXACT SAME source text has already been compiled under the
-    EXACT SAME toolchain.
+(** A content-addressed, cross-process cache of compiled native-conversion
+    units. The checker's native conversion ({!Nativeconv}) splits the code of
+    a cast's dependency closure into bounded units
+    ({!Nativelib.link_dependencies}) and compiles each once; this module lets
+    every process that shares the cache directory ([ROCQCHK_NATIVE_CACHE])
+    reuse a unit another process already compiled. Without that variable the
+    cache is a private directory, shared with the [-j] workers and removed
+    when the main process exits.
 
-    Safety invariant: a cache entry is addressed by a SHA-256 of the
-    generated source bytes together with an "epoch" fingerprint of every
-    component that can change what those bytes compile to (this coqchk
-    binary, the resolved [ocamlfind]/[ocamlopt], and the kernel's native
-    [.cmi] directory this build compiles against -- see {!val:epoch}). Two
-    different terms can therefore never share an entry: they generate
-    different source text (checked empirically: {!Nativecode.make_cenv}
-    resets every name/symbol counter per call, and the traversal of a term
-    is deterministic, so the same two terms checked against the same
-    "already linked" state always print byte-identical source). Any change
-    to the compiler, the kernel, or the generated-code shape changes the
-    epoch and the old entries simply stop being looked up: entries are never
-    actively invalidated, so a stale directory left over from a previous
-    build is inert, not a residual trust liability. *)
+    Safety invariant: an entry is addressed by a SHA-256 of the unit's
+    generated source, the digests of the compiled artifacts of every earlier
+    unit it names, and an "epoch" fingerprint of every component that can
+    change what the source compiles to (this coqchk binary, the resolved
+    [ocamlfind]/[ocamlopt], the compiler flags, the kernel's native [.cmi]
+    tree). The unit's module name is derived from that key. Entries are never
+    invalidated: a stale entry from another toolchain is simply never looked
+    up. *)
 
-(** Is a cache directory configured ([ROCQCHK_NATIVE_CACHE])? When false
-    every function below is a plain pass-through with no filesystem access:
-    behavior is identical to a build without this module. *)
-val enabled : unit -> bool
+(** [init ~include_dirs ~flags] fixes the cache root and the epoch. It must
+    run once, before any native conversion and before any [-j] worker is
+    forked. [include_dirs] and [flags] are those of every unit compile. *)
+val init : include_dirs:string list -> flags:string list -> unit
 
-(** [epoch_tag ~include_dirs] is the fingerprint identifying "this exact
-    toolchain, compiling with these include directories". Computed once
-    (memoized) from the first call; every subsequent call ignores its
-    argument and returns the same tag, which is safe because
-    [Nativelib.include_dirs] is set once at process start, before any
-    compile happens. *)
-val epoch_tag : include_dirs:string list -> string
+(** [key ~text ~deps]: hex key of a unit whose generated source is [text] and
+    whose referenced earlier units have the artifact digests [deps]. *)
+val key : text:string -> deps:string -> string
 
-(** [cached_entry ~include_dirs source] returns the directory of an
-    already-compiled entry (holding [obj.cmxs] and, when they exist,
-    [obj.cmi] / [obj.cmx]) for exactly this generated OCaml source under the
-    current epoch, if the cache holds one. *)
-val cached_entry : include_dirs:string list -> string -> string option
+val mkdir_p : string -> unit
 
-(** [fetch_to ~include_dirs source ~dest_stem] is [cached_entry] followed by
-    materializing each cached sibling file (([.cmxs]/[.cmi]/[.cmx])) at
-    [dest_stem] with that extension appended (hardlink when possible, else a
-    byte copy) -- the same set and paths a fresh [ocamlopt -shared] compile
-    of [dest_stem ^ ".native"] would have produced, so a LATER compile in the
-    same process that needs this bundle's [.cmi] finds it exactly where it
-    would after a real compile. Returns [true] on a hit. *)
-val fetch_to : include_dirs:string list -> string -> dest_stem:string -> bool
+val copy_file : src:string -> dst:string -> unit
 
-(** [with_lock ~include_dirs source f] runs [f] while holding an exclusive,
-    cross-process lock scoped to this exact source's cache key (a POSIX
-    [lockf] tied to an open file descriptor, so it is released automatically
-    if the holder dies or is killed -- no stale-lock cleanup is needed).
-    Concurrent [-j] workers compiling the same not-yet-cached source
-    therefore block on each other instead of both running [ocamlopt].
-    Callers MUST re-run {!cached_entry} (or {!fetch_to}) after acquiring
-    the lock: another worker may have published the entry while this one
-    was waiting. When the cache is disabled this is just [f ()]. *)
-val with_lock : include_dirs:string list -> string -> (unit -> 'a) -> 'a
+val absolute : string -> string
 
-(** [publish ~include_dirs source ~compiled_stem] atomically makes whichever
-    of [compiled_stem ^ ".cmxs"/".cmi"/".cmx"] exist available to
-    {!cached_entry} / {!fetch_to} for this exact source under the current
-    epoch (copy into a fresh temp directory, then [rename] the directory, so
-    a concurrent reader never observes a partial sibling set). Idempotent:
-    publishing the same source twice is safe, since by the safety invariant
-    any two publishes for the same key were compiled from byte-identical
-    source under the same epoch. *)
-val publish : include_dirs:string list -> string -> compiled_stem:string -> unit
+(** Number of hex digits of the key in a unit's module name. *)
+val module_name_len : int
 
-(** One-line summary of this process's hits / misses / lock-wait time, for
-    the harness's native-conversion report. *)
+(** OCaml module name of the unit with this key. *)
+val module_name : string -> string
+
+(** Extension of the loadable object of a unit. *)
+val object_ext : string
+
+(** Directory of the published entry for this key, if any (counts a hit). It
+    holds the unit's object, [.cmi] and (native) [.cmx], each named after
+    {!module_name}. *)
+val lookup : string -> string option
+
+(** Count one unit that had to be compiled. *)
+val note_miss : unit -> unit
+
+(** [with_lock key f] runs [f] holding an exclusive cross-process lock scoped
+    to this key (a POSIX [lockf], released if the holder dies). Callers MUST
+    re-run {!lookup} after acquiring it. Locks are held for one unit at a
+    time and never nested. *)
+val with_lock : string -> (unit -> 'a) -> 'a
+
+(** The message recorded by {!record_failure} for this key in this run, if
+    any. A worker that finds one fails with it instead of compiling again. *)
+val failure_of : string -> string option
+
+val record_failure : string -> string -> unit
+
+(** A fresh private directory inside the cache for compiling the unit with
+    this key (same filesystem as the entry, so {!publish} is a rename). The
+    compile must run with it as its working directory and name its source
+    relatively, so that the artifacts do not depend on where they were built. *)
+val scratch : string -> string
+
+(** [publish key ~scratch] keeps only the unit's object, [.cmi] and [.cmx] of
+    [scratch], renames it to the entry directory and returns that directory
+    (an entry that already exists wins). *)
+val publish : string -> scratch:string -> string
+
+val discard_scratch : string -> unit
+
+(** Digest of the [.cmi] and [.cmx] of a stored unit. *)
+val artifact_digest : dir:string -> name:string -> string
+
+val reset_stats : unit -> unit
+
+(** One-line summary of this process's hits / misses / lock-wait time. *)
 val stats_line : unit -> string
