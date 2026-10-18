@@ -417,4 +417,106 @@ if ! awk -v c0="$c0" -v c1="$c1" -v c2="$c2" 'BEGIN { exit !(c2 - c1 <= 3 * (c1 
   echo "AxLibQ2: ${c2}s of CPU for two queries, ${c1}s for one, ${c0}s for none"
   status=1
 fi
+
+# Many equal copies of one type that are separate objects. The walk without
+# reuse costs one pass over each copy, so two queries over them must cost at
+# most 1.5 times the file without queries, plus one second (a table that
+# compares the copies of a bucket one by one costs the square of their number):
+# - Coll20000: 20,000 axioms a(i) : forall x(i) : nat, nat, which differ only
+#   in a binder name;
+# - FunCopies: a functor with 100 parameters of one type, applied 200 times,
+#   each application having its own copy of the type.
+# And memory: a functor sealed by a module type gives its types as copies made
+# anew in each query, so what the reuse keeps must not grow with the number of
+# queries beyond what the entries need:
+# - SealedFun: 800 axioms of one 800-wide type in a sealed functor, queried
+#   in 13 groups and then as a whole; after the queries, the live heap (after
+#   Optimize Heap) must be at most 1.2 times the live heap of the same file
+#   without queries. Without reuse it is 1.15 times; with the types of every
+#   query kept it is 1.29 times (the file's own modules are most of the heap).
+coll() {
+  for ((k = 1; k <= $1; k++)); do echo "Axiom a$k : forall x$k : nat, nat."; done
+  for ((j = 0; j < $1; j += 100)); do
+    echo "Definition c$((j / 100)) : nat := $(seq -f 'a%g 0' $((j + 1)) $((j + 100)) | paste -sd+ | sed 's/+/ + /g')."
+  done
+  echo "Definition R : nat := $(seq -f 'c%g' 0 $(($1 / 100 - 1)) | paste -sd+ | sed 's/+/ + /g')."
+  for _ in 1 2; do echo "Print Assumptions R."; done
+}
+
+funcopies() {
+  echo "Module Type T. Parameter t : Type. End T."
+  echo "Module M <: T. Definition t := nat. End M."
+  echo "Module F (X : T)."
+  echo "  Parameters $(names 'a%g' $2): X.t."
+  echo "  Definition u : list X.t := $(seq -f 'cons a%g (' 1 $2 | tr '\n' ' ')nil$(printf ')%.0s' $(seq 1 $2))."
+  echo "End F."
+  seq -f 'Module P%g := F M.' 1 $1
+  echo "Definition R : list (list M.t) := $(seq -f 'cons P%g.u (' 1 $1 | tr '\n' ' ')nil$(printf ')%.0s' $(seq 1 $1))."
+  for _ in 1 2; do echo "Print Assumptions R."; done
+}
+
+# 800 axioms of an 800-wide type in a functor F sealed by T, applied to M, and
+# a root over groups of 64 of them; [$1] = queries asks for the group roots
+# in turn, then the whole.
+sealedfun() {
+  local n=$2 groups=() g lo hi leaves k
+  echo "Axiom G : $(yes 'nat ->' | head -n $n | tr '\n' ' ')Prop."
+  echo "Module Type S."
+  seq -f '  Parameter b%g : nat.' 1 $n
+  echo "End S."
+  echo "Module M <: S."
+  seq -f '  Axiom b%g : nat.' 1 $n
+  echo "End M."
+  echo "Module Type T."
+  echo "  Parameter W : Prop."
+  seq -f '  Parameter a%g : W.' 1 $n
+  echo "End T."
+  echo "Module F (X : S) : T."
+  echo "  Definition W : Prop := G $(seq -f 'X.b%g' 1 $n | tr '\n' ' ')."
+  seq -f "  Axiom a%g : G $(seq -f 'X.b%g' 1 $n | tr '\n' ' ')." 1 $n
+  echo "End F."
+  echo "Module P := F M."
+  echo "Definition f (x y : P.W) : P.W := x."
+  for ((lo = 1; lo <= n; lo += 64)); do
+    hi=$((lo + 63)); ((hi > n)) && hi=$n
+    leaves=()
+    for ((k = lo; k <= hi; k++)); do leaves+=("P.a$k"); done
+    echo "Definition r$lo := $(tree "${leaves[@]}")."
+    groups+=("r$lo")
+  done
+  echo "Definition R := $(tree "${groups[@]}")."
+  if [ "$1" = queries ]; then
+    for g in "${groups[@]}"; do echo "Print Assumptions $g."; done
+    echo "Print Assumptions R."
+  fi
+  echo "Optimize Heap."
+  echo "Print Debug GC."
+}
+
+coll 20000 > Coll20000.v
+funcopies 200 100 > FunCopies.v
+sealedfun queries 800 > SealedFunQ.v
+sealedfun none 800 > SealedFun0.v
+for f in Coll20000 FunCopies; do
+  grep -v '^Print Assumptions' "$f.v" > "${f}NoQuery.v"
+  full=$(cpu "$f.v")
+  base=$(cpu "${f}NoQuery.v")
+  expect "${f}NoQuery" "$(cat "${f}NoQuery.v.log")" ""
+  # Both queries print the same lines: one per axiom, and a header.
+  expect "$f" "$(wc -l < "$f.v.log")" 40002
+  if ! awk -v f="$full" -v b="$base" 'BEGIN { exit !(f <= 1.5 * b + 1) }'; then
+    echo "$f: ${full}s of CPU, against ${base}s without its queries"
+    status=1
+  fi
+done
+
+live() { awk '/^live_words:/ { gsub(/[.]/, "", $2); print $2 }' "$1"; }
+rocq c -q -R . P SealedFunQ.v > SealedFunQ.v.log 2>&1 || true
+rocq c -q -R . P SealedFun0.v > SealedFun0.v.log 2>&1 || true
+lq=$(live SealedFunQ.v.log); l0=$(live SealedFun0.v.log)
+expect SealedFunQ "$(grep -c '^Axioms:$' SealedFunQ.v.log)" 14
+if ! awk -v q="$lq" -v z="$l0" 'BEGIN { exit !(z > 0 && q <= 1.2 * z) }'; then
+  echo "SealedFunQ: ${lq} live words after its queries, against ${l0} without"
+  status=1
+fi
 exit $status

@@ -54,21 +54,27 @@ Axioms:
 X5.I is assumed to be positive.
 V5.I is assumed to be positive.
 b5 : V5.I -> X5.I -> nat
-Transparent constants:
-d6 :
-nat
-Q6.c :
-nat
-P6.c :
-nat
 Axioms:
-X6 : (fun _ _ : nat => nat) P6.c Q6.c
-Transparent constants:
-d6 :
-nat
-Q6.c :
-nat
-P6.c :
-nat
+Q6.g is assumed to be guarded.
+P6.g is assumed to be guarded.
+X6 : P6.g = Q6.g
 Axioms:
-X6 : (fun _ _ : nat => nat) P6.c Q6.c
+Q6.g is assumed to be guarded.
+P6.g is assumed to be guarded.
+X6 : P6.g = Q6.g
+Axioms:
+Q7.g is assumed to be guarded.
+P6.g is assumed to be guarded.
+X7 : P6.g = Q7.g
+Axioms:
+Q7.g is assumed to be guarded.
+P6.g is assumed to be guarded.
+X7 : P6.g = Q7.g
+Axioms:
+Q8.g is assumed to be guarded.
+P6.g is assumed to be guarded.
+X8 : P6.g = Q8.g
+Axioms:
+Q8.g is assumed to be guarded.
+P6.g is assumed to be guarded.
+X8 : P6.g = Q8.g

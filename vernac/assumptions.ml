@@ -268,8 +268,9 @@ let fold_with_full_binders g f n acc c =
     would have multiplied that. A replay keeps the objects it still has to
     visit in a list, and queues each reference of the types it collects once
     ([queued] in [replay_into]): two references are one element only when
-    their user names and their canonical names both agree, as [data] is
-    keyed by user name and an entry by canonical name, so that list holds
+    their user names and their canonical names both agree, as [data] and
+    the entries are keyed by user name and [find_entry] also requires the
+    canonical name to match, so that list holds
     each object at most once for those references and its length is bounded
     by the objects the replay reaches. When a query starts, the entries weigh
     at most [memo_factor] times the heaviest earlier query, and during the
@@ -305,31 +306,80 @@ let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref =
 
 let memo_factor = 2
 
+(** Folds [f] over the references in a type, in the order [traverse] meets
+    them: it must collect exactly the objects [traverse] adds to the set of
+    references of a type (the [Var], [Const], [Ind] and [Construct] arms of
+    [traverse], and the sub-terms [fold_with_full_binders] gives it), for a
+    replay of a constant without a body to reach what its walk reached. A
+    walk that meets the empty-match arm of [traverse] is never recorded. *)
+let rec fold_refs_of_type f acc t =
+  let open GlobRef in
+  match Constr.kind t with
+  | Constr.Var id -> f (VarRef id) acc
+  | Constr.Const (kn, _) -> f (ConstRef kn) acc
+  | Constr.Ind (ind, _) -> f (IndRef ind) acc
+  | Constr.Construct (cst, _) -> f (ConstructRef cst) acc
+  | _ -> fold_with_full_binders (fun _ () -> ()) (fun () acc t -> fold_refs_of_type f acc t) () acc t
+
+(** Terms, as types of constants without a body, by what a replay or a walk
+    sees of them: two terms are one key when they are equal up to binder
+    names and the references in them are the same, a reference being the same
+    when both its user name and its canonical name agree. A module alias or
+    [Include] gives one object two user names, and a functor application or a
+    sealed functor gives equal types as separate copies, so neither physical
+    identity nor [Constr.equal] (which compares a constant by canonical name
+    only) would do: separate copies would each be a key, and every lookup
+    would scan them, or two alias names would be merged. [==] is the fast path
+    of the equality; the hash reads the structure of the term and its
+    references, two passes over it where the walk of the type makes one. *)
+module TypeTbl = Hashtbl.Make (struct
+    type t = Constr.t
+    let rec equal_refs nargs a b =
+      a == b ||
+      (match Constr.kind a, Constr.kind b with
+       | Constr.Cast (c1, _, t1), Constr.Cast (c2, _, t2) ->
+         (* [compare_head_gen] looks through casts, the walk does not *)
+         equal_refs 0 c1 c2 && equal_refs 0 t1 t2
+       | Constr.Cast _, _ | _, Constr.Cast _ -> false
+       | Constr.Case (ci1, _, _, _, _, _, _), Constr.Case (ci2, _, _, _, _, _, _) ->
+         (* the walk expands a match through the inductive's declaration *)
+         Ind.UserOrd.equal ci1.Constr.ci_ind ci2.Constr.ci_ind && same_head nargs a b
+       | Constr.Const (c1, _), Constr.Const (c2, _) ->
+         Constant.UserOrd.equal c1 c2 && same_head nargs a b
+       | Constr.Ind (i1, _), Constr.Ind (i2, _) ->
+         Ind.UserOrd.equal i1 i2 && same_head nargs a b
+       | Constr.Construct (k1, _), Constr.Construct (k2, _) ->
+         Construct.UserOrd.equal k1 k2 && same_head nargs a b
+       | _ -> same_head nargs a b)
+    and same_head nargs a b =
+      Constr.compare_head_gen (fun _ _ _ -> true) (fun _ _ -> true) (fun _ _ -> false)
+        equal_refs nargs a b
+    let equal a b = equal_refs 0 a b
+    let hash t =
+      (* [Constr.hash] separates structurally different types and ignores
+         binder names, as the equality does; the references add the user
+         names it leaves out. *)
+      fold_refs_of_type (fun r h ->
+          (h * 65599 + GlobRef.UserOrd.hash r) * 65599 + GlobRef.CanOrd.hash r)
+        (Constr.hash t) t land max_int
+  end)
+
 (** The entries and their weight (see the invariant), in one immutable value
     that is assigned once per update: an interrupted update leaves the entries
     and the weight as they were. [verified] is a table, not part of that
     atomicity: it holds the types of constants without a body whose
-    references all have an entry. Entries are never replaced, so that stays
-    true until the value is replaced by a fresh one ([fresh_memo]), which
-    leaves the table of the old value behind. Kernel hash-consing makes the
-    types of many constants one physical term, and a check of the references
-    would otherwise repeat for each. *)
-module Verified = Hashtbl.Make (struct
-    type t = Constr.t
-    let equal = (==)
-    (* The structural hash of the term, one pass over it like the walk of the
-       type: a bounded hash would put the types that differ only beyond the
-       part it reads in one bucket. Physically equal terms hash alike. *)
-    let hash (t : t) = Constr.hash t
-  end)
-
+    references all have an entry (see [TypeTbl] for what one type is). Entries
+    are never replaced, so that stays true until the value is replaced by a
+    fresh one ([fresh_memo]), which leaves the table of the old value behind.
+    A type is entered once, however many equal copies there are, so the table
+    does not grow with the copies a sealed functor makes anew in each query. *)
 type memo = {
   entries : memo_entry GlobRef.Map_env.t;
   weight : int;
-  verified : unit Verified.t;
+  verified : unit TypeTbl.t;
 }
 
-let fresh_memo () = { entries = GlobRef.Map_env.empty; weight = 0; verified = Verified.create 16 }
+let fresh_memo () = { entries = GlobRef.Map_env.empty; weight = 0; verified = TypeTbl.create 16 }
 
 let memo = ref (fresh_memo ())
 
@@ -450,21 +500,6 @@ exception Miss
     of the deepest walk takes no more stack. *)
 let replay_weight = ref 0
 
-(** Folds [f] over the references in a type, in the order [traverse] meets
-    them: it must collect exactly the objects [traverse] adds to the set of
-    references of a type (the [Var], [Const], [Ind] and [Construct] arms of
-    [traverse], and the sub-terms [fold_with_full_binders] gives it), for a
-    replay of a constant without a body to reach what its walk reached. A
-    walk that meets the empty-match arm of [traverse] is never recorded. *)
-let rec fold_refs_of_type f acc t =
-  let open GlobRef in
-  match Constr.kind t with
-  | Constr.Var id -> f (VarRef id) acc
-  | Constr.Const (kn, _) -> f (ConstRef kn) acc
-  | Constr.Ind (ind, _) -> f (IndRef ind) acc
-  | Constr.Construct (cst, _) -> f (ConstructRef cst) acc
-  | _ -> fold_with_full_binders (fun _ () -> ()) (fun () acc t -> fold_refs_of_type f acc t) () acc t
-
 (** Sets of references in which two references are one element only when both
     their user names and their canonical names agree: [data] and the walk's
     set of references are keyed by user name, so a reference with the same
@@ -540,11 +575,11 @@ let replay_into data0 obj data =
               let typ = (lookup_constant kn).Declarations.const_type in
               let table = match !folded with
                 | Some t -> t
-                | None -> let t = Verified.create 16 in folded := Some t; t
+                | None -> let t = TypeTbl.create 16 in folded := Some t; t
               in
-              if Verified.mem table typ then loop pushed data todo
+              if TypeTbl.mem table typ then loop pushed data todo
               else
-                let () = Verified.replace table typ () in
+                let () = TypeTbl.replace table typ () in
                 loop pushed data (fold_refs_of_type push todo typ)
   in
   loop Mindmap_env.Set.empty data [obj]
@@ -608,11 +643,11 @@ let[@inline never] pop_type obj =
    [walk_object]). *)
 let[@inline never] type_verified obj =
   let (o, typ) = !last_type in
-  o == obj && Verified.mem !memo.verified typ
+  o == obj && TypeTbl.mem !memo.verified typ
 
 let[@inline never] note_verified obj =
   let (o, typ) = !last_type in
-  if o == obj then Verified.replace !memo.verified typ ()
+  if o == obj then TypeTbl.replace !memo.verified typ ()
 
 let[@inline never] edges_have_entries obj edges =
   type_verified obj

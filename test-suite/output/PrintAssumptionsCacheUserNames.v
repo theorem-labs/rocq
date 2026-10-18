@@ -1,7 +1,9 @@
-(* One object under two user names (a module alias, Include, a functor
-   application) has one entry per user name in the output, as the walk without
-   reuse reports it: the second query of each pair replays the type of an axiom
-   that names both. *)
+(* One object under two user names (a module alias, Include, a functor that
+   returns or includes its argument, an ascription) has one entry per user name
+   in the output, as the walk without reuse reports it: the second query of
+   each pair replays the type of an axiom that names both. A functor
+   application that defines its own constants gives another canonical name and
+   is not such a case. *)
 
 (* Alias, a fixpoint assumed guarded. *)
 Module N1.
@@ -50,12 +52,22 @@ Axiom b5 : V5.I -> X5.I -> nat.
 Print Assumptions b5.
 Print Assumptions b5.
 
-(* A functor application. *)
-Module Type T. Parameter c : nat. End T.
-Module F (A : T) <: T. Definition c := A.c. End F.
-Module P6 : T. Definition c := 0. End P6.
-Module Q6 := F P6.
-Axiom X6 : (fun _ _ : nat => nat) P6.c Q6.c.
-Definition d6 : nat := X6.
-Print All Dependencies d6.
-Print All Dependencies d6.
+(* Functor applications and ascription whose result has the canonical name of
+   its argument's field: a functor returning its argument, a functor including
+   its argument, and an ascription. *)
+Module Type U. Unset Guard Checking. Fixpoint g (n : nat) : nat := g n. Set Guard Checking. End U.
+Module P6. Unset Guard Checking. Fixpoint g (n : nat) : nat := g n. Set Guard Checking. End P6.
+Module G (A : U) := A.
+Module Q6 := G P6.
+Axiom X6 : P6.g = Q6.g.
+Print Assumptions X6.
+Print Assumptions X6.
+Module H (A : U). Include A. End H.
+Module Q7 := H P6.
+Axiom X7 : P6.g = Q7.g.
+Print Assumptions X7.
+Print Assumptions X7.
+Module Q8 <: U := P6.
+Axiom X8 : P6.g = Q8.g.
+Print Assumptions X8.
+Print Assumptions X8.
