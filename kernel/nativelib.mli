@@ -22,30 +22,31 @@ val get_load_paths : (unit -> string list) ref
 
 val load_obj : (string -> unit) ref
 
-val get_ml_filename : unit -> string * string
+(** [link_dependencies env sigma ts] compiles, loads and links the native code
+    of every constant and inductive that the terms [ts] reach and that is not
+    linked yet. The code is cut into units of bounded size (see
+    [ROCQCHK_NATIVE_UNIT_MIN]/[ROCQCHK_NATIVE_UNIT_MAX], in bytes of generated
+    source), generated and compiled in dependency order, each unit once per
+    cache ({!Nativecache}). A unit that cannot be compiled or loaded is an
+    error that names it; there is no fallback. *)
+val link_dependencies : Environ.env -> Genlambda.evars -> Constr.constr list -> unit
 
-(** [compile file code ~profile upds] will compile native [code] to [file],
-   and return the name of the object file (this name depends on
-   whether we are in byte mode or not; file is expected to be a .ml file)
-   together with [upds] rewritten so every entry's recorded link prefix is a
-   function of [code]'s own content rather than [file]'s random name (BET
-   #867/BET-29: needed for the compile cache to match across processes). *)
-val compile :
-  string -> Nativecode.global list -> profile:bool -> Nativecode.code_location_updates ->
-  string * Nativecode.code_location_updates
+(** [run_cast ~profile code symbols] compiles (through the cache) and runs the
+    unit holding a conversion's own [code]; all its dependencies must be linked
+    ({!link_dependencies}). Returns the values stored in [rt1] and [rt2]. *)
+val run_cast :
+  profile:bool -> Nativecode.global list -> Nativevalues.symbols ->
+  Nativevalues.t option * Nativevalues.t option
+
+(** Fixes the cache root and epoch; needed before any [-j] worker forks so
+    that every worker shares one cache. Called by {!link_dependencies} too. *)
+val init_cache : unit -> unit
 
 type native_library = Nativecode.global list * Nativevalues.symbols
 
 (** [compile_library (code, _) file] is similar to [compile file code]
    but will perform some extra tweaks to handle [code] as a Rocq lib. *)
 val compile_library : native_library -> string -> unit
-
-(** [execute_library file upds] dynamically loads library [file],
-    updates the library locations [upds], and returns the values stored
-    in [rt1] and [rt2] *)
-val execute_library :
-  prefix:string -> string -> Nativevalues.symbols -> Nativecode.code_location_updates ->
-  Nativevalues.t option * Nativevalues.t option
 
 (** [enable_library] marks the given library for dynamic loading
     the next time [link_libraries] is called. *)

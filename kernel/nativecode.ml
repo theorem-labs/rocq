@@ -2269,109 +2269,148 @@ let compile_mind cenv mb mind stack =
   in
   Array.fold_left_i f stack mb.mind_packets
 
-type code_location_update = {
-  upd_info : link_info ref;
-  upd_prefix : string;
-}
+(* A constant or inductive whose native code is not loaded yet and that a
+   conversion needs. [plan_deps] lists them in a canonical dependency order;
+   [Nativelib.link_dependencies] compiles them in bounded units. *)
+type plan_item =
+  | Plan_mind of MutInd.t * mutual_inductive_body * link_info ref
+  | Plan_const of Constant.t * constant_body * link_info ref
 
-type code_location_updates =
-  code_location_update Mindmap_env.t * code_location_update Cmap_env.t
+let item_key = function
+  | Plan_mind (mind, _, _) -> "I" ^ KerName.to_string (MutInd.user mind)
+  | Plan_const (c, _, _) -> "C" ^ KerName.to_string (Constant.user c)
 
-type linkable_code = global list * symbols * code_location_updates
+let describe_item = function
+  | Plan_mind (mind, _, _) -> "inductive " ^ MutInd.to_string mind
+  | Plan_const (c, _, _) -> "constant " ^ Constant.to_string c
 
-let empty_updates = Mindmap_env.empty, Cmap_env.empty
+(* The name the item's main value has in generated source. Two distinct items
+   (distinct [item_key]) with the same name would shadow each other. *)
+let item_def_name = function
+  | Plan_mind (mind, _, _) -> "ind_" ^ string_of_mind mind
+  | Plan_const (c, _, _) -> "const_" ^ string_of_con c
 
-(* BET #867/BET-29 native-conversion cache: [compile_deps] stamps every newly
-   compiled constant/inductive with whatever [prefix] the caller passed in
-   (normally derived from a random temp filename, see [Nativelib.get_ml_filename]).
-   That prefix is never read back for THIS bundle's own generated text (every
-   [Gconstant]/[Gind] this bundle defines uses the literal "" prefix, see
-   [compile_constant]/[compile_mind]); it only becomes visible later, when a
-   DIFFERENT bundle in the same process references one of these now-linked
-   constants ([get_const_prefix]/[Lconst], [get_mind_prefix]) and prints it as
-   "<prefix>const_<name>". A random prefix there makes that later bundle's
-   generated text -- and so its cache key -- depend on which process compiled
-   this one first. [stabilize_prefix] replaces the recorded prefix on every
-   entry of [upds] with a caller-supplied one (expected to be a hash of this
-   bundle's own generated text) so two processes that compile the identical
-   bundle always record the identical prefix, and so can compile identical
-   LATER bundles against it too. *)
-let stabilize_prefix prefix (mind_updates, const_updates) =
-  let rewrite u = { u with upd_prefix = prefix } in
-  (Mindmap_env.map rewrite mind_updates, Cmap_env.map rewrite const_updates)
+type plan_ref = RConst of Constant.t | RMind of MutInd.t
 
-let compile_mind_deps cenv env prefix
-    (comp_stack, (mind_updates, const_updates) as init) mind =
-  let mib,nameref,_ = lookup_mind_key mind env in
-  if is_code_loaded nameref
-    || Mindmap_env.mem mind mind_updates
-  then init
-  else
-    let comp_stack =
-      compile_mind cenv mib mind comp_stack
-    in
-    let upd = {
-      upd_info = nameref;
-      upd_prefix = prefix;
-    } in
-    let mind_updates = Mindmap_env.add mind upd mind_updates in
-    (comp_stack, (mind_updates, const_updates))
-
-(* This function compiles all necessary dependencies of t, and generates code in
-   reverse order, as well as linking information updates *)
-let compile_deps cenv env sigma prefix init t =
-  let rec aux env lvl init t =
-  match kind t with
-  | Ind ((mind,_),_u) -> compile_mind_deps cenv env prefix init mind
-  | Const (c, _u) ->
-    let c, _ = get_alias env sigma c in
-    let cb,(nameref,_),_ = lookup_constant_key c env in
-    let (_, (_, const_updates)) = init in
-    if is_code_loaded nameref
-    || (Cmap_env.mem c const_updates)
-    then init
-    else
-      let comp_stack, (mind_updates, const_updates) =
-        match cb.const_body with
-        | Def t ->
-           aux env lvl init t
-        | _ -> init
-      in
-      let code = compile_constant cenv env sigma c cb in
-      let upd = {
-        upd_info = nameref;
-        upd_prefix = prefix;
-      } in
-      let comp_stack = code@comp_stack in
-      let const_updates = Cmap_env.add c upd const_updates in
-      comp_stack, (mind_updates, const_updates)
-  | Construct (((mind,_),_),_u) -> compile_mind_deps cenv env prefix init mind
-  | Proj (p,_,c) ->
-    let init = compile_mind_deps cenv env prefix init (Projection.mind p) in
-    aux env lvl init c
-  | Case (ci, _u, _pms, _p, _iv, _c, _ac) ->
-      let mind = fst ci.ci_ind in
-      let init = compile_mind_deps cenv env prefix init mind in
-      fold_constr_with_binders succ (aux env) lvl init t
-  | Var id ->
-    let open Context.Named.Declaration in
-    begin match lookup_named id env with
-      | LocalDef (_,t,_) ->
-        aux env lvl init t
-      | _ -> init
-    end
-  | Rel n when n > lvl ->
-    let open Context.Rel.Declaration in
-    let decl = lookup_rel n env in
-    let env = env_of_rel n env in
-    begin match decl with
-    | LocalDef (_,t,_) ->
-      aux env lvl init t
-    | LocalAssum _ -> init
-    end
-  | _ -> fold_constr_with_binders succ (aux env) lvl init t
+(* The constants and inductives [t] mentions directly: bodies of constants are
+   not entered. *)
+let shallow_refs env sigma t =
+  let acc = ref [] in
+  let add r = acc := r :: !acc in
+  let rec aux env lvl () t =
+    match kind t with
+    | Ind ((mind,_),_u) -> add (RMind mind)
+    | Const (c, _u) ->
+      let c, _ = get_alias env sigma c in
+      add (RConst c)
+    | Construct (((mind,_),_),_u) -> add (RMind mind)
+    | Proj (p,_,c) ->
+      add (RMind (Projection.mind p));
+      aux env lvl () c
+    | Case (ci, _u, _pms, _p, _iv, _c, _ac) ->
+      add (RMind (fst ci.ci_ind));
+      fold_constr_with_binders succ (aux env) lvl () t
+    | Var id ->
+      let open Context.Named.Declaration in
+      begin match lookup_named id env with
+        | LocalDef (_,t,_) -> aux env lvl () t
+        | _ -> ()
+      end
+    | Rel n when n > lvl ->
+      let open Context.Rel.Declaration in
+      let decl = lookup_rel n env in
+      let env = env_of_rel n env in
+      begin match decl with
+        | LocalDef (_,t,_) -> aux env lvl () t
+        | LocalAssum _ -> ()
+      end
+    | _ -> fold_constr_with_binders succ (aux env) lvl () t
   in
-  aux env 0 init t
+  aux env 0 () t;
+  !acc
+
+(* Dependency level of every constant planned in this process: 1 + the
+   highest level among its direct dependencies, inductives being level 0. It
+   is a property of the dependency graph alone, so it does not change with
+   which items happen to be linked already. *)
+let level_tbl = ref Cmap_env.empty
+
+(* Every constant and inductive that [ts] reaches whose code is not loaded,
+   each once, ordered by (level, name): a function of the SET of items only,
+   never of which term was visited first. Items of one level never depend on
+   each other, so any cut of the sequence respects dependencies. *)
+let plan_deps env sigma ts =
+  let items = ref [] in
+  let memo_c = ref Cmap_env.empty in
+  let memo_m = ref Mindmap_env.empty in
+  let visit_mind mind =
+    if Mindmap_env.mem mind !memo_m then 0
+    else begin
+      memo_m := Mindmap_env.add mind () !memo_m;
+      let mib,nameref,_ = lookup_mind_key mind env in
+      if not (is_code_loaded nameref) then begin
+        let it = Plan_mind (mind, mib, nameref) in
+        items := (0, item_key it, it) :: !items
+      end;
+      0
+    end
+  in
+  let rec visit = function
+    | RMind mind -> visit_mind mind
+    | RConst c -> visit_const c
+  and visit_const c =
+    match Cmap_env.find_opt c !memo_c with
+    | Some l -> l
+    | None ->
+      let cb,(nameref,_),_ = lookup_constant_key c env in
+      let l =
+        if is_code_loaded nameref then
+          Option.default 0 (Cmap_env.find_opt c !level_tbl)
+        else begin
+          let deps = match cb.const_body with
+            | Def t -> shallow_refs env sigma t
+            | _ -> []
+          in
+          let lvl = List.fold_left (fun acc r -> max acc (visit r + 1)) 0 deps in
+          let it = Plan_const (c, cb, nameref) in
+          items := (lvl, item_key it, it) :: !items;
+          level_tbl := Cmap_env.add c lvl !level_tbl;
+          lvl
+        end
+      in
+      memo_c := Cmap_env.add c l !memo_c;
+      l
+  in
+  List.iter (fun t -> List.iter (fun r -> ignore (visit r)) (shallow_refs env sigma t)) ts;
+  let cmp (l1, k1, _) (l2, k2, _) =
+    let c = Int.compare l1 l2 in
+    if c <> 0 then c else String.compare k1 k2
+  in
+  List.map (fun (l, _, it) -> (l, it)) (List.sort cmp !items)
+
+(* One compilation unit under construction: it has a name/symbol environment
+   of its own, so its text depends only on its own items and on the units
+   those reference. *)
+type unit_builder = { ub_cenv : cenv }
+
+let new_unit () = { ub_cenv = make_cenv () }
+
+let unit_header =
+  Glet(Ginternal "symbols_tbl", MLprimitive (Get_symbols, [|MLglobal (Ginternal "()")|]))
+
+(* The globals defining [item], in definition order. *)
+let unit_add_item u env sigma = function
+  | Plan_mind (mind, mib, _) -> List.rev (compile_mind u.ub_cenv mib mind [])
+  | Plan_const (c, cb, _) -> List.rev (compile_constant u.ub_cenv env sigma c cb)
+
+let unit_symbols u = get_cenv_symbols u.ub_cenv
+
+(* [prefix] (the unit's module name plus a dot) is what every later unit
+   writes in front of the names of [items]. *)
+let link_items items prefix =
+  List.iter (fun item ->
+      let r = match item with Plan_mind (_, _, r) -> r | Plan_const (_, _, r) -> r in
+      r := Linked prefix) items
 
 let compile_constant_field cenv env con acc cb =
     let gl = compile_constant cenv env (empty_evars env) con cb in
@@ -2395,20 +2434,21 @@ let mk_open s = Gopen s
 let mk_internal_let s code =
   Glet(Ginternal s, code)
 
-(* ML Code for conversion function *)
-let mk_conv_code env sigma prefix t1 t2 =
+(* ML Code for conversion function. Every dependency must already be linked
+   ([Nativelib.link_dependencies]): the code of a cast never bundles one. *)
+let ensure_linked env sigma ts =
+  match plan_deps env sigma ts with
+  | [] -> ()
+  | (_, item) :: _ ->
+    anomaly Pp.(str "native conversion: " ++ str (describe_item item)
+                ++ str " is not linked before the cast's own unit.")
+
+let mk_conv_code env sigma t1 t2 =
+  ensure_linked env sigma [t1; t2];
   let cenv = make_cenv () in
-  let gl, (mind_updates, const_updates) =
-    let init = ([], empty_updates) in
-    compile_deps cenv env sigma prefix init t1
-  in
-  let gl, (mind_updates, const_updates) =
-    let init = (gl, (mind_updates, const_updates)) in
-    compile_deps cenv env sigma prefix init t2
-  in
   let code1 = lambda_of_constr env sigma t1 in
   let code2 = lambda_of_constr env sigma t2 in
-  let (gl,code1) = compile_with_fv cenv env sigma UGlobal gl None code1 in
+  let (gl,code1) = compile_with_fv cenv env sigma UGlobal [] None code1 in
   let (gl,code2) = compile_with_fv cenv env sigma UGlobal gl None code2 in
   let t1 = mk_internal_let "t1" code1 in
   let t2 = mk_internal_let "t2" code2 in
@@ -2417,40 +2457,22 @@ let mk_conv_code env sigma prefix t1 t2 =
   let setref1 = Glet(Ginternal "_", MLsetref("rt1",g1)) in
   let setref2 = Glet(Ginternal "_", MLsetref("rt2",g2)) in
   let gl = List.rev (setref2 :: setref1 :: t2 :: t1 :: gl) in
-  let header = Glet(Ginternal "symbols_tbl",
-    MLprimitive (Get_symbols,
-      [|MLglobal (Ginternal "()")|])) in
-  let symbols = get_cenv_symbols cenv in
-  header::gl, symbols, (mind_updates, const_updates)
+  unit_header::gl, get_cenv_symbols cenv
 
-let mk_norm_code env sigma prefix t =
+let mk_norm_code env sigma t =
+  ensure_linked env sigma [t];
   let cenv = make_cenv () in
-  let gl, (mind_updates, const_updates) =
-    let init = ([], empty_updates) in
-    compile_deps cenv env sigma prefix init t
-  in
   let code = lambda_of_constr env sigma t in
-  let (gl,code) = compile_with_fv cenv env sigma UGlobal gl None code in
+  let (gl,code) = compile_with_fv cenv env sigma UGlobal [] None code in
   let t1 = mk_internal_let "t1" code in
   let g1 = MLglobal (Ginternal "t1") in
   let setref = Glet(Ginternal "_", MLsetref("rt1",g1)) in
   let gl = List.rev (setref :: t1 :: gl) in
-  let header = Glet(Ginternal "symbols_tbl",
-    MLprimitive (Get_symbols,
-      [|MLglobal (Ginternal "()")|])) in
-  let symbols = get_cenv_symbols cenv in
-  header::gl, symbols, (mind_updates, const_updates)
+  unit_header::gl, get_cenv_symbols cenv
 
 let mk_library_header (symbols : Nativevalues.symbols) =
   let symbols = Format.sprintf "(str_decode \"%s\")" (str_encode symbols) in
   [Glet(Ginternal "symbols_tbl", MLglobal (Ginternal symbols))]
-
-let update_location r =
-  r.upd_info := Linked r.upd_prefix
-
-let update_locations (ind_updates,const_updates) =
-  Mindmap_env.iter (fun _ -> update_location) ind_updates;
-  Cmap_env.iter (fun _ -> update_location) const_updates
 
 let add_header_comment mlcode s =
   Gcomment s :: mlcode
