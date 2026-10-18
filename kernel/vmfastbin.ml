@@ -1,11 +1,11 @@
-(* VM fast paths for self-contained Corelib binary-number operations.
+(* VM fast paths for self-contained binary-number operations.
 
-   The checker captures a fixed body for each canonical definition while it
-   checks Corelib. The interpreter registers a closure only when its checked
-   body is structurally equal to one of those reference terms; a closure is
-   never selected by name. The C implementations below need no transparent
-   definition other than the closure they replace, so an [Opaque] dependency
-   cannot change their bytecode semantics. *)
+   The checker captures a checked body for each canonical Corelib or Stdlib
+   anchor once per process. The interpreter registers a closure only when its
+   checked body is structurally equal to one of those reference terms; a
+   closure is never selected by name. The C implementations below need no
+   transparent definition other than the closure they replace, so an [Opaque]
+   dependency cannot change their bytecode semantics. *)
 
 open Declarations
 
