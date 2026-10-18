@@ -18,6 +18,8 @@ let enabled = Sys.getenv_opt "ROCQ_VM_FASTBIN" = Some "1"
 let anchors = [
   "Corelib.BinNums.PosDef.Pos.compare_cont", Pos_compare_cont;
   "Corelib.BinNums.PosDef.Pos.eqb", Pos_eqb;
+  "Stdlib.BinNums.PosDef.Pos.compare_cont", Pos_compare_cont;
+  "Stdlib.BinNums.PosDef.Pos.eqb", Pos_eqb;
 ]
 
 let references : (operation, Constr.t) Hashtbl.t = Hashtbl.create (List.length anchors)
@@ -32,15 +34,20 @@ let arity = function
 
 external register_closure : Vmvalues.values -> int -> int -> unit = "rocq_vmfast_register"
 
-let closure_arity value =
-  Vmvalues.closure_arity (Obj.magic value : Vmvalues.vfun)
+let trace = Sys.getenv_opt "ROCQ_VM_FASTBIN_TRACE" = Some "1"
+
 
 let capture_reference kn = function
   | Def body ->
     let name = Names.Constant.to_string kn in
+    if trace && (String.ends_with ~suffix:".compare_cont" name
+                 || String.ends_with ~suffix:".Pos.eqb" name) then
+      Printf.eprintf "FASTBIN candidate: %s\n%!" name;
     List.iter (fun (anchor, op) ->
-        if String.equal name anchor && not (Hashtbl.mem references op) then
-          Hashtbl.add references op body)
+        if String.equal name anchor && not (Hashtbl.mem references op) then begin
+          if trace then Printf.eprintf "FASTBIN reference: %s\n%!" name;
+          Hashtbl.add references op body
+        end)
       anchors
   | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> ()
 
@@ -54,6 +61,7 @@ let operation_of_body body =
 let register _kn body value =
   if enabled then
     match operation_of_body body with
-    | Some op when Int.equal (closure_arity value) (arity op) ->
+    | Some op ->
+      if trace then Printf.eprintf "FASTBIN register op=%d\n%!" (id op);
       register_closure value (id op) (arity op)
-    | Some _ | None -> ()
+    | None -> ()

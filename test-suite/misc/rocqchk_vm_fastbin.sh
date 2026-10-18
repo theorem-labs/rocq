@@ -55,20 +55,20 @@ for i, j in pairs:
     x, y = values[i], values[j]
     r = ("Eq", "Lt", "Gt")[i % 3]
     write(f"Definition compare_cont_{i} : Pos.compare_cont {r} p{i} p{j} = "
-          f"{r if x == y else comparison(x, y)} := eq_refl.\n")
+          f"{r if x == y else comparison(x, y)} := ltac:(vm_compute; reflexivity).\n")
     write(f"Definition eqb_{i} : Pos.eqb p{i} p{j} = "
-          f"{'true' if x == y else 'false'} := eq_refl.\n")
+          f"{'true' if x == y else 'false'} := ltac:(vm_compute; reflexivity).\n")
 
     zx = x if i % 3 == 0 else -x
     zy = y if i % 2 == 0 else -y
     write(f"Definition zcompare_{i} : Z.compare {z_literal(zx)} {z_literal(zy)} = "
-          f"{comparison(zx, zy)} := eq_refl.\n")
+          f"{comparison(zx, zy)} := ltac:(vm_compute; reflexivity).\n")
 
-write("Definition zcompare_zero : Z.compare 0%Z (Zpos p0) = Lt := eq_refl.\n")
+write("Definition zcompare_zero : Z.compare 0%Z (Zpos p0) = Lt := ltac:(vm_compute; reflexivity).\n")
 
 deep = 1 << 4096
 write(f"Definition p_too_deep := {deep}%positive.\n")
-write("Definition eqb_too_deep : Pos.eqb p_too_deep p_too_deep = true := eq_refl.\n")
+write("Definition eqb_too_deep : Pos.eqb p_too_deep p_too_deep = true := ltac:(vm_compute; reflexivity).\n")
 out.close()
 PY
 
@@ -87,10 +87,14 @@ if ! ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 rocqchk "${rocqchk_args[@]}" Fast
   exit 1
 fi
 
+grep -v '^FASTBIN ' "$d/bytecode.err" > "$d/bytecode.clean.err"
 grep -v '^FASTBIN ' "$d/fastbin.err" > "$d/fastbin.clean.err"
 diff -u "$d/bytecode.out" "$d/fastbin.out"
-diff -u "$d/bytecode.err" "$d/fastbin.clean.err"
+diff -u "$d/bytecode.clean.err" "$d/fastbin.clean.err"
 for op in 0 1; do
-  grep -Eq "^FASTBIN op=$op hits=[1-9][0-9]* fallbacks=[0-9]+$" "$d/fastbin.err"
+  if ! grep -Eq "^FASTBIN op=$op hits=[1-9][0-9]* fallbacks=[0-9]+$" "$d/fastbin.err"; then
+    grep '^FASTBIN ' "$d/fastbin.err" >&2
+    exit 1
+  fi
 done
 grep -Eq '^FASTBIN op=1 hits=[1-9][0-9]* fallbacks=[1-9][0-9]*$' "$d/fastbin.err"
