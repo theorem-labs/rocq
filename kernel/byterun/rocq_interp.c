@@ -16,7 +16,6 @@
 #include <stdio.h>
 #include <signal.h>
 #include <stdint.h>
-#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -26,9 +25,8 @@
 #include <caml/version.h>
 #include <caml/callback.h>
 #include <caml/fail.h>
-#include <caml/gc.h>
 #define ROCQ_FASTBIN_MAX 16384
-#define ROCQ_FASTBIN_OPS 12
+#define ROCQ_FASTBIN_OPS 2
 #define ROCQ_FASTBIN_MAX_DEPTH 4096
 
 struct rocq_fastbin_entry {
@@ -138,12 +136,7 @@ value rocq_vmfast_register(value closure, value op, value arity)
   value rocq_fastbin_out__;                                                    \
   if (rocq_fastbin_find(rocq_env, &rocq_fastbin_op__, &rocq_fastbin_arity__)   \
       && rocq_extra_args + 1 == rocq_fastbin_arity__) {                        \
-    if (getenv("ROCQ_VM_FASTBIN_TRACE") != NULL)                              \
-      fprintf(stderr, "FASTBIN try op=%d arity=%d extra=%ld\n",                \
-        rocq_fastbin_op__, rocq_fastbin_arity__, rocq_extra_args);             \
     if (rocq_fastbin_eval(rocq_fastbin_op__, sp, &rocq_fastbin_out__)) {       \
-      if (getenv("ROCQ_VM_FASTBIN_TRACE") != NULL)                             \
-        fprintf(stderr, "FASTBIN success op=%d\n", rocq_fastbin_op__);         \
       accu = rocq_fastbin_out__;                                               \
       rocq_fastbin_hits++;                                                     \
       rocq_fastbin_hits_by_op[rocq_fastbin_op__]++;                            \

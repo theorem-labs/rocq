@@ -14,7 +14,6 @@ type operation =
   | Pos_eqb
 
 let enabled = Sys.getenv_opt "ROCQ_VM_FASTBIN" = Some "1"
-let trace = Sys.getenv_opt "ROCQ_VM_FASTBIN_TRACE" = Some "1"
 
 let anchors = [
   "Corelib.BinNums.PosDef.Pos.compare_cont", Pos_compare_cont;
@@ -61,11 +60,9 @@ let capture_reference kn = function
   | Def body ->
     let name = Names.Constant.to_string kn in
     List.iter (fun (anchor, op) ->
-        if String.equal name anchor && not (Hashtbl.mem references op) then
-          if String.equal (marshal_hex body) (fixed_serialization op) then
-            Hashtbl.add references op body
-          else if trace then
-            Printf.eprintf "FASTBIN reject pinned reference: %s\n%!" name)
+        if String.equal name anchor && not (Hashtbl.mem references op)
+           && String.equal (marshal_hex body) (fixed_serialization op) then
+          Hashtbl.add references op body)
       anchors
   | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> ()
 
@@ -79,7 +76,5 @@ let operation_of_body body =
 let register _kn body value =
   if enabled then
     match operation_of_body body with
-    | Some op ->
-      if trace then Printf.eprintf "FASTBIN register op=%d\n%!" (id op);
-      register_closure value (id op) (arity op)
+    | Some op -> register_closure value (id op) (arity op)
     | None -> ()

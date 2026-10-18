@@ -11,15 +11,21 @@ d=$(mktemp -d)
 trap 'find -- "$d" -depth -delete' EXIT
 
 # The oracle is generated independently with Python arbitrary-precision
-# integers. The corpus includes xH, deep xO and xI chains, deterministic random
-# positives, both Z signs, and a positive beyond the C fast path's depth limit.
+# integers. Literals use Corelib's postfix constructor notation, so the test
+# needs no Stdlib. The corpus includes xH, deep xO and xI chains,
+# deterministic random positives, both Z signs, a Corelib-shaped copy of
+# Pos.compare_cont with one changed case (it must stay on bytecode), and a
+# positive beyond the C fast path's depth limit.
 python3 - "$d/FastBin.v" <<'PY'
 import random
 import sys
 
 out = open(sys.argv[1], "w", encoding="utf-8")
 write = out.write
-write("From Stdlib Require Import ZArith NArith PArith.\nLocal Open Scope positive_scope.\n\n")
+write("From Corelib Require Import PosDef IntDef.\nLocal Open Scope positive_scope.\n\n")
+
+def pos(value):
+    return "(1" + "".join("~" + bit for bit in bin(value)[3:]) + ")"
 
 rng = random.Random(0xF457B1)
 values = [
@@ -41,7 +47,7 @@ values = [
 values.extend(rng.getrandbits(bits) | (1 << (bits - 1)) | 1 for bits in (5, 37, 65, 129, 257))
 
 for i, value in enumerate(values):
-    write(f"Definition p{i} := {value}%positive.\n")
+    write(f"Definition p{i} : positive := {pos(value)}.\n")
 write("\n")
 write("""
 Module ShadowPos.
@@ -58,7 +64,7 @@ Fixpoint compare_cont (r:comparison) (x y:positive) {struct y} : comparison :=
   | 1, 1 => r
   end.
 End ShadowPos.
-Definition shadow_compare : ShadowPos.compare_cont Eq 1 3%positive = Gt :=
+Definition shadow_compare : ShadowPos.compare_cont Eq 1 1~1 = Gt :=
   ltac:(vm_compute; reflexivity).
 
 """)
@@ -67,7 +73,9 @@ def comparison(x, y):
     return "Lt" if x < y else "Gt" if x > y else "Eq"
 
 def z_literal(value):
-    return f"({value})%Z"
+    if value == 0:
+        return "Z0"
+    return f"({'Zpos' if value > 0 else 'Zneg'} {pos(abs(value))})"
 
 pairs = [(i, (i * 7 + 3) % len(values)) for i in range(len(values))]
 for i, j in pairs:
@@ -89,11 +97,10 @@ for i, j in pairs:
     write(f"Definition zcompare_{i} : Z.compare {z_literal(zx)} {z_literal(zy)} = "
           f"{comparison(zx, zy)} := ltac:(vm_compute; reflexivity).\n")
 
-write("Definition zcompare_zero_kernel : Z.compare 0%Z (Zpos p0) = Lt := eq_refl.\n")
-write("Definition zcompare_zero : Z.compare 0%Z (Zpos p0) = Lt := ltac:(vm_compute; reflexivity).\n")
+write("Definition zcompare_zero_kernel : Z.compare Z0 (Zpos p0) = Lt := eq_refl.\n")
+write("Definition zcompare_zero : Z.compare Z0 (Zpos p0) = Lt := ltac:(vm_compute; reflexivity).\n")
 
-deep = 1 << 4096
-write(f"Definition p_too_deep := {deep}%positive.\n")
+write(f"Definition p_too_deep : positive := Eval vm_compute in Pos.iter xO 1 {pos(4096)}.\n")
 write("Definition eqb_too_deep_kernel : Pos.eqb p_too_deep p_too_deep = true := eq_refl.\n")
 write("Definition eqb_too_deep : Pos.eqb p_too_deep p_too_deep = true := ltac:(vm_compute; reflexivity).\n")
 out.close()
