@@ -60,6 +60,28 @@
 # bounded reuse, and 1,240 to 1,280 MiB with a cache that keeps every entry
 # until the environment changes, which runs out here.
 #
+# Memory and time within one query, with the same caps: constants without a
+# body (axioms, parameters, Admitted lemmas) whose types name many objects,
+# one query over all of them. The walk without reuse keeps no reference of
+# such a type (the constant maps to None), so the reuse must keep none
+# either: a set per constant, which hash-consing makes cheap for the
+# environment, costs the product of the two counts, in memory and in time.
+# - AxMod2000: 2,000 modules A(k) : S, S holding Parameter a : T, T naming
+#   2,000 definitions through BIG.
+# - Par1200: Parameters a1 ... a1200 : T, T naming 1,200 definitions.
+# - AxOne2000, AdmOne1300: 2,000 Axioms, or 1,300 Lemmas proved by
+#   Admitted, of type BIG = 0, BIG naming as many definitions.
+# - AxLib2000: a library of 2,000 axioms of type BIG, BIG naming 2,000
+#   axioms, under a root R of trees of 64, and a client that queries R.
+# Each answers without reuse under 1,000,000 KiB on the dev and the release
+# profile (peak RSS 340 to 640 MB), and runs out of memory with a set per
+# constant. The client of AxLib2000 must also take at most 0.095 times the CPU
+# time of compiling the library: stock and this reuse take 0.05 to 0.075, a
+# set per constant 0.11 to 0.15, so a query under a Timeout of that
+# proportion of the library's time answers with the one and not with the
+# other. Both are measured in the same run, so the machine's speed does not
+# matter.
+#
 # OCaml 5 ignores ulimit -s (it runs OCaml code on its own stack), and the
 # memory caps were measured on OCaml 4 only: the stack and memory cases are
 # skipped there, rather than pass on files that cannot overflow.
@@ -257,6 +279,55 @@ blockretain() {
   for ((g = 0; g < q; g++)); do echo "Print Assumptions G$g."; done
 }
 
+# The names of seq format $1, from 1 to $2, on one line.
+names() { seq -f "$1" 1 "$2" | tr '\n' ' '; }
+
+# Constants without a body whose types name $1 definitions, one query over
+# all of them. [axmod]: $1 modules A(k) : S, S holding one Parameter of that
+# type. [axpar]: $1 Parameters of that type in one command. [axone]: $1 Axioms
+# of type BIG = 0, one command each, taken by a definition H.
+axmod() {
+  seq -f 'Definition c%g := 0.' 1 $1
+  echo "Abbreviation BIG := ($(seq -f 'c%g' 1 $1 | paste -sd+ | sed 's/+/ + /g'))."
+  echo "Module Type S. Parameter a : (fun _ : nat => nat) BIG. End S."
+  seq -f 'Declare Module A%g : S.' 1 $1
+  echo "Definition all : nat := $(seq -f 'A%g.a' 1 $1 | paste -sd+ | sed 's/+/ + /g')."
+  echo "Print Assumptions all."
+}
+
+axpar() {
+  seq -f 'Definition c%g := 0.' 1 $1
+  echo "Abbreviation BIG := ($(seq -f 'c%g' 1 $1 | paste -sd+ | sed 's/+/ + /g'))."
+  echo "Parameters $(names 'a%g' $1): (fun _ : nat => nat) BIG."
+  echo "Definition all : nat := $(seq -f 'a%g' 1 $1 | paste -sd+ | sed 's/+/ + /g')."
+  echo "Print Assumptions all."
+}
+
+axone() {
+  echo "Definition F ($(names 'x%g' $1): nat) : nat := 0."
+  seq -f 'Definition b%g := 0.' 1 $1
+  echo "Abbreviation BIG := (F $(names 'b%g' $1))."
+  echo "Definition T := BIG = 0."
+  echo "Definition H ($(names 'y%g' $1): T) : nat := 0."
+  if [ "$2" = Admitted ]; then seq -f 'Lemma a%g : BIG = 0. Admitted.' 1 $1
+  else seq -f 'Axiom a%g : BIG = 0.' 1 $1; fi
+  echo "Definition G := H $(names 'a%g' $1)."
+  echo "Print Assumptions G."
+}
+
+# A library of $1 axioms a(k) of type BIG, which names the $1 axioms b(k)
+# through G, and a root R: a balanced tree of [f] over all the a(k).
+axlib() {
+  echo "Axiom G : $(yes 'nat ->' | head -n $1 | tr '\n' ' ')Prop."
+  seq -f 'Axiom b%g : nat.' 1 $1
+  echo "Abbreviation BIG := (G $(names 'b%g' $1))."
+  seq -f 'Axiom a%g : BIG.' 1 $1
+  echo "Definition f (x y : BIG) : BIG := x."
+  local leaves=() k
+  for ((k = 1; k <= $1; k++)); do leaves+=("a$k"); done
+  echo "Definition R := $(tree "${leaves[@]}")."
+}
+
 { chain 50000; echo "Print Assumptions x50000."; } > Chain50000.v
 { chain 72500; echo "Print Assumptions x72500."; } > Chain72500.v
 leaves=()
@@ -293,4 +364,36 @@ for f in Retain64 BlockRetain64; do
   out=$(ulimit -s 8192; ulimit -v 1000000; rocq c -q -R . P "$f.v" 2>&1) || true
   expect "$f" "$out" "$want"
 done
+
+# The axioms are printed newest first, an order the case does not pin: the
+# lines are compared sorted.
+axmod 2000 > AxMod2000.v
+axpar 1200 > Par1200.v
+axone 2000 Axiom > AxOne2000.v
+axone 1300 Admitted > AdmOne1300.v
+for f in AxMod2000 Par1200 AxOne2000 AdmOne1300; do
+  case $f in
+    AxMod*) want=$({ echo "Axioms:"; seq -f 'A%g.a : (fun _ : nat => nat) BIG' 1 2000; } | sort) ;;
+    Par*) want=$({ echo "Axioms:"; seq -f 'a%g : (fun _ : nat => nat) BIG' 1 1200; } | sort) ;;
+    AdmOne*) want=$({ echo "Axioms:"; seq -f 'a%g : BIG = 0' 1 1300; } | sort) ;;
+    *) want=$({ echo "Axioms:"; seq -f 'a%g : BIG = 0' 1 2000; } | sort) ;;
+  esac
+  out=$(ulimit -s 8192; ulimit -v 1000000; rocq c -q -R . P "$f.v" 2>&1 | sort) || true
+  expect "$f" "$out" "$want"
+done
+
+# A library of 2,000 axioms of a wide type, compiled once, and a client that
+# queries a root over all of them, under the memory cap, with the time bound.
+axlib 2000 > Lib.v
+printf 'Require Import P.Lib.\nPrint Assumptions R.\n' > AxLib2000.v
+libcpu=$(cpu Lib.v)
+expect Lib "$(cat Lib.v.log)" ""
+out=$(ulimit -s 8192; ulimit -v 1000000; rocq c -q -R . P AxLib2000.v 2>&1 | grep -E '^(Axioms:|[ab][0-9]+ : )' | sort) || true
+want=$({ echo "Axioms:"; seq -f 'a%g : BIG' 1 2000; seq -f 'b%g : nat' 1 2000; } | sort)
+expect AxLib2000 "$out" "$want"
+client=$(cpu AxLib2000.v)
+if ! awk -v c="$client" -v l="$libcpu" 'BEGIN { exit !(c <= 0.095 * l) }'; then
+  echo "AxLib2000: ${client}s of CPU for the client, against ${libcpu}s for the library"
+  status=1
+fi
 exit $status

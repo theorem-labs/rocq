@@ -209,9 +209,13 @@ let fold_with_full_binders g f n acc c =
     Soundness invariant: for every object [o] and environment [E], the entry
     for [o] under [E] is the pair of the [data] value the walk gives [o] and
     the edge set of [o]:
-    - for an object with a body, its direct references (its value's set);
-    - for an axiom, the direct references of its type, which the walk visits
-      but does not keep;
+    - for an object with a body, its direct references (its value's set, the
+      very set [data] holds);
+    - for a constant without a body (axiom, parameter, primitive, symbol), no
+      set: the walk visits the references in its type and keeps none, so the
+      entry only says that the edges are the references of the type, which a
+      replay collects again ([type_refs]) from the type that
+      [lookup_constant] finds, as the walk does;
     - for a member of a mutual block, the block's direct references plus
       every inductive and constructor of the block.
     An object is never recorded when its walk, including every walk nested in
@@ -250,10 +254,19 @@ let fold_with_full_binders g f n acc c =
     environment. An entry weighs one plus the size of its edge set, and a
     block's edge set, which all its members share, counts once. A query weighs
     the entries it records plus the entries it replays, counted the same way:
-    about the size of the [data] it builds. So when a query starts, the
-    entries weigh at most [memo_factor] times the heaviest earlier query, and
-    during the query they grow by at most its own weight. Clearing is always
-    sound: it only costs reuse. *)
+    about the size of the [data] it builds.
+
+    What an entry keeps is what [data] keeps for the object, or less: the set
+    of an object with a body is the very set [data] holds for it, shared, not
+    copied; a constant without a body keeps nothing, as [data] maps it to
+    [None]; a block keeps one set for all its members, the set [data] holds
+    for each of them plus the members. So the entries a query records are
+    about as large as the [data] it builds, whatever the objects are: many
+    constants without a body whose types name many objects cost no more than
+    [data] does, where a set per constant would have multiplied that. When a
+    query starts, the entries weigh at most [memo_factor] times the heaviest
+    earlier query, and during the query they grow by at most its own weight.
+    Clearing is always sound: it only costs reuse. *)
 
 (* ROCQ_DEBUG_ASSUMPTIONS_MEMO=1, read once at startup, reports each completed
    replay, and each clearing of the entries by the weight bound, on standard
@@ -262,25 +275,40 @@ let fold_with_full_binders g f n acc c =
    change. *)
 let debug_memo = Sys.getenv_opt "ROCQ_DEBUG_ASSUMPTIONS_MEMO" = Some "1"
 
+(** The edges of an entry: the objects its walk reaches directly. *)
+type memo_edges =
+  | Direct of GlobRef.Set_env.t
+  | Type_of of Constant.t
+      (** the references in the type of a constant without a body, collected
+          from the type when needed *)
+
 type memo_entry = {
   memo_obj : GlobRef.t;
   memo_value : GlobRef.Set_env.t option;
-  memo_edges : GlobRef.Set_env.t;
-  memo_size : int;  (** cardinal of [memo_edges] *)
+  memo_edges : memo_edges;
+  memo_size : int;  (** cardinal of the set of [Direct], 0 for [Type_of] *)
 }
 
 let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref = ref None
 
-let memo_entries = ref (GlobRef.Map_env.empty : memo_entry GlobRef.Map_env.t)
-
 let memo_factor = 2
 
-(** The weight of [memo_entries], of the heaviest query in the environment
-    before the current one, and of the current query (see the invariant).
-    Weights are added before the entries they count, and the entries are
-    cleared before their weight, so an interrupted update can only overstate
-    the weight. *)
-let memo_weight = ref 0
+(** The entries and their weight (see the invariant), in one immutable value
+    that is assigned once per update: an interrupted update leaves the entries
+    and the weight as they were. *)
+type memo = {
+  entries : memo_entry GlobRef.Map_env.t;
+  weight : int;
+}
+
+let memo_empty = { entries = GlobRef.Map_env.empty; weight = 0 }
+
+let memo = ref memo_empty
+
+(** The weight of the heaviest query in the environment before the current
+    one, and of the current query. They only decide when the entries are
+    cleared, so an interrupted update that leaves them stale costs reuse or
+    memory, never output. *)
 let memo_heaviest = ref 0
 let query_weight = ref 0
 
@@ -304,14 +332,12 @@ let sync_memo access =
   | Some (env', mp', access') when env' == env && ModPath.equal mp' mp && access' == access ->
     memo_heaviest := max !memo_heaviest !query_weight;
     query_weight := 0;
-    if !memo_weight > memo_factor * !memo_heaviest then begin
-      memo_entries := GlobRef.Map_env.empty;
-      memo_weight := 0;
+    if !memo.weight > memo_factor * !memo_heaviest then begin
+      memo := memo_empty;
       if debug_memo then Printf.eprintf "[assumptions-memo] cleared\n%!"
     end
   | _ ->
-    memo_entries := GlobRef.Map_env.empty;
-    memo_weight := 0;
+    memo := memo_empty;
     memo_heaviest := 0;
     query_weight := 0;
     memo_key := Some (env, mp, access)
@@ -326,7 +352,7 @@ let sync_memo access =
    reuse: the other canonical name is walked, and is not recorded
    ([user_name_unrecorded]). *)
 let find_entry obj =
-  match GlobRef.Map_env.find_opt obj !memo_entries with
+  match GlobRef.Map_env.find_opt obj !memo.entries with
   | Some e when GlobRef.CanOrd.equal e.memo_obj obj -> Some e
   | _ -> None
 
@@ -339,22 +365,28 @@ let has_entry obj = Option.has_some (find_entry obj)
    would go down to it and miss, and the walk that follows would replay every
    level below again, quadratic in the depth of a chain. Unlike [has_entry],
    this compares user names only. *)
-let user_name_unrecorded obj = not (GlobRef.Map_env.mem obj !memo_entries)
+let user_name_unrecorded obj = not (GlobRef.Map_env.mem obj !memo.entries)
 
 (* Inlined into [walk_object]: the call would add a frame at the bottom of the
    deepest walk, under [Map_env.add], and so shorten the longest chain that
-   fits in the stack. *)
+   fits in the stack. [edges] is the set the walk found: the entry keeps it,
+   unless [obj] is a constant without a body, where [data] keeps nothing and
+   the entry keeps the constant instead (see the invariant). *)
 let[@inline always] add_entry value edges obj =
-  let size = GlobRef.Set_env.cardinal edges in
-  memo_weight := !memo_weight + 1 + size;
+  let memo_edges, size = match value, obj with
+    | None, GlobRef.ConstRef kn -> Type_of kn, 0
+    | _ -> Direct edges, GlobRef.Set_env.cardinal edges
+  in
   query_weight := !query_weight + 1 + size;
-  let e = { memo_obj = obj; memo_value = value; memo_edges = edges; memo_size = size } in
-  memo_entries := GlobRef.Map_env.add obj e !memo_entries
+  let e = { memo_obj = obj; memo_value = value; memo_edges; memo_size = size } in
+  let m = !memo in
+  memo := { entries = GlobRef.Map_env.add obj e m.entries; weight = m.weight + 1 + size }
 
-(* The members are added to a new map, which is assigned once: a block
-   recorded in part (a [Timeout] or an interrupt during the loop) would keep
-   its other members from ever being recorded ([user_name_unrecorded]), and
-   every replay that reaches one of them would miss deep in the graph. *)
+(* The members are added to a new map, which is assigned once, with the
+   weight: a block recorded in part (a [Timeout] or an interrupt during the
+   loop) would keep its other members from ever being recorded
+   ([user_name_unrecorded]), and every replay that reaches one of them would
+   miss deep in the graph. *)
 let record_block mind mib contents =
   let members = Array.fold_left_i (fun n members oib ->
       let ind = (mind, n) in
@@ -369,11 +401,13 @@ let record_block mind mib contents =
     let edges = GlobRef.Set_env.union contents members in
     let size = GlobRef.Set_env.cardinal edges in
     let weight = GlobRef.Set_env.cardinal members + size in
-    memo_weight := !memo_weight + weight;
     query_weight := !query_weight + weight;
-    memo_entries := GlobRef.Set_env.fold (fun obj entries ->
-        let e = { memo_obj = obj; memo_value = Some contents; memo_edges = edges; memo_size = size } in
-        GlobRef.Map_env.add obj e entries) members !memo_entries
+    let m = !memo in
+    let entries = GlobRef.Set_env.fold (fun obj entries ->
+        let e = { memo_obj = obj; memo_value = Some contents; memo_edges = Direct edges; memo_size = size } in
+        GlobRef.Map_env.add obj e entries) members m.entries
+    in
+    memo := { entries; weight = m.weight + weight }
 
 exception Miss
 
@@ -381,6 +415,24 @@ exception Miss
     global rather than an argument of [loop], so that the replay at the bottom
     of the deepest walk takes no more stack. *)
 let replay_weight = ref 0
+
+(** The references in a type, as [traverse] finds them with an empty
+    accumulator: the objects it meets, not their dependencies. For a constant
+    without a body this is what the walk gives as the edges of the constant,
+    the walk of a recorded object never meeting an empty match. *)
+let rec type_refs ctx acc t =
+  let open GlobRef in
+  match Constr.kind t with
+  | Constr.Var id -> Set_env.add (VarRef id) acc
+  | Constr.Const (kn, _) -> Set_env.add (ConstRef kn) acc
+  | Constr.Ind (ind, _) -> Set_env.add (IndRef ind) acc
+  | Constr.Construct (cst, _) -> Set_env.add (ConstructRef cst) acc
+  | _ -> fold_with_full_binders Context.Rel.add type_refs ctx acc t
+
+let memo_edge_refs = function
+  | Direct edges -> edges
+  | Type_of kn ->
+    type_refs Context.Rel.empty GlobRef.Set_env.empty (lookup_constant kn).Declarations.const_type
 
 (* [data0] is the query's [data] before the replay. An object in it is
    skipped, as the walk skips it. Every other object reached needs an entry
@@ -423,7 +475,7 @@ let replay_into data0 obj data =
               | None -> pushed
             in
             let () = replay_weight := !replay_weight + e.memo_size in
-            let todo = GlobRef.Set_env.fold (fun r todo -> r :: todo) e.memo_edges todo in
+            let todo = GlobRef.Set_env.fold (fun r todo -> r :: todo) (memo_edge_refs e.memo_edges) todo in
             loop pushed data todo
   in
   loop Mindmap_env.Set.empty data [obj]
