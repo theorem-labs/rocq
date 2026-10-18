@@ -2048,6 +2048,7 @@ value rocq_interprete
 }
 
 value rocq_push_ra(value code) {
+  if (Is_long(code)) caml_failwith("Rocq VM: diagnostic: rocq_push_ra called with immediate code");
   code_t tcode = Code_val(code);
   print_instr("push_ra");
   rocq_sp -= 3;
@@ -2090,6 +2091,13 @@ value rocq_push_vstack(value stk, value max_stack_size) {
 value  rocq_interprete_ml(value tcode, value a, value t, value g, value e, value ea) {
   // Registering the other arguments w.r.t. the OCaml GC is done by rocq_interprete
   CAMLparam1(tcode);
+  if (Is_long(tcode)) {
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "Rocq VM: diagnostic: rocq_interprete_ml called with immediate tcode %ld (expected bytecode block)",
+             (long) Long_val(tcode));
+    caml_failwith(msg);
+  }
   print_instr("rocq_interprete");
   value res = rocq_interprete(Code_val(tcode), a, t, g, e, Long_val(ea));
   print_instr("end rocq_interprete");
