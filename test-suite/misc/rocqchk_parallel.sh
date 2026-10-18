@@ -93,6 +93,10 @@ run() {
 {
   for j in 1 2 4; do run "correct library, -j $j" -j $j -R "$d/good" "" -norec Lib; done
   for j in 1 2 4; do run "ill-typed proof, -j $j" -j $j -R "$d" "" -norec Lib; done
+  # A worker that stops after each check gives its other proofs back: the
+  # verdict is the same.
+  run "correct library, -j 4, -worker-budget 0" -j 4 -worker-budget 0 -R "$d/good" "" -norec Lib
+  run "ill-typed proof, -j 4, -worker-budget 0" -j 4 -worker-budget 0 -R "$d" "" -norec Lib
   # Profiling is sequential only.
   run "-j 2 with -profile" -j 2 -profile "$d/prof.json" -R "$d/good" "" -norec Lib
 } > "$d/actual.out"
