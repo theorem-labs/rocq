@@ -1,0 +1,74 @@
+Axioms:
+N1.f is assumed to be guarded.
+M1.f is assumed to be guarded.
+b1 : M1.f = N1.f
+Axioms:
+N1.f is assumed to be guarded.
+M1.f is assumed to be guarded.
+b1 : M1.f = N1.f
+Axioms:
+N1.f is assumed to be guarded.
+K2.f is assumed to be guarded.
+c2 : N1.f = K2.f
+Axioms:
+N1.f is assumed to be guarded.
+K2.f is assumed to be guarded.
+c2 : N1.f = K2.f
+Axioms:
+MA3.f is assumed to be guarded.
+M3.f is assumed to be guarded.
+X3 : (fun _ _ : nat => nat) (M3.f 0) (MA3.f 0)
+Axioms:
+MA3.f is assumed to be guarded.
+M3.f is assumed to be guarded.
+X3 : (fun _ _ : nat => nat) (M3.f 0) (MA3.f 0)
+Transparent constants:
+d4 :
+nat
+MA4.c :
+nat
+M4.c :
+nat
+Nat.add :
+nat -> nat -> nat
+Axioms:
+X4b : (fun _ : nat => nat) MA4.c
+X4a : (fun _ : nat => nat) M4.c
+Transparent constants:
+d4 :
+nat
+MA4.c :
+nat
+M4.c :
+nat
+Nat.add :
+nat -> nat -> nat
+Axioms:
+X4b : (fun _ : nat => nat) MA4.c
+X4a : (fun _ : nat => nat) M4.c
+Axioms:
+X5.I is assumed to be positive.
+V5.I is assumed to be positive.
+b5 : V5.I -> X5.I -> nat
+Axioms:
+X5.I is assumed to be positive.
+V5.I is assumed to be positive.
+b5 : V5.I -> X5.I -> nat
+Transparent constants:
+d6 :
+nat
+Q6.c :
+nat
+P6.c :
+nat
+Axioms:
+X6 : (fun _ _ : nat => nat) P6.c Q6.c
+Transparent constants:
+d6 :
+nat
+Q6.c :
+nat
+P6.c :
+nat
+Axioms:
+X6 : (fun _ _ : nat => nat) P6.c Q6.c

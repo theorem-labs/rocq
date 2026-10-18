@@ -267,11 +267,14 @@ let fold_with_full_binders g f n acc c =
     many objects cost no more than [data] does, where a set per constant
     would have multiplied that. A replay keeps the objects it still has to
     visit in a list, and queues each reference of the types it collects once
-    ([queued] in [replay_into]), so that list holds each object at most once
-    for those references and its length is bounded by the objects the replay
-    reaches. When a query starts, the entries weigh at most [memo_factor]
-    times the heaviest earlier query, and during the query they grow by at
-    most its own weight. Clearing is always sound: it only costs reuse. *)
+    ([queued] in [replay_into]): two references are one element only when
+    their user names and their canonical names both agree, as [data] is
+    keyed by user name and an entry by canonical name, so that list holds
+    each object at most once for those references and its length is bounded
+    by the objects the replay reaches. When a query starts, the entries weigh
+    at most [memo_factor] times the heaviest earlier query, and during the
+    query they grow by at most its own weight. Clearing is always sound: it
+    only costs reuse. *)
 
 (* ROCQ_DEBUG_ASSUMPTIONS_MEMO=1, read once at startup, reports each completed
    replay, and each clearing of the entries by the weight bound, on standard
@@ -304,21 +307,31 @@ let memo_factor = 2
 
 (** The entries and their weight (see the invariant), in one immutable value
     that is assigned once per update: an interrupted update leaves the entries
-    and the weight as they were. [verified] holds the last few types of
-    constants without a body whose references all have an entry: entries are
-    never replaced, so that stays true until the value is replaced by
-    [memo_empty]. Kernel hash-consing makes the types of many constants one
-    physical term, which a check of the references would otherwise repeat for
-    each. *)
+    and the weight as they were. [verified] is a table, not part of that
+    atomicity: it holds the types of constants without a body whose
+    references all have an entry. Entries are never replaced, so that stays
+    true until the value is replaced by a fresh one ([fresh_memo]), which
+    leaves the table of the old value behind. Kernel hash-consing makes the
+    types of many constants one physical term, and a check of the references
+    would otherwise repeat for each. *)
+module Verified = Hashtbl.Make (struct
+    type t = Constr.t
+    let equal = (==)
+    (* The structural hash of the term, one pass over it like the walk of the
+       type: a bounded hash would put the types that differ only beyond the
+       part it reads in one bucket. Physically equal terms hash alike. *)
+    let hash (t : t) = Constr.hash t
+  end)
+
 type memo = {
   entries : memo_entry GlobRef.Map_env.t;
   weight : int;
-  verified : Constr.t list;
+  verified : unit Verified.t;
 }
 
-let memo_empty = { entries = GlobRef.Map_env.empty; weight = 0; verified = [] }
+let fresh_memo () = { entries = GlobRef.Map_env.empty; weight = 0; verified = Verified.create 16 }
 
-let memo = ref memo_empty
+let memo = ref (fresh_memo ())
 
 (** The weight of the heaviest query in the environment before the current
     one, and of the current query. They only decide when the entries are
@@ -348,11 +361,11 @@ let sync_memo access =
     memo_heaviest := max !memo_heaviest !query_weight;
     query_weight := 0;
     if !memo.weight > memo_factor * !memo_heaviest then begin
-      memo := memo_empty;
+      memo := fresh_memo ();
       if debug_memo then Printf.eprintf "[assumptions-memo] cleared\n%!"
     end
   | _ ->
-    memo := memo_empty;
+    memo := fresh_memo ();
     memo_heaviest := 0;
     query_weight := 0;
     memo_key := Some (env, mp, access)
@@ -452,10 +465,18 @@ let rec fold_refs_of_type f acc t =
   | Constr.Construct (cst, _) -> f (ConstructRef cst) acc
   | _ -> fold_with_full_binders (fun _ () -> ()) (fun () acc t -> fold_refs_of_type f acc t) () acc t
 
-(** Sets of references ordered by canonical name, unlike [GlobRef.Set_env]: a
-    reference with the same user name and another canonical name is another
-    element, as it is for [find_entry]. *)
-module Queued = Stdlib.Set.Make (GlobRef.CanOrd)
+(** Sets of references in which two references are one element only when both
+    their user names and their canonical names agree: [data] and the walk's
+    set of references are keyed by user name, so a reference with the same
+    canonical name and another user name (a module alias, [Include], a
+    functor application) must be queued too, and one with the same user name
+    and another canonical name must still reach [find_entry] and miss. *)
+module Queued = Stdlib.Set.Make (struct
+    type t = GlobRef.t
+    let compare a b =
+      let c = GlobRef.UserOrd.compare a b in
+      if c <> 0 then c else GlobRef.CanOrd.compare a b
+  end)
 
 (* [data0] is the query's [data] before the replay. An object in it is
    skipped, as the walk skips it. Every other object reached needs an entry
@@ -481,20 +502,22 @@ let replay_into data0 obj data =
      again, so the list holds at most the distinct references of the types
      reached, besides the counted sets. The type of many constants is one
      physical term (kernel hash-consing): one already folded in this replay
-     ([types], the last few) is not folded again, its references are queued. *)
+     ([folded], by physical identity, however many types there are) is not
+     folded again, its references are queued. *)
+  let folded = ref None in
   let queued = ref Queued.empty in
   let push r todo =
     let q = Queued.add r !queued in
     if q == !queued then todo else (queued := q; r :: todo)
   in
-  let rec loop pushed types data = function
+  let rec loop pushed data = function
     | [] -> data
     | obj :: todo ->
-      if GlobRef.Map_env.mem obj data0 then loop pushed types data todo
+      if GlobRef.Map_env.mem obj data0 then loop pushed data todo
       else match find_entry obj with
       | None -> raise Miss
       | Some e ->
-        if GlobRef.Map_env.mem obj data then loop pushed types data todo
+        if GlobRef.Map_env.mem obj data then loop pushed data todo
         else
           let () = incr replay_weight in
           let data = GlobRef.Map_env.add obj e.memo_value data in
@@ -503,7 +526,7 @@ let replay_into data0 obj data =
             | GlobRef.VarRef _ | GlobRef.ConstRef _ -> None
           in
           match block with
-          | Some mind when Mindmap_env.Set.mem mind pushed -> loop pushed types data todo
+          | Some mind when Mindmap_env.Set.mem mind pushed -> loop pushed data todo
           | _ ->
             let pushed = match block with
               | Some mind -> Mindmap_env.Set.add mind pushed
@@ -512,15 +535,19 @@ let replay_into data0 obj data =
             match e.memo_edges with
             | Direct { refs; size } ->
               let () = replay_weight := !replay_weight + size in
-              loop pushed types data (GlobRef.Set_env.fold (fun r todo -> r :: todo) refs todo)
+              loop pushed data (GlobRef.Set_env.fold (fun r todo -> r :: todo) refs todo)
             | Type_of kn ->
               let typ = (lookup_constant kn).Declarations.const_type in
-              if List.memq typ types then loop pushed types data todo
+              let table = match !folded with
+                | Some t -> t
+                | None -> let t = Verified.create 16 in folded := Some t; t
+              in
+              if Verified.mem table typ then loop pushed data todo
               else
-                let types = typ :: (match types with a :: b :: c :: _ -> [a; b; c] | l -> l) in
-                loop pushed types data (fold_refs_of_type push todo typ)
+                let () = Verified.replace table typ () in
+                loop pushed data (fold_refs_of_type push todo typ)
   in
-  loop Mindmap_env.Set.empty [] data [obj]
+  loop Mindmap_env.Set.empty data [obj]
 
 (** [Some data'] when every object the replay reaches outside [data] has an
     entry, where [data'] is [data] plus the closure of [obj], stopping at
@@ -550,34 +577,42 @@ let get_constant_body access kn =
       incr unreplayable_steps;
       None
 
-(* Whether each reference in [edges] of [obj] has an entry. The type of many
-   constants without a body is one physical term (kernel hash-consing), and
+(* The types of the constants without a body whose walk is in progress,
+   innermost first, kept on the heap like [inductive_marks]: the walk would
+   otherwise keep its type live across the walk of that type, which adds a slot
+   to the frame of [walk_object]. [pop_type] moves the innermost to
+   [last_type], where [edges_have_entries] reads it. The environment is not
+   consulted again for it. *)
+let type_stack = ref ([] : Constr.t list)
+let last_type = ref (GlobRef.VarRef (Id.of_string "_"), Constr.mkProp)
+
+let[@inline never] pop_type obj =
+  match !type_stack with
+  | t :: l -> last_type := (obj, t); type_stack := l
+  | [] -> assert false
+
+(* Whether each reference in [edges] of [obj] has an entry. When [obj] is the
+   constant without a body whose type was popped last ([last_type], tagged
+   with the object itself, compared physically), [edges] are the references of
+   that type, since a walk that reaches this check met no empty match. The
+   type of many such constants is one physical term (kernel hash-consing), and
    the references of a type do not depend on the constant: entries are never
    replaced, so a type whose references all had an entry keeps them until the
-   entries are cleared, and the types of the last few such constants are
-   remembered ([memo.verified]) rather than checked again for each. For such
-   a constant [edges] are the references of its type, since a walk that
-   reaches this check met no empty match.
-
-   The type is read again from [obj] here, rather than passed along, so that
-   it is not live across the walk of the type, which would add a slot to the
-   frame of [walk_object]; and the three functions are not inlined, for the
-   same reason. *)
+   entries are cleared. Such a type is entered in [memo.verified], by physical
+   identity, which does not depend on how many types there are, and the check
+   is skipped for the constants that share it. No environment lookup is made
+   here, and a constant with a body is never tagged. The object is passed
+   rather than the value, so that the walk's frame is as it would be without
+   this function; the three functions are small and not inlined for the same
+   reason (a single larger function adds a slot to the frame of
+   [walk_object]). *)
 let[@inline never] type_verified obj =
-  match obj with
-  | GlobRef.ConstRef kn ->
-    let cb = lookup_constant kn in
-    not (Declareops.constant_has_body cb) && List.memq cb.Declarations.const_type !memo.verified
-  | _ -> false
+  let (o, typ) = !last_type in
+  o == obj && Verified.mem !memo.verified typ
 
 let[@inline never] note_verified obj =
-  match obj with
-  | GlobRef.ConstRef kn ->
-    let cb = lookup_constant kn in
-    if not (Declareops.constant_has_body cb) then
-      let m = !memo in
-      memo := { m with verified = cb.Declarations.const_type :: (match m.verified with a :: b :: c :: _ -> [a; b; c] | l -> l) }
-  | _ -> ()
+  let (o, typ) = !last_type in
+  if o == obj then Verified.replace !memo.verified typ ()
 
 let[@inline never] edges_have_entries obj edges =
   type_verified obj
@@ -643,11 +678,12 @@ and walk_object access curr data ax2ty body obj =
       let data = GlobRef.Map_env.add obj None data in
       begin match obj with
       | GlobRef.ConstRef kn ->
-        let cb = lookup_constant kn in
-        let typ = cb.Declarations.const_type in
+        let typ = (lookup_constant kn).Declarations.const_type in
+        type_stack := typ :: !type_stack;
         let type_refs, data, ax2ty =
           traverse access obj Context.Rel.empty
                    (GlobRef.Set_env.empty, data, ax2ty) typ in
+        pop_type obj;
         None, type_refs, data, ax2ty
       (* VarRef, IndRef and ConstructRef don't need recursive type traversal.
          For VarRef (section variables), the dependencies are already tracked.
@@ -755,6 +791,7 @@ and traverse_context access current ctx accu ctxt =
 let traverse access grs =
   let () = modcache := ModPath.Map.empty in
   let () = inductive_marks := [] in
+  let () = type_stack := [] in
   let () = sync_memo access in
   let env = Global.env () in
   List.fold_left (fun accu gr ->
