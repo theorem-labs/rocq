@@ -1,0 +1,5 @@
+Axioms:
+ax : Prop
+Debug: [vernacinterp] interpreting: Print Assumptions f
+Axioms:
+ax : Prop
