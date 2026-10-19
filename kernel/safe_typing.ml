@@ -880,6 +880,8 @@ type exported_opaque = {
   exp_univs : (int * int) option;
   (* Minimal amount of data needed to rebuild the private universes. We enforce
      in the API that private constants have no internal constraints. *)
+  exp_unchecked : bool;
+  (* The body was not typed by the kernel, see {!skip_qed_typecheck}. *)
 }
 type exported_private_constant = Constant.t * exported_opaque option
 
@@ -889,6 +891,8 @@ let repr_exported_opaque o =
   | Some _ -> Opaqueproof.PrivatePolymorphic Univ.ContextSet.empty
   in
   (o.exp_handle, (o.exp_body, priv))
+
+let exported_opaque_unchecked o = o.exp_unchecked
 
 let set_vm_library lib senv =
   { senv with env = Environ.set_vm_library lib senv.env }
@@ -1093,13 +1097,16 @@ let compile_bytecode env cb =
   let code = Vmbytegen.compile_constant_body ~fail_on_error:false env cb.const_universes cb.const_body in
   { cb with const_body_code = code }
 
+let skip_qed_typecheck = ref false
+
 (* Special function to call when the body of an opaque definition is provided.
   It performs the type-checking of the body immediately. *)
 let infer_direct_opaque ~sec_univs env ce =
   let cb, ctx = Constant_typing.infer_opaque ~sec_univs env ce in
   let body = ce.Entries.opaque_entry_body, Univ.ContextSet.empty in
   let handle _env c () = (c, Univ.ContextSet.empty, 0) in
-  let (hbody, c, u) = Constant_typing.check_delayed handle ctx (body, ()) in
+  let skip_typecheck = !skip_qed_typecheck in
+  let (hbody, c, u) = Constant_typing.check_delayed ~skip_typecheck handle ctx (body, ()) in
   (* No constraints can be generated, we set it empty everywhere *)
   let () = assert (is_empty_private u) in
   hbody, { cb with const_body = OpaqueDef c }
@@ -1171,7 +1178,7 @@ let export_private_constants eff senv =
       let () = assert (HConstr.self hbody == body) in
       HConstr.hcons hbody
     in
-    let opaque = { exp_body = body; exp_handle = h; exp_univs = univs } in
+    let opaque = { exp_body = body; exp_handle = h; exp_univs = univs; exp_unchecked = !skip_qed_typecheck } in
     senv, (kn, { c with const_body = OpaqueDef o }, Some opaque, None)
   | Def _ | Undef _ | Primitive _ | Symbol _ as body ->
     (* Hashconsing is handled by {!add_constant_aux}, propagate hbody *)
@@ -1223,6 +1230,7 @@ type opaque_certificate = {
   opq_univs : Univ.ContextSet.t Opaqueproof.delayed_universes;
   opq_handle : Opaqueproof.opaque_handle;
   opq_nonce : Nonce.t;
+  opq_unchecked : bool;
 }
 
 let check_opaque senv (i : Opaqueproof.opaque_handle) pf =
@@ -1240,7 +1248,8 @@ let check_opaque senv (i : Opaqueproof.opaque_handle) pf =
     in
     body, uctx, trusted
   in
-  let (hbody, c, ctx) = Constant_typing.check_delayed handle ty_ctx pf in
+  let skip_typecheck = !skip_qed_typecheck in
+  let (hbody, c, ctx) = Constant_typing.check_delayed ~skip_typecheck handle ty_ctx pf in
   let _, c = match hbody with
     | Some hbody -> assert (c == HConstr.self hbody); HConstr.hcons hbody
     | None -> Constr.hcons c
@@ -1251,7 +1260,7 @@ let check_opaque senv (i : Opaqueproof.opaque_handle) pf =
   | Opaqueproof.PrivatePolymorphic u ->
     Opaqueproof.PrivatePolymorphic (snd @@ Univ.ContextSet.hcons u)
   in
-  { opq_body = c; opq_univs = ctx; opq_handle = i; opq_nonce = nonce }
+  { opq_body = c; opq_univs = ctx; opq_handle = i; opq_nonce = nonce; opq_unchecked = skip_typecheck }
 
 let fill_opaque { opq_univs = ctx; opq_handle = i; opq_nonce = n; _ } senv =
   let () = if not @@ HandleMap.mem i senv.future_cst then
@@ -1277,6 +1286,8 @@ let is_filled_opaque i senv =
 
 let repr_certificate { opq_body = body; opq_univs = ctx; _ } =
   body, ctx
+
+let certificate_unchecked c = c.opq_unchecked
 
 let check_constraints uctx = function
 | Entries.Polymorphic_entry _ -> Univ.ContextSet.is_empty uctx
