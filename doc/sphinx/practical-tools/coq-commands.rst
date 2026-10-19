@@ -769,8 +769,9 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
 :-silent: Do not write progress information to the standard output.
 :-j *n*: Check opaque proofs in parallel, using up to *n* processes at the
   same time (the default is 1). The bodies of opaque constants are checked by
-  up to *n*-1 worker processes, created with ``fork``, while the main process
-  checks everything else, then helps with the opaque proofs that are left. A
+  worker processes, created with ``fork``: up to *n*-1 while the main process
+  checks everything else, then up to *n* while the main process waits for
+  them and hands out the opaque proofs that are left. A
   library is accepted only if every worker exits normally. A worker that has
   run for longer than its budget (see ``-worker-budget``) stops after the proof
   it is checking and hands its remaining proofs back to the main process,
