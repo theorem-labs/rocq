@@ -666,10 +666,18 @@ let[@inline never] edges_have_entries obj edges =
     [traverse] only ever adds to [data] and [ax2ty]; everything the node
     contains was added to [data] when it was first walked, and to the set of
     references the walk collects (the walk's [curr], which a recorded entry
-    keeps as its edges) when it was first walked in the same term; and a node
-    that added to [ax2ty] (a match the walk cannot record) is put back to
-    unseen, below, so it is never skipped and the walk's count of such steps
-    is the one it would have without the skip.
+    keeps as its edges) when it was first walked in the same term. What a
+    second walk of a node would still add is [ax2ty] (a match on an empty type
+    that the walk cannot record, which prints the context it is found in) and
+    [unreplayable_steps] (what keeps the walk of an object from being
+    recorded). Only a step that increments [unreplayable_steps] does either,
+    so a node is skipped only if no such step has happened since it was
+    marked: the cache stores [!unreplayable_steps] with a mark and a hit needs
+    it to be unchanged. That is conservative (a step after the node was walked,
+    elsewhere, makes it walked again, which is the walk that would have
+    happened anyway) and needs nothing after the walk of a node, so that
+    [traverse] makes every call in tail position, as it does without the
+    cache, and a chain of objects holds no frame of it.
 
     A fixed-size, direct-mapped, LOSSY cache rather than a hash table: the key
     would have to be physical identity, and a hash of a term that is itself
@@ -683,34 +691,71 @@ let cache_bits = 18
 let cache_size = 1 lsl cache_bits
 let cache_key = ref [||]
 let cache_gen = ref [||]
+let cache_steps = ref [||]
 let gen_count = ref 0
 
+(* The arrays are allocated once, at the first query, and kept: allocating
+   them in every query makes 6 MB of major-heap garbage per query, which a
+   file with many queries pays in peak memory. A number is never reused ([gen_count]
+   only grows), so an entry of an earlier query never hits and nothing needs
+   resetting. What a query must not leave behind is the terms in [cache_key],
+   which would keep alive terms read from the library only for it: they are
+   overwritten when it ends, also by an exception. *)
 let cache_init () =
-  cache_key := Array.make cache_size Constr.mkProp;
-  cache_gen := Array.make cache_size (-1);
-  gen_count := 0
+  if Int.equal (Array.length !cache_key) 0 then begin
+    cache_key := Array.make cache_size Constr.mkProp;
+    cache_gen := Array.make cache_size (-1);
+    cache_steps := Array.make cache_size (-1)
+  end
 
-let cache_clear () = cache_key := [||]; cache_gen := [||]
+let cache_clear () = Array.fill !cache_key 0 (Array.length !cache_key) Constr.mkProp
 
 let fresh_gen () = incr gen_count; !gen_count
 
 let seen gen c =
   let i = Constr.hash_bounded c land (cache_size - 1) in
-  let keys = !cache_key and gens = !cache_gen in
+  let keys = !cache_key and gens = !cache_gen and steps = !cache_steps in
+  let now = !unreplayable_steps in
   if Int.equal (Array.unsafe_get gens i) gen && Array.unsafe_get keys i == c
+     && Int.equal (Array.unsafe_get steps i) now
   then true
   else begin
     Array.unsafe_set gens i gen;
     Array.unsafe_set keys i c;
+    Array.unsafe_set steps i now;
     false
   end
 
-(* Undo a [seen]: walk the node again if it is met again. *)
-let unsee gen c =
-  let i = Constr.hash_bounded c land (cache_size - 1) in
-  let keys = !cache_key and gens = !cache_gen in
-  if Int.equal (Array.unsafe_get gens i) gen && Array.unsafe_get keys i == c
-  then Array.unsafe_set gens i (-1)
+(* The end of a walk of [obj]: its entry is recorded when no step the walk took
+   is one that cannot be replayed, and every edge has an entry. Not inlined, so
+   that the frames of the walks that call it are as they would be without it. *)
+let[@inline never] record mark value edges obj =
+  if Int.equal mark !unreplayable_steps && user_name_unrecorded obj
+     && edges_have_entries obj edges
+  then add_entry value edges obj
+
+(* The part of the walk of a match on an empty type that does not recurse: a
+   node that is never walked again, and counts as an unreplayable step. It is
+   a function of its own, not inlined, to keep the frame of [traverse_node] as
+   it would be without it. *)
+let[@inline never] empty_match cook_used_in current ctx (curr, data, ax2ty) oty kn =
+  let () = incr unreplayable_steps in
+  let obj = GlobRef.ConstRef kn in
+  let already_in = GlobRef.Map_env.mem obj data in
+  let data = if not already_in then GlobRef.Map_env.add obj None data else data in
+  (* The goal's type here comes straight off the (possibly uncooked) term:
+     everywhere else, a node's shape doesn't matter, only the set of
+     [GlobRef]s it mentions, but this one gets printed verbatim ("used in ...
+     to prove"), so a section-discharged reference inside it (e.g. [k] where
+     the discharge would print [k u]) has to be cooked -- cheaply, since
+     [cook_used_in] only walks this one type, never the proof body the
+     uncooked walk was built to let us skip cooking. *)
+  let (full_ctx, cooked_oty) = cook_used_in ctx (Vars.subst1 Constr.mkProp oty) in
+  let ty = (current, full_ctx, cooked_oty) in
+  let ax2ty =
+    try let l = GlobRef.Map_env.find obj ax2ty in GlobRef.Map_env.add obj (ty::l) ax2ty
+    with Not_found -> GlobRef.Map_env.add obj [ty] ax2ty in
+  (GlobRef.Set_env.add obj curr, data, ax2ty)
 
 (* The [Var], [Const], [Ind] and [Construct] arms below and the empty-match
    arm are mirrored by [fold_refs_of_type], which a replay of a constant
@@ -719,18 +764,13 @@ let unsee gen c =
    what these arms collect must be made there too. *)
 let rec traverse access gen bound cook_used_in (current:GlobRef.t) ctx accu t =
   match Constr.kind t with
-  | Constr.Rel _ | Constr.Meta _ | Constr.Sort _ | Constr.Int _
-  | Constr.Float _ | Constr.String _ | Constr.Evar _ ->
+  | Constr.Rel _ | Constr.Sort _ | Constr.Int _ | Constr.Float _ | Constr.String _ ->
     (* nothing to save: no subterms and no dependencies *)
-    traverse_node access gen bound cook_used_in current ctx accu t
+    accu
+  | Constr.Meta _ | Constr.Evar _ -> assert false
   | _ ->
     if seen gen t then accu
-    else
-      let (_, _, ax2ty) = accu in
-      let ans = traverse_node access gen bound cook_used_in current ctx accu t in
-      let (_, _, ax2ty') = ans in
-      let () = if ax2ty' != ax2ty then unsee gen t in
-      ans
+    else (traverse_node [@ocaml.tailcall]) access gen bound cook_used_in current ctx accu t
 
 and traverse_node access gen bound cook_used_in (current:GlobRef.t) ctx accu t =
   let open GlobRef in
@@ -755,25 +795,7 @@ and traverse_node access gen bound cook_used_in (current:GlobRef.t) ctx accu t =
     (* non dependent match on an inductive with no constructors *)
     begin match Constr.kind c with
     | Const (kn, _) when not (Declareops.constant_has_body (lookup_constant kn)) ->
-      let () = incr unreplayable_steps in
-      let (curr, data, ax2ty) = accu in
-      let obj = ConstRef kn in
-      let already_in = GlobRef.Map_env.mem obj data in
-      let data = if not already_in then GlobRef.Map_env.add obj None data else data in
-      (* The goal's type here comes straight off the (possibly uncooked)
-         term [t]: everywhere else, a node's shape doesn't matter, only the
-         set of [GlobRef]s it mentions, but this one gets printed verbatim
-         ("used in ... to prove"), so a section-discharged reference inside
-         it (e.g. [k] where the discharge would print [k u]) has to be
-         cooked -- cheaply, since [cook_used_in] only walks this one type,
-         never the proof body the uncooked walk was built to let us skip
-         cooking. *)
-      let (full_ctx, cooked_oty) = cook_used_in ctx (Vars.subst1 mkProp oty) in
-      let ty = (current, full_ctx, cooked_oty) in
-      let ax2ty =
-        try let l = GlobRef.Map_env.find obj ax2ty in GlobRef.Map_env.add obj (ty::l) ax2ty
-        with Not_found -> GlobRef.Map_env.add obj [ty] ax2ty in
-      (GlobRef.Set_env.add obj curr, data, ax2ty)
+      (empty_match [@ocaml.tailcall]) cook_used_in current ctx accu oty kn
     | _ ->
         fold_with_full_binders
           Context.Rel.add (traverse access gen bound cook_used_in current) ctx accu t
@@ -794,74 +816,80 @@ and traverse_object access (curr, data, ax2ty) body obj =
 
 and walk_object access curr data ax2ty body obj =
   let mark = !unreplayable_steps in
-  let value, edges, data, ax2ty =
-    match body () (* Beware: this can be very costly *) with
-    | None ->
-      (* This is an axiom. Always traverse its type to find dependencies *)
-      let data = GlobRef.Map_env.add obj None data in
-      begin match obj with
-      | GlobRef.ConstRef kn ->
-        let typ = (lookup_constant kn).Declarations.const_type in
-        type_stack := typ :: !type_stack;
-        let type_refs, data, ax2ty =
-          traverse access (fresh_gen ()) Id.Set.empty id_cook_used_in obj Context.Rel.empty
-                   (GlobRef.Set_env.empty, data, ax2ty) typ in
-        pop_type obj;
-        None, type_refs, data, ax2ty
-      (* VarRef, IndRef and ConstructRef don't need recursive type traversal.
-         For VarRef (section variables), the dependencies are already tracked.
-         For IndRef and ConstructRef, dependencies are handled by traverse_inductive *)
-      | GlobRef.VarRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _ ->
-        None, GlobRef.Set_env.empty, data, ax2ty end
-    | Some body ->
-      let contents,data,ax2ty = walk_body access body obj data ax2ty in
-      Some contents, contents, GlobRef.Map_env.add obj (Some contents) data, ax2ty
-  in
-  let () =
-    if Int.equal mark !unreplayable_steps && user_name_unrecorded obj
-       && edges_have_entries obj edges
-    then add_entry value edges obj
-  in
-  (curr, data, ax2ty)
+  match body () (* Beware: this can be very costly *) with
+  | None -> (walk_axiom [@ocaml.tailcall]) access curr data ax2ty obj mark
+  | Some body -> (walk_body [@ocaml.tailcall]) access curr data ax2ty body obj mark
+
+and walk_axiom access curr data ax2ty obj mark =
+  (* This is an axiom. Always traverse its type to find dependencies *)
+  let data = GlobRef.Map_env.add obj None data in
+  match obj with
+  | GlobRef.ConstRef kn ->
+    let typ = (lookup_constant kn).Declarations.const_type in
+    type_stack := typ :: !type_stack;
+    let type_refs, data, ax2ty =
+      traverse access (fresh_gen ()) Id.Set.empty id_cook_used_in obj Context.Rel.empty
+               (GlobRef.Set_env.empty, data, ax2ty) typ in
+    pop_type obj;
+    let () = record mark None type_refs obj in
+    (curr, data, ax2ty)
+  (* VarRef, IndRef and ConstructRef don't need recursive type traversal.
+     For VarRef (section variables), the dependencies are already tracked.
+     For IndRef and ConstructRef, dependencies are handled by traverse_inductive *)
+  | GlobRef.VarRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _ ->
+    let () = record mark None GlobRef.Set_env.empty obj in
+    (curr, data, ax2ty)
 
 (* The walk of an object's body, with the section discharge left undone: the
    section variables it binds are not assumptions, the context it abstracts
    over is walked as binders, and a node that is printed verbatim is cooked
-   when it is met. It is a function of its own, not inlined, so that
-   [walk_object] keeps the frame it has without it (the walk of a chain of
-   objects holds one such frame per link). *)
-and[@inline never] walk_body access body obj data ax2ty =
+   when it is met. Entered by a tail call, like the walks of the other kinds of
+   object, so a walk holds one frame per object. *)
+and walk_body access curr data ax2ty body obj mark =
+  let gen, bound, cook_used_in, accu = body_prelude access body obj data ax2ty in
+  let accu =
+    traverse access gen bound cook_used_in obj Context.Rel.empty accu body.Global.uncooked_body in
+  (finish_body [@ocaml.tailcall]) access curr obj mark accu
+
+(* What the walk of a body starts from: a fresh number for this term, so that a
+   node is only ever skipped under the [bound] it was walked with; the
+   variables the discharge binds; [cook_used_in], which cooks the one node that
+   is printed verbatim; and the accumulator after the context the discharge
+   abstracts over, whose declarations are dependencies too (it becomes the
+   binders of the cooked term). It is a function of its own, and not inlined,
+   so that the frame [walk_body] holds across the walk of the term is only what
+   it needs after it. *)
+and[@inline never] body_prelude access body obj data ax2ty =
   let bound = body.Global.uncooked_bound in
-  (* a fresh number for this term, so that a node is only ever skipped under
-     the [bound] it was walked with *)
   let gen = fresh_gen () in
-  let accu = (GlobRef.Set_env.empty, data, ax2ty) in
-  (* [ctx], here, is always real binders found walking [uncooked_body] itself
-     -- never [uncooked_context], which [uncooked_body] is not wrapped in
-     (that wrapping is exactly the cost this walk exists to skip paying). So a
-     node cooked at [ctx] still needs [uncooked_context] appended to be
-     printed against: that is where [cook_at_ctx]'s newly generalized
-     references land (see its comment). *)
+  (* [ctx], in [cook_used_in], is always real binders found walking
+     [uncooked_body] itself -- never [uncooked_context], which [uncooked_body]
+     is not wrapped in (that wrapping is exactly the cost this walk exists to
+     skip paying). So a node cooked at [ctx] still needs [uncooked_context]
+     appended to be printed against: that is where [cook_used_in]'s newly
+     generalized references land (see [cook_at_ctx]). *)
   let cook_used_in ctx t =
     (ctx @ body.Global.uncooked_context,
      cook_at_ctx body.Global.uncooked_expand ctx t) in
-  (* the context the discharge abstracts over becomes the binders of the
-     cooked term, so its declarations are dependencies too *)
   let accu =
     traverse_context access gen bound cook_used_in obj
-      Context.Rel.empty accu body.Global.uncooked_context in
-  let contents,data,ax2ty =
-    traverse access gen bound cook_used_in obj
-      Context.Rel.empty accu body.Global.uncooked_body in
-  (* Also traverse the type of globals, which may mention unrelated
-     references depending on axioms even if they convert to something else. *)
-  match obj with
-  | GlobRef.ConstRef kn ->
-    let cb = lookup_constant kn in
-    let typ = cb.Declarations.const_type in
-    traverse access (fresh_gen ()) Id.Set.empty id_cook_used_in obj Context.Rel.empty
-      (contents,data,ax2ty) typ
-  | _ -> (contents,data,ax2ty)
+      Context.Rel.empty (GlobRef.Set_env.empty, data, ax2ty)
+      body.Global.uncooked_context in
+  (gen, bound, cook_used_in, accu)
+
+(* The end of the walk of a body: the type of a constant too (it may mention
+   unrelated references that depend on axioms even if they convert to
+   something else), then the entry. *)
+and[@inline never] finish_body access curr obj mark (contents, data, ax2ty) =
+  let contents, data, ax2ty = match obj with
+    | GlobRef.ConstRef kn ->
+      let typ = (lookup_constant kn).Declarations.const_type in
+      traverse access (fresh_gen ()) Id.Set.empty id_cook_used_in obj Context.Rel.empty
+        (contents, data, ax2ty) typ
+    | _ -> (contents, data, ax2ty)
+  in
+  let () = record mark (Some contents) contents obj in
+  (curr, GlobRef.Map_env.add obj (Some contents) data, ax2ty)
 
 (** Collects the references occurring in the declaration of mutual inductive
     definitions. All the constructors and names of a mutual inductive
