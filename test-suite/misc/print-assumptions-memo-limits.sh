@@ -55,10 +55,20 @@
 #   take that body.
 # The walk without reuse drops each query's data before the next; the reuse
 # keeps entries, and clears them when they weigh more than twice the
-# heaviest query. Measured on the dev and the release profile, both files
-# need 720 to 790 MiB of address space without reuse, 790 to 880 MiB with the
-# bounded reuse, and 1,240 to 1,280 MiB with a cache that keeps every entry
-# until the environment changes, which runs out here.
+# heaviest query. Smallest address space (ulimit -v, 10,000 KiB steps, the
+# same in three runs, OCaml 4.14.2, dev / release) at which each file answers:
+# - without reuse: Retain64 720,000 / 760,000, BlockRetain64 760,000 / 790,000;
+# - with the bounded reuse (the cache alone): Retain64 800,000 / 870,000,
+#   BlockRetain64 840,000 / 870,000;
+# - with the bounded reuse and the walk of the stored proof term (upstream
+#   rocq-prover/rocq#22425): Retain64 890,000 / 920,000, BlockRetain64
+#   840,000 / 920,000. Up to 90,000 KiB more than the cache alone comes from
+#   that walk: #22425 on its own, without the cache, needs Retain64 890,000 /
+#   970,000 and BlockRetain64 940,000 / 970,000;
+# - with a cache that keeps every entry until the environment changes,
+#   1,240,000 to 1,280,000 KiB, which runs out here.
+# The cap above leaves 80,000 KiB over the largest of the first three. Builds
+# of the grader bound memory by their cgroup, not by address space.
 #
 # Constants without a body (axioms, parameters, Admitted lemmas) whose types
 # name many objects. The walk without reuse keeps no reference of such a type
