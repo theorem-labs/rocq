@@ -15,12 +15,21 @@ let debug = CDebug.create ~name:"checker-workers" ()
 
 type task = Constant.t * (unit -> unit)
 
-(* What the main process keeps about a running worker, for error
-   messages. The closures are dropped once the worker is forked. *)
+(* What the main process keeps about a running worker. The batch is for
+   error messages. The tasks are kept to re-queue what the worker did not
+   check before its time budget ran out. [report] is the read end of the
+   pipe on which the worker says how many checks it completed. *)
 type batch = {
   size : int;
   first : Constant.t;
   last : Constant.t;
+}
+
+type worker = {
+  pid : int;
+  batch : batch;
+  tasks : task array;
+  report : Unix.file_descr;
 }
 
 exception CheckError of Constant.t * exn
@@ -43,6 +52,15 @@ let set_jobs ~profiling n =
 
 let error_printer = ref (fun _ -> ())
 let set_error_printer f = error_printer := f
+
+(* Wall time, in seconds, after which a worker stops, once it has
+   completed a check. See [run_worker]. *)
+let default_budget = 20.
+let budget = ref default_budget
+
+let set_budget t =
+  if not (t >= 0.) then invalid_arg "CheckWorkers.set_budget";
+  budget := t
 
 (* Scheduling.
 
@@ -76,8 +94,12 @@ let min_share = 10
 let queue : task Queue.t = Queue.create ()
 let last_dispatch = ref 0.
 
-(* Running workers, by pid. *)
-let running : (int * batch) list ref = ref []
+(* Running workers. *)
+let running : worker list ref = ref []
+
+(* Statistics, for the debug output. *)
+let forks = ref 0
+let early_stops = ref 0
 
 let flush_output () =
   Format.pp_print_flush Format.std_formatter ();
@@ -100,24 +122,56 @@ let tune_gc () =
            Gc.minor_heap_size = max gc.Gc.minor_heap_size (4 * 1024 * 1024);
            max_overhead = 1000000 }
 
-(* Runs in the child, never returns. *)
-let run_worker parent (tasks : task array) =
+(* What a worker tells the main process: the number of checks it
+   completed, the first ones of its batch in order, as 8 bytes (big
+   endian). Nothing else is ever written to the pipe. *)
+let report_size = 8
+
+let default_report_writer fd completed =
+  let b = Bytes.create report_size in
+  Bytes.set_int64_be b 0 (Int64.of_int completed);
+  if Unix.write fd b 0 report_size <> report_size then failwith "short write"
+
+let report_writer = ref default_report_writer
+let set_report_writer f = report_writer := f
+
+(* Runs in the child, never returns.
+
+   The batch is checked in order. The time a worker lives is what makes
+   its private memory grow: the garbage collector keeps touching the heap
+   it shares copy-on-write with the main process. So once the budget has
+   passed, the worker stops after the check it is in, reports how many it
+   completed, and exits; the main process re-queues the rest. At least
+   one check is completed first, whatever the budget, so that the
+   checking always progresses. *)
+let run_worker parent report (tasks : task array) =
+  let size = Array.length tasks in
   let current = ref (fst tasks.(0)) in
-  (* Only reaching the end of the batch may count as success. *)
+  let completed = ref 0 in
+  (* Only reaching the end of the batch, or a stop that is reported, may
+     count as success. *)
   at_exit (fun () -> Unix._exit 2);
+  let deadline = Unix.gettimeofday () +. !budget in
   let code =
     try
       tune_gc ();
-      Array.iter (fun (kn, check) ->
-          (* Nobody is waiting for the result any more. *)
-          if Unix.getppid () <> parent then Unix._exit 1;
-          current := kn;
-          check ())
-        tasks;
+      while !completed < size
+            && (!completed = 0 || Unix.gettimeofday () < deadline) do
+        let kn, check = tasks.(!completed) in
+        (* Nobody is waiting for the result any more. *)
+        if Unix.getppid () <> parent then Unix._exit 1;
+        current := kn;
+        check ();
+        incr completed
+      done;
       0
     with e ->
       (try !error_printer (CheckError (!current, e)) with _ -> ());
       CErrors.exit_code e
+  in
+  let code =
+    if code <> 0 then code
+    else (try !report_writer report !completed; 0 with _ -> 3)
   in
   (try flush_output () with _ -> ());
   (* Not [exit]: the at_exit functions of the main process must not run
@@ -144,16 +198,29 @@ let spawn tasks =
   (* Otherwise the child would print again what is still buffered. *)
   flush_output ();
   let parent = Unix.getpid () in
-  match Unix.fork () with
-  | 0 -> run_worker parent tasks
-  | pid ->
-    debug (fun () -> str "worker " ++ int pid ++ str ": " ++ pr_batch batch);
-    running := (pid, batch) :: !running
-  | exception Unix.Unix_error (err, _, _) ->
+  let check_here_instead err =
     debug (fun () ->
-        str "cannot fork (" ++ str (Unix.error_message err) ++
+        str "cannot fork (" ++ str err ++
         str "), checking here " ++ pr_batch batch);
     Array.iter check_here tasks
+  in
+  match Unix.pipe ~cloexec:true () with
+  | exception Unix.Unix_error (err, _, _) -> check_here_instead (Unix.error_message err)
+  | report, report_out ->
+    match Unix.fork () with
+    | 0 ->
+      Unix.close report;
+      List.iter (fun w -> try Unix.close w.report with Unix.Unix_error _ -> ()) !running;
+      run_worker parent report_out tasks
+    | pid ->
+      Unix.close report_out;
+      incr forks;
+      debug (fun () -> str "worker " ++ int pid ++ str ": " ++ pr_batch batch);
+      running := { pid; batch; tasks; report } :: !running
+    | exception Unix.Unix_error (err, _, _) ->
+      Unix.close report;
+      Unix.close report_out;
+      check_here_instead (Unix.error_message err)
 
 let signal_name s =
   let names = Sys.[
@@ -167,29 +234,76 @@ let signal_name s =
   | Some name -> name
   | None -> "signal " ^ string_of_int s
 
+let close_report fd = try Unix.close fd with Unix.Unix_error _ -> ()
+
 let abort () =
   let workers = !running in
   running := [];
   Queue.clear queue;
-  List.iter (fun (pid, _) ->
-      try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ())
+  List.iter (fun w ->
+      try Unix.kill w.pid Sys.sigkill with Unix.Unix_error _ -> ())
     workers;
-  List.iter (fun (pid, _) ->
-      try ignore (waitpid_non_intr [] pid) with Unix.Unix_error _ -> ())
+  List.iter (fun w ->
+      (try ignore (waitpid_non_intr [] w.pid) with Unix.Unix_error _ -> ());
+      close_report w.report)
     workers
 
-(* Anything but a normal exit with code 0 means that the batch is not
-   known to be correct. *)
+(* What the worker wrote, at most one byte more than a report. *)
+let read_report fd =
+  let buf = Bytes.create (report_size + 1) in
+  let rec go off =
+    if off = Bytes.length buf then off
+    else match Unix.read fd buf off (Bytes.length buf - off) with
+      | 0 -> off
+      | n -> go (off + n)
+      | exception Unix.Unix_error (Unix.EINTR, _, _) -> go off
+      | exception Unix.Unix_error _ -> -1
+  in
+  let n = go 0 in
+  close_report fd;
+  if n < 0 then "" else Bytes.sub_string buf 0 n
+
+(* The only way for a batch to be known to be correct, or partly so, is
+   a normal exit with code 0 and a report of exactly the right form,
+   saying that between 1 and [size] checks were completed. *)
+let completed_count ~size status report =
+  match status with
+  | Unix.WEXITED 0 when String.length report = report_size ->
+    let k = String.get_int64_be report 0 in
+    if Int64.compare k 1L >= 0 && Int64.compare k (Int64.of_int size) <= 0
+    then Some (Int64.to_int k)
+    else None
+  | _ -> None
+
+(* Put [tasks] back at the front of the queue, in order. *)
+let push_front tasks =
+  let front = Queue.create () in
+  Array.iter (fun t -> Queue.push t front) tasks;
+  Queue.transfer queue front;
+  Queue.transfer front queue
+
+(* A batch is known to be correct only for the checks its worker
+   reported as completed. The others are queued again: each check runs
+   once, in the worker or later, and its result counts only if the
+   process that ran it ended successfully. *)
 let reaped pid status =
-  match List.assoc_opt pid !running with
+  match List.find_opt (fun w -> w.pid = pid) !running with
   | None -> ()
-  | Some batch ->
-    running := List.remove_assoc pid !running;
-    match status with
-    | Unix.WEXITED 0 -> debug (fun () -> str "worker " ++ int pid ++ str " succeeded")
-    | _ ->
+  | Some w ->
+    running := List.filter (fun w' -> w'.pid <> pid) !running;
+    let report = read_report w.report in
+    match completed_count ~size:w.batch.size status report with
+    | None ->
       abort ();
-      raise (WorkerFailed (pid, status, batch))
+      raise (WorkerFailed (pid, status, w.batch))
+    | Some k when k = w.batch.size ->
+      debug (fun () -> str "worker " ++ int pid ++ str " succeeded")
+    | Some k ->
+      incr early_stops;
+      debug (fun () ->
+          str "worker " ++ int pid ++ str " stopped early after " ++ int k ++
+          str " of " ++ int w.batch.size ++ str ", queueing the rest again");
+      push_front (Array.sub w.tasks k (w.batch.size - k))
 
 let rec reap_finished () =
   if not (CList.is_empty !running) then
@@ -239,14 +353,22 @@ let finish () =
         i := !i + stride
       done
     done;
-    while not (Queue.is_empty queue) do
+    (* A worker that stops early queues checks again, so the queue is
+       only known to be empty when no worker is left. *)
+    while not (Queue.is_empty queue) || not (CList.is_empty !running) do
       reap_finished ();
-      let size = Queue.length queue / (2 * nprocs) in
-      if free_slots () > 0 && size >= min_share then deal 1 size
-      else check_here (Queue.pop queue)
+      if Queue.is_empty queue then begin
+        if not (CList.is_empty !running) then begin
+          let pid, status = waitpid_non_intr [] (-1) in
+          reaped pid status
+        end
+      end else begin
+        let size = Queue.length queue / (2 * nprocs) in
+        if free_slots () > 0 && size >= min_share then deal 1 size
+        else check_here (Queue.pop queue)
+      end
     done;
-    while not (CList.is_empty !running) do
-      let pid, status = waitpid_non_intr [] (-1) in
-      reaped pid status
-    done
+    debug (fun () ->
+        str "done: " ++ int !forks ++ str " workers forked, " ++
+        int !early_stops ++ str " stopped early")
   end

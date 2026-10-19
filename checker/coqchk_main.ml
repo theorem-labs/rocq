@@ -172,6 +172,12 @@ let set_jobs s =
   | Some n when n >= 1 -> jobs := n
   | _ -> fatal_error (str "Option -j expects a positive integer, got " ++ qstring s ++ str ".") 1
 
+let set_worker_budget s =
+  match float_of_string_opt s with
+  | Some t when t >= 0. -> CheckWorkers.set_budget t
+  | _ ->
+    fatal_error (str "Option -worker-budget expects a number of seconds, got " ++ qstring s ++ str ".") 1
+
 let make_senv () =
   let senv = Safe_typing.empty_environment in
   let senv = Safe_typing.set_impredicative_set !impredicative_set senv in
@@ -243,6 +249,9 @@ let print_usage_channel co command =
 \n  -silent                     disable trace of constants being checked\
 \n  -j n                        check opaque proofs in parallel, using up to n\
 \n                              processes (default is 1, no parallelism)\
+\n  -worker-budget s            with -j, a worker process stops after s seconds\
+\n                              (default is 20) and its remaining checks are given\
+\n                              to another one; this bounds the memory it uses\
 \n\
 \n  -impredicative-set          set sort Set impredicative\
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
@@ -467,6 +476,9 @@ let parse_args argv =
 
     | "-j" :: n :: rem -> set_jobs n; parse rem
     | "-j" :: [] -> usage 1
+
+    | "-worker-budget" :: s :: rem -> set_worker_budget s; parse rem
+    | "-worker-budget" :: [] -> usage 1
 
     | s :: _ when s<>"" && s.[0]='-' ->
         fatal_error (str "Unknown option " ++ str s) 1

@@ -771,9 +771,18 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   same time (the default is 1). The bodies of opaque constants are checked by
   up to *n*-1 worker processes, created with ``fork``, while the main process
   checks everything else, then helps with the opaque proofs that are left. A
-  library is accepted only if every worker exits normally. More processes use
-  more memory. This option is not available on Windows, and is ignored with
-  ``-profile``.
+  library is accepted only if every worker exits normally. A worker that has
+  run for longer than its budget (see ``-worker-budget``) stops after the proof
+  it is checking and hands its remaining proofs back to the main process,
+  which queues them again for another process; each proof is still checked
+  exactly once. More processes use more memory. This option is not available
+  on Windows, and is ignored with ``-profile``.
+:-worker-budget *s*: With ``-j``, the time in seconds (default 20) after which
+  a worker process stops, once it has completed one check, and gives the proofs
+  it has not checked back to the main process. A worker lives for the budget
+  plus the time of its last proof. Workers share the memory of the main process
+  and copy more of it the longer they live, so a smaller budget bounds the
+  memory they use. ``0`` makes a worker check a single proof.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
