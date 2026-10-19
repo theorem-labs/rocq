@@ -418,6 +418,26 @@ if ! awk -v c0="$c0" -v c1="$c1" -v c2="$c2" 'BEGIN { exit !(c2 - c1 <= 3 * (c1 
   status=1
 fi
 
+# The context an empty match stores for its "used in ... to prove" line is the
+# walk's own, shared by every match, so a match costs nothing in its depth:
+# fun (x0 ... x3999 : nat) => cons (match F return nat with end) (... 4000
+# times ... nil) over Axiom F : False holds 4,000 matches under 4,000 binders,
+# and a client that queries it runs under -v 800000. Without reuse the client
+# needs about 600 MB of address space; a copy of the context per match (16M
+# list cells) needs about 1 GB, and runs out here. The library is compiled
+# without a stack cap.
+deep() {
+  echo "Axiom F : False."
+  echo "Definition big := fun ($(names 'x%g' 4000): nat) => $(yes 'cons (match F return nat with end) (' | head -n 4000 | tr '\n' ' ')nil$(printf ')%.0s' $(seq 1 4000))."
+}
+deep > D4000.v
+expect D4000lib "$(ulimit -s unlimited; rocq c -q -R . P D4000.v 2>&1)" ""
+{ echo "Require Import P.D4000."; echo "Print Assumptions big."; } > D4000Client.v
+out=$(ulimit -s 8192; ulimit -v 800000; rocq c -q -R . P D4000Client.v 2>&1) || true
+expect D4000 "$(echo "$out" | sed -n 1,2p; echo "$out" | wc -l)" "Axioms:
+F : False
+8002"
+
 # Many equal copies of one type that are separate objects. The walk without
 # reuse costs one pass over each copy, so two queries over them must cost at
 # most 1.5 times the file without queries, plus one second (a table that
