@@ -47,29 +47,48 @@ cp "$d/bad/Use.v" "$d/async/Use.v"
 rocq c -q -R "$d/async" "" "$d/async/Use.v" > "$d/out"
 grep -qxF "Bad.bad $line" "$d/out" || { >&2 echo "FAILURE: an async worker did not record Bad.bad as unchecked"; cat "$d/out" >&2; exit 1; }
 
-# 3. Identity of what dependents and rocqchk see
-# Both builds use the same directory, since a .vo records its source path.
-mkdir "$d/src" "$d/on" "$d/off"
-cat > "$d/src/A.v" <<'EOF'
-Lemma a : forall n, n + 0 = n.
+# 3. Identity of what dependents and rocqchk see, for several roots A and a
+# dependent B. Besides plain proofs, the bodies of univ and counter add a
+# monomorphic universe constraint and allocate fresh universe levels; both
+# reach the universes of A and B, so they must not depend on the option.
+# Both builds of a fixture use the same directory, since a .vo records its
+# source path.
+fixture() { # NAME A.v B.v
+  mkdir "$d/$1" "$d/$1/src" "$d/$1/on" "$d/$1/off"
+  printf '%s\n' "$2" > "$d/$1/src/A.v"
+  printf '%s\n' "$3" > "$d/$1/src/B.v"
+}
+fixture basic 'Lemma a : forall n, n + 0 = n.
 Proof. induction n; simpl; [reflexivity | rewrite IHn; reflexivity]. Qed.
-Lemma a' : 5 * 5 = 25.
+Lemma a2 : 5 * 5 = 25.
 Proof. abstract reflexivity. Qed.
-Definition t := a 3.
-EOF
-cat > "$d/src/B.v" <<'EOF'
-Require Import A.
+Definition t := a 3.' 'Require Import A.
 Lemma b : 3 + 0 = 3.
-Proof. exact t. Qed.
-EOF
-for mode in on off; do
-  opt=; [ $mode = on ] && opt=-skip-qed-typecheck
-  rm -f "$d"/src/*.vo*
-  for f in A B; do rocq c -q $opt -R "$d/src" "" "$d/src/$f.v"; done
-  rocqchk -silent -o -R "$d/src" "" A B > "$d/chk-$mode"
-  cp "$d/src/A.vo" "$d/src/B.vo" "$d/$mode/"
+Proof. exact t. Qed.'
+fixture univ 'Definition T1 := Type.
+Definition T2 := Type.
+Lemma l : True. Proof. pose (x := T1 : T2). exact I. Qed.' 'Require Import A.
+Definition b := (T1 : T2).
+Lemma bl : True. Proof. exact l. Qed.'
+fixture counter 'Lemma l : True. Proof. pose (y := Type). pose (z := Type). exact I. Qed.
+Definition T3 := Type.' 'Require Import A.
+Definition b3 : Type := T3.
+Lemma bl : True. Proof. exact l. Qed.'
+fixture counter_unused 'Lemma l : True. Proof. pose (y := Type). pose (z := Type). exact I. Qed.
+Definition T3 := Type.' 'Require Import A.
+Lemma bl : True. Proof. exact l. Qed.'
+for fx in basic univ counter counter_unused; do
+  s="$d/$fx/src"
+  for mode in on off; do
+    opt=; [ $mode = on ] && opt=-skip-qed-typecheck
+    rm -f "$s"/*.vo*
+    for f in A B; do rocq c -q $opt -R "$s" "" "$s/$f.v"; done
+    rocqchk -silent -o -R "$s" "" A B > "$d/$fx/chk-$mode" 2>&1
+    grep -q "CONTEXT SUMMARY" "$d/$fx/chk-$mode" || { >&2 echo "FAILURE: $fx: no rocqchk context summary"; cat "$d/$fx/chk-$mode" >&2; exit 1; }
+    cp "$s/A.vo" "$s/B.vo" "$d/$fx/$mode/"
+  done
+  cmp "$d/$fx/chk-on" "$d/$fx/chk-off" || { >&2 echo "FAILURE: $fx: rocqchk context summaries differ"; diff "$d/$fx/chk-on" "$d/$fx/chk-off" >&2; exit 1; }
 done
-cmp "$d/chk-on" "$d/chk-off" || { >&2 echo "FAILURE: rocqchk context summaries differ"; diff "$d/chk-on" "$d/chk-off" >&2; exit 1; }
 
 python3 - "$d" <<'PY'
 import sys, struct
@@ -84,19 +103,20 @@ def segs(p):
     for _ in range(n):
         (nl,) = struct.unpack_from(">I", b, off); off += 4
         name = b[off:off+nl].decode(); off += nl
-        pos, ln = struct.unpack_from(">QQ", b, off); off += 16
-        h = b[off:off+16]; off += 16
-        out[name] = (b[pos:pos+ln], h)
+        pos, ln = struct.unpack_from(">QQ", b, off); off += 32
+        out[name] = b[pos:pos+ln]
     return out
-for f in ["A", "B"]:
-    on = segs(f"{d}/on/{f}.vo")
-    off = segs(f"{d}/off/{f}.vo")
-    # The library segment's MD5 is the digest a dependent records.
-    if on["library"] != off["library"]:
-        sys.exit(f"FAILURE: library segment of {f}.vo differs")
-    if on["summary"] != off["summary"]:
-        sys.exit(f"FAILURE: summary segment of {f}.vo differs (dependency digests)")
-    if on["opaques"] == off["opaques"]:
-        sys.exit(f"FAILURE: opaques segment of {f}.vo does not record the option")
+# The vmlibrary segment is not compared: its marshal sharing varies between
+# ordinary runs.
+for fx in ["basic", "univ", "counter", "counter_unused"]:
+    for f in ["A", "B"]:
+        on = segs(f"{d}/{fx}/on/{f}.vo")
+        off = segs(f"{d}/{fx}/off/{f}.vo")
+        # The library segment's MD5 is the digest a dependent records.
+        for seg in ["library", "summary"]:
+            if on[seg] != off[seg]:
+                sys.exit(f"FAILURE: {fx}: {seg} segment of {f}.vo differs")
+    if segs(f"{d}/{fx}/on/A.vo")["opaques"] == segs(f"{d}/{fx}/off/A.vo")["opaques"]:
+        sys.exit(f"FAILURE: {fx}: opaques segment of A.vo does not record the option")
 PY
 exit 0
