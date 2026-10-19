@@ -39,10 +39,10 @@ let record fd i =
   let line = Printf.sprintf "%d %d\n" (Unix.getpid ()) i in
   assert (Unix.write_substring fd line 0 (String.length line) = String.length line)
 
-(* [n] deferred checks, [-j jobs], then [finish]. A check [refuse] raises.
-   Returns the log, or the exception that [finish] raised (after [abort],
-   as the checker does). *)
-let run ?(jobs = 2) ?refuse ?(work = fun () -> ()) ~budget n =
+(* [n] deferred checks, [-j jobs], then [finish]. A check [refuse] raises;
+   check [i] records itself, then runs [work i]. Returns the log, or the
+   exception that [finish] raised (after [abort], as the checker does). *)
+let run ?(jobs = 2) ?refuse ?(work = fun _ -> ()) ~budget n =
   with_log (fun fd read ->
       CheckWorkers.set_jobs ~profiling:false jobs;
       CheckWorkers.set_budget budget;
@@ -55,7 +55,7 @@ let run ?(jobs = 2) ?refuse ?(work = fun () -> ()) ~budget n =
              CheckWorkers.defer (constant i) (fun () ->
                  if Some i = refuse then failwith "refused";
                  record fd i;
-                 work ())
+                 work i)
            done;
            let result =
              try CheckWorkers.finish (); None
@@ -79,24 +79,28 @@ let assert_exactly_once n log =
 
 let workers_of log = List.filter (fun (p, _) -> p <> me) log
 
-(* [finish] deals the interleaved queue: index [i] comes at the rank
-   ([i mod stride], [i]) when the queue is dealt in order. *)
-let rank ~stride i = (i mod stride, i)
+let checks_of p log = List.filter_map (fun (q, i) -> if q = p then Some i else None) log
 
-let assert_worker_in_order ~stride log =
-  let by_pid = Hashtbl.create 17 in
-  List.iter (fun (p, i) ->
-      let prev = Stdlib.Option.value ~default:[] (Hashtbl.find_opt by_pid p) in
-      Hashtbl.replace by_pid p (i :: prev))
-    (workers_of log);
-  Hashtbl.iter (fun p rev ->
-      let rec ascending = function
-        | a :: (b :: _ as rest) -> compare (rank ~stride a) (rank ~stride b) < 0 && ascending rest
-        | _ -> true
-      in
-      if not (ascending (List.rev rev)) then
-        assert_failure (Printf.sprintf "worker %d did not check its batch in order" p))
-    by_pid
+let pids_of log = List.sort_uniq compare (List.map fst (workers_of log))
+
+(* The batches [finish] deals to [slots] workers from [0 .. n-1] when no
+   worker stops early, in order: each has [ceil (r / (2 * slots))] checks
+   taken one in [r / size] from the front of the [r] that remain, and the
+   checks not taken stay in front, in order. *)
+let expected_batches ~slots n =
+  let rec go acc queue =
+    match queue with
+    | [] -> List.rev acc
+    | _ ->
+      let r = List.length queue in
+      let size = (r + 2 * slots - 1) / (2 * slots) in
+      let lanes = max 1 (r / size) in
+      let taken = min r (lanes * size) in
+      let batch = List.filteri (fun i _ -> i < taken && i mod lanes = 0) queue in
+      let rest = List.filteri (fun i _ -> not (i < taken && i mod lanes = 0)) queue in
+      go (batch :: acc) rest
+  in
+  go [] (List.init n Fun.id)
 
 let n = 200
 
@@ -104,44 +108,125 @@ let assert_no_exception = function
   | None -> ()
   | Some e -> assert_failure ("unexpected " ^ Printexc.to_string e)
 
+(* All the checks here are deferred within a fraction of a second, less
+   than the dispatch window, and fewer than a batch of the library phase
+   at a time, so all of them are dealt by [finish]. *)
+let assert_main_checked_nothing log =
+  if List.exists (fun (p, _) -> p = me) log then
+    assert_failure "the main process checked a proof after the libraries"
+
+let assert_batches_as_documented ~slots n log =
+  let got = List.sort compare (List.map (fun p -> checks_of p log) (pids_of log)) in
+  let expected = List.sort compare (expected_batches ~slots n) in
+  let pr l = String.concat "; " (List.map (fun b -> String.concat "," (List.map string_of_int b)) l) in
+  assert_equal ~printer:pr expected got
+
 let () = add_test "no early stop: every check runs once" (fun () ->
     let result, log = run ~budget:CheckWorkers.default_budget n in
     assert_no_exception result;
     assert_exactly_once n log;
-    assert_bool "a worker checked something" (workers_of log <> []))
+    assert_main_checked_nothing log;
+    assert_batches_as_documented ~slots:2 n log)
+
+(* Fewer than 2N x 10 checks left: they are still dealt to workers, down
+   to batches of one check. *)
+let () = add_test "few checks left: all dealt, in batches as documented" (fun () ->
+    let result, log = run ~jobs:4 ~budget:CheckWorkers.default_budget 30 in
+    assert_no_exception result;
+    assert_exactly_once 30 log;
+    assert_main_checked_nothing log;
+    assert_batches_as_documented ~slots:4 30 log;
+    assert_bool "batches of one check" (List.exists (fun p -> List.length (checks_of p log) = 1) (pids_of log)))
+
+(* With -j 2, two workers run at once after the libraries: each of the
+   two checks waits until the other one has started. *)
+let () = add_test "after the libraries, N workers run at once" (fun () ->
+    let dir = Filename.temp_file "checkworkers" ".meet" in
+    Sys.remove dir;
+    Unix.mkdir dir 0o700;
+    let meet i =
+      close_out (open_out (Filename.concat dir (string_of_int i)));
+      let deadline = Unix.gettimeofday () +. 10. in
+      while Array.length (Sys.readdir dir) < 2 do
+        if Unix.gettimeofday () > deadline then failwith "checked alone";
+        Unix.sleepf 0.01
+      done
+    in
+    let finally () = Array.iter (fun f -> Sys.remove (Filename.concat dir f)) (Sys.readdir dir); Sys.rmdir dir in
+    Fun.protect ~finally (fun () ->
+        let result, log = run ~jobs:2 ~budget:CheckWorkers.default_budget ~work:meet 2 in
+        assert_no_exception result;
+        assert_exactly_once 2 log;
+        assert_main_checked_nothing log;
+        assert_equal ~printer:string_of_int 2 (List.length (pids_of log))))
 
 (* Budget 0: a worker completes one check and stops, so the checking
    progresses and ends, and what the workers did not do is checked again
-   exactly once, by a later worker or by the main process. *)
+   exactly once, by a later worker. *)
 let () = add_test "budget 0: each worker completes one check, all run once" (fun () ->
     let result, log = run ~budget:0. n in
     assert_no_exception result;
     assert_exactly_once n log;
-    let pids = List.sort_uniq compare (List.map fst (workers_of log)) in
+    assert_main_checked_nothing log;
+    let pids = pids_of log in
     assert_bool "workers ran" (pids <> []);
-    List.iter (fun p ->
-        let k = List.length (List.filter (fun (q, _) -> q = p) log) in
-        assert_equal ~printer:string_of_int 1 k)
-      pids;
-    assert_worker_in_order ~stride:4 log)
+    List.iter (fun p -> assert_equal ~printer:string_of_int 1 (List.length (checks_of p log))) pids)
 
 (* A budget that expires while a worker is in its batch. *)
-let () = add_test "short budget: batch checked in order, every check runs once" (fun () ->
-    let result, log = run ~budget:0.05 ~work:(fun () -> Unix.sleepf 0.02) n in
+let () = add_test "short budget: every check runs once" (fun () ->
+    let result, log = run ~budget:0.05 ~work:(fun _ -> Unix.sleepf 0.02) n in
     assert_no_exception result;
     assert_exactly_once n log;
-    assert_worker_in_order ~stride:4 log;
-    let pids = List.sort_uniq compare (List.map fst (workers_of log)) in
+    assert_main_checked_nothing log;
     List.iter (fun p ->
-        let k = List.length (List.filter (fun (q, _) -> q = p) log) in
+        let k = List.length (checks_of p log) in
         assert_bool "a worker that stops has completed at least one check" (k >= 1);
         assert_bool "a worker stops once its budget has passed" (k < 50))
-      pids)
+      (pids_of log))
+
+(* The first worker overruns its budget on its first check and gives the
+   rest of its batch back while many checks are still queued behind it
+   (each takes some time, so the other worker cannot drain them first).
+   The next check [a] of that batch is long: it lasts until the check [b]
+   after it has started. So [b] must not wait behind [a], in the same
+   batch or for a slot: it heads another batch, checked by another worker
+   at the same time. *)
+let () = add_test "re-queued tail with a long head: the check after it does not wait" (fun () ->
+    let n = 400 in
+    let first = List.hd (expected_batches ~slots:2 n) in
+    let a = List.nth first 1 and b = List.nth first 2 in
+    let started = Filename.temp_file "checkworkers" ".started" in
+    Sys.remove started;
+    let work i =
+      if i = 0 then Unix.sleepf 0.1
+      else if i = b then close_out (open_out started)
+      else if i = a then begin
+        let deadline = Unix.gettimeofday () +. 10. in
+        while not (Sys.file_exists started) do
+          if Unix.gettimeofday () > deadline then failwith "waited behind the long check";
+          Unix.sleepf 0.01
+        done
+      end
+      else Unix.sleepf 0.005
+    in
+    let finally () = if Sys.file_exists started then Sys.remove started in
+    Fun.protect ~finally (fun () ->
+        let result, log = run ~budget:0.05 ~work n in
+        assert_no_exception result;
+        assert_exactly_once n log;
+        assert_main_checked_nothing log;
+        let by i = fst (List.find (fun (_, j) -> j = i) log) in
+        assert_bool "the overrun worker stopped after its first check" (checks_of (by 0) log = [0]);
+        assert_bool "the long check and the one after it went to different workers" (by a <> by b);
+        List.iter (fun i ->
+            assert_equal ~printer:string_of_int i (List.hd (checks_of (by i) log)))
+          [a; b]))
 
 let () = add_test "several workers, budget 0: every check runs once" (fun () ->
     let result, log = run ~jobs:4 ~budget:0. n in
     assert_no_exception result;
-    assert_exactly_once n log)
+    assert_exactly_once n log;
+    assert_main_checked_nothing log)
 
 (* A refusal behaves as with a worker that is not stopped: the worker that
    checks the proof exits with its error code and the main process raises

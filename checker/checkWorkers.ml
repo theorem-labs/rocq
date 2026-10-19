@@ -74,21 +74,31 @@ let set_budget t =
 
    The cost of a proof is not known in advance, it varies wildly, and
    costly proofs tend to be in the same library, hence deferred in a
-   row. So the checks handed out together are dealt round-robin to the
-   workers, and a worker is given at most a [1/N] share of the queued
-   checks, where [N] is the number of processes.
+   row. So a batch is not a run of the queue but a stride of it: when
+   the queue holds [s] batches of the size wanted, a batch takes one
+   check in [s], from the front. Checks next to each other in the queue
+   go to different batches. A worker that stops early puts the checks
+   it did not do back at the front, so the first of them head the next
+   batches: a long check given back does not wait behind the checks
+   that followed it in its batch.
 
-   Once the libraries are checked, all that is left is known. It is
-   dealt out by guided self-scheduling: whenever a worker slot is free,
-   it is given a share of what remains, proportional to it, and in
-   between the main process checks the remaining proofs itself, one at a
-   time, so that all processes finish at about the same time. *)
+   While the libraries are being checked, the main process checks them,
+   so there are at most [N-1] workers, where [N] is the number of
+   processes, and a worker is given at most a [1/N] share of the queued
+   checks.
+
+   Once the libraries are checked, all that is left is known, and the
+   main process only hands out checks and waits for workers, which costs
+   it no processor time. So there are up to [N] workers, and the main
+   process checks nothing itself. It deals by guided self-scheduling:
+   whenever a worker slot is free, it is given [1/(2N)] of what remains,
+   and at least one check, so that all workers end at about the same
+   time. *)
 let window = 1.0
 
-(* Below this, a batch is not worth a fork, while the libraries are
-   being checked, and once they are. *)
+(* Below this, a batch is not worth a fork while the libraries are
+   being checked. *)
 let min_batch = 50
-let min_share = 10
 
 (* Deferred checks not yet given to a worker, oldest first. *)
 let queue : task Queue.t = Queue.create ()
@@ -311,16 +321,24 @@ let rec reap_finished () =
     | 0, _ -> ()
     | pid, status -> reaped pid status; reap_finished ()
 
-let free_slots () = !max_workers - List.length !running
+let free_slots slots = slots - List.length !running
 
-(* Take [k * size] checks (or all) from the front of the queue and deal
-   them round-robin into [k] batches. *)
+(* Deal [k] batches of at most [size] checks from the front of the
+   queue. When it holds [s >= k] batches of [size], batch [j] takes the
+   checks at positions [j], [j + s], [j + 2s]... of the first [s * size].
+   The checks not taken stay at the front, in order. *)
 let deal k size =
-  let n = min (Queue.length queue) (k * size) in
+  let n = Queue.length queue in
+  let lanes = max k (n / size) in
   let batches = Array.make k [] in
-  for i = 0 to n - 1 do
-    batches.(i mod k) <- Queue.pop queue :: batches.(i mod k)
+  let rest = Queue.create () in
+  for i = 0 to min n ((size - 1) * lanes + k) - 1 do
+    let task = Queue.pop queue in
+    let j = i mod lanes in
+    if j < k then batches.(j) <- task :: batches.(j) else Queue.push task rest
   done;
+  Queue.transfer queue rest;
+  Queue.transfer rest queue;
   Array.iter (fun l -> if not (CList.is_empty l) then spawn (Array.of_list (List.rev l))) batches
 
 let defer kn check =
@@ -333,39 +351,25 @@ let defer kn check =
       reap_finished ();
       let n = Queue.length queue in
       let size = max min_batch ((n + !max_workers) / (!max_workers + 1)) in
-      let k = min (free_slots ()) (n / size) in
+      let k = min (free_slots !max_workers) (n / size) in
       if k > 0 then deal k size
     end
   end
 
 let finish () =
   if !max_workers > 0 then begin
-    let nprocs = !max_workers + 1 in
-    (* Shares are taken from the front of the queue: interleave it, so
-       that each share is spread over all of it. *)
-    let tasks = Array.of_seq (Queue.to_seq queue) in
-    let stride = 2 * nprocs in
-    Queue.clear queue;
-    for s = 0 to stride - 1 do
-      let i = ref s in
-      while !i < Array.length tasks do
-        Queue.push tasks.(!i) queue;
-        i := !i + stride
-      done
-    done;
+    (* The main process checks nothing from now on, so one more worker
+       can run. *)
+    let slots = !max_workers + 1 in
     (* A worker that stops early queues checks again, so the queue is
        only known to be empty when no worker is left. *)
     while not (Queue.is_empty queue) || not (CList.is_empty !running) do
       reap_finished ();
-      if Queue.is_empty queue then begin
-        if not (CList.is_empty !running) then begin
-          let pid, status = waitpid_non_intr [] (-1) in
-          reaped pid status
-        end
-      end else begin
-        let size = Queue.length queue / (2 * nprocs) in
-        if free_slots () > 0 && size >= min_share then deal 1 size
-        else check_here (Queue.pop queue)
+      if free_slots slots > 0 && not (Queue.is_empty queue) then
+        deal 1 ((Queue.length queue + 2 * slots - 1) / (2 * slots))
+      else begin
+        let pid, status = waitpid_non_intr [] (-1) in
+        reaped pid status
       end
     done;
     debug (fun () ->
