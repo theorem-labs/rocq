@@ -30,6 +30,14 @@ Fatal Error: Worker process PID exited with code 129
              while checking 50 opaque proofs (the first is Lib.l1,
              the last Lib.l393).
 exit code: 129
+== ill-typed late proof, -j 4, -worker-budget 0
+type error reported
+proof reported: Lib.l300
+exit code: 129
+== ill-typed late proof, -j 2, -worker-budget 0
+type error reported
+proof reported: Lib.l300
+exit code: 129
 == -j 2 with -profile
 Warning: Option -j is ignored when profiling; checking sequentially.
 exit code: 0
