@@ -51,7 +51,7 @@ let mode_eq m1 m2 = match m1, m2 with
 
 (* The single piece of state behind the flags below, and the only one
    registered with the summary. *)
-let current_mode : mode option Summary.Ref.t =
+let current_mode : mode option ref =
   Summary.ref ~name:"printing-reversible-mode" None
 
 (* These flags behave like a radio button: setting one unsets the
@@ -64,13 +64,13 @@ let declare_mode_option key mode =
     optstage = Summary.Stage.Interp;
     optdepr  = None;
     optkey   = key;
-    optread  = (fun () -> match Summary.Ref.get current_mode with
+    optread  = (fun () -> match !current_mode with
         | Some m -> mode_eq m mode
         | None -> false);
     optwrite = (fun b ->
-        if b then Summary.Ref.set current_mode (Some mode)
-        else match Summary.Ref.get current_mode with
-          | Some m when mode_eq m mode -> Summary.Ref.set current_mode None
+        if b then current_mode := Some mode
+        else match !current_mode with
+          | Some m when mode_eq m mode -> current_mode := None
           | _ -> ());
   }
 
@@ -260,7 +260,7 @@ let reparses ~mode ~kind ~flags env sigma t expr =
 let in_check = ref false
 
 let checked_extern ~flags ~extern ~kind env sigma t =
-  match Summary.Ref.get current_mode with
+  match !current_mode with
   | None -> flags, extern ~flags
   | Some _ when !in_check -> flags, extern ~flags
   | Some mode ->
