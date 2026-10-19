@@ -41,8 +41,17 @@ let record fd i =
 
 (* [n] deferred checks, [-j jobs], then [finish]. A check [refuse] raises;
    check [i] records itself, then runs [work i]. Returns the log, or the
-   exception that [finish] raised (after [abort], as the checker does). *)
-let run ?(jobs = 2) ?refuse ?(work = fun _ -> ()) ~budget n =
+   exception that [defer] or [finish] raised (after [abort], as the
+   checker does).
+
+   The checks are deferred within a fraction of a second, less than the
+   dispatch window, unless [windows] is given: the checks are then cut
+   into [windows] equal parts, and before the last check of each part
+   the main process sleeps past the window, so that deferring that check
+   deals batches as while the libraries are checked. [before_finish] is
+   given the log reader after the last [defer]. *)
+let run ?(jobs = 2) ?refuse ?(work = fun _ -> ()) ?(windows = 0)
+    ?(before_finish = fun _ -> ()) ~budget n =
   with_log (fun fd read ->
       CheckWorkers.set_jobs ~profiling:false jobs;
       CheckWorkers.set_budget budget;
@@ -51,14 +60,18 @@ let run ?(jobs = 2) ?refuse ?(work = fun _ -> ()) ~budget n =
             CheckWorkers.set_jobs ~profiling:false 1;
             CheckWorkers.set_budget CheckWorkers.default_budget)
         (fun () ->
-           for i = 0 to n - 1 do
-             CheckWorkers.defer (constant i) (fun () ->
-                 if Some i = refuse then failwith "refused";
-                 record fd i;
-                 work i)
-           done;
+           let part = if windows = 0 then 0 else n / windows in
            let result =
-             try CheckWorkers.finish (); None
+             try
+               for i = 0 to n - 1 do
+                 if part > 0 && i mod part = part - 1 then Unix.sleepf 1.05;
+                 CheckWorkers.defer (constant i) (fun () ->
+                     if Some i = refuse then failwith "refused";
+                     record fd i;
+                     work i)
+               done;
+               before_finish read;
+               CheckWorkers.finish (); None
              with e -> CheckWorkers.abort (); Some e
            in
            (* No worker is left behind. *)
@@ -83,11 +96,11 @@ let checks_of p log = List.filter_map (fun (q, i) -> if q = p then Some i else N
 
 let pids_of log = List.sort_uniq compare (List.map fst (workers_of log))
 
-(* The batches [finish] deals to [slots] workers from [0 .. n-1] when no
+(* The batches [finish] deals to [slots] workers from [queue] when no
    worker stops early, in order: each has [ceil (r / (2 * slots))] checks
    taken one in [r / size] from the front of the [r] that remain, and the
    checks not taken stay in front, in order. *)
-let expected_batches ~slots n =
+let finish_batches ~slots queue =
   let rec go acc queue =
     match queue with
     | [] -> List.rev acc
@@ -100,7 +113,20 @@ let expected_batches ~slots n =
       let rest = List.filteri (fun i _ -> not (i < taken && i mod lanes = 0)) queue in
       go (batch :: acc) rest
   in
-  go [] (List.init n Fun.id)
+  go [] queue
+
+let expected_batches ~slots n = finish_batches ~slots (List.init n Fun.id)
+
+(* The [k] batches of [size] checks dealt from [queue] while the libraries
+   are checked, and what stays queued: when the queue holds [s >= k]
+   batches of [size], batch [j] takes the checks at positions [j], [j + s],
+   [j + 2s]... of the first [s * size], and its worker checks them newest
+   first. *)
+let library_batches ~k ~size queue =
+  let s = max k (List.length queue / size) in
+  let taken i = i < s * size && i mod s < k in
+  let batch j = List.rev (List.filteri (fun i _ -> taken i && i mod s = j) queue) in
+  List.init k batch, List.filteri (fun i _ -> not (taken i)) queue
 
 let n = 200
 
@@ -108,18 +134,20 @@ let assert_no_exception = function
   | None -> ()
   | Some e -> assert_failure ("unexpected " ^ Printexc.to_string e)
 
-(* All the checks here are deferred within a fraction of a second, less
-   than the dispatch window, and fewer than a batch of the library phase
-   at a time, so all of them are dealt by [finish]. *)
+(* The main process only queues and deals checks, and waits for workers:
+   it checks a proof itself only when it cannot fork. *)
 let assert_main_checked_nothing log =
   if List.exists (fun (p, _) -> p = me) log then
-    assert_failure "the main process checked a proof after the libraries"
+    assert_failure "the main process checked a proof"
 
-let assert_batches_as_documented ~slots n log =
+let pr_batches l = String.concat "; " (List.map (fun b -> String.concat "," (List.map string_of_int b)) l)
+
+(* Each worker checked exactly one of [expected], in its order. *)
+let assert_batches expected log =
   let got = List.sort compare (List.map (fun p -> checks_of p log) (pids_of log)) in
-  let expected = List.sort compare (expected_batches ~slots n) in
-  let pr l = String.concat "; " (List.map (fun b -> String.concat "," (List.map string_of_int b)) l) in
-  assert_equal ~printer:pr expected got
+  assert_equal ~printer:pr_batches (List.sort compare expected) got
+
+let assert_batches_as_documented ~slots n log = assert_batches (expected_batches ~slots n) log
 
 let () = add_test "no early stop: every check runs once" (fun () ->
     let result, log = run ~budget:CheckWorkers.default_budget n in
@@ -164,9 +192,9 @@ let () = add_test "after the libraries, N workers run at once" (fun () ->
         assert_main_checked_nothing log;
         assert_equal ~printer:string_of_int 2 (List.length (pids_of log))))
 
-(* Workers that end together are all reaped, whichever way the main
-   process sees them end, and it then stops waiting. *)
-let () = add_test "workers that end together are all reaped" (fun () ->
+(* Workers dealt by [finish] that end together are all reaped, whichever
+   way the main process sees them end, and it then stops waiting. *)
+let () = add_test "workers dealt by finish that end together are all reaped" (fun () ->
     meeting 4 (fun meet clear ->
         for _ = 1 to 30 do
           clear ();
@@ -243,10 +271,9 @@ let () = add_test "several workers, budget 0: every check runs once" (fun () ->
 
 (* A refusal behaves as with a worker that is not stopped: the worker that
    checks the proof exits with its error code and the main process raises
-   WorkerFailed, or the main process checks it and raises CheckError. *)
+   WorkerFailed. The main process checks no proof itself, so it never
+   raises CheckError here. *)
 let assert_refusal = function
-  | Some (CheckWorkers.CheckError (kn, Failure _)) ->
-    assert_bool "constant is the refused one" (Names.Constant.CanOrd.equal kn (constant 150))
   | Some (CheckWorkers.WorkerFailed (_, Unix.WEXITED c, b)) ->
     assert_bool "exit code of the error" (c <> 0);
     assert_bool "batch size" (b.CheckWorkers.size >= 1)
@@ -268,6 +295,135 @@ let () = add_test "refusal surfaces without early stop" (fun () ->
 let () = add_test "refusal surfaces, several workers" (fun () ->
     let result, _ = run ~jobs:4 ~budget:0. ~refuse:150 n in
     assert_refusal result)
+
+(* Batches dealt by [defer] while the libraries are checked (see the
+   [windows] argument of [run]): a batch is a stride of the queue that its
+   worker checks newest first, and what the worker does not check goes
+   back to the front in the order it would have checked it. *)
+
+(* The log once it holds [k] records, while the main process waits
+   before [finish], so that only the batches dealt by [defer] run. *)
+let wait_records read k =
+  let deadline = Unix.gettimeofday () +. 10. in
+  let rec go () =
+    let log = read () in
+    if List.length log >= k then log
+    else if Unix.gettimeofday () > deadline then
+      assert_failure (Printf.sprintf "%d checks recorded, %d expected" (List.length log) k)
+    else (Unix.sleepf 0.01; go ())
+  in
+  go ()
+
+let heads read k = List.sort compare (List.map snd (wait_records read k))
+
+(* -j 2: 201 checks, one batch of 101 dealt while the libraries are
+   checked (positions 0 to 100), the 100 others by [finish]. *)
+let () = add_test "libraries, no early stop: one batch, newest first, then finish" (fun () ->
+    let result, log = run ~jobs:2 ~windows:1 ~budget:CheckWorkers.default_budget 201 in
+    assert_no_exception result;
+    assert_exactly_once 201 log;
+    assert_main_checked_nothing log;
+    let lib, rest = library_batches ~k:1 ~size:101 (List.init 201 Fun.id) in
+    assert_equal ~printer:pr_batches [List.init 101 (fun i -> 100 - i)] lib;
+    assert_batches (lib @ finish_batches ~slots:2 rest) log)
+
+(* -j 4: three strided batches of 51 (checks 0, 3... 150; 1, 4... 151;
+   2, 5... 152), then [finish] deals the 48 others. *)
+let () = add_test "libraries, no early stop: strided batches, newest first, then finish" (fun () ->
+    let result, log = run ~jobs:4 ~windows:1 ~budget:CheckWorkers.default_budget 201 in
+    assert_no_exception result;
+    assert_exactly_once 201 log;
+    assert_main_checked_nothing log;
+    let lib, rest = library_batches ~k:3 ~size:51 (List.init 201 Fun.id) in
+    assert_equal ~printer:pr_batches
+      (List.init 3 (fun j -> List.init 51 (fun i -> 150 + j - 3 * i))) lib;
+    assert_batches (lib @ finish_batches ~slots:4 rest) log)
+
+(* Budget 0: the worker of each batch dealt while the libraries are
+   checked completes only the newest check of its batch, then gives the
+   others back, and they are all still checked exactly once. *)
+let () = add_test "libraries, budget 0: the newest check heads its batch, -j 2" (fun () ->
+    let before_finish read =
+      assert_equal ~printer:pr_batches [[100]] [heads read 1] in
+    let result, log = run ~jobs:2 ~windows:1 ~before_finish ~budget:0. 201 in
+    assert_no_exception result;
+    assert_exactly_once 201 log;
+    assert_main_checked_nothing log)
+
+let () = add_test "libraries, budget 0: the newest checks head the strided batches, -j 4" (fun () ->
+    let before_finish read =
+      assert_equal ~printer:pr_batches [[150; 151; 152]] [heads read 3] in
+    let result, log = run ~jobs:4 ~windows:1 ~before_finish ~budget:0. 201 in
+    assert_no_exception result;
+    assert_exactly_once 201 log;
+    assert_main_checked_nothing log)
+
+(* Batches dealt in three windows, while the workers of earlier ones may
+   still run or have given checks back. *)
+let () = add_test "libraries, budget 0, three windows: every check runs once" (fun () ->
+    let result, log = run ~jobs:3 ~windows:3 ~budget:0. 450 in
+    assert_no_exception result;
+    assert_exactly_once 450 log;
+    assert_main_checked_nothing log;
+    List.iter (fun p -> assert_equal ~printer:string_of_int 1 (List.length (checks_of p log))) (pids_of log))
+
+let () = add_test "libraries, short budget, three windows: every check runs once" (fun () ->
+    let result, log = run ~jobs:4 ~windows:3 ~budget:0.05 ~work:(fun _ -> Unix.sleepf 0.01) 600 in
+    assert_no_exception result;
+    assert_exactly_once 600 log;
+    assert_main_checked_nothing log;
+    List.iter (fun p ->
+        let k = List.length (checks_of p log) in
+        assert_bool "a worker that stops has completed at least one check" (k >= 1);
+        assert_bool "a worker stops once its budget has passed" (k < 50))
+      (pids_of log))
+
+(* Check 150 heads the first batch dealt at -j 4: its worker fails on it,
+   and the batch it reports is that one. *)
+let () = add_test "libraries: refusal in a batch surfaces" (fun () ->
+    let result, log = run ~jobs:4 ~windows:1 ~budget:CheckWorkers.default_budget ~refuse:150 201 in
+    assert_refusal result;
+    (match result with
+     | Some (CheckWorkers.WorkerFailed (_, _, b)) ->
+       assert_bool "the batch is the one headed by the refused check"
+         (Names.Constant.CanOrd.equal b.CheckWorkers.first (constant 150) && b.CheckWorkers.size = 51)
+     | _ -> ());
+    assert_bool "the refused check did not record itself"
+      (not (List.exists (fun (_, i) -> i = 150) log)))
+
+(* Check 120 is deep in a batch dealt while the libraries are checked:
+   with budget 0 it is only reached from checks given back. *)
+let () = add_test "libraries, budget 0, three windows: refusal surfaces" (fun () ->
+    let result, log = run ~jobs:4 ~windows:3 ~budget:0. ~refuse:120 450 in
+    assert_refusal result;
+    assert_bool "the refused check did not record itself"
+      (not (List.exists (fun (_, i) -> i = 120) log)))
+
+(* A worker that has ended and not been reaped. *)
+let zombie pid =
+  let ic = open_in (Printf.sprintf "/proc/%d/stat" pid) in
+  let l = Fun.protect ~finally:(fun () -> close_in ic) (fun () -> input_line ic) in
+  l.[String.rindex l ')' + 2] = 'Z'
+
+(* Workers that end together are all reaped, and then [finish] stops
+   waiting. At -j 3, 100 checks are dealt in two batches of 50 while the
+   libraries are checked, and none is left for [finish] to deal. Both
+   workers have ended when [finish] starts, so its first look at them
+   reaps the last one. *)
+let () = add_test "workers that end together are all reaped" (fun () ->
+    let before_finish read =
+      let log = wait_records read 100 in
+      assert_equal ~printer:string_of_int 2 (List.length (pids_of log));
+      let deadline = Unix.gettimeofday () +. 10. in
+      while not (List.for_all zombie (pids_of log)) do
+        if Unix.gettimeofday () > deadline then assert_failure "a worker did not end";
+        Unix.sleepf 0.01
+      done
+    in
+    let result, log = run ~jobs:3 ~windows:1 ~before_finish ~budget:CheckWorkers.default_budget 100 in
+    assert_no_exception result;
+    assert_exactly_once 100 log;
+    assert_main_checked_nothing log)
 
 (* The report is the one thing the main process believes about what a
    worker did not do: anything but a well-formed count in [1, size],

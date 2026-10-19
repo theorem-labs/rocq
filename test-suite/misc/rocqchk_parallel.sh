@@ -99,8 +99,8 @@ run() {
   sed -e 's/Worker process [0-9]*/Worker process PID/' "$d/run.log"
   echo "exit code: $R"
 }
-# The late refusal is found by a worker or by the main process depending on
-# timing, so only what does not depend on it is kept.
+# The late refusal is found by a worker, but which batch l9 is in once it has
+# been given back depends on timing, so the batch is not kept.
 run_late() {
   echo "== $1"
   shift
