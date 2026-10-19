@@ -157,6 +157,9 @@ type uncooked_proofterm = {
 type indirect_accessor = {
   access_proof : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm option;
   access_uncooked_proof : Opaqueproof.opaque -> uncooked_proofterm option;
+  access_unchecked : Opaqueproof.opaque -> bool;
+  (** Whether the kernel did not type this opaque proof when it was declared,
+      see {!Safe_typing.skip_qed_typecheck}. *)
 }
 
 val force_proof : indirect_accessor -> Opaqueproof.opaque -> Opaqueproof.opaque_proofterm

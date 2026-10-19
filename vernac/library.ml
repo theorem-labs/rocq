@@ -221,7 +221,7 @@ let access_opaque_table o =
   let (sub, ci, _, _) = Opaqueproof.repr o in
   match stored_opaque o with
   | None -> None
-  | Some (c, ctx) ->
+  | Some ((c, ctx), _) ->
     let (c, ctx) = Discharge.cook_opaque_proofterm ci (c, ctx) in
     let c = Mod_subst.subst_mps_list sub c in
     Some (c, ctx)
@@ -263,7 +263,7 @@ let uncooked_opaque_table o =
     None
   else match stored_opaque o with
   | None -> None
-  | Some (c, _) ->
+  | Some ((c, _), _) ->
     let subst = Mod_subst.subst_mps_list sub in
     let caches = List.map Cooking.create_cache ci in
     let fold (info, cache) (bound, ctx) =
@@ -283,9 +283,15 @@ let uncooked_opaque_table o =
            Global.uncooked_context = context;
            Global.uncooked_expand = expand }
 
+let access_opaque_unchecked o =
+  match stored_opaque o with
+  | None -> false
+  | Some (_, unchecked) -> unchecked
+
 let indirect_accessor = {
   Global.access_proof = access_opaque_table;
   Global.access_uncooked_proof = uncooked_opaque_table;
+  Global.access_unchecked = access_opaque_unchecked;
 }
 
 (************************************************************************)

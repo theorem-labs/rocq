@@ -1086,6 +1086,12 @@ let assumptions ?(add_opaque=false) ?(add_transparent=false) access st grs =
           let l = try GlobRef.Map_env.find obj ax2ty with Not_found -> [] in
           ContextObjectMap.add (Axiom (UncheckedEliminations obj, l)) Constr.mkProp accu
       in
+      let accu = match cb.const_body with
+        | OpaqueDef o when Option.has_some contents && access.Global.access_unchecked o ->
+          (* The body was read above, so its table is available. *)
+          ContextObjectMap.add (Axiom (UncheckedOpaque kn, [])) Constr.mkProp accu
+        | _ -> accu
+      in
     if not (Option.has_some contents) then
       let t = type_of_constant cb in
       let l = try GlobRef.Map_env.find obj ax2ty with Not_found -> [] in

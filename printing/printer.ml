@@ -1128,6 +1128,7 @@ type axiom =
   | UncheckedEliminations of GlobRef.t
   | UIP of MutInd.t
   | IndicesNotMattering of MutInd.t
+  | UncheckedOpaque of Constant.t
 
 type context_object =
   | Variable of Id.t (* A section variable or a Let definition *)
@@ -1142,7 +1143,8 @@ struct
 
   let compare_axiom x y =
     match x,y with
-    | Constant k1 , Constant k2 ->
+    | Constant k1 , Constant k2
+    | UncheckedOpaque k1, UncheckedOpaque k2 ->
       Constant.UserOrd.compare k1 k2
     | Positive m1 , Positive m2
     | UIP m1, UIP m2
@@ -1164,6 +1166,8 @@ struct
     | _, UncheckedEliminations _ -> 1
     | UIP _, _ -> -1
     | _, UIP _ -> 1
+    | IndicesNotMattering _, _ -> -1
+    | _, IndicesNotMattering _ -> 1
 
   let compare x y =
     match x , y with
@@ -1253,16 +1257,24 @@ let pr_assumptionset ?(flags=current_combined()) env sigma theory_info s =
           hov 2 (safe_pr_inductive env mind ++ spc () ++ strbrk"relies on definitional UIP.")
       | IndicesNotMattering mind ->
           hov 2 (safe_pr_inductive env mind ++ spc () ++ strbrk"relies on indices not mattering.")
+      | UncheckedOpaque kn ->
+          h (safe_pr_global env (GlobRef.ConstRef kn) ++ str " has an opaque proof not checked by the kernel.")
     in
+    (* [nc] collects the [UncheckedOpaque] notes: [fold] visits keys in
+       increasing order and prepends, so they are kept apart to print them
+       after every other kind of axiom. *)
     let fold t typ accu =
-      let (v, a, o, tr) = accu in
+      let (v, a, nc, o, tr) = accu in
       match t with
       | Variable id ->
         let var = pr_id id ++ spc() ++ str ": " ++ pr_ltype_env ~flags env sigma typ in
-        (var :: v, a, o, tr)
+        (var :: v, a, nc, o, tr)
+      | Axiom (UncheckedOpaque _ as axiom, _) ->
+        let ax = pr_axiom env axiom typ in
+        (v, a, ax :: nc, o, tr)
       | Axiom (axiom, []) ->
         let ax = pr_axiom env axiom typ in
-        (v, ax :: a, o, tr)
+        (v, ax :: a, nc, o, tr)
       | Axiom (axiom,l) ->
         let ax = pr_axiom env axiom typ ++
           spc() ++
@@ -1276,17 +1288,18 @@ let pr_assumptionset ?(flags=current_combined()) env sigma theory_info s =
             str "used in " ++ Id.print lab ++
             str " to prove" ++ fnl() ++ safe_pr_ltype_relctx (ctx,ty))
           l in
-        (v, ax :: a, o, tr)
+        (v, ax :: a, nc, o, tr)
       | Opaque kn ->
         let opq = safe_pr_constant env kn ++ safe_pr_ltype env sigma typ in
-        (v, a, opq :: o, tr)
+        (v, a, nc, opq :: o, tr)
       | Transparent kn ->
         let tran = safe_pr_constant env kn ++ safe_pr_ltype env sigma typ in
-        (v, a, o, tran :: tr)
+        (v, a, nc, o, tran :: tr)
     in
-    let (vars, axioms, opaque, trans) =
-      ContextObjectMap.fold fold s ([], [], [], [])
+    let (vars, axioms, unchecked, opaque, trans) =
+      ContextObjectMap.fold fold s ([], [], [], [], [])
     in
+    let axioms = axioms @ unchecked in
     let theory =
       if show_theory_impredicative_set then
         [str "Set is impredicative"]
