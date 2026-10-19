@@ -327,7 +327,7 @@ let free_slots slots = slots - List.length !running
    queue. When it holds [s >= k] batches of [size], batch [j] takes the
    checks at positions [j], [j + s], [j + 2s]... of the first [s * size].
    The checks not taken stay at the front, in order. *)
-let deal k size =
+let deal ?(newest_first = false) k size =
   let n = Queue.length queue in
   let lanes = max k (n / size) in
   let batches = Array.make k [] in
@@ -339,7 +339,9 @@ let deal k size =
   done;
   Queue.transfer queue rest;
   Queue.transfer rest queue;
-  Array.iter (fun l -> if not (CList.is_empty l) then spawn (Array.of_list (List.rev l))) batches
+  Array.iter (fun l ->
+      if not (CList.is_empty l) then spawn (Array.of_list (if newest_first then l else List.rev l)))
+    batches
 
 let defer kn check =
   if !max_workers = 0 then check ()
@@ -352,7 +354,11 @@ let defer kn check =
       let n = Queue.length queue in
       let size = max min_batch ((n + !max_workers) / (!max_workers + 1)) in
       let k = min (free_slots !max_workers) (n / size) in
-      if k > 0 then deal k size
+      (* While the libraries are checked, a worker checks its batch
+         newest first: costly proofs come late in a library, so one
+         deferred last no longer waits for the rest of its batch and is
+         not the one given back when the worker's budget runs out. *)
+      if k > 0 then deal ~newest_first:true k size
     end
   end
 
