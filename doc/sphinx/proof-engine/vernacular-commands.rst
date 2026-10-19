@@ -454,6 +454,10 @@ Requests to the environment
    The message "Closed under the global context" indicates that all the theorems and
    definitions have no dependencies.
 
+   An opaque constant whose proof was not typechecked by the kernel, because
+   its library was compiled with ``-skip-qed-typecheck``, is reported under
+   "Axioms" as :n:`@qualid has an opaque proof not checked by the kernel.`
+
 .. flag:: Printing All Assumptions
 
    Turn this :term:`flag` on to make :cmd:`Print Assumptions` report

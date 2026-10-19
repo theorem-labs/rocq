@@ -86,6 +86,9 @@ type exported_private_constant = Constant.t * exported_opaque option
 
 val repr_exported_opaque : exported_opaque -> Opaqueproof.opaque_handle * Opaqueproof.opaque_proofterm
 
+(** Whether the body of this exported opaque was not typed by the kernel. *)
+val exported_opaque_unchecked : exported_opaque -> bool
+
 val export_private_constants :
   private_constants ->
   exported_private_constant list safe_transformer
@@ -126,6 +129,16 @@ val is_filled_opaque : Opaqueproof.opaque_handle -> safe_environment -> bool
 (** Get the proof term that was checked by the kernel. *)
 val repr_certificate : opaque_certificate ->
   Constr.t * Univ.ContextSet.t Opaqueproof.delayed_universes
+
+(** Whether the proof of this certificate was not typed by the kernel. *)
+val certificate_unchecked : opaque_certificate -> bool
+
+(** When set, the kernel does not type the body of an opaque constant
+    ({!check_opaque}, and opaque side effects) nor compare its type to the
+    statement. The body, its private universes and its section variables are
+    computed as usual. Each such body is reported by {!certificate_unchecked}
+    and {!exported_opaque_unchecked}. Default [false]. *)
+val skip_qed_typecheck : bool ref
 
 (** {5 Rewrite rules} *)
 
