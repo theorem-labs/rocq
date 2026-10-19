@@ -12,11 +12,12 @@
 
     The check of an opaque body is handed to [defer]. By default it is
     run immediately. With [-j N] for [N > 1], it is queued instead, and
-    queued checks are run in batches by up to [N-1] worker processes
-    created with [Unix.fork], while the main process carries on with
-    the rest of the libraries. A worker inherits a copy-on-write copy
-    of the whole heap, so it runs the queued closures as they are:
-    nothing is marshalled and nothing is shared afterwards.
+    queued checks are run in batches by worker processes created with
+    [Unix.fork]: up to [N-1] while the main process carries on with the
+    rest of the libraries, then up to [N] while it waits for them in
+    [finish], where it checks nothing itself. A worker inherits a
+    copy-on-write copy of the whole heap, so it runs the queued closures
+    as they are: nothing is marshalled and nothing is shared afterwards.
 
     A batch is checked only if its worker exits with code 0.
 
@@ -31,9 +32,10 @@
 
 val set_jobs : profiling:bool -> int -> unit
 (** [set_jobs ~profiling n] allows [n] processes to check at the same
-    time: the main one and [n-1] workers. It has no effect when
-    [n <= 1], and falls back to checking in the main process, with a
-    warning, when profiling or when [Unix.fork] is not available. *)
+    time: the main one and [n-1] workers while the libraries are
+    checked, then [n] workers. It has no effect when [n <= 1], and falls
+    back to checking in the main process, with a warning, when profiling
+    or when [Unix.fork] is not available. *)
 
 val default_budget : float
 (** Seconds. *)
@@ -57,9 +59,9 @@ val defer : Names.Constant.t -> (unit -> unit) -> unit
     is queued, nor have effects that anything else depends on. *)
 
 val finish : unit -> unit
-(** Check everything that is still queued and wait for all workers.
-    Raises [WorkerFailed] if a worker did not exit with code 0, or did
-    not report between 1 and [size] completed checks. *)
+(** Deal everything that is still queued to workers and wait for all of
+    them. Raises [WorkerFailed] if a worker did not exit with code 0, or
+    did not report between 1 and [size] completed checks. *)
 
 val abort : unit -> unit
 (** Kill all workers, wait for them, and drop the queued checks. *)
