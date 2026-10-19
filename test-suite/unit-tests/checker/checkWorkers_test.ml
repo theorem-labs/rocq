@@ -138,27 +138,43 @@ let () = add_test "few checks left: all dealt, in batches as documented" (fun ()
     assert_batches_as_documented ~slots:4 30 log;
     assert_bool "batches of one check" (List.exists (fun p -> List.length (checks_of p log) = 1) (pids_of log)))
 
-(* With -j 2, two workers run at once after the libraries: each of the
-   two checks waits until the other one has started. *)
+(* [k] checks that each wait until all [k] have started, so [k] workers
+   run at once and end at about the same time. *)
+let meeting k f =
+  let dir = Filename.temp_file "checkworkers" ".meet" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o700;
+  let meet i =
+    close_out (open_out (Filename.concat dir (string_of_int i)));
+    let deadline = Unix.gettimeofday () +. 10. in
+    while Array.length (Sys.readdir dir) < k do
+      if Unix.gettimeofday () > deadline then failwith "checked alone";
+      Unix.sleepf 0.01
+    done
+  in
+  let clear () = Array.iter (fun f -> Sys.remove (Filename.concat dir f)) (Sys.readdir dir) in
+  Fun.protect ~finally:(fun () -> clear (); Sys.rmdir dir) (fun () -> f meet clear)
+
+(* With -j 2, two workers run at once after the libraries. *)
 let () = add_test "after the libraries, N workers run at once" (fun () ->
-    let dir = Filename.temp_file "checkworkers" ".meet" in
-    Sys.remove dir;
-    Unix.mkdir dir 0o700;
-    let meet i =
-      close_out (open_out (Filename.concat dir (string_of_int i)));
-      let deadline = Unix.gettimeofday () +. 10. in
-      while Array.length (Sys.readdir dir) < 2 do
-        if Unix.gettimeofday () > deadline then failwith "checked alone";
-        Unix.sleepf 0.01
-      done
-    in
-    let finally () = Array.iter (fun f -> Sys.remove (Filename.concat dir f)) (Sys.readdir dir); Sys.rmdir dir in
-    Fun.protect ~finally (fun () ->
+    meeting 2 (fun meet _ ->
         let result, log = run ~jobs:2 ~budget:CheckWorkers.default_budget ~work:meet 2 in
         assert_no_exception result;
         assert_exactly_once 2 log;
         assert_main_checked_nothing log;
         assert_equal ~printer:string_of_int 2 (List.length (pids_of log))))
+
+(* Workers that end together are all reaped, whichever way the main
+   process sees them end, and it then stops waiting. *)
+let () = add_test "workers that end together are all reaped" (fun () ->
+    meeting 4 (fun meet clear ->
+        for _ = 1 to 30 do
+          clear ();
+          let result, log = run ~jobs:4 ~budget:CheckWorkers.default_budget ~work:meet 4 in
+          assert_no_exception result;
+          assert_exactly_once 4 log;
+          assert_main_checked_nothing log
+        done))
 
 (* Budget 0: a worker completes one check and stops, so the checking
    progresses and ends, and what the workers did not do is checked again
