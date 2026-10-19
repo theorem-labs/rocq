@@ -55,10 +55,20 @@
 #   take that body.
 # The walk without reuse drops each query's data before the next; the reuse
 # keeps entries, and clears them when they weigh more than twice the
-# heaviest query. Measured on the dev and the release profile, both files
-# need 720 to 790 MiB of address space without reuse, 790 to 880 MiB with the
-# bounded reuse, and 1,240 to 1,280 MiB with a cache that keeps every entry
-# until the environment changes, which runs out here.
+# heaviest query. Smallest address space (ulimit -v, 10,000 KiB steps, the
+# same in three runs, OCaml 4.14.2, dev / release) at which each file answers:
+# - without reuse: Retain64 720,000 / 760,000, BlockRetain64 760,000 / 790,000;
+# - with the bounded reuse (the cache alone): Retain64 800,000 / 870,000,
+#   BlockRetain64 840,000 / 870,000;
+# - with the bounded reuse and the walk of the stored proof term (upstream
+#   rocq-prover/rocq#22425): Retain64 890,000 / 920,000, BlockRetain64
+#   840,000 / 920,000. Up to 90,000 KiB more than the cache alone comes from
+#   that walk: #22425 on its own, without the cache, needs Retain64 890,000 /
+#   970,000 and BlockRetain64 940,000 / 970,000;
+# - with a cache that keeps every entry until the environment changes,
+#   1,240,000 to 1,280,000 KiB, which runs out here.
+# The cap above leaves 80,000 KiB over the largest of the first three. Builds
+# of the grader bound memory by their cgroup, not by address space.
 #
 # Constants without a body (axioms, parameters, Admitted lemmas) whose types
 # name many objects. The walk without reuse keeps no reference of such a type
@@ -417,6 +427,26 @@ if ! awk -v c0="$c0" -v c1="$c1" -v c2="$c2" 'BEGIN { exit !(c2 - c1 <= 3 * (c1 
   echo "AxLibQ2: ${c2}s of CPU for two queries, ${c1}s for one, ${c0}s for none"
   status=1
 fi
+
+# The context an empty match stores for its "used in ... to prove" line is the
+# walk's own, shared by every match, so a match costs nothing in its depth:
+# fun (x0 ... x3999 : nat) => cons (match F return nat with end) (... 4000
+# times ... nil) over Axiom F : False holds 4,000 matches under 4,000 binders,
+# and a client that queries it runs under -v 800000. Without reuse the client
+# needs about 600 MB of address space; a copy of the context per match (16M
+# list cells) needs about 1 GB, and runs out here. The library is compiled
+# without a stack cap.
+deep() {
+  echo "Axiom F : False."
+  echo "Definition big := fun ($(names 'x%g' 4000): nat) => $(yes 'cons (match F return nat with end) (' | head -n 4000 | tr '\n' ' ')nil$(printf ')%.0s' $(seq 1 4000))."
+}
+deep > D4000.v
+expect D4000lib "$(ulimit -s unlimited; rocq c -q -R . P D4000.v 2>&1)" ""
+{ echo "Require Import P.D4000."; echo "Print Assumptions big."; } > D4000Client.v
+out=$(ulimit -s 8192; ulimit -v 800000; rocq c -q -R . P D4000Client.v 2>&1) || true
+expect D4000 "$(echo "$out" | sed -n 1,2p; echo "$out" | wc -l)" "Axioms:
+F : False
+8002"
 
 # Many equal copies of one type that are separate objects. The walk without
 # reuse costs one pass over each copy, so two queries over them must cost at

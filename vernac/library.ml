@@ -210,24 +210,82 @@ let access_table what tables dp i =
   in
   Opaques.get_opaque_disk i t
 
+let stored_opaque o =
+  let (_sub, _ci, dp, i) = Opaqueproof.repr o in
+  if DirPath.equal dp (Global.current_dirpath ()) then
+    Opaques.get_current_opaque i
+  else
+    access_table "opaque proofs" opaque_tables dp i
+
 let access_opaque_table o =
-  let (sub, ci, dp, i) = Opaqueproof.repr o in
-  let ans =
-    if DirPath.equal dp (Global.current_dirpath ()) then
-      Opaques.get_current_opaque i
-    else
-      let what = "opaque proofs" in
-      access_table what opaque_tables dp i
-  in
-  match ans with
+  let (sub, ci, _, _) = Opaqueproof.repr o in
+  match stored_opaque o with
   | None -> None
   | Some (c, ctx) ->
     let (c, ctx) = Discharge.cook_opaque_proofterm ci (c, ctx) in
     let c = Mod_subst.subst_mps_list sub c in
     Some (c, ctx)
 
+(* The same term, with the module substitutions applied but not the section
+   discharge, plus what the discharge would have done.  [None] when the
+   discharge generalizes an inductive of the section, since a [Case]
+   node of the stored term then has fewer parameters than the discharged
+   inductive declares. *)
+let uncooked_opaque_table o =
+  let (sub, ci, _, _) = Opaqueproof.repr o in
+  if List.exists Cooking.discharges_inductive ci then None
+  else if not (List.for_all Mod_subst.is_empty_subst sub) then
+    (* [Cooking.expand_subst]'s canonical-name lookups are keyed the way the
+       raw stored term below names things, before [subst] resolves module
+       paths crossed by a functor instantiation; composing it with the
+       substituted term would risk a silent miss on exactly the "used in ...
+       to prove" subterm this accessor exists to let a caller print
+       correctly (Assumptions.ml). Every opaque in a functor-free, one-file
+       proof script -- the whole real workload -- has an empty [sub], so
+       this never fires there; fall back to the cooked proof rather than
+       risk being wrong on the rare one that does. *)
+    None
+  else if List.length ci > 1 then
+    (* More than one enclosing section survived to discharge this term: a
+       reference inside it can need generalizing by TWO SEPARATE closings
+       (e.g. a nested section's constant referencing an outer one, each
+       contributing its own instance), and composing their [expand_subst]
+       passes as a plain function chain -- with no wrapping lambda between
+       them to mark where one closing's generalized variables end and the
+       next's begin -- does not reliably recover the single combined
+       application a real, from-the-root cooking pass would produce (it can
+       apply the wrong instance to the wrong argument slot). A single
+       section's own [expand_info] is always exact, since the kernel
+       resolves a multi-hop dependency (built discharges over the same
+       section's variables however many other section-local constants it
+       goes through) into ONE instance there; bail only once a second
+       closing stacks a second, separate one on top. *)
+    None
+  else match stored_opaque o with
+  | None -> None
+  | Some (c, _) ->
+    let subst = Mod_subst.subst_mps_list sub in
+    let caches = List.map Cooking.create_cache ci in
+    let fold (info, cache) (bound, ctx) =
+      (Id.Set.union bound (Cooking.names_info info),
+       Context.Rel.map subst (Cooking.rel_context_of_cooking_cache cache) @ ctx)
+    in
+    let (bound, context) =
+      List.fold_right fold (List.combine ci caches) (Id.Set.empty, []) in
+    (* Same expand/subst core [Discharge.cook_opaque_proofterm] uses for the
+       cooked body, with no final generalization over [context]: the caller
+       supplies those binders itself, at the depth its own subterm sits at
+       (see the .mli). *)
+    let expand t =
+      List.fold_right (fun cache t -> Cooking.expand_subst cache t) caches t in
+    Some { Global.uncooked_body = subst c;
+           Global.uncooked_bound = bound;
+           Global.uncooked_context = context;
+           Global.uncooked_expand = expand }
+
 let indirect_accessor = {
   Global.access_proof = access_opaque_table;
+  Global.access_uncooked_proof = uncooked_opaque_table;
 }
 
 (************************************************************************)
