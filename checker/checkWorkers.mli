@@ -18,13 +18,31 @@
     of the whole heap, so it runs the queued closures as they are:
     nothing is marshalled and nothing is shared afterwards.
 
-    A batch is checked only if its worker exits with code 0. *)
+    A batch is checked only if its worker exits with code 0.
+
+    A worker lives for at most a time budget (see [set_budget]): the
+    longer a worker lives, the more of the heap it shares with the main
+    process it has copied. Once the budget has passed, and the worker
+    has completed at least one check, it stops after the check it is in
+    and reports how many checks of its batch, the first ones in order, it
+    completed. The main process queues the others again, at the front.
+    So every check is run exactly once, by a process that ends
+    successfully, whichever way the work is cut into batches. *)
 
 val set_jobs : profiling:bool -> int -> unit
 (** [set_jobs ~profiling n] allows [n] processes to check at the same
     time: the main one and [n-1] workers. It has no effect when
     [n <= 1], and falls back to checking in the main process, with a
     warning, when profiling or when [Unix.fork] is not available. *)
+
+val default_budget : float
+(** Seconds. *)
+
+val set_budget : float -> unit
+(** [set_budget t] makes workers stop after [t] seconds of wall time,
+    counted from their creation, at the next end of a check, but never
+    before one check is completed. [t = 0.] makes a worker complete a
+    single check. @raise Invalid_argument if [t] is negative or NaN. *)
 
 exception CheckError of Names.Constant.t * exn
 (** The deferred check of the body of a constant raised an exception.
@@ -40,7 +58,8 @@ val defer : Names.Constant.t -> (unit -> unit) -> unit
 
 val finish : unit -> unit
 (** Check everything that is still queued and wait for all workers.
-    Raises [WorkerFailed] if a worker did not exit with code 0. *)
+    Raises [WorkerFailed] if a worker did not exit with code 0, or did
+    not report between 1 and [size] completed checks. *)
 
 val abort : unit -> unit
 (** Kill all workers, wait for them, and drop the queued checks. *)
@@ -58,3 +77,12 @@ exception WorkerFailed of int * Unix.process_status * batch
 val pr_batch : batch -> Pp.t
 
 val signal_name : int -> string
+
+(** {2 For tests only} *)
+
+val default_report_writer : Unix.file_descr -> int -> unit
+(** What a worker does to report the number of checks it completed. *)
+
+val set_report_writer : (Unix.file_descr -> int -> unit) -> unit
+(** [set_report_writer f] replaces what a worker does to report the number
+    of checks it completed, given the descriptor to write to. *)
