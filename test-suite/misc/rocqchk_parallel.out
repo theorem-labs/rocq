@@ -32,11 +32,11 @@ Fatal Error: Worker process PID exited with code 129
 exit code: 129
 == ill-typed late proof, -j 4, -worker-budget 0
 type error reported
-proof reported: Lib.l300
+proof reported: Lib.l9
 exit code: 129
 == ill-typed late proof, -j 2, -worker-budget 0
 type error reported
-proof reported: Lib.l300
+proof reported: Lib.l9
 exit code: 129
 == -j 2 with -profile
 Warning: Option -j is ignored when profiling; checking sequentially.

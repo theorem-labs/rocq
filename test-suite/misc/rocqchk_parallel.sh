@@ -15,14 +15,16 @@ d=$(mktemp -d)
 mkdir "$d/good" "$d/bad" "$d/late"
 
 # Many opaque proofs, so that there is work for several workers. The bad
-# library has its ill-typed proof first, the late one far from the first
-# batch: with -worker-budget 0 it is only reached once batches have been
-# given back.
+# library has its ill-typed proof first. The late one has it at l9: the queue
+# is dealt in a stride of 2 x N, so l9 is the second proof of the first
+# worker's first batch at -j 4 and its third at -j 2, and with
+# -worker-budget 0 that worker stops after l1. l9 is then checked only from
+# the proofs the worker gives back.
 gen() {
   echo 'Inductive T : Prop := I.'
   echo 'Definition U := T.'
   for i in $(seq 1 400); do
-    if { [ "$i" = 1 ] && [ "$1" = bad ]; } || { [ "$i" = 300 ] && [ "$1" = late ]; }; then
+    if { [ "$i" = 1 ] && [ "$1" = bad ]; } || { [ "$i" = 9 ] && [ "$1" = late ]; }; then
       echo "Lemma l$i : forall x : U, U. Proof. exact (fun x => x). Qed."
     else
       echo "Lemma l$i : U. Proof. exact I. Qed."
@@ -105,7 +107,7 @@ run_late() {
   R=0
   rocqchk -silent "$@" > "$d/run.log" 2>&1 || R=$?
   grep -q 'Type error: ActualType' "$d/run.log" && echo "type error reported"
-  grep -q 'while checking the opaque proof of Lib.l300\.' "$d/run.log" && echo "proof reported: Lib.l300"
+  grep -q 'while checking the opaque proof of Lib.l9\.' "$d/run.log" && echo "proof reported: Lib.l9"
   echo "exit code: $R"
 }
 {
@@ -115,7 +117,8 @@ run_late() {
   # verdict is the same.
   run "correct library, -j 4, -worker-budget 0" -j 4 -worker-budget 0 -R "$d/good" "" -norec Lib
   run "ill-typed proof, -j 4, -worker-budget 0" -j 4 -worker-budget 0 -R "$d" "" -norec Lib
-  # The refusing proof is not in the first batch: it comes from a batch given back.
+  # The refusing proof is in the first batch but is not its first proof: it is
+  # checked only after that batch's worker gives it back.
   run_late "ill-typed late proof, -j 4, -worker-budget 0" -j 4 -worker-budget 0 -R "$d/late-spliced" "" -norec Lib
   run_late "ill-typed late proof, -j 2, -worker-budget 0" -j 2 -worker-budget 0 -R "$d/late-spliced" "" -norec Lib
   # Profiling is sequential only.
