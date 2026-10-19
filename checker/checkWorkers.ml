@@ -367,7 +367,7 @@ let finish () =
       reap_finished ();
       if free_slots slots > 0 && not (Queue.is_empty queue) then
         deal 1 ((Queue.length queue + 2 * slots - 1) / (2 * slots))
-      else begin
+      else if not (CList.is_empty !running) then begin
         let pid, status = waitpid_non_intr [] (-1) in
         reaped pid status
       end
