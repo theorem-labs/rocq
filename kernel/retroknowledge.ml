@@ -16,11 +16,26 @@
 
 open Names
 
+type pos_function =
+  | Pos_compare_cont
+  | Pos_eqb
+  | Pos_add
+  | Pos_succ
+  | Pos_mul
+
+let pos_function_to_string = function
+  | Pos_compare_cont -> "pos_compare_cont"
+  | Pos_eqb -> "pos_eqb"
+  | Pos_add -> "pos_add"
+  | Pos_succ -> "pos_succ"
+  | Pos_mul -> "pos_mul"
+
 type retroknowledge = {
     retro_int63 : Constant.t option;
     retro_float64 : Constant.t option;
     retro_string : Constant.t option;
     retro_array : Constant.t option;
+    retro_pos : (constructor * constructor * constructor) option; (* xI, xO, xH *)
     retro_bool : (constructor * constructor) option; (* true, false *)
     retro_carry : (constructor * constructor) option; (* C0, C1 *)
     retro_pair : constructor option;
@@ -33,9 +48,10 @@ type retroknowledge = {
                      * constructor * constructor * constructor * constructor
                      * constructor)
                       option;
-                    (* PNormal, NNormal, PSubn, NSubn,
-                       PZero, NZero, PInf, NInf,
-                       NaN *)
+                  (* PNormal, NNormal, PSubn, NSubn,
+                     PZero, NZero, PInf, NInf,
+                     NaN *)
+    retro_pos_functions : (pos_function * Constant.t) list;
 }
 
 let empty = {
@@ -43,14 +59,17 @@ let empty = {
     retro_float64 = None;
     retro_string = None;
     retro_array = None;
+    retro_pos = None;
     retro_bool = None;
     retro_carry = None;
     retro_pair = None;
     retro_cmp = None;
     retro_f_cmp = None;
     retro_f_class = None;
+    retro_pos_functions = [];
 }
 
 type action =
   | Register_ind : 'a CPrimitives.prim_ind * inductive -> action
   | Register_type : 'a CPrimitives.prim_type * Constant.t -> action
+  | Register_pos_function : pos_function * Constant.t -> action

@@ -490,16 +490,19 @@ let v_ind_pack = v_tuple "mutual_inductive_body"
     v_opt v_bool;
     v_typing_flags|]
 
-let v_prim_ind = v_enum "prim_ind" 6
-(* Number of "Register ... as kernel.ind_..." in Primv_int63.v and PrimFloat.v *)
+let v_prim_ind = v_enum "prim_ind" 7
+(* Number of constructors of [prim_ind] in [kernel/cPrimitives.ml]. *)
 
 let v_prim_type = v_enum "prim_type" 4
-(* Number of constructors of prim_type in "kernel/cPrimitives.ml" *)
+(* Number of constructors of [prim_type] in [kernel/cPrimitives.ml]. *)
+
+let v_pos_function = v_enum "pos_function" 5
 
 let v_retro_action =
   v_sum "retro_action" 0 [|
     [|v_prim_ind; v_ind|];
     [|v_prim_type; v_cst|];
+    [|v_pos_function; v_cst|];
   |]
 
 let v_retroknowledge =

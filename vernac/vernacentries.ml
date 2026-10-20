@@ -2390,18 +2390,46 @@ let vernac_register ~atts qid r =
     let ns, id = Libnames.repr_qualid n in
     if DirPath.equal (dirpath_of_string "kernel") ns then begin
       unsupported_attributes atts;
-      let CPrimitives.PIE pind = match Id.to_string id with
-        | "ind_bool" -> CPrimitives.(PIE PIT_bool)
-        | "ind_carry" -> CPrimitives.(PIE PIT_carry)
-        | "ind_pair" -> CPrimitives.(PIE PIT_pair)
-        | "ind_cmp" -> CPrimitives.(PIE PIT_cmp)
-        | "ind_f_cmp" -> CPrimitives.(PIE PIT_f_cmp)
-        | "ind_f_class" -> CPrimitives.(PIE PIT_f_class)
-        | k -> CErrors.user_err ?loc:n.loc Pp.(str "Register: unknown identifier “" ++ str k ++ str "” in the \"kernel\" namespace.")
-      in
-      match gr with
-      | GlobRef.IndRef ind -> Global.register_inductive ind pind
-      | _ -> CErrors.user_err ?loc:qid.loc (Pp.str "Register in kernel: expecting an inductive type.")
+      match Id.to_string id with
+      | "pos_compare_cont" ->
+        begin match gr with
+        | GlobRef.ConstRef c -> Global.register_pos_function Retroknowledge.Pos_compare_cont c
+        | _ -> CErrors.user_err ?loc:qid.loc (Pp.str "Register in kernel: expecting a constant.")
+        end
+      | "pos_eqb" ->
+        begin match gr with
+        | GlobRef.ConstRef c -> Global.register_pos_function Retroknowledge.Pos_eqb c
+        | _ -> CErrors.user_err ?loc:qid.loc (Pp.str "Register in kernel: expecting a constant.")
+        end
+      | "pos_add" ->
+        begin match gr with
+        | GlobRef.ConstRef c -> Global.register_pos_function Retroknowledge.Pos_add c
+        | _ -> CErrors.user_err ?loc:qid.loc (Pp.str "Register in kernel: expecting a constant.")
+        end
+      | "pos_succ" ->
+        begin match gr with
+        | GlobRef.ConstRef c -> Global.register_pos_function Retroknowledge.Pos_succ c
+        | _ -> CErrors.user_err ?loc:qid.loc (Pp.str "Register in kernel: expecting a constant.")
+        end
+      | "pos_mul" ->
+        begin match gr with
+        | GlobRef.ConstRef c -> Global.register_pos_function Retroknowledge.Pos_mul c
+        | _ -> CErrors.user_err ?loc:qid.loc (Pp.str "Register in kernel: expecting a constant.")
+        end
+      | name ->
+        let CPrimitives.PIE primitive = match name with
+          | "ind_pos" -> CPrimitives.(PIE PIT_pos)
+          | "ind_bool" -> CPrimitives.(PIE PIT_bool)
+          | "ind_carry" -> CPrimitives.(PIE PIT_carry)
+          | "ind_pair" -> CPrimitives.(PIE PIT_pair)
+          | "ind_cmp" -> CPrimitives.(PIE PIT_cmp)
+          | "ind_f_cmp" -> CPrimitives.(PIE PIT_f_cmp)
+          | "ind_f_class" -> CPrimitives.(PIE PIT_f_class)
+          | k -> CErrors.user_err ?loc:n.loc Pp.(str "Register: unknown identifier “" ++ str k ++ str "” in the \"kernel\" namespace.")
+        in
+        match gr with
+        | GlobRef.IndRef ind -> Global.register_inductive ind primitive
+        | _ -> CErrors.user_err ?loc:qid.loc (Pp.str "Register in kernel: expecting an inductive type.")
     end
     else
       let local = Attributes.parse hint_locality_default_superglobal atts in

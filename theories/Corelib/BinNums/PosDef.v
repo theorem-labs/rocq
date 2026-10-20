@@ -47,6 +47,8 @@ Fixpoint succ x :=
     | p~0 => p~1
     | 1 => 1~0
   end.
+Register succ as kernel.pos_succ.
+
 
 (** ** Addition *)
 
@@ -75,6 +77,8 @@ with add_carry x y :=
     | 1, q~0 => (succ q)~0
     | 1, 1 => 1~1
   end.
+Register add as kernel.pos_add.
+
 
 (** ** Operation [x -> 2*x-1] *)
 
@@ -169,6 +173,8 @@ Fixpoint mul x y :=
     | p~0 => (mul p y)~0
     | 1 => y
   end.
+Register mul as kernel.pos_mul.
+
 
 (** ** Iteration over a positive number *)
 
@@ -211,6 +217,8 @@ Fixpoint compare_cont (r:comparison) (x y:positive) {struct y} : comparison :=
     | 1, q~0 => Lt
     | 1, 1 => r
   end.
+Register compare_cont as kernel.pos_compare_cont.
+
 
 Definition compare := compare_cont Eq.
 
@@ -223,6 +231,8 @@ Fixpoint eqb p q {struct q} :=
     | 1, 1 => true
     | _, _ => false
   end.
+Register eqb as kernel.pos_eqb.
+
 
 Definition leb x y :=
  match compare x y with Gt => false | _ => true end.

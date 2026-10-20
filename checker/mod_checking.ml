@@ -78,9 +78,13 @@ and compile_module_bytecode : 'a. env -> Vmlibrary.t -> ModPath.t ->
 
 type opaques = Names.Cset.t Names.Cmap.t
 
+type constant_retro =
+  | PrimitiveType of CPrimitives.prim_type_ex
+  | PosFunction of Retroknowledge.pos_function
+
 type check_state = {
   st_opaques : opaques;
-  st_retro : (int * CPrimitives.prim_ind_ex) Mindmap_env.t * CPrimitives.prim_type_ex Cmap_env.t;
+  st_retro : (int * CPrimitives.prim_ind_ex) Mindmap_env.t * constant_retro Cmap_env.t;
 }
 
 let empty_state = {
@@ -184,9 +188,12 @@ let check_constant_declaration env opac kn cb opacify =
   let env = Environ.add_constant kn cb env in
   let env = match retro with
   | None -> env
-  | Some (CPrimitives.PTE prm) ->
+  | Some (PrimitiveType (CPrimitives.PTE primitive)) ->
     (* TODO: Some checking is performed by this function, but it looks too lightweight *)
-    Primred.add_retroknowledge env (Retroknowledge.Register_type (prm, kn))
+    Primred.add_retroknowledge env (Retroknowledge.Register_type (primitive, kn))
+  | Some (PosFunction operation) ->
+    Vmposfun.check env operation kn;
+    Primred.add_retroknowledge env (Retroknowledge.Register_pos_function (operation, kn))
   in
   env, opac
 
@@ -449,10 +456,19 @@ let get_retroknowlege env retro =
       (imap, cmap, Mindmap_env.add ind (i, CPrimitives.PIE prm) extind)
     else
       (Mindmap_env.add ind (i, CPrimitives.PIE prm) imap, cmap, extind)
-  | Retroknowledge.Register_type (prm, cst) ->
-    let () = assert (not (Cmap_env.mem cst cmap)) in
-    let () = assert (not (Environ.mem_constant cst env)) in
-    (imap, Cmap_env.add cst (CPrimitives.PTE prm) cmap, extind)
+  | Retroknowledge.Register_type (primitive, constant) ->
+    let () = assert (not (Cmap_env.mem constant cmap)) in
+    let () = assert (not (Environ.mem_constant constant env)) in
+    (imap, Cmap_env.add constant (PrimitiveType (CPrimitives.PTE primitive)) cmap, extind)
+  | Retroknowledge.Register_pos_function (operation, constant) ->
+    if Environ.mem_constant constant env then begin
+      Vmposfun.check env operation constant;
+      (imap, cmap, extind)
+    end
+    else if Cmap_env.mem constant cmap then
+      CErrors.user_err Pp.(str "Inconsistent positive function registration for constant " ++ Constant.print constant ++ str ".")
+    else
+      (imap, Cmap_env.add constant (PosFunction operation) cmap, extind)
   in
   let (imap, cmap, _) = List.fold_left fold (Mindmap_env.empty, Cmap_env.empty, Mindmap_env.empty) retro in
   (imap, cmap)

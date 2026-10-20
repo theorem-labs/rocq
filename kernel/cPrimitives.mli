@@ -107,8 +107,8 @@ type 'a prim_type =
   | PT_float64 : unit prim_type
   | PT_string : unit prim_type
   | PT_array : (UVars.Instance.t * ind_or_type) prim_type
-
 and 'a prim_ind =
+  | PIT_pos : unit prim_ind
   | PIT_bool : unit prim_ind
   | PIT_carry : ind_or_type prim_ind
   | PIT_pair : (ind_or_type * ind_or_type) prim_ind

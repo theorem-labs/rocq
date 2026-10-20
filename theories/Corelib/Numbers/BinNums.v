@@ -36,6 +36,8 @@ Register positive as num.pos.type.
 Register xI as num.pos.xI.
 Register xO as num.pos.xO.
 Register xH as num.pos.xH.
+Register positive as kernel.ind_pos.
+
 
 (** [N] is a datatype representing natural numbers in a binary way,
     by extending the [positive] datatype with a zero.
