@@ -385,11 +385,12 @@ let rec check_module env opac mp mb opacify =
     ()
   in
   opac
-
-and check_module_type env mp mty =
-  Flags.if_verbose Feedback.msg_notice (str "  checking module type: " ++ str (ModPath.to_string @@ mp));
+and check_module_type env mp (mty : Mod_declarations.module_type_body) =
+  Flags.if_verbose Feedback.msg_notice
+    (str "  checking module type: " ++ str (ModPath.to_string mp));
   let _ : check_state =
-    check_signature env empty_state (mod_type mty) mp (mod_delta mty) Cset.empty in
+    check_signature env empty_state (mod_type mty) mp (mod_delta mty) Cset.empty
+  in
   ()
 
 and check_structure_field env opac mp lab res opacify = function
@@ -408,7 +409,13 @@ and check_structure_field env opac mp lab res opacify = function
         let opac = { opac with st_retro = (Mindmap_env.remove kn ind_retro, cst_retro) } in
         opac
       in
-      CheckInductive.check_inductive env kn mib retro, opac
+      let env = CheckInductive.check_inductive env kn mib retro in
+      let env = match retro with
+      | None -> env
+      | Some (index, CPrimitives.PIE primitive) ->
+        Primred.add_retroknowledge env (Retroknowledge.Register_ind (primitive, (kn, index)))
+      in
+      env, opac
   | SFBmodule msb ->
       let mp = MPdot(mp, lab) in
       let opac = check_module env opac mp msb opacify in
@@ -437,52 +444,62 @@ let eq_prim_ind (type a b) (p : a CPrimitives.prim_ind) (q : b CPrimitives.prim_
   String.equal (CPrimitives.prim_ind_to_string p) (CPrimitives.prim_ind_to_string q)
 
 let get_retroknowlege env retro =
-  let fold (imap, cmap, extind) = function
-  | Retroknowledge.Register_ind (prm, (ind, i)) ->
-    (* Tolerate redeclarations because the kernel allows it somehow *)
-    let check_prm map = match Mindmap_env.find_opt ind map with
+  let fold (env, imap, cmap, extind) = function
+  | Retroknowledge.Register_ind (primitive, (ind, index)) ->
+    (* Tolerate redeclarations because the kernel allows them. *)
+    let check_primitive map = match Mindmap_env.find_opt ind map with
     | None -> ()
-    | Some (_, CPrimitives.PIE prm') ->
-      if not (eq_prim_ind prm prm') then
-        CErrors.user_err Pp.(str "Inconsistent primitive registration for inductive " ++ MutInd.print ind ++ str ".")
+    | Some (_, CPrimitives.PIE registered) ->
+      if not (eq_prim_ind primitive registered) then
+        CErrors.user_err Pp.(str "Inconsistent primitive registration for inductive " ++
+                            MutInd.print ind ++ str ".")
     in
-    let () = check_prm imap in
-    let () = check_prm extind in
-    (* It is allowed to register inductives coming from another library, so we have
-       to account for that. *)
-    if Environ.mem_mind ind env then
-      let spec = Inductive.lookup_mind_specif env (ind, i) in
-      let () = Safe_typing.check_register_ind (ind, i) prm spec in
-      (imap, cmap, Mindmap_env.add ind (i, CPrimitives.PIE prm) extind)
+    let () = check_primitive imap in
+    let () = check_primitive extind in
+    if Environ.mem_mind ind env then begin
+      let spec = Inductive.lookup_mind_specif env (ind, index) in
+      let () = Safe_typing.check_register_ind (ind, index) primitive spec in
+      let env = Primred.add_retroknowledge env (Retroknowledge.Register_ind (primitive, (ind, index))) in
+      env, imap, cmap, Mindmap_env.add ind (index, CPrimitives.PIE primitive) extind
+    end
     else
-      (Mindmap_env.add ind (i, CPrimitives.PIE prm) imap, cmap, extind)
+      env, Mindmap_env.add ind (index, CPrimitives.PIE primitive) imap, cmap, extind
   | Retroknowledge.Register_type (primitive, constant) ->
     let () = assert (not (Cmap_env.mem constant cmap)) in
     let () = assert (not (Environ.mem_constant constant env)) in
-    (imap, Cmap_env.add constant (PrimitiveType (CPrimitives.PTE primitive)) cmap, extind)
+    env, imap, Cmap_env.add constant (PrimitiveType (CPrimitives.PTE primitive)) cmap, extind
   | Retroknowledge.Register_pos_function (operation, constant) ->
     if Environ.mem_constant constant env then begin
       Vmposfun.check env operation constant;
-      (imap, cmap, extind)
+      let env = Primred.add_retroknowledge env
+          (Retroknowledge.Register_pos_function (operation, constant)) in
+      env, imap, cmap, extind
     end
     else if Cmap_env.mem constant cmap then
-      CErrors.user_err Pp.(str "Inconsistent positive function registration for constant " ++ Constant.print constant ++ str ".")
+      CErrors.user_err Pp.(str "Inconsistent positive function registration for constant " ++
+                          Constant.print constant ++ str ".")
     else
-      (imap, Cmap_env.add constant (PosFunction operation) cmap, extind)
+      env, imap, Cmap_env.add constant (PosFunction operation) cmap, extind
   in
-  let (imap, cmap, _) = List.fold_left fold (Mindmap_env.empty, Cmap_env.empty, Mindmap_env.empty) retro in
-  (imap, cmap)
+  let env, imap, cmap, _ =
+    List.fold_left fold (env, Mindmap_env.empty, Cmap_env.empty, Mindmap_env.empty) retro
+  in
+  env, (imap, cmap)
 
 let check_module env opac retro mp mb =
-  let retro = get_retroknowlege env retro in
+  let env, retro = get_retroknowlege env retro in
   let st = { st_opaques = opac; st_retro = retro } in
-  let { st_opaques = opac; st_retro = (imap, cmap) } = check_module env st mp mb Cset.empty in
+  let { st_opaques = opac; st_retro = (imap, cmap) } =
+    check_module env st mp mb Cset.empty
+  in
   let () = match Mindmap_env.choose_opt imap, Cmap_env.choose_opt cmap with
   | None, None -> ()
   | Some (ind, _), (None | Some _) ->
-    CErrors.user_err Pp.(str "Retroknowledge registration for unknown inductive " ++ MutInd.print ind ++ str ".")
-  | None, Some (cst, _) ->
-    CErrors.user_err Pp.(str "Retroknowledge registration for unknown constant " ++ Constant.print cst ++ str ".")
+    CErrors.user_err Pp.(str "Retroknowledge registration for unknown inductive " ++
+                        MutInd.print ind ++ str ".")
+  | None, Some (constant, _) ->
+    CErrors.user_err Pp.(str "Retroknowledge registration for unknown constant " ++
+                        Constant.print constant ++ str ".")
   in
   opac
 

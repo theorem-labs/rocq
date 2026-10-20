@@ -1402,6 +1402,13 @@ Exposing constants to OCaml libraries
    This makes the kernel aware of the `bool` type, which is used, for example,
    to define the return type of the :g:`#int63_eq` primitive.
 
+   The kernel also accepts the ``kernel.ind_pos`` registration for the
+   ``positive`` datatype and the ``kernel.pos_compare_cont``,
+   ``kernel.pos_eqb``, ``kernel.pos_add``, ``kernel.pos_succ``, and
+   ``kernel.pos_mul`` registrations for transparent binary-number
+   definitions. Each function registration is checked against the kernel's
+   reference definition before it is recorded.
+
    This command supports attributes :attr:`local`, :attr:`export` and :attr:`global`.
    The default is :attr:`global`, even inside sections.
 

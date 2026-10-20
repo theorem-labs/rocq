@@ -33,7 +33,7 @@
 #include "rocq_values.h"
 
 #define ROCQ_POS_FUNCTIONS 5
-
+#define ROCQ_POSFUN_STACK_BYTES (64 * 1024)
 static value rocq_pos_closures[ROCQ_POS_FUNCTIONS];
 static int rocq_pos_closure_roots[ROCQ_POS_FUNCTIONS];
 static unsigned long long rocq_posfun_hits[ROCQ_POS_FUNCTIONS];
@@ -128,7 +128,6 @@ static int rocq_posfun_find(value closure, int *operation, int *arity)
 }
 
 struct rocq_posfun_plan {
-  unsigned char *storage;
   unsigned char *bits;
   size_t length;
 };
@@ -140,7 +139,7 @@ static int rocq_posfun_length(value v, size_t *length)
   size_t count = 0;
   for (;;) {
     if (!rocq_posfun_node(v, &bit, &next)) return 0;
-    if (count == SIZE_MAX) caml_raise_out_of_memory();
+    if (count == SIZE_MAX) return 0;
     count++;
     if (bit == -1) {
       *length = count;
@@ -152,8 +151,8 @@ static int rocq_posfun_length(value v, size_t *length)
 
 static void rocq_posfun_decode(value v, unsigned char *bits, size_t length)
 {
-  int bit;
-  value next;
+  int bit = 0;
+  value next = Val_unit;
   size_t i;
   for (i = 0; i < length; i++) {
     rocq_posfun_node(v, &bit, &next);
@@ -164,19 +163,19 @@ static void rocq_posfun_decode(value v, unsigned char *bits, size_t length)
   abort();
 }
 
-static int rocq_posfun_arithmetic(int operation, value *sp, struct rocq_posfun_plan *plan)
+static int rocq_posfun_arithmetic(int operation, value *sp, unsigned char *storage,
+                                  size_t storage_capacity, struct rocq_posfun_plan *plan)
 {
-  size_t xlen, ylen, result_capacity, result_length, i, j;
-  unsigned char *x, *y, *result, *storage;
+  size_t xlen, ylen, result_capacity, result_length, remaining, i, j;
+  unsigned char *x, *y, *result;
   int carry;
   if (!rocq_posfun_length(sp[0], &xlen)) return 0;
   if (operation != 3 && !rocq_posfun_length(sp[1], &ylen)) return 0;
   if (operation == 3) ylen = 0;
-  if (xlen > SIZE_MAX - ylen - (operation == 4 ? xlen + ylen : xlen + ylen + 2))
-    caml_raise_out_of_memory();
+  if (xlen > storage_capacity || ylen > storage_capacity - xlen) return 0;
+  remaining = storage_capacity - xlen - ylen;
   result_capacity = operation == 4 ? xlen + ylen : (xlen > ylen ? xlen : ylen) + 1;
-  storage = malloc(xlen + ylen + result_capacity);
-  if (storage == NULL) caml_raise_out_of_memory();
+  if (result_capacity > remaining) return 0;
   x = storage;
   y = x + xlen;
   result = y + ylen;
@@ -221,7 +220,6 @@ static int rocq_posfun_arithmetic(int operation, value *sp, struct rocq_posfun_p
     }
     while (result_length > 1 && result[result_length - 1] == 0) result_length--;
   }
-  plan->storage = storage;
   plan->bits = result;
   plan->length = result_length;
   return 1;
@@ -257,6 +255,8 @@ value rocq_vmposfun_register(value closure, value operation, value arity)
     rocq_pos_closures[op] = closure;
     caml_register_global_root(&rocq_pos_closures[op]);
     rocq_pos_closure_roots[op] = 1;
+  } else {
+    caml_modify_generational_global_root(&rocq_pos_closures[op], closure);
   }
   return Val_unit;
 }
@@ -1000,6 +1000,7 @@ value rocq_interprete
         int pos_operation, pos_arity, pos_success;
         value pos_result, pos_block;
         size_t pos_index;
+        unsigned char pos_storage[ROCQ_POSFUN_STACK_BYTES];
         struct rocq_posfun_plan pos_plan;
         print_instr("GRABREC");
         if (rec_pos <= rocq_extra_args && !Is_accu(sp[rec_pos])
@@ -1008,15 +1009,15 @@ value rocq_interprete
           if (pos_operation < 2) {
             pos_success = rocq_posfun_eval(pos_operation, sp, &pos_result);
           } else {
-            pos_success = rocq_posfun_arithmetic(pos_operation, sp, &pos_plan);
+            pos_success = rocq_posfun_arithmetic(pos_operation, sp, pos_storage,
+                                                  sizeof(pos_storage), &pos_plan);
             if (pos_success) {
               accu = Val_int(0);
-              for (pos_index = pos_plan.length; pos_index-- > 1;) {
-                Rocq_alloc_small(pos_block, 1, pos_plan.bits[pos_index - 2] ? 1 : 2);
+              for (pos_index = pos_plan.length - 1; pos_index-- > 0;) {
+                Rocq_alloc_small(pos_block, 1, pos_plan.bits[pos_index] ? 1 : 2);
                 Field(pos_block, 0) = accu;
                 accu = pos_block;
               }
-              free(pos_plan.storage);
               pos_result = accu;
             }
           }
