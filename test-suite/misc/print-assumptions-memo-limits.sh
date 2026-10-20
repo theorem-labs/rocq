@@ -324,7 +324,7 @@ axone() {
   echo "Abbreviation BIG := (F $(names 'b%g' $1))."
   echo "Definition T := BIG = 0."
   echo "Definition H ($(names 'y%g' $1): T) : nat := 0."
-  if [ "$2" = Admitted ]; then seq -f 'Lemma a%g : BIG = 0. Admitted.' 1 $1
+  if [ "$2" = Admitted ]; then seq -f 'Lemma a%g : BIG = 0. Proof. Admitted.' 1 $1
   else seq -f 'Axiom a%g : BIG = 0.' 1 $1; fi
   echo "Definition G := H $(names 'a%g' $1)."
   echo "Print Assumptions G."
