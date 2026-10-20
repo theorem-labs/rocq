@@ -70,13 +70,16 @@ open(sys.argv[1], "w").write(
 )
 PY
 
-OCAMLRUNPARAM=s=4k ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 \
-  rocq c -q -native-compiler no "$d/GC.v" 2> "$d/gc-on.err"
+( ulimit -s 131072
+  OCAMLRUNPARAM=s=4k ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 \
+    rocq c -q -native-compiler no "$d/GC.v"
+) 2> "$d/gc-on.err"
 grep -q '^VMPosFun succ hits=[1-9]' "$d/gc-on.err"
 grep -q '^VMPosFun add hits=[1-9]' "$d/gc-on.err"
 grep -q '^VMPosFun mul hits=[1-9]' "$d/gc-on.err"
-OCAMLRUNPARAM=s=4k ROCQ_VM_FASTBIN=0 \
-  rocq c -q -native-compiler no "$d/GC.v"
+( ulimit -s 131072
+  OCAMLRUNPARAM=s=4k ROCQ_VM_FASTBIN=0 rocq c -q -native-compiler no "$d/GC.v"
+)
 
 python3 - "$d/Capacity.v" <<'PY'
 import sys
@@ -91,12 +94,12 @@ open(sys.argv[1], "w").write(
 )
 PY
 
-( ulimit -s 131072
+( ulimit -s 262144
   ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 \
     rocq c -q -native-compiler no "$d/Capacity.v"
 ) 2> "$d/capacity-on.err"
 grep -q '^VMPosFun add hits=0 fallbacks=[1-9]' "$d/capacity-on.err"
-( ulimit -s 131072
+( ulimit -s 262144
   ROCQ_VM_FASTBIN=0 rocq c -q -native-compiler no "$d/Capacity.v"
 )
 
