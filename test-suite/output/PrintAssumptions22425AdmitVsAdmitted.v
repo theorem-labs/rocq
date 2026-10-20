@@ -12,7 +12,7 @@ Section S.
   Lemma usedin_admit_tactic : k = k.
   Proof. admit. Admitted.
   Lemma usedin_admitted_command : k = k.
-  Admitted.
+  Proof. Admitted.
 End S.
 
 Print Assumptions usedin_admit_tactic.

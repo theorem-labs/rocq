@@ -8,7 +8,7 @@ Section S.
   Variable u : nat.
   Definition k := u + 1.
   Lemma ax : (fun _ : nat => False) u.
-  Admitted.
+  Proof. Admitted.
   Lemma usedin1 : k = k.
   Proof. exact (match ax return k = k with end). Qed.
 
