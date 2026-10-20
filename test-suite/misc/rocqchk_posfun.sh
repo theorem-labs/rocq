@@ -55,10 +55,14 @@ import sys
 term = "xH"
 for _ in range(4096):
     term = f"xI ({term})"
+successor = "xO (" * 4097 + "xH" + ")" * 4097
 
 open(sys.argv[1], "w").write(
     "From Corelib Require Import BinNums PosDef.\n"
     f"Definition p : positive := {term}.\n"
+    f"Definition successor_p : positive := {successor}.\n"
+    "Goal Pos.succ p = successor_p.\n"
+    "Proof. vm_compute. reflexivity. Qed.\n"
     "Goal Pos.add p p = xO p.\n"
     "Proof. vm_compute. reflexivity. Qed.\n"
     "Goal Pos.mul p (xO xH) = xO p.\n"
@@ -68,10 +72,60 @@ PY
 
 OCAMLRUNPARAM=s=4k ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 \
   rocq c -q -native-compiler no "$d/GC.v" 2> "$d/gc-on.err"
+grep -q '^VMPosFun succ hits=[1-9]' "$d/gc-on.err"
 grep -q '^VMPosFun add hits=[1-9]' "$d/gc-on.err"
 grep -q '^VMPosFun mul hits=[1-9]' "$d/gc-on.err"
 OCAMLRUNPARAM=s=4k ROCQ_VM_FASTBIN=0 \
   rocq c -q -native-compiler no "$d/GC.v"
+
+python3 - "$d/Capacity.v" <<'PY'
+import sys
+
+term = "xO (" * 40000 + "xH" + ")" * 40000
+
+open(sys.argv[1], "w").write(
+    "From Corelib Require Import BinNums PosDef.\n"
+    f"Definition p : positive := {term}.\n"
+    "Goal Pos.add p xH = Pos.succ p.\n"
+    "Proof. vm_compute. reflexivity. Qed.\n"
+)
+PY
+
+( ulimit -s 131072
+  ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 \
+    rocq c -q -native-compiler no "$d/Capacity.v"
+) 2> "$d/capacity-on.err"
+grep -q '^VMPosFun add hits=0 fallbacks=[1-9]' "$d/capacity-on.err"
+( ulimit -s 131072
+  ROCQ_VM_FASTBIN=0 rocq c -q -native-compiler no "$d/Capacity.v"
+)
+
+cat > "$d/Fallbacks.v" <<'EOF'
+From Corelib Require Import BinNums PosDef.
+
+Module Ref.
+Fixpoint eqb p q {struct q} :=
+  match p, q with
+  | xI p, xI q => eqb p q
+  | xO p, xO q => eqb p q
+  | xH, xH => true
+  | _, _ => false
+  end.
+End Ref.
+
+Definition partial_compare := Pos.compare (xI xH).
+Goal partial_compare (xO xH) = Gt.
+Proof. vm_compute. reflexivity. Qed.
+
+Definition open_eqb (p : positive) := Pos.eqb p p.
+Goal forall p, open_eqb p = Ref.eqb p p.
+Proof. intros p; vm_compute; reflexivity. Qed.
+EOF
+
+ROCQ_VM_FASTBIN=1 ROCQ_VM_FASTBIN_STATS=1 \
+  rocq c -q -native-compiler no "$d/Fallbacks.v" 2> "$d/fallbacks-on.err"
+grep -q '^VMPosFun compare_cont hits=[1-9]' "$d/fallbacks-on.err"
+ROCQ_VM_FASTBIN=0 rocq c -q -native-compiler no "$d/Fallbacks.v"
 
 cat > "$d/Negative.v" <<'EOF'
 From Corelib Require Import BinNums PosDef.
@@ -193,6 +247,117 @@ for operation in compare_cont eqb add succ mul; do
   grep -q "^VMPosFun $operation hits=[1-9]" "$d/differential-on.err"
 done
 ROCQ_VM_FASTBIN=0 rocq c -q -native-compiler no "$d/Differential.v"
+
+mkdir "$d/duplicate"
+cat > "$d/duplicate/Defs.v" <<'EOF'
+Inductive positive : Set :=
+xI : forall _ : positive, positive
+| xO : forall _ : positive, positive
+| xH : positive.
+Register positive as kernel.ind_pos.
+Inductive bool : Set :=
+true : bool
+| false : bool.
+Register bool as kernel.ind_bool.
+Inductive comparison : Set :=
+Eq : comparison
+| Lt : comparison
+| Gt : comparison.
+Register comparison as kernel.ind_cmp.
+
+Fixpoint succ x :=
+  match x with
+  | xI p => xO (succ p)
+  | xO p => xI p
+  | xH => xO xH
+  end.
+Register succ as kernel.pos_succ.
+Register succ as kernel.pos_succ.
+EOF
+
+rocq c -q -noinit -native-compiler no -Q "$d/duplicate" Duplicate "$d/duplicate/Defs.v"
+rocqchk -bytecode-compiler yes -Q "$d/duplicate" Duplicate -norec Duplicate.Defs
+
+mkdir "$d/registration-failures"
+cat > "$d/registration-failures/Failures.v" <<'EOF'
+Inductive positive : Set :=
+xI : forall _ : positive, positive
+| xO : forall _ : positive, positive
+| xH : positive.
+Register positive as kernel.ind_pos.
+Inductive bool : Set :=
+true : bool
+| false : bool.
+Register bool as kernel.ind_bool.
+Inductive comparison : Set :=
+Eq : comparison
+| Lt : comparison
+| Gt : comparison.
+Register comparison as kernel.ind_cmp.
+
+Definition wrong_compare (_ : comparison) (_ _ : positive) := Eq.
+Fail Register wrong_compare as kernel.pos_compare_cont.
+Definition wrong_eqb (_ _ : positive) := true.
+Fail Register wrong_eqb as kernel.pos_eqb.
+Definition wrong_succ (_ : positive) := xH.
+Fail Register wrong_succ as kernel.pos_succ.
+Definition opaque_succ (x : positive) := x.
+Opaque opaque_succ.
+Fail Register opaque_succ as kernel.pos_succ.
+Polymorphic Definition polymorphic (A : Type) := A.
+Fail Register polymorphic as kernel.pos_succ.
+Section S.
+Variable p : positive.
+Definition section_succ := p.
+Fail Register section_succ as kernel.pos_succ.
+End S.
+Module Type T. End T.
+Module F (X : T).
+Definition functor_succ (p : positive) := p.
+Fail Register functor_succ as kernel.pos_succ.
+End F.
+
+Definition wrong_add (_ _ : positive) := xH.
+Fail Register wrong_add as kernel.pos_add.
+Fixpoint succ x :=
+  match x with
+  | xI p => xO (succ p)
+  | xO p => xI p
+  | xH => xO xH
+  end.
+Register succ as kernel.pos_succ.
+Fail Register wrong_add as kernel.pos_add.
+Fixpoint add x y :=
+  match x, y with
+  | xI p, xI q => xO (add_carry p q)
+  | xI p, xO q => xI (add p q)
+  | xI p, xH => xO (succ p)
+  | xO p, xI q => xI (add p q)
+  | xO p, xO q => xO (add p q)
+  | xO p, xH => xI p
+  | xH, xI q => xO (succ q)
+  | xH, xO q => xI q
+  | xH, xH => xO xH
+  end
+with add_carry x y :=
+  match x, y with
+  | xI p, xI q => xI (add_carry p q)
+  | xI p, xO q => xO (add_carry p q)
+  | xI p, xH => xI (succ p)
+  | xO p, xI q => xO (add_carry p q)
+  | xO p, xO q => xI (add p q)
+  | xO p, xH => xO (succ p)
+  | xH, xI q => xI (succ q)
+  | xH, xO q => xO (succ q)
+  | xH, xH => xI xH
+  end.
+Register add as kernel.pos_add.
+Definition wrong_mul (_ _ : positive) := xH.
+Fail Register wrong_mul as kernel.pos_mul.
+EOF
+
+rocq c -q -noinit -native-compiler no -Q "$d/registration-failures" RegistrationFailures \
+  "$d/registration-failures/Failures.v"
 
 rocq c -q -native-compiler no "$d/Good.v"
 
