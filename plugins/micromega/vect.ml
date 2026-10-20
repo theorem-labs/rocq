@@ -220,20 +220,46 @@ let for_all p l = List.for_all (fun {var = v; coe = n} -> p v n) l
 let decr_var i v = List.map (fun x -> {x with var = x.var - i}) v
 let incr_var i v = List.map (fun x -> {x with var = x.var + i}) v
 
+(* [gcd]/[normalise] fold [Z.gcd] over every coefficient's numerator to find
+   a common factor. Profiling a real proof file (coqc, 368-file vendor tree,
+   AsanNodesFactSound.v -- docs/build/ROCQ-INTERNALS.md in
+   binary-equivalence-taiga) found this fold dominating the file's whole
+   76.9s compile: __gmpn_hgcd2/__gmpn_gcd_*/ml_z_gcd alone were ~55% of
+   sampled cycles, driven by Simplex calling Vect.normalise on every pivot
+   row. [Z.gcd] has an absorbing element: once the running accumulator is 1,
+   every subsequent [Z.gcd 1 x] call is forced to return 1 again (gcd(1,x)=1
+   for all x), so folding further numerators into it cannot change the
+   final answer -- only waste a GMP call. Short-circuiting once the running
+   gcd hits 1 is therefore an exact, observably-identical speedup of the
+   same fold, not an approximation; it changes nothing about what Simplex
+   proves, only how fast it decides a vector is already coprime. [gcd] keeps
+   running its per-term [assert] on every element even after the GCD itself
+   stops being recomputed, so its debug-assertion behaviour is unchanged. *)
 let gcd v =
   let res =
-    fold
-      (fun c _ n ->
+    let rec go acc v =
+      match v with
+      | [] -> acc
+      | {coe = n; _} :: v' ->
         assert (Int.equal (Z.compare (Q.den n) Z.one) 0);
-        Z.gcd c (Q.num n))
-      Z.zero v
+        if Int.equal (Z.compare acc Z.one) 0 then go acc v'
+        else go (Z.gcd acc (Q.num n)) v'
+    in
+    go Z.zero v
   in
   if Int.equal (Z.compare res Z.zero) 0 then Z.one else res
 
 let normalise v =
   let ppcm = fold (fun c _ n -> Z.ppcm c (Q.den n)) Z.one v in
   let gcd =
-    let gcd = fold (fun c _ n -> Z.gcd c (Q.num n)) Z.zero v in
+    let rec go acc v =
+      match v with
+      | [] -> acc
+      | {coe = n; _} :: v' ->
+        if Int.equal (Z.compare acc Z.one) 0 then acc
+        else go (Z.gcd acc (Q.num n)) v'
+    in
+    let gcd = go Z.zero v in
     if Int.equal (Z.compare gcd Z.zero) 0 then Z.one else gcd
   in
   List.map
