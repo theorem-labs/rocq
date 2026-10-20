@@ -1,0 +1,13 @@
+Axioms:
+ax : forall u : nat, (fun _ : nat => False) u
+Axioms:
+ax2 : nat -> False
+Closed under the global context
+Axioms:
+XI.bad : False
+used in usedinF to prove
+ 0 = 0
+Axioms:
+badp : False
+used in usedinP to prove
+ kp nat = kp nat

@@ -10,23 +10,23 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
+# The theorem-labs fork is built and run on Linux only, in the BET grader
+# image, whose opam switch is ocaml-variants.4.14.2+options with
+# ocaml-option-flambda. The first entry installs exactly that compiler. CI
+# builds with dune's dev profile (`make world`), so the release-only
+# -O3 -unbox-closures that the grader's `dune build -p` applies are not
+# exercised here. The OCaml 5 entry keeps the fork building on current OCaml.
+# macOS and Windows are not targets of this fork and are not in the matrix.
 jobs:
   build:
     strategy:
       matrix:
         include:
-          - name: macOS
-            os: macos-latest
-            ocaml: 4.14
+          - name: Linux (OCaml 4.14.2 flambda)
+            os: ubuntu-latest
+            ocaml: ocaml-variants.4.14.2+options,ocaml-option-flambda
             test_disabled:
-            # We exclude the coq-core package
             packages: ./coqide-server.opam ./rocq*.opam
-          - name: Windows
-            os: windows-latest
-            ocaml: 4.14
-            test_disabled: misc coq-makefile precomputed-time-tests
-            # we don't support rocqide on Windows yet, so we filter it, see #20631
-            packages: ./coqide-server.opam ./rocq-*.opam
           - name: Linux (latest OCaml)
             os: ubuntu-latest
             ocaml: 5.4
@@ -38,10 +38,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - name: 🐛 Special macOS Config
-        if: matrix.os == 'macos-latest'
-        run: brew install gnu-time
-
       - name: APT update
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update
