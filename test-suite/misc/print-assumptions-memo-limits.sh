@@ -95,6 +95,15 @@ set -e
 export PATH=$BIN:$PATH
 export LC_ALL=C
 
+# The caps bound the Print Assumptions walk. On a build configured with
+# -native-compiler yes, rocq c also compiles each file to native code by
+# default, and the caps would then bound ocamlopt on these files instead:
+# Chain50000 runs ocamlopt out of stack under ulimit -s 8192.
+rocq() {
+  if [ "$1" = c ]; then shift; command rocq c -native-compiler no "$@"
+  else command rocq "$@"; fi
+}
+
 case $(rocq --version) in
   *"compiled with OCaml 4."*) ocaml4=true ;;
   *) ocaml4=false ;;
