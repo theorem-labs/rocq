@@ -1638,6 +1638,11 @@ let explain_incompatible_prim_declarations (type a) (act:a Primred.action_kind) 
     let px = try pr_inductive env x with Not_found -> MutInd.print (fst x) in
     str "Cannot declare " ++ px ++ str " as primitive " ++ str (CPrimitives.prim_ind_to_string ind) ++
     str ": " ++ pr_inductive env y ++ str " is already declared."
+  | IncompatPosFunction operation ->
+    let px = try pr_constant env x with Not_found -> Constant.print x in
+    str "Cannot declare " ++ px ++ str " as positive function " ++
+    str (Retroknowledge.pos_function_to_string operation) ++ str ": " ++
+    pr_constant env y ++ str " is already declared."
 
 (* Recursion schemes errors *)
 let error_not_mutual_in_scheme env ind ind' =

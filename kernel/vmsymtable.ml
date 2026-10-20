@@ -285,8 +285,9 @@ let rec slot_for_getglobal env sigma kn envcache table =
     | BCdefined (_, index, patches) ->
       let code = index () in
       let code = (code, patches) in
-      let v = eval_to_patch env sigma code envcache table in
-      set_global v table
+      let value = eval_to_patch env sigma code envcache table in
+      Vmposfun.bind env kn value;
+      set_global value table
     | BCalias kn' -> slot_for_getglobal env sigma kn' envcache table
     | BCconstant -> set_global (val_of_constant kn) table
     | BCuncompiled ->

@@ -183,6 +183,7 @@ val is_type_in_type : GlobRef.t -> bool
 
 val register_inline : Constant.t -> unit
 val register_inductive : inductive -> 'a CPrimitives.prim_ind -> unit
+val register_pos_function : Retroknowledge.pos_function -> Constant.t -> unit
 
 (** {6 Oracle } *)
 

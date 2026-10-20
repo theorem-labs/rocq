@@ -47,6 +47,8 @@ Bind Scope bool_scope with bool.
 Register bool as core.bool.type.
 Register true as core.bool.true.
 Register false as core.bool.false.
+Register bool as kernel.ind_bool.
+
 
 (************************************************)
 (** * Reflect: a specialized inductive type for
@@ -373,6 +375,8 @@ Register comparison as core.comparison.type.
 Register Eq as core.comparison.Eq.
 Register Lt as core.comparison.Lt.
 Register Gt as core.comparison.Gt.
+Register comparison as kernel.ind_cmp.
+
 
 Lemma comparison_eq_stable (c c' : comparison) : ~~ c = c' -> c = c'.
 Proof.

@@ -17,8 +17,11 @@
 #include <signal.h>
 #include <stdint.h>
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define CAML_INTERNALS
+#include <caml/fail.h>
 #include <caml/memory.h>
 #include <caml/signals.h>
 #include <caml/version.h>
@@ -28,6 +31,235 @@
 #include "rocq_fix_code.h"
 #include "rocq_memory.h"
 #include "rocq_values.h"
+
+#define ROCQ_POS_FUNCTIONS 5
+
+static value rocq_pos_closures[ROCQ_POS_FUNCTIONS];
+static int rocq_pos_closure_roots[ROCQ_POS_FUNCTIONS];
+static unsigned long long rocq_posfun_hits[ROCQ_POS_FUNCTIONS];
+static unsigned long long rocq_posfun_fallbacks[ROCQ_POS_FUNCTIONS];
+static int rocq_posfun_stats_initialized;
+
+static void rocq_posfun_dump_stats(void)
+{
+  static const char *names[ROCQ_POS_FUNCTIONS] = {
+    "compare_cont", "eqb", "add", "succ", "mul"
+  };
+  int i;
+  for (i = 0; i < ROCQ_POS_FUNCTIONS; i++) {
+    if (rocq_pos_closure_roots[i]) {
+      fprintf(stderr, "VMPosFun %s hits=%llu fallbacks=%llu\n", names[i],
+              rocq_posfun_hits[i], rocq_posfun_fallbacks[i]);
+    }
+  }
+}
+
+static void rocq_posfun_setup_stats(void)
+{
+  if (!rocq_posfun_stats_initialized) {
+    if (getenv("ROCQ_VM_FASTBIN_STATS") != NULL) atexit(rocq_posfun_dump_stats);
+    rocq_posfun_stats_initialized = 1;
+  }
+}
+static int rocq_posfun_node(value v, int *bit, value *next)
+{
+  if (!Is_block(v)) {
+    if (Long_val(v) != 0) return 0;
+    *bit = -1;
+    return 1;
+  }
+  if (Wosize_val(v) != 1 || (Tag_val(v) != 1 && Tag_val(v) != 2))
+    return 0;
+  *bit = Tag_val(v) == 1;
+  *next = Field(v, 0);
+  return 1;
+}
+
+static int rocq_posfun_validate(value v)
+{
+  int bit;
+  value next;
+  for (;;) {
+    if (!rocq_posfun_node(v, &bit, &next)) return 0;
+    if (bit == -1) return 1;
+    v = next;
+  }
+}
+
+static int rocq_posfun_compare(value x, value y, int *result)
+{
+  int xbit, ybit;
+  value xnext, ynext;
+  int comparison = 0;
+  if (!rocq_posfun_validate(x) || !rocq_posfun_validate(y)) return 0;
+  for (;;) {
+    rocq_posfun_node(x, &xbit, &xnext);
+    rocq_posfun_node(y, &ybit, &ynext);
+    if (xbit == -1 && ybit == -1) {
+      *result = comparison;
+      return 1;
+    }
+    if (xbit == -1) {
+      *result = -1;
+      return 1;
+    }
+    if (ybit == -1) {
+      *result = 1;
+      return 1;
+    }
+    if (xbit != ybit) comparison = xbit ? 1 : -1;
+    x = xnext;
+    y = ynext;
+  }
+}
+
+static int rocq_posfun_find(value closure, int *operation, int *arity)
+{
+  int i;
+  static const int arities[ROCQ_POS_FUNCTIONS] = { 3, 2, 2, 1, 2 };
+  for (i = 0; i < ROCQ_POS_FUNCTIONS; i++) {
+    if (rocq_pos_closure_roots[i] && rocq_pos_closures[i] == closure) {
+      *operation = i;
+      *arity = arities[i];
+      return 1;
+    }
+  }
+  return 0;
+}
+
+struct rocq_posfun_plan {
+  unsigned char *storage;
+  unsigned char *bits;
+  size_t length;
+};
+
+static int rocq_posfun_length(value v, size_t *length)
+{
+  int bit;
+  value next;
+  size_t count = 0;
+  for (;;) {
+    if (!rocq_posfun_node(v, &bit, &next)) return 0;
+    if (count == SIZE_MAX) caml_raise_out_of_memory();
+    count++;
+    if (bit == -1) {
+      *length = count;
+      return 1;
+    }
+    v = next;
+  }
+}
+
+static void rocq_posfun_decode(value v, unsigned char *bits, size_t length)
+{
+  int bit;
+  value next;
+  size_t i;
+  for (i = 0; i < length; i++) {
+    rocq_posfun_node(v, &bit, &next);
+    bits[i] = bit == -1 ? 1 : (unsigned char)bit;
+    if (bit == -1) return;
+    v = next;
+  }
+  abort();
+}
+
+static int rocq_posfun_arithmetic(int operation, value *sp, struct rocq_posfun_plan *plan)
+{
+  size_t xlen, ylen, result_capacity, result_length, i, j;
+  unsigned char *x, *y, *result, *storage;
+  int carry;
+  if (!rocq_posfun_length(sp[0], &xlen)) return 0;
+  if (operation != 3 && !rocq_posfun_length(sp[1], &ylen)) return 0;
+  if (operation == 3) ylen = 0;
+  if (xlen > SIZE_MAX - ylen - (operation == 4 ? xlen + ylen : xlen + ylen + 2))
+    caml_raise_out_of_memory();
+  result_capacity = operation == 4 ? xlen + ylen : (xlen > ylen ? xlen : ylen) + 1;
+  storage = malloc(xlen + ylen + result_capacity);
+  if (storage == NULL) caml_raise_out_of_memory();
+  x = storage;
+  y = x + xlen;
+  result = y + ylen;
+  rocq_posfun_decode(sp[0], x, xlen);
+  if (operation != 3) rocq_posfun_decode(sp[1], y, ylen);
+  if (operation == 2) {
+    carry = 0;
+    result_length = xlen > ylen ? xlen : ylen;
+    for (i = 0; i < result_length; i++) {
+      int sum = (i < xlen ? x[i] : 0) + (i < ylen ? y[i] : 0) + carry;
+      result[i] = (unsigned char)(sum & 1);
+      carry = sum >> 1;
+    }
+    if (carry) result[result_length++] = 1;
+  }
+  else if (operation == 3) {
+    carry = 1;
+    result_length = xlen;
+    for (i = 0; i < result_length; i++) {
+      int sum = x[i] + carry;
+      result[i] = (unsigned char)(sum & 1);
+      carry = sum >> 1;
+    }
+    if (carry) result[result_length++] = 1;
+  }
+  else {
+    result_length = xlen + ylen;
+    memset(result, 0, result_length);
+    for (i = 0; i < xlen; i++) {
+      if (!x[i]) continue;
+      carry = 0;
+      for (j = 0; j < ylen; j++) {
+        int sum = result[i + j] + y[j] + carry;
+        result[i + j] = (unsigned char)(sum & 1);
+        carry = sum >> 1;
+      }
+      for (j = i + ylen; carry; j++) {
+        int sum = result[j] + carry;
+        result[j] = (unsigned char)(sum & 1);
+        carry = sum >> 1;
+      }
+    }
+    while (result_length > 1 && result[result_length - 1] == 0) result_length--;
+  }
+  plan->storage = storage;
+  plan->bits = result;
+  plan->length = result_length;
+  return 1;
+}
+
+static int rocq_posfun_eval(int operation, value *sp, value *result)
+{
+  int comparison;
+  switch (operation) {
+  case 0:
+    if (Is_block(sp[0]) || Long_val(sp[0]) < 0 || Long_val(sp[0]) > 2
+        || !rocq_posfun_compare(sp[1], sp[2], &comparison)) return 0;
+    *result = comparison == 0 ? sp[0] : Val_int(comparison < 0 ? 1 : 2);
+    return 1;
+  case 1:
+    if (!rocq_posfun_compare(sp[0], sp[1], &comparison)) return 0;
+    *result = Val_int(comparison == 0 ? 0 : 1);
+    return 1;
+  default:
+    return 0;
+  }
+}
+
+value rocq_vmposfun_register(value closure, value operation, value arity)
+{
+  int op = Int_val(operation);
+  int expected_arity = Int_val(arity);
+  static const int arities[ROCQ_POS_FUNCTIONS] = { 3, 2, 2, 1, 2 };
+  if (op < 0 || op >= ROCQ_POS_FUNCTIONS || expected_arity != arities[op])
+    caml_invalid_argument("invalid registered positive VM function");
+  rocq_posfun_setup_stats();
+  if (!rocq_pos_closure_roots[op]) {
+    rocq_pos_closures[op] = closure;
+    caml_register_global_root(&rocq_pos_closures[op]);
+    rocq_pos_closure_roots[op] = 1;
+  }
+  return Val_unit;
+}
 
 #if OCAML_VERSION < 41000
 extern void caml_minor_collection(void);
@@ -769,7 +1001,41 @@ value rocq_interprete
 
       Instruct(GRABREC) {
         int rec_pos = *pc++; /* commence a zero */
+        int pos_operation, pos_arity, pos_success;
+        value pos_result, pos_block;
+        size_t pos_index;
+        struct rocq_posfun_plan pos_plan;
         print_instr("GRABREC");
+        if (rec_pos <= rocq_extra_args && !Is_accu(sp[rec_pos])
+            && rocq_posfun_find(rocq_env, &pos_operation, &pos_arity)
+            && rocq_extra_args + 1 == pos_arity) {
+          if (pos_operation < 2) {
+            pos_success = rocq_posfun_eval(pos_operation, sp, &pos_result);
+          } else {
+            pos_success = rocq_posfun_arithmetic(pos_operation, sp, &pos_plan);
+            if (pos_success) {
+              accu = Val_int(0);
+              for (pos_index = pos_plan.length; pos_index-- > 1;) {
+                Rocq_alloc_small(pos_block, 1, pos_plan.bits[pos_index - 2] ? 1 : 2);
+                Field(pos_block, 0) = accu;
+                accu = pos_block;
+              }
+              free(pos_plan.storage);
+              pos_result = accu;
+            }
+          }
+          if (pos_success) {
+            rocq_posfun_hits[pos_operation]++;
+            accu = pos_result;
+            sp += pos_arity;
+            pc = LoadRA(sp[0]);
+            rocq_env = sp[1];
+            rocq_extra_args = Long_val(sp[2]);
+            sp += 3;
+            Next;
+          }
+          rocq_posfun_fallbacks[pos_operation]++;
+        }
         if (rec_pos <= rocq_extra_args && !Is_accu(sp[rec_pos])) {
           pc++; /* Skip the next RESTART, then point rocq_env at the free variables. */
           rocq_env = rocq_env + (Int_val(Field(rocq_env, 1)) - 2) * sizeof(value);

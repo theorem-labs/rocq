@@ -469,6 +469,9 @@ let subst_retro_action subst action =
   | Register_type(prim,c) ->
     let c' = subst_constant subst c in
     if c == c' then action else Register_type(prim, c')
+  | Register_pos_function (operation, c) ->
+    let c' = subst_constant subst c in
+    if c == c' then action else Register_pos_function (operation, c')
 
 let rec map_kn f f' c =
   let func = map_kn f f' in

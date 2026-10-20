@@ -1888,6 +1888,23 @@ let check_register_ind (type t) ind (r : t CPrimitives.prim_ind) (mb, ob as spec
        "th constructor does not have the expected type") in
   let check_type_cte pos = check_type pos ind in
   match r with
+  | CPrimitives.PIT_pos ->
+    check_nparams 0;
+    check_nconstr 3;
+    let test_unary pos name =
+      check_name pos name;
+      let c = ob.mind_user_lc.(pos) in
+      let s = Pp.(str "the " ++ int (pos + 1) ++ str
+                   "th constructor does not have the expected type") in
+      check_if (Constr.isProd c) s;
+      let (_, dom, codom) = Constr.destProd c in
+      check_if (Constr.equal dom ind) s;
+      check_if (Constr.equal codom ind) s
+    in
+    test_unary 0 "xI";
+    test_unary 1 "xO";
+    check_name 2 "xH";
+    check_type_cte 2
   | CPrimitives.PIT_bool ->
     check_nparams 0;
     check_nconstr 2;
@@ -1977,6 +1994,10 @@ let register_inductive ind prim senv =
   let () = check_register_ind ind prim spec in
   let action = Retroknowledge.Register_ind(prim,ind) in
   add_retroknowledge action senv
+let register_pos_function operation constant senv =
+  Vmposfun.check senv.env operation constant;
+  add_retroknowledge (Retroknowledge.Register_pos_function (operation, constant)) senv
+
 
 (* NB: The next old comment probably refers to [propagate_loads] above.
    When a Require is done inside a module, we'll redo this require

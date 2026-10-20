@@ -905,6 +905,12 @@ let type_of_prim env u t =
   let float_ty () = type_of_float env in
   let string_ty () = type_of_string env in
   let array_ty u a = mkApp(type_of_array env u, [|a|]) in
+  let pos_ty () =
+    match (Environ.retroknowledge env).Retroknowledge.retro_pos with
+    | Some ((ind,_),_,_) -> UM.mkInd ind
+    | None -> CErrors.user_err Pp.(str"The type positive must be registered before this primitive.")
+  in
+
   let bool_ty () =
     match (Environ.retroknowledge env).Retroknowledge.retro_bool with
     | Some ((ind,_),_) -> UM.mkInd ind
@@ -943,6 +949,7 @@ let type_of_prim env u t =
     | PT_array -> array_ty (fst t) (tr_type (snd t))
   in
   let tr_ind (tr_type : ind_or_type -> constr) (type t) (i : t prim_ind) (a : t) = match i, a with
+    | PIT_pos, () -> pos_ty ()
     | PIT_bool, () -> bool_ty ()
     | PIT_carry, t -> carry_ty (tr_type t)
     | PIT_pair, (t1, t2) -> pair_ty (tr_type t1) (tr_type t2)

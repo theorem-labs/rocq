@@ -8,6 +8,7 @@ open CErrors
 type _ action_kind =
   | IncompatTypes : _ prim_type -> Constant.t action_kind
   | IncompatInd : _ prim_ind -> inductive action_kind
+  | IncompatPosFunction : pos_function -> Constant.t action_kind
 
 type exn += IncompatibleDeclarations : 'a action_kind * 'a * 'a -> exn
 
@@ -18,6 +19,10 @@ let check_same_types typ c1 c2 =
 let check_same_inds ind i1 i2 =
   if not (Ind.UserOrd.equal i1 i2)
   then raise (IncompatibleDeclarations (IncompatInd ind, i1, i2))
+
+let check_same_pos_function op c1 c2 =
+  if not (Constant.UserOrd.equal c1 c2) then
+    raise (IncompatibleDeclarations (IncompatPosFunction op, c1, c2))
 
 let add_retroknowledge retro action =
   match action with
@@ -46,6 +51,12 @@ let add_retroknowledge retro action =
 
   | Register_ind(pit,ind) ->
     begin match pit with
+      | PIT_pos ->
+        let r =
+          match retro.retro_pos with
+          | None -> ((ind,1), (ind,2), (ind,3))
+          | Some (((ind',_),_,_) as t) -> check_same_inds pit ind ind'; t in
+        { retro with retro_pos = Some r }
       | PIT_bool ->
         let r =
           match retro.retro_bool with
@@ -85,6 +96,14 @@ let add_retroknowledge retro action =
           | Some (((ind',_),_,_,_,_,_,_,_,_) as t) ->
             check_same_inds pit ind ind'; t in
         { retro with retro_f_class = Some r }
+    end
+  | Register_pos_function (op, c) ->
+    begin match List.assoc_opt op retro.retro_pos_functions with
+    | None ->
+      { retro with retro_pos_functions = (op, c) :: retro.retro_pos_functions }
+    | Some c' ->
+      check_same_pos_function op c c';
+      retro
     end
 
 let add_retroknowledge env action =
