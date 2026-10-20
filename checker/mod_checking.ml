@@ -475,11 +475,19 @@ let get_retroknowlege env retro =
           (Retroknowledge.Register_pos_function (operation, constant)) in
       env, imap, cmap, extind
     end
-    else if Cmap_env.mem constant cmap then
+    else match Cmap_env.find_opt constant cmap with
+    | None ->
+      env, imap, Cmap_env.add constant (PosFunction operation) cmap, extind
+    | Some (PosFunction registered) ->
+      if String.equal (Retroknowledge.pos_function_to_string operation)
+          (Retroknowledge.pos_function_to_string registered)
+      then env, imap, cmap, extind
+      else
+        CErrors.user_err Pp.(str "Inconsistent positive function registration for constant " ++
+                            Constant.print constant ++ str ".")
+    | Some (PrimitiveType _) ->
       CErrors.user_err Pp.(str "Inconsistent positive function registration for constant " ++
                           Constant.print constant ++ str ".")
-    else
-      env, imap, Cmap_env.add constant (PosFunction operation) cmap, extind
   in
   let env, imap, cmap, _ =
     List.fold_left fold (env, Mindmap_env.empty, Cmap_env.empty, Mindmap_env.empty) retro
