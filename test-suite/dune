@@ -4,6 +4,11 @@
  (name ocaml_pwd)
  (modules ocaml_pwd))
 
+(executable
+ (name forge_posfun)
+ (modules forge_posfun)
+ (libraries rocq-runtime.kernel))
+
 (env
  (dev (flags :standard -w -70)))
 
