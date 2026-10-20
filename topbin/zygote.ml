@@ -98,40 +98,23 @@ let read_file path =
    proof_mode=None (e.g. tactic/bullet syntax once a proof body starts) --
    callers only ever care about a leading run of plain vernacular
    (Require) sentences, so a parse hiccup past that point is treated the
-   same as EOF: stop and return what was cleanly parsed so far.
-
-   [exhaustive] (default false) changes what a parse hiccup means. This
-   function never INTERPRETS a sentence between parses (unlike the real
-   compile, whose Vernac loading loop parses and interprets one sentence
-   at a time): if sentence k's own syntax depends on something only
-   INTERPRETING an earlier sentence would establish (confirmed live: a
-   `Notation` a later sentence's term syntax relies on, e.g. ListNotations'
-   `[...]`, only takes effect once `Import` is actually INTERPRETED, not
-   merely parsed), this function's parse of sentence k fails here even
-   though the real compile sails through it. With [exhaustive:true], that
-   failure raises [Truncated_before_eof] instead of silently stopping, so
-   a caller that needs "this is the WHOLE prefix, not a hiccup-shortened
-   one" (the self-check in zygote_run below) can refuse to trust a short
-   count rather than silently serving behind it. *)
-exception Truncated_before_eof
-
-let peek_sentences ?(exhaustive = false) ~max_n file =
+   same as EOF: stop and return what was cleanly parsed so far. *)
+let peek_sentences ~max_n file =
   let content = read_file file in
   let ic = open_in_bin file in
   Fun.protect ~finally:(fun () -> close_in ic) (fun () ->
     let pa = Procq.Parsable.make
         ~loc:Loc.(initial (InFile { dirpath = None; file }))
         (Gramlib.Stream.of_channel ic) in
-    let stop acc = if exhaustive then raise Truncated_before_eof else List.rev acc in
     let rec loop n acc =
       if n <= 0 then List.rev acc
       else match Procq.Entry.parse (Pvernac.main_entry None) pa with
-        | None -> List.rev acc (* true EOF: a clean stop, exhaustive or not *)
+        | None -> List.rev acc
         | Some { CAst.loc = Some loc; _ } ->
           let text = String.sub content loc.Loc.bp (loc.Loc.ep - loc.Loc.bp) in
           loop (n - 1) (text :: acc)
-        | Some { CAst.loc = None; _ } -> stop acc
-        | exception _ -> stop acc
+        | Some { CAst.loc = None; _ } -> List.rev acc
+        | exception _ -> List.rev acc
     in
     loop max_n [])
 
@@ -303,27 +286,8 @@ let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn =
     end else begin
       reopen_std Unix.stdout stdout_path;
       reopen_std Unix.stderr stderr_path;
-      (* Rocq's own CLI parser (Coqcargs.add_compile) never hands
-         Ccompile.compile_file a bare filename verbatim: it first
-         prepends "./" to any argument with no directory component
-         (Filename.is_implicit), "needed not to break up Rocq loadpath
-         stuff" per its own comment. That string becomes the embedded
-         Loc.t source name (the file embeds the LITERAL string it was
-         given, same principle as the cwd/coqlibs note above) -- confirmed
-         live: the same file compiled via this protocol with "c1.v"
-         verbatim versus "./c1.v" produces two BYTE-DIFFERENT .vo files,
-         and only the "./"-prefixed one matches a stock compile byte-for-
-         byte. coq_makefile always invokes `$(ROCQ) compile ... FILE.v`
-         with the bare stem, so skipping this normalization here would
-         make EVERY zygote-routed file diverge from stock, not just an
-         edge case. Apply the identical transformation Coqcargs.add_compile
-         applies, rather than passing the client's string straight through. *)
-      let normalize_file f =
-        if Filename.is_implicit f then Filename.concat Filename.current_dir_name f
-        else f
-      in
       let copts = Coqcargs.{ default with
-        compile_file = Some (normalize_file file, echo = "1");
+        compile_file = Some (file, echo = "1");
         compilation_output_name = Some output;
       } in
       let code = compile_like_coqc opts stm_opts copts injections in
@@ -348,48 +312,36 @@ let reap_finished_children () =
 
 (* Dependency-staleness guard: the warm-up compile (zygote_run, below)
    loads every Require'd library ONCE into this process's library table,
-   and every `Declare ML Module` a required library's source carries
-   loads an OCaml plugin via Dynlink -- in both cases, nothing in this
-   design ever re-checks that in-memory state against disk afterward. If
-   a library OR a plugin the shared prefix touches is rebuilt while this
-   daemon sits warm (idle_timeout can hold it for minutes), every later
-   fork would silently compile against stale in-memory state -- the same
-   bug class rocq-warm's own staleness tests exist to catch (DESIGN.md
-   "The .vo on disk was rebuilt under the session"), not exercised
-   anywhere in this prototype before this check. The guard is a coarse
-   (mtime, size) fingerprint of every loaded library's .vo AND every
-   loaded plugin's .cmxs/.cmo (Library.loaded_libraries and
-   Mltop.loaded_plugin_files track these as two entirely disjoint lists,
-   confirmed live: `Print Libraries.`/`Print ML Modules.` after `Require
-   Import Ltac2.Ltac2.` share not one entry -- Library knows nothing
-   about ltac2_plugin.cmxs), taken once right after warm-up and
-   re-verified before every accepted connection; residual risk: a
-   same-second edit that preserves the file's size is not detected
-   (Unix.stat's mtime has only second resolution, matching rocq-warm's
-   own design note that its daemon uses mtime_ns -- not available in
-   OCaml's Unix.stat). On mismatch the daemon answers this one request
-   MISMATCH (the existing, already-handled fallback path), then exits
-   instead of forking -- the next client's ensure_zygote finds no socket
-   and spawns a fresh daemon, which re-interprets the now-current prefix
-   (and re-links whatever plugins it now needs). *)
+   and nothing in this design ever re-checks that in-memory state against
+   disk afterward. If a library the shared prefix touches is rebuilt while
+   this daemon sits warm (idle_timeout can hold it for minutes), every
+   later fork would silently compile against stale in-memory library
+   state -- the same bug class rocq-warm's own staleness tests exist to
+   catch (DESIGN.md "The .vo on disk was rebuilt under the session"), not
+   exercised anywhere in this prototype before this check. The guard is a
+   coarse (mtime, size) fingerprint of every loaded library's .vo, taken
+   once right after warm-up and re-verified before every accepted
+   connection; residual risk: a same-second edit that preserves the file's
+   size is not detected (Unix.stat's mtime has only second resolution,
+   matching rocq-warm's own design note that its daemon uses mtime_ns --
+   not available in OCaml's Unix.stat). On mismatch the daemon answers
+   this one request MISMATCH (the existing, already-handled fallback
+   path), then exits instead of forking -- the next client's ensure_zygote
+   finds no socket and spawns a fresh daemon, which re-interprets the
+   now-current prefix. *)
 type fingerprint = (string * float * int) list
 
 let capture_fingerprint () : fingerprint =
-  let stat_one path =
-    try
-      let st = Unix.stat path in
-      Some (path, st.Unix.st_mtime, st.Unix.st_size)
-    with Unix.Unix_error _ -> Some (path, nan, -1)
-      (* vanished out from under us -- definitely stale *)
-  in
-  let libraries =
-    List.filter_map (fun dir ->
-      let path = Library.library_full_filename dir in
-      if path = "<unavailable filename>" then None else stat_one path)
-      (Library.loaded_libraries ())
-  in
-  let plugins = List.filter_map stat_one (Mltop.loaded_plugin_files ()) in
-  libraries @ plugins
+  List.filter_map (fun dir ->
+    let path = Library.library_full_filename dir in
+    if path = "<unavailable filename>" then None
+    else
+      try
+        let st = Unix.stat path in
+        Some (path, st.Unix.st_mtime, st.Unix.st_size)
+      with Unix.Unix_error _ -> Some (path, nan, -1)
+        (* vanished out from under us -- definitely stale *))
+    (Library.loaded_libraries ())
 
 let fingerprint_stale fp =
   List.exists (fun (path, mtime, size) ->
@@ -446,6 +398,14 @@ let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
      forked children inherit it via copy-on-write, exactly as they inherit
      every other piece of process state this design relies on. *)
   ignore (Feedback.add_feeder Coqloop.coqloop_feed);
+  (* Record the prefix as parsed sentences (the same comparison the server
+     loop uses per request), BEFORE the warm-up compile touches global
+     state, from the untouched scratch file. *)
+  let prefix_sentences = Array.of_list (peek_sentences ~max_n:max_int prefix_file) in
+  if Array.length prefix_sentences = 0 then begin
+    Printf.eprintf "rocq-zygote: prefix file %s has no sentences, refusing to serve\n%!" prefix_file;
+    exit 2
+  end;
   (* One-time warm-up: compile the shared prefix exactly as coqc would
      compile any ordinary file, in THIS (pre-fork) process. This is the
      only place the heavy Require/Nametab-registration work happens; every
@@ -463,39 +423,6 @@ let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
   if code <> 0 then begin
     Printf.eprintf "rocq-zygote: prefix warm-up failed (exit %d), refusing to serve\n%!" code;
     exit code
-  end;
-  (* Record the prefix as parsed sentences (the same comparison the server
-     loop uses per request) ONLY NOW, after the warm-up succeeded -- not
-     before, against untouched global state. peek_sentences never
-     interprets a sentence between parses, so parsing it against
-     pre-warm-up state stops short at any sentence whose own syntax
-     depends on an EARLIER sentence having been INTERPRETED (confirmed
-     live: ListNotations' `[...]` only parses once `Import` is actually
-     run, not merely parsed), silently under-counting the per-request
-     guard's comparison depth below the real prefix's length -- a sibling
-     file could then share only that SHORTER guard-checked run, diverge
-     in its own content right after it, and still inherit the REAL
-     (longer) prefix's effects via fork. Parsing now, after the real
-     compile has already interpreted every prefix sentence in this very
-     process, means any such notation is already active, so this re-parse
-     reaches exactly as far as the real compile did. ~exhaustive:true is
-     the backstop for anything that can still make the two diverge: it
-     turns "stopped before reaching the file's own end" into a hard
-     refusal instead of a silently short count. *)
-  let prefix_sentences =
-    try Array.of_list (peek_sentences ~exhaustive:true ~max_n:max_int prefix_file)
-    with Truncated_before_eof ->
-      Printf.eprintf
-        "rocq-zygote: prefix file %s has content past a sentence this \
-         self-check cannot parse even after the real warm-up compile \
-         succeeded on the whole file -- the per-request guard's \
-         comparison length could not be trusted to cover the whole \
-         prefix; refusing to serve\n%!" prefix_file;
-      exit 2
-  in
-  if Array.length prefix_sentences = 0 then begin
-    Printf.eprintf "rocq-zygote: prefix file %s has no sentences, refusing to serve\n%!" prefix_file;
-    exit 2
   end;
   let fingerprint = capture_fingerprint () in
   serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs:zargs.coqlibs
