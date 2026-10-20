@@ -104,9 +104,4 @@ val declare_ml_modules : Vernacexpr.locality_flag -> string list -> interp_fun
 (** {5 Utilities} *)
 
 val print_ml_modules : unit -> Pp.t
-
-(** The on-disk files (.cmxs/.cmo) backing every currently loaded ML
-    plugin, resolved the same way [Declare ML Module] resolved them to
-    Dynlink. *)
-val loaded_plugin_files : unit -> string list
 val print_gc : unit -> Pp.t
