@@ -91,6 +91,10 @@ type summary_disk = {
   md_deps : (compilation_unit_name * Safe_typing.vodigest) array;
   md_ocaml : string;
   md_info : Library_info.t;
+  (* Subset of the direct dependencies (i.e. of the dirpaths appearing in
+     [md_deps]) that were only safe-required (SafeLoaded) when this library
+     was compiled. Downstream requires must keep these dependencies safe. *)
+  md_safe_deps : DirPath.Set.t;
 }
 
 (*s Modules loaded in memory contain the following informations. They are
@@ -100,20 +104,23 @@ type library_t = {
   library_name : compilation_unit_name;
   library_data : library_disk;
   library_deps : (compilation_unit_name * Safe_typing.vodigest) array;
+  library_safe_deps : DirPath.Set.t;
   library_digests : Safe_typing.vodigest;
   library_info : Library_info.t;
   library_vm : Vmlibrary.on_disk;
 }
 
+type load_status = FullLoaded | SafeLoaded
+
 (* This is a map from names to loaded libraries *)
-let libraries_table : library_t DirPath.Map.t ref =
+let libraries_table : (load_status * library_t) DirPath.Map.t ref =
   Summary.ref DirPath.Map.empty ~stage:Summary.Stage.Synterp ~name:"LIBRARY"
 
 (* This is the map of loaded libraries filename *)
 (* (not synchronized so as not to be caught in the states on disk) *)
 let libraries_filename_table = ref DirPath.Map.empty
 
-(* These are the _ordered_ sets of loaded, imported and exported libraries *)
+(* These are the _ordered_ sets of loaded libraries *)
 let libraries_loaded_list = Summary.ref [] ~stage:Summary.Stage.Synterp ~name:"LIBRARY-LOAD"
 
 let loaded_native_libraries = Summary.ref DirPath.Set.empty ~stage:Summary.Stage.Interp ~name:"NATIVE-LIBRARY-LOAD"
@@ -133,7 +140,7 @@ let try_find_library dir =
       (str "Unknown library " ++ DirPath.print dir ++ str ".")
 
 let library_compiled dir =
-  let lib = Option.get @@ find_library dir in
+  let _, lib = Option.get @@ find_library dir in
   lib.library_data.md_compiled
 
 let register_library_filename dir f =
@@ -153,14 +160,14 @@ let library_is_loaded dir =
   (* If a library is loaded several time, then the first occurrence must
      be performed first, thus the libraries_loaded_list ... *)
 
-let register_loaded_library ~root m =
+let register_loaded_library ~root load_status m =
   let libname = m.library_name in
   let rec aux = function
     | [] -> [root, libname]
     | (_, m') ::_ as l when DirPath.equal m' libname -> l
     | m'::l' -> m' :: aux l' in
   libraries_loaded_list := aux !libraries_loaded_list;
-  libraries_table := DirPath.Map.add libname m !libraries_table
+  libraries_table := DirPath.Map.add libname (load_status, m) !libraries_table
 
 let register_native_library libname =
   if (Global.typing_flags ()).enable_native_compiler
@@ -203,24 +210,88 @@ let access_table what tables dp i =
   in
   Opaques.get_opaque_disk i t
 
+let stored_opaque o =
+  let (_sub, _ci, dp, i) = Opaqueproof.repr o in
+  if DirPath.equal dp (Global.current_dirpath ()) then
+    Opaques.get_current_opaque i
+  else
+    access_table "opaque proofs" opaque_tables dp i
+
 let access_opaque_table o =
-  let (sub, ci, dp, i) = Opaqueproof.repr o in
-  let ans =
-    if DirPath.equal dp (Global.current_dirpath ()) then
-      Opaques.get_current_opaque i
-    else
-      let what = "opaque proofs" in
-      access_table what opaque_tables dp i
-  in
-  match ans with
+  let (sub, ci, _, _) = Opaqueproof.repr o in
+  match stored_opaque o with
   | None -> None
-  | Some (c, ctx) ->
+  | Some ((c, ctx), _) ->
     let (c, ctx) = Discharge.cook_opaque_proofterm ci (c, ctx) in
     let c = Mod_subst.subst_mps_list sub c in
     Some (c, ctx)
 
+(* The same term, with the module substitutions applied but not the section
+   discharge, plus what the discharge would have done.  [None] when the
+   discharge generalizes an inductive of the section, since a [Case]
+   node of the stored term then has fewer parameters than the discharged
+   inductive declares. *)
+let uncooked_opaque_table o =
+  let (sub, ci, _, _) = Opaqueproof.repr o in
+  if List.exists Cooking.discharges_inductive ci then None
+  else if not (List.for_all Mod_subst.is_empty_subst sub) then
+    (* [Cooking.expand_subst]'s canonical-name lookups are keyed the way the
+       raw stored term below names things, before [subst] resolves module
+       paths crossed by a functor instantiation; composing it with the
+       substituted term would risk a silent miss on exactly the "used in ...
+       to prove" subterm this accessor exists to let a caller print
+       correctly (Assumptions.ml). Every opaque in a functor-free, one-file
+       proof script -- the whole real workload -- has an empty [sub], so
+       this never fires there; fall back to the cooked proof rather than
+       risk being wrong on the rare one that does. *)
+    None
+  else if List.length ci > 1 then
+    (* More than one enclosing section survived to discharge this term: a
+       reference inside it can need generalizing by TWO SEPARATE closings
+       (e.g. a nested section's constant referencing an outer one, each
+       contributing its own instance), and composing their [expand_subst]
+       passes as a plain function chain -- with no wrapping lambda between
+       them to mark where one closing's generalized variables end and the
+       next's begin -- does not reliably recover the single combined
+       application a real, from-the-root cooking pass would produce (it can
+       apply the wrong instance to the wrong argument slot). A single
+       section's own [expand_info] is always exact, since the kernel
+       resolves a multi-hop dependency (built discharges over the same
+       section's variables however many other section-local constants it
+       goes through) into ONE instance there; bail only once a second
+       closing stacks a second, separate one on top. *)
+    None
+  else match stored_opaque o with
+  | None -> None
+  | Some ((c, _), _) ->
+    let subst = Mod_subst.subst_mps_list sub in
+    let caches = List.map Cooking.create_cache ci in
+    let fold (info, cache) (bound, ctx) =
+      (Id.Set.union bound (Cooking.names_info info),
+       Context.Rel.map subst (Cooking.rel_context_of_cooking_cache cache) @ ctx)
+    in
+    let (bound, context) =
+      List.fold_right fold (List.combine ci caches) (Id.Set.empty, []) in
+    (* Same expand/subst core [Discharge.cook_opaque_proofterm] uses for the
+       cooked body, with no final generalization over [context]: the caller
+       supplies those binders itself, at the depth its own subterm sits at
+       (see the .mli). *)
+    let expand t =
+      List.fold_right (fun cache t -> Cooking.expand_subst cache t) caches t in
+    Some { Global.uncooked_body = subst c;
+           Global.uncooked_bound = bound;
+           Global.uncooked_context = context;
+           Global.uncooked_expand = expand }
+
+let access_opaque_unchecked o =
+  match stored_opaque o with
+  | None -> false
+  | Some (_, unchecked) -> unchecked
+
 let indirect_accessor = {
   Global.access_proof = access_opaque_table;
+  Global.access_uncooked_proof = uncooked_opaque_table;
+  Global.access_unchecked = access_opaque_unchecked;
 }
 
 (************************************************************************)
@@ -236,6 +307,7 @@ let mk_library sd md digests vm =
     library_name     = sd.md_name;
     library_data     = md;
     library_deps     = sd.md_deps;
+    library_safe_deps = sd.md_safe_deps;
     library_digests  = digests;
     library_info     = sd.md_info;
     library_vm = vm;
@@ -301,34 +373,43 @@ let () = CErrors.register_handler (function
 let error_in_intern provenance dir (exn, info) =
   Exninfo.iraise (InternError { exn; provenance; dir }, info)
 
-(* Returns the digest of a library, checks both caches to see what is loaded *)
-let rec intern_library ~root ~intern (needed, contents as acc) dir =
-  (* Look if in the current logical environment *)
+(* Intern a library and its dependency closure.
+
+   Unlike a plain load, safe-ness is not decided during interning: we
+   first intern the whole closure (skipping already-loaded libraries,
+   whose dependencies are already loaded), and only afterwards compute a
+   per-library effective mode (see [compute_modes]) from the recorded
+   safe-dependency edges. This keeps a safe dependency of a fully-loaded
+   library safe for the current session too. *)
+let rec intern_library ~intern (needed, contents as acc) dir =
+  (* Look if in the current logical environment: already-loaded libraries
+     (whether full or safe) are terminal, their deps are already loaded. *)
   match find_library dir with
-  | Some loaded_lib -> loaded_lib, acc
+  | Some _ -> acc
   | None ->
     (* Look if already listed in the accumulator *)
     match DirPath.Map.find_opt dir contents with
-    | Some interned_lib ->
-      interned_lib, acc
+    | Some _ ->
+      acc
     | None ->
       (* We intern the library, and then intern the deps *)
       match intern dir with
       | Ok m, provenance ->
         check_library_expected_name ~provenance dir m.library_name;
-        m, intern_library_deps ~root ~intern acc dir m
+        intern_library_deps ~intern acc dir m
       | Error iexn, provenance ->
         error_in_intern provenance dir iexn
 
-and intern_library_deps ~root ~intern libs dir m =
+and intern_library_deps ~intern (needed, contents) dir m =
+  let contents = DirPath.Map.add dir m contents in
   let needed, contents =
     Array.fold_left (intern_mandatory_library ~intern dir)
-      libs m.library_deps in
-  ((root, dir) :: needed, DirPath.Map.add dir m contents )
+      (needed, contents) m.library_deps in
+  ((false, dir) :: needed, contents)
 
-and intern_mandatory_library ~intern caller libs (dir,d) =
-  let m, libs = intern_library ~root:false ~intern libs dir in
-  let digest = m.library_digests in
+and intern_mandatory_library ~intern caller (needed, contents) (dir,d) =
+  let needed, contents = intern_library ~intern (needed, contents) dir in
+  let digest = digest_of_dep ~contents dir in
   let () = if not (Safe_typing.digest_match ~actual:digest ~required:d) then
     let from = library_full_filename caller in
     user_err
@@ -337,12 +418,112 @@ and intern_mandatory_library ~intern caller libs (dir,d) =
        str ") makes inconsistent assumptions over library " ++
        DirPath.print dir)
   in
-  libs
+  (needed, contents)
 
-let rec_intern_library ~intern libs (loc, dir) =
-  let m, libs = intern_library ~root:true ~intern libs dir in
-  Library_info.warn_library_info m.library_name m.library_info;
-  libs
+and digest_of_dep ~contents dir =
+  match DirPath.Map.find_opt dir contents with
+  | Some m -> m.library_digests
+  | None ->
+    match find_library dir with
+    | Some (_, m) -> m.library_digests
+    | None ->
+      anomaly Pp.(str "Missing library " ++ DirPath.print dir ++
+                  str " while interning dependencies.")
+
+let rec_intern_library ~intern (needed, contents) (_loc, dir) =
+  intern_library ~intern (needed, contents) dir
+
+(* [needed] is built dependencies-first (each dir is prepended after its
+   deps). A dir added as a dependency and then reached again as a root keeps
+   its original (earlier) position; mark such positions as roots. *)
+let promote_roots needed roots =
+  let roots = List.fold_left (fun s d -> DirPath.Set.add d s) DirPath.Set.empty roots in
+  List.map (fun (root, d) -> (root || DirPath.Set.mem d roots), d) needed
+
+(* Effective load mode computed for each library of an interned closure. *)
+type require_mode = ModeFull | ModeSafe
+
+(* Compute, for each newly-interned library of the closure, whether it must
+   be fully loaded or may be safe-loaded.
+
+   Roots get the command mode ([ModeFull] for [Require], [ModeSafe] for
+   [Require (safe)]). An edge A -> D is "safe" iff D belongs to A's recorded
+   safe dependencies ([library_safe_deps]), otherwise "normal". A library is
+   [ModeFull] iff it is reachable from a [ModeFull] root through a chain of
+   normal edges; otherwise it is [ModeSafe].
+
+   Fullness only grows, so this is a monotone fixpoint reached by a worklist
+   seeded with the full roots and propagated along normal edges. *)
+let compute_modes ~cmd_safe ~roots contents =
+  let full = ref DirPath.Set.empty in
+  let queue = Queue.create () in
+  let mark dir =
+    if DirPath.Map.mem dir contents && not (DirPath.Set.mem dir !full) then begin
+      full := DirPath.Set.add dir !full;
+      Queue.add dir queue
+    end
+  in
+  if not cmd_safe then List.iter mark roots;
+  while not (Queue.is_empty queue) do
+    let dir = Queue.pop queue in
+    let m = DirPath.Map.find dir contents in
+    Array.iter (fun (d, _) ->
+        if not (DirPath.Set.mem d m.library_safe_deps) then mark d)
+      m.library_deps
+  done;
+  fun dir -> if DirPath.Set.mem dir !full then ModeFull else ModeSafe
+
+let error_previously_safe_required dir =
+  CErrors.user_err
+    Pp.(str "Cannot unsafe-require library " ++ DirPath.print dir ++ spc() ++
+        str "because it was previously required with (safe).")
+
+(* Detect in-session conflicts with already-loaded libraries, i.e. a full
+   demand (a full root, or a normal edge from a full library) reaching a
+   library that was previously safe-required.
+
+   This is a pre-order depth-first traversal from the roots along full
+   (normal-edge) reachability, following each library's dependencies in
+   declaration order, so that the offending library reported is the first
+   one a plain require would have reached. *)
+let check_closure_conflicts ~cmd_safe ~roots contents =
+  let visited = ref DirPath.Set.empty in
+  let rec visit dir =
+    match find_library dir with
+    | Some (SafeLoaded, _) -> error_previously_safe_required dir
+    | Some (FullLoaded, _) -> ()
+    | None ->
+      if not (DirPath.Set.mem dir !visited) then begin
+        visited := DirPath.Set.add dir !visited;
+        let m = DirPath.Map.find dir contents in
+        Array.iter (fun (d, _) ->
+            if not (DirPath.Set.mem d m.library_safe_deps) then visit d)
+          m.library_deps
+      end
+  in
+  if not cmd_safe then List.iter visit roots
+
+(* Intern the closure of [modrefl], compute per-library modes, run the
+   in-session conflict checks and return the topologically-ordered list of
+   newly-interned libraries tagged with their computed mode. *)
+let intern_and_resolve_modes ~cmd_safe ~intern modrefl =
+  let needed, contents =
+    List.fold_left (rec_intern_library ~intern) ([], DirPath.Map.empty) modrefl in
+  let roots = List.map snd modrefl in
+  let needed = promote_roots needed roots in
+  List.iter (fun dir ->
+      let info = match DirPath.Map.find_opt dir contents with
+        | Some m -> Some m.library_info
+        | None -> Option.map (fun (_, m) -> m.library_info) (find_library dir)
+      in
+      Option.iter (Library_info.warn_library_info dir) info)
+    roots;
+  let mode_of = compute_modes ~cmd_safe ~roots contents in
+  check_closure_conflicts ~cmd_safe ~roots contents;
+  List.rev_map (fun (root, dir) ->
+      let m = DirPath.Map.find dir contents in
+      (mode_of dir, root, m))
+    needed
 
 let native_name_from_filename f =
   let ch = raw_intern_library f in
@@ -366,6 +547,8 @@ let native_name_from_filename f =
     which recursively loads its dependencies)
 *)
 
+(* Full-mode registration (object replay). *)
+
 let register_library m =
   let l = m.library_data in
   Declaremods.Interp.register_library
@@ -377,29 +560,69 @@ let register_library m =
   ;
   register_native_library m.library_name
 
-let register_library_syntax (root, m) =
+let register_library_syntax ~root m =
   let l = m.library_data in
   Declaremods.Synterp.register_library
     m.library_name
     l.md_syntax_objects;
-  register_loaded_library ~root m
+  register_loaded_library ~root FullLoaded m
+
+(* Safe-mode registration: the kernel-side import and the name-pushing walk
+   live in declaremods.ml (see [Declaremods.*.register_safe_library]); here we
+   only drive them, maintaining library.ml's bookkeeping tables, and dispatch
+   full- vs safe-mode registration for each library of a required closure. *)
+
+let register_safe_library_syntax ~root m =
+  Declaremods.Synterp.register_safe_library m.library_name
+    (Safe_typing.module_of_library m.library_data.md_compiled);
+  register_loaded_library ~root SafeLoaded m
+
+let register_safe_library m =
+  let compiled = m.library_data.md_compiled in
+  let () =
+    let mp = MPfile m.library_name in
+    try
+      (* If the library was loaded inside a module or section, the
+         end_segment will replay the library object for non-kernel
+         effects but the kernel did not forget the library. *)
+      ignore(Global.lookup_module mp);
+    with Not_found ->
+      let mp' = Global.import compiled m.library_vm m.library_digests in
+      if not (ModPath.equal mp mp') then
+        anomaly (Pp.str "Unexpected disk module name.")
+  in
+  Declaremods.Interp.register_safe_library m.library_name
+    (Safe_typing.module_of_library compiled);
+  register_native_library m.library_name
+
+(* Unified require objects. A single [Require] / [Require (safe)] now
+   registers a whole topologically-ordered closure in which each library
+   carries its computed mode: full libraries replay their objects, safe ones
+   are only imported kernel-side. Interleaving the two in one object preserves
+   the order (a full library's object replay may rely on an earlier one). *)
+
+let register_one_syntax (mode, root, m) = match mode with
+  | ModeFull -> register_library_syntax ~root m
+  | ModeSafe -> register_safe_library_syntax ~root m
+
+let register_one_interp (mode, m) = match mode with
+  | ModeFull -> register_library m
+  | ModeSafe -> register_safe_library m
 
 (* Follow the semantics of Anticipate object:
    - called at module or module type closing when a Require occurs in
      the module or module type
-   - not called from a library (i.e. a module identified with a file) *)
-let load_require _ needed =
-  List.iter register_library needed
+   - not called from a library (i.e. a module identified with a file)
+   [needed] is the ordered list of libraries not already loaded *)
+let cache_require needed =
+  List.iter register_one_interp needed
 
-  (* [needed] is the ordered list of libraries not already loaded *)
-let cache_require o =
-  load_require 1 o
-
-let discharge_require o = Some o
+let load_require _ o =
+  cache_require o
 
 (* open_function is never called from here because an Anticipate object *)
 
-type require_obj = library_t list
+type require_obj = (require_mode * library_t) list
 
 let in_require : require_obj -> obj =
   declare_object
@@ -407,20 +630,18 @@ let in_require : require_obj -> obj =
      cache_function = cache_require;
      load_function = load_require;
      open_function = (fun _ _ -> assert false);
-     discharge_function = discharge_require;
+     discharge_function = (fun o -> Some o);
      classify_function = (fun o -> Anticipate) }
 
-let load_require_syntax _ needed =
-  List.iter register_library_syntax needed
+let cache_require_syntax needed =
+  List.iter register_one_syntax needed
 
-let cache_require_syntax o =
-  load_require_syntax 1 o
-
-let discharge_require_syntax o = Some o
+let load_require_syntax _ o =
+  cache_require_syntax o
 
 (* open_function is never called from here because an Anticipate object *)
 
-type require_obj_syntax = (bool * library_t) list
+type require_obj_syntax = (require_mode * bool * library_t) list
 
 let in_require_syntax : require_obj_syntax -> obj =
   declare_object
@@ -429,7 +650,7 @@ let in_require_syntax : require_obj_syntax -> obj =
      cache_function = cache_require_syntax;
      load_function = load_require_syntax;
      open_function = (fun _ _ -> assert false);
-     discharge_function = discharge_require_syntax;
+     discharge_function = (fun o -> Some o);
      classify_function = (fun o -> Anticipate) }
 
 (* Require libraries, import them if [export <> None], mark them for export
@@ -440,15 +661,14 @@ let warn_require_in_module =
     (fun () -> strbrk "Use of “Require” inside a module is fragile." ++ spc() ++
                strbrk "It is not recommended to use this functionality in finished proof scripts.")
 
-let require_library_from_dirpath needed =
+let require_library needed =
   if Lib.is_module_or_modtype () then warn_require_in_module ();
   Lib.add_leaf (in_require needed)
 
-let require_library_syntax_from_dirpath ~intern modrefl =
-  let needed, contents = List.fold_left (rec_intern_library ~intern) ([], DirPath.Map.empty) modrefl in
-  let needed = List.rev_map (fun (root, dir) -> root, DirPath.Map.find dir contents) needed in
+let require_library_syntax_from_dirpath ~cmd_safe ~intern modrefl =
+  let needed = intern_and_resolve_modes ~cmd_safe ~intern modrefl in
   Lib.add_leaf (in_require_syntax needed);
-  List.map snd needed
+  List.map (fun (mode, _root, m) -> (mode, m)) needed
 
 (************************************************************************)
 (*s [save_library dir] ends library [dir] and save it to the disk. *)
@@ -457,11 +677,23 @@ let current_deps () =
   (* Only keep the roots of the dependency DAG *)
   let map (root, m) =
     if root then
-      let m = try_find_library m in
+      let _, m = try_find_library m in
       Some (m.library_name, m.library_digests)
     else None
   in
   List.map_filter map !libraries_loaded_list
+
+let current_safe_deps () =
+  (* Among the direct dependencies (the roots of the DAG), record those that
+     are only safe-loaded so that downstream requires keep them safe. *)
+  let add acc (root, m) =
+    if root then
+      match find_library m with
+      | Some (SafeLoaded, _) -> DirPath.Set.add m acc
+      | Some (FullLoaded, _) | None -> acc
+    else acc
+  in
+  List.fold_left add DirPath.Set.empty !libraries_loaded_list
 
 let error_recursively_dependent_library dir =
   user_err
@@ -508,6 +740,7 @@ let save_library_struct ~output_native_objects dir =
     ; md_deps = Array.of_list (current_deps ())
     ; md_ocaml = Coq_config.caml_version
     ; md_info = info
+    ; md_safe_deps = current_safe_deps ()
     } in
   let md =
     { md_compiled

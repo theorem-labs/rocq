@@ -520,6 +520,20 @@ and ``rocq repl``, unless stated otherwise:
 :-type-in-type: Collapse the universe hierarchy of Rocq.
 
   .. warning:: This makes the logic inconsistent.
+:-skip-qed-typecheck: Do not let the kernel typecheck the proof of an opaque
+  constant (one closed with :cmd:`Qed`) when it is declared. The proof term,
+  its universe constraints and its section variables are computed and stored
+  exactly as without this option, so libraries that depend on this one see
+  the same library; only the table of opaque proofs records which proofs were
+  not typechecked. This is meant for builds
+  whose :file:`.vo` files are all checked afterwards by ``rocqchk``, which
+  typechecks every opaque proof regardless of this option.
+  :cmd:`Print Assumptions` reports each constant whose proof was not
+  typechecked.
+
+  .. warning:: A library compiled with this option can contain an ill-typed
+     proof, for instance one built with ``vm_cast_no_check``, until ``rocqchk``
+     has checked it.
 :-mangle-names *ident*: *Experimental.* Do not depend on this option. Replace
   Rocq's auto-generated name scheme with names of the form *ident0*, *ident1*,
   etc. Within Rocq, the :flag:`Mangle Names` flag turns this behavior on,
@@ -767,6 +781,23 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
 :-o: At exit, print a summary about the context. List the names of all
   assumptions and variables (constants without a :term:`body`).
 :-silent: Do not write progress information to the standard output.
+:-j *n*: Check opaque proofs in parallel, using up to *n* processes at the
+  same time (the default is 1). The bodies of opaque constants are checked by
+  worker processes, created with ``fork``: up to *n*-1 while the main process
+  checks everything else, then up to *n* while the main process waits for
+  them and hands out the opaque proofs that are left. A
+  library is accepted only if every worker exits normally. A worker that has
+  run for longer than its budget (see ``-worker-budget``) stops after the proof
+  it is checking and hands its remaining proofs back to the main process,
+  which queues them again for another process; each proof is still checked
+  exactly once. With *n* > 1, ``rocqchk`` uses several times the memory of a
+  sequential check. This option is not available on Windows, and is ignored
+  with ``-profile``.
+:-worker-budget *s*: With ``-j``, the time in seconds (default 20) after which
+  a worker process stops, once it has completed one check, and gives the proofs
+  it has not checked back to the main process. This bounds how long a worker
+  lives: the budget plus the time of its last proof. ``0`` makes a worker check
+  a single proof.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
