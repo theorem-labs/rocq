@@ -36,13 +36,14 @@ let patch = Release 0
 
 let coq_version = Printf.sprintf "%d.%d%s" major minor (pr_patch patch)
 
+(* + 2_000: the theorem-labs fork's opaque-table layout (Opaques.opaque_disk). *)
 let vo_magic =
   let patch = match patch with
     | Alpha -> -1
     | Rc _ -> 0
     | Release i -> i
   in
-  major * 10_000 + minor * 100 + patch
+  major * 10_000 + minor * 100 + patch + 2_000
 
 (* NB: not the same as checking patch = Release,
    because post release commits still get patch = Release *)
