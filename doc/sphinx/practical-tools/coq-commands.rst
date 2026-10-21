@@ -493,7 +493,7 @@ and ``rocq repl``, unless stated otherwise:
   typechecked.
 
   .. warning:: A library compiled with this option can contain an ill-typed
-     proof, for instance one built with ``vm_cast_no_check``, until ``rocqchk``
+     proof, for instance one built with ``exact_no_check``, until ``rocqchk``
      has checked it.
 :-mangle-names *ident*: *Experimental.* Do not depend on this option. Replace
   Rocq's auto-generated name scheme with names of the form *ident0*, *ident1*,
