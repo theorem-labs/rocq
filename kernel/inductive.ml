@@ -1750,7 +1750,7 @@ let rec codomain_is_coind ?evars env c =
         with Not_found ->
           raise (CoFixGuardError (env, CodomainNotInductiveType b)))
 
-let check_one_cofix cache ?evars env nbfix def deftype =
+let check_one_cofix cache ?evars env nbfix def vlra =
   let rec check_rec_call env alreadygrd n tree vlra t =
     if not (noccur_with_meta n nbfix t) then
       let c,args = decompose_app_list (whd_all ?evars env t) in
@@ -1790,18 +1790,19 @@ let check_one_cofix cache ?evars env nbfix def deftype =
             else
               raise (CoFixGuardError (env,RecCallInTypeOfAbstraction a))
 
-        | CoFix (_j,(_,varit,vdefs as recdef)) ->
-            if List.for_all (noccur_with_meta n nbfix) args
-            then
-              if Array.for_all (noccur_with_meta n nbfix) varit then
-                let nbfix = Array.length vdefs in
-                let env' = push_rec_types recdef env in
-                (Array.iter (check_rec_call env' alreadygrd (n+nbfix) tree vlra) vdefs;
-                 List.iter (check_rec_call env alreadygrd n tree vlra) args)
-              else
-                raise (CoFixGuardError (env,RecCallInTypeOfDef c))
-            else
-              raise (CoFixGuardError (env,UnguardedRecursiveCall c))
+        | CoFix (i, (_, varit, vdefs as recdef)) ->
+          let () = if not (List.for_all (noccur_with_meta n nbfix) args) then
+            raise (CoFixGuardError (env, UnguardedRecursiveCall c))
+          in
+          let () = if not (Array.for_all (noccur_with_meta n nbfix) varit) then
+            raise (CoFixGuardError (env, RecCallInTypeOfDef c))
+          in
+          let nbfixinner = Array.length vdefs in
+          let env' = push_rec_types recdef env in
+          let () = if not (Array.for_all_i (fun j c -> Int.equal i j || noccur_with_meta (n + nbfixinner) nbfix c) 0 vdefs) then
+            raise (CoFixGuardError (env, RecCallInNonMainMutual c))
+          in
+          check_rec_call env' alreadygrd (n + nbfixinner) tree vlra vdefs.(i)
 
         | Case (ci, u, pms, p, iv, tm, br) -> (* iv ignored: just a cache *)
           begin
@@ -1832,8 +1833,6 @@ let check_one_cofix cache ?evars env nbfix def deftype =
           | Array _ ->
            raise (CoFixGuardError (env,NotGuardedForm t)) in
 
-  let ((mind, _),_) = codomain_is_coind ?evars env deftype in
-  let vlra = lookup_subterms env mind in
   check_rec_call env false 1 vlra (dest_subterms vlra) def
 
 (* The  function which checks that the whole block of definitions
@@ -1846,7 +1845,10 @@ let check_cofix ?evars env (_bodynum,(names,types,bodies as recdef)) =
     let nbfix = Array.length bodies in
     for i = 0 to nbfix-1 do
       let fixenv = push_rec_types recdef env in
-      try check_one_cofix cache ?evars fixenv nbfix bodies.(i) types.(i)
+      try
+        let ((mind, _),_) = codomain_is_coind ?evars env types.(i) in
+        let vlra = lookup_subterms env mind in
+        check_one_cofix cache ?evars fixenv nbfix bodies.(i) vlra
       with CoFixGuardError (errenv,err) ->
         error_ill_formed_rec_body errenv (Type_errors.CoFixGuardError err) names i
           fixenv (judgment_of_fixpoint recdef)
