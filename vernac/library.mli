@@ -88,6 +88,16 @@ val library_compiled : DirPath.t -> Safe_typing.compiled_library
 (** {6 Native compiler. } *)
 val native_name_from_filename : string -> string
 
+(** {6 Opaque tables} *)
+
+(** Changes whenever the opaque proofs of a loaded library can have changed:
+    at each library file read, also by a [Require] that then fails, which can
+    replace the opaque proofs of a library that stays loaded. The rollback of
+    a failed command does not undo that, and does not change
+    [Global.env ()]. The opaque proofs of the library being compiled are part
+    of the state and are not counted. *)
+val opaque_tables_generation : unit -> int
+
 (** {6 Opaque accessors} *)
 val indirect_accessor : Global.indirect_accessor
 [@@deprecated

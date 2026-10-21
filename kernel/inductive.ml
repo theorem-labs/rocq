@@ -65,6 +65,24 @@ let inductive_nonrec_rec_paramdecls (mib,u) =
 let instantiate_inductive_constraints mib u =
   UVars.AbstractContext.instantiate u (Declareops.inductive_polymorphic_context mib)
 
+(** Splits a fixpoint body between the context until the [recindx+1]-th
+    assumption, and the rest of the body. Inlines local definitions,
+    which is necessary for the computation of uniform arguments,
+    and incidentally allows local definitions in the prefix to circumvent
+    restrictions if their inlining passes them. *)
+let split_struct_arg ?evars env recindx =
+  let rec decrec env n ctx c =
+    if Int.equal n 0 then ctx, c
+    else
+    let rc = whd_all ?evars env c in
+    match kind rc with
+    | Lambda (na, ty, bd) ->
+        let d = LocalAssum (na, ty) in
+        decrec (push_rel d env) (n-1) (Context.Rel.add d ctx) bd
+    | _ -> invalid_arg "split_struct_arg"
+  in
+  decrec env (recindx + 1) Context.Rel.empty
+
 (************************************************************************)
 
 let instantiate_params t u args sign =
@@ -1153,13 +1171,18 @@ let rec subterm_specif cache ?evars renv stack t =
           (nbfix-i, lazy (Subterm(Int.Set.empty,Strict,recargs))) in
         let decrArg = recindxs.(i) in
         let theBody = bodies.(i)   in
-        let nbOfAbst = decrArg+1 in
-        let sign,strippedBody = whd_decompose_lambda_n_assum ?evars renv.env nbOfAbst theBody in
+        (* Reduce in [renv'.env], where the body's own declarations are, for
+           the reason given at the call of [find_uniform_parameters]. A body
+           with too few abstractions gives no subterm information rather than
+           an anomaly: the guard condition then refuses what depends on it. *)
+        match split_struct_arg ?evars renv'.env decrArg theBody with
+        | exception Invalid_argument _ -> Not_subterm
+        | sign, strippedBody ->
                    (* pushing the fix parameters *)
         let stack' = push_stack_closures renv l stack in
         let renv'' = push_ctxt_renv renv' sign in
         let renv'' =
-          if List.length stack' < nbOfAbst then renv''
+          if List.length stack' < decrArg + 1 then renv''
           else
             let decrArg = List.nth stack' decrArg in
             let arg_spec = stack_element_specif cache ?evars decrArg in
@@ -1285,16 +1308,27 @@ let check_is_subterm x tree =
   | Not_subterm | Subterm (_,Large,_) -> InvalidSubterm
   | Internally_bound_subterm l -> NeedReduceSubterm l
 
-let find_uniform_parameters recindx nargs bodies =
+let find_uniform_parameters illformed ?evars env recindx nargs bodies =
   let nbodies = Array.length bodies in
   (* Ensure that the structural argument is not uniform,
      so that it stays in [non_absorbed_stack] *)
   let min_indx = Array.fold_left min nargs recindx in
-  (* We work only on the i-th body but are in the context of n bodies *)
-  let rec aux i k nuniformparams c =
+  let rec aux k nuniformparams c =
     let f, l = decompose_app_list c in
     match kind f with
     | Rel n ->
+      let fold accu c = match kind c with
+        | Rel m when m > k && m <= k + nbodies ->
+          (* An argument that is a bare occurrence of one of the mutual
+             fixpoints: it is applied to nothing, so no prefix of arguments can
+             be extruded from it, and [drop_uniform_parameters] must not be
+             asked to drop one. [fold_constr_with_binders] would miss it,
+             because it visits the immediate children of the argument and a
+             [Rel] has none. *)
+          0
+        | _ -> fold_constr_with_binders succ aux k accu c
+      in
+      let nuniformparams = List.fold_left fold nuniformparams l in
       (* A recursive reference to any one of the mutual fixpoints *)
       if n > k && n <= k + nbodies then
         List.fold_left_until (fun j arg ->
@@ -1309,9 +1343,17 @@ let find_uniform_parameters recindx nargs bodies =
           ) 0 l
       else
         nuniformparams
-    | _ -> fold_constr_with_binders succ (aux i) k nuniformparams c
+    | _ -> fold_constr_with_binders succ aux k nuniformparams c
   in
-  Array.fold_left_i (fun i -> aux i 0) min_indx bodies
+  Array.fold_left2_i (fun k nuniformparams recindx c ->
+    let _, c = try
+      split_struct_arg ?evars env recindx c
+      with Invalid_argument _ -> illformed k
+      (* Typing invariants are checked later for inner fixpoints *)
+    in
+    (* Typing invariants say no recursive call happen in prefix ctx *)
+    aux (recindx + 1) nuniformparams c)
+    min_indx recindx bodies
 
 (** Given a fixpoint [fix f x y z n {struct n} := phi(f x y u t, ..., f x y u' t')]
     with [z] not uniform we build in context [x:A, y:B(x), z:C(x,y)] a term
@@ -1319,21 +1361,36 @@ let find_uniform_parameters recindx nargs bodies =
     [forall (z:C(x,y)) (n:I(x,y,z)), T(x,y,z,n)], so that
     [fun x y z => psi z] is of same type as the original term *)
 
-let drop_uniform_parameters nuniformparams bodies =
+(* [bail] is called when an occurrence of one of the mutual fixpoints carries
+   fewer arguments than the prefix [find_uniform_parameters] computed. That
+   means the analysis and this rewriting disagree about the term, so the
+   extrusion is not justified and the definition is refused. Upstream instead
+   raises Failure "List.skipn" from the kernel (rocq-prover/rocq#21798, commit
+   f4ba720a635c), and the 9.2 base silently truncated, which accepts the
+   rewritten body on an assumption nothing checked. Both are avoided here:
+   where the analysis has not foreseen a term, the guard condition refuses it.
+
+   The two known ways to reach this are an occurrence that is passed on
+   without being applied, which [find_uniform_parameters] now bounds directly,
+   and one that only survives in the unreduced body, which the analysis cannot
+   see because it works on the reduced one. *)
+let drop_uniform_parameters bail nuniformparams bodies =
   let nbodies = Array.length bodies in
-  let rec aux i k c =
+  let rec aux k c =
     let f, l = decompose_app_list c in
     match kind f with
     | Rel n ->
-      (* A recursive reference to the i-th body *)
-      if Int.equal n (nbodies + k - i) then
-        let new_args = List.skipn_at_best nuniformparams l in
-        Term.applist (f, new_args)
-      else
-        c
-    | _ -> map_with_binders succ (aux i) k c
+      let l = List.map (fun c -> aux k c) l in
+      (* A recursive reference to any one of the mutual fixpoints *)
+      if n > k && n <= k + nbodies then
+        if List.length l < nuniformparams then bail ()
+        else
+          let new_args = List.skipn nuniformparams l in
+          Term.applist (f, new_args)
+      else Term.applist (f, l)
+    | _ -> map_with_binders succ aux k c
   in
-  Array.mapi (fun i -> aux i 0) bodies
+  Array.map (aux 0) bodies
 
 let filter_fix_stack_domain cache ?evars nr decrarg stack nuniformparams =
   let rec aux i nuniformparams stack =
@@ -1468,20 +1525,29 @@ let check_one_fix cache ?evars renv recpos trees def =
             let nbodies = Array.length bodies in
             let rs' = Array.fold_left (check_inert_subterm_rec_call renv) (NoNeedReduce::rs) typarray in
             let renv' = push_fix_renv renv recdef in
-            let nuniformparams = find_uniform_parameters recindxs (List.length stack) bodies in
-            let bodies = drop_uniform_parameters nuniformparams bodies in
+            let illformed k =
+              error_ill_formed_rec_body renv.env (Type_errors.FixGuardError (NotEnoughAbstractionInFixBody recindxs.(k)))
+                (pi1 recdef) k (push_rec_types recdef renv.env)
+                (judgment_of_fixpoint recdef)
+            in
+            (* The bodies live under the block's own declarations, so the
+               analysis reduces them in [renv'.env], the environment the
+               kernel checks them in. With [renv.env], which is short by
+               [nbodies] declarations and is what upstream passes, every
+               lookup that [split_struct_arg]'s reduction makes is shifted,
+               and a body whose head resolves to a different local definition
+               is analysed in place of the real one. That admits closed proofs
+               of False: test-suite/failure/guard_uniform_params_envshift.v. *)
+            let nuniformparams = find_uniform_parameters illformed ?evars renv'.env recindxs (List.length stack) bodies in
+            let bodies = drop_uniform_parameters (fun () -> illformed i) nuniformparams bodies in
             let fix_stack = filter_fix_stack_domain cache ?evars (redex_level rs) decrArg stack nuniformparams in
             let fix_stack = if List.length stack > decrArg then List.firstn (decrArg+1) fix_stack else fix_stack in
             let stack_this = lift_stack nbodies fix_stack in
             let stack_others = lift_stack nbodies (List.firstn nuniformparams fix_stack) in
             (* Check guard in the expanded fix *)
-            let illformed () =
-              error_ill_formed_rec_body renv.env (Type_errors.FixGuardError (NotEnoughAbstractionInFixBody recindxs.(i)))
-                (pi1 recdef) i (push_rec_types recdef renv.env)
-                (judgment_of_fixpoint recdef) in
             let rs' = Array.fold_left2_i (fun j rs' recindx body ->
                 let fix_stack = if Int.equal i j then stack_this else stack_others in
-                check_nested_fix_body illformed renv' (recindx+1) fix_stack rs' body) rs' recindxs bodies in
+                check_nested_fix_body renv' (recindx+1) fix_stack rs' body) rs' recindxs bodies in
             let needreduce_fix, rs = List.sep_first rs' in
             let absorbed_stack, non_absorbed_stack = List.chop nuniformparams stack in
             check_rec_call_state renv needreduce_fix non_absorbed_stack rs (fun () ->
@@ -1596,23 +1662,24 @@ let check_one_fix cache ?evars renv recpos trees def =
         | (Evar _ | Meta _) ->
             rs
 
-  and check_nested_fix_body illformed renv decr stack rs body =
+  and check_nested_fix_body renv decr stack rs body =
     if Int.equal decr 0 then
       check_inert_subterm_rec_call renv rs body
     else
       match kind (whd_all ?evars renv.env body) with
         | Lambda (x,a,body) ->
           begin
+            let rs = check_inert_subterm_rec_call renv rs a in
             match stack with
             | elt :: stack ->
-              let rs = check_inert_subterm_rec_call renv rs a in
               let renv', stack', body' = pop_argument cache NoNeedReduce renv elt stack x a body in
-              check_nested_fix_body illformed renv' (decr-1) stack' rs body'
+              check_nested_fix_body renv' (decr-1) stack' rs body'
             | [] ->
               let renv' = push_var_renv renv (redex_level rs) (x,a) in
-              check_nested_fix_body illformed renv' (decr-1) [] rs body
+              check_nested_fix_body renv' (decr-1) [] rs body
           end
-        | _ -> illformed ()
+        | _ -> assert false
+        (* We know from find_uniform_parameters that they are wellformed *)
 
   and check_rec_call_state renv needreduce_of_head stack rs expand_head =
     (* Test if either the head or the stack of a state
@@ -1750,7 +1817,7 @@ let rec codomain_is_coind ?evars env c =
         with Not_found ->
           raise (CoFixGuardError (env, CodomainNotInductiveType b)))
 
-let check_one_cofix cache ?evars env nbfix def deftype =
+let check_one_cofix cache ?evars env nbfix def vlra =
   let rec check_rec_call env alreadygrd n tree vlra t =
     if not (noccur_with_meta n nbfix t) then
       let c,args = decompose_app_list (whd_all ?evars env t) in
@@ -1790,18 +1857,19 @@ let check_one_cofix cache ?evars env nbfix def deftype =
             else
               raise (CoFixGuardError (env,RecCallInTypeOfAbstraction a))
 
-        | CoFix (_j,(_,varit,vdefs as recdef)) ->
-            if List.for_all (noccur_with_meta n nbfix) args
-            then
-              if Array.for_all (noccur_with_meta n nbfix) varit then
-                let nbfix = Array.length vdefs in
-                let env' = push_rec_types recdef env in
-                (Array.iter (check_rec_call env' alreadygrd (n+nbfix) tree vlra) vdefs;
-                 List.iter (check_rec_call env alreadygrd n tree vlra) args)
-              else
-                raise (CoFixGuardError (env,RecCallInTypeOfDef c))
-            else
-              raise (CoFixGuardError (env,UnguardedRecursiveCall c))
+        | CoFix (i, (_, varit, vdefs as recdef)) ->
+          let () = if not (List.for_all (noccur_with_meta n nbfix) args) then
+            raise (CoFixGuardError (env, UnguardedRecursiveCall c))
+          in
+          let () = if not (Array.for_all (noccur_with_meta n nbfix) varit) then
+            raise (CoFixGuardError (env, RecCallInTypeOfDef c))
+          in
+          let nbfixinner = Array.length vdefs in
+          let env' = push_rec_types recdef env in
+          let () = if not (Array.for_all_i (fun j c -> Int.equal i j || noccur_with_meta (n + nbfixinner) nbfix c) 0 vdefs) then
+            raise (CoFixGuardError (env, RecCallInNonMainMutual c))
+          in
+          check_rec_call env' alreadygrd (n + nbfixinner) tree vlra vdefs.(i)
 
         | Case (ci, u, pms, p, iv, tm, br) -> (* iv ignored: just a cache *)
           begin
@@ -1832,8 +1900,6 @@ let check_one_cofix cache ?evars env nbfix def deftype =
           | Array _ ->
            raise (CoFixGuardError (env,NotGuardedForm t)) in
 
-  let ((mind, _),_) = codomain_is_coind ?evars env deftype in
-  let vlra = lookup_subterms env mind in
   check_rec_call env false 1 vlra (dest_subterms vlra) def
 
 (* The  function which checks that the whole block of definitions
@@ -1846,7 +1912,10 @@ let check_cofix ?evars env (_bodynum,(names,types,bodies as recdef)) =
     let nbfix = Array.length bodies in
     for i = 0 to nbfix-1 do
       let fixenv = push_rec_types recdef env in
-      try check_one_cofix cache ?evars fixenv nbfix bodies.(i) types.(i)
+      try
+        let ((mind, _),_) = codomain_is_coind ?evars env types.(i) in
+        let vlra = lookup_subterms env mind in
+        check_one_cofix cache ?evars fixenv nbfix bodies.(i) vlra
       with CoFixGuardError (errenv,err) ->
         error_ill_formed_rec_body errenv (Type_errors.CoFixGuardError err) names i
           fixenv (judgment_of_fixpoint recdef)
