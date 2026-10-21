@@ -1,0 +1,22 @@
+
+CONTEXT SUMMARY
+===============
+
+* Theory: Set is predicative
+  
+* Theory: Rewrite rules are not allowed
+  
+* Axioms: <none>
+  
+* Constants/Inductives relying on type-in-type:
+    sealed_flags_summary.Seal.t
+  
+* Constants/Inductives relying on unsafe (co)fixpoints: <none>
+  
+* Inductives whose positivity is assumed:
+    sealed_flags_summary.Seal.bad
+  
+* Inductives relying on indices not mattering:
+    Corelib.Init.Datatypes.eq_true
+    Corelib.Init.Logic.eq
+  
