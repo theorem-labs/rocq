@@ -760,6 +760,39 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   plus the time of its last proof. Workers share the memory of the main process
   and copy more of it the longer they live, so a smaller budget bounds the
   memory they use. ``0`` makes a worker check a single proof.
+:-statement-report *file*: After checking, print a report on named
+  constants, before the summary of ``-o``. Each line of *file* is a
+  request ``name model trusted``, its tokens separated by single spaces:
+  *name* is a label printed back as given, and *model* and *trusted* are
+  fully qualified constant names as ``rocqchk`` prints them. *trusted* may
+  be ``-`` or left out. Blank lines and lines starting with ``#`` are skipped;
+  any other line, and any line with a tab or a carriage return, is an error,
+  reported before any library is loaded. For each request, the report says
+  whether the type of *model* is convertible to the type of *trusted*
+  (``match``, ``mismatch``, or ``universes-differ`` when their universe
+  contexts differ; ``not-requested`` with no *trusted*; ``model-missing`` or
+  ``trusted-missing`` when a name is not in the environment), and lists the
+  axioms and relaxed typing conditions that its selected proof witness reaches.
+  A public declaration uses the environment; a bodyless public declaration
+  uses its module implementation and then follows references in that
+  implementation view. This prevents an independent signature proof from
+  hiding a relaxed implementation proof. Integer, float and string literals
+  and arrays also reach their registered primitive type.
+  The report is printed between the lines ``STATEMENT REPORT`` and
+  ``END STATEMENT REPORT``, one line per statement, axiom and condition:
+
+  .. code-block:: text
+
+     STATEMENT REPORT
+     statement <name> <model> <trusted|-> <verdict> <axiom-count> <condition-count>
+     axiom <name> <constant>
+     flag <name> <condition> <object>
+     END STATEMENT REPORT
+
+  It does not change the exit status. If the report stops after its start
+  line, it has no ``END STATEMENT REPORT`` line and the checker emits a
+  warning. A program that reads the report must treat such a stream as no
+  report, not as partial evidence.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
