@@ -529,7 +529,8 @@ and ``rocq repl``, unless stated otherwise:
   whose :file:`.vo` files are all checked afterwards by ``rocqchk``, which
   typechecks every opaque proof regardless of this option.
   :cmd:`Print Assumptions` reports each constant whose proof was not
-  typechecked.
+  typechecked. Subproofs declared by :tacn:`abstract` are still typechecked
+  when the tactic runs.
 
   .. warning:: A library compiled with this option can contain an ill-typed
      proof, for instance one built with ``exact_no_check``, until ``rocqchk``
