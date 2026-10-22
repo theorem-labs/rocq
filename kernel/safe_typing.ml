@@ -1593,6 +1593,31 @@ let univs_of_library lib = lib.comp_sorts, lib.comp_univs
 let current_modpath senv = senv.modpath
 let current_dirpath senv = Names.ModPath.dp (current_modpath senv)
 
+(* Return [senv] with its module-building state (the fields that
+   [is_initial] inspects, and the resolvers / sections / pending-work that go
+   with an open or just-finished library) reset to the pristine, is_initial
+   values, while KEEPING everything the required libraries put in place: the
+   kernel environment, the [required] map, the universe / sort-quality context,
+   the retroknowledge and the opaque table. Used only by the coqc fork server:
+   after the warm-up has loaded the shared prefix's Requires inside a throwaway
+   library, this yields the state a fresh process would have at its initial top
+   level but with those Requires already loaded, so each forked child can start
+   its own library on top (start_library's [assert (is_initial senv)]). *)
+let reset_to_initial_keeping_requires senv =
+  (* start_library's only mutation of the kernel [env] itself is to stamp the
+     VM table with the library's path; undo that (keeping the foreign VM tables
+     loaded from the Requires) so a child's start_library can stamp its own. *)
+  let env = Environ.set_vm_library
+      (Vmlibrary.reset_local (Environ.vm_library senv.env)) senv.env in
+  { empty_environment with
+    env;
+    required = senv.required;
+    univ = senv.univ;
+    qualities = senv.qualities;
+    local_retroknowledge = senv.local_retroknowledge;
+    opaquetab = senv.opaquetab;
+  }
+
 let start_library dir senv =
   (* When starting a library, the current environment should be initial
      i.e. only composed of Require's *)

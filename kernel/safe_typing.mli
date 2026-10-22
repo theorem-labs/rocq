@@ -259,6 +259,13 @@ val check_flags_for_library : compiled_library -> safe_transformer0
 
 val start_library : DirPath.t -> ModPath.t safe_transformer
 
+(** [reset_to_initial_keeping_requires senv] resets the module-building state to
+    its pristine, [is_initial] values while keeping the environment, required
+    libraries, universe/sort context, retroknowledge and opaque table loaded by
+    [Require]s. Used by the coqc fork server to warm up a shared Require prefix
+    once and then let each forked child start its own library on top. *)
+val reset_to_initial_keeping_requires : safe_environment -> safe_environment
+
 val export :
   output_native_objects:bool ->
   safe_environment -> DirPath.t ->

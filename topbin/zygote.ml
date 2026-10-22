@@ -242,7 +242,7 @@ let reopen_std fd path =
    relative path string in its own Loc.t metadata (the divergence
    documented in 20d). The chdir runs in the forked child only, so it
    never perturbs the parent zygote's own cwd for later forks. *)
-let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn =
+let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs ~warm_counters conn =
   Unix.set_close_on_exec conn;
   (* Always move onto a fresh descriptor before we repoint fd 0/1/2 for the
      compile's own stdout/stderr -- stdin/stdout/stderr are already open in
@@ -279,6 +279,26 @@ let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn =
     end else begin
       reopen_std Unix.stdout stdout_path;
       reopen_std Unix.stderr stderr_path;
+      (* Restore the universe/sort name counters to the value the warm-up
+         left them at -- the value a fresh process has after the same
+         Requires. new_doc (inside compile below) restores the warmed-up
+         summary state (libraries kept, so no Require touches disk) but does
+         NOT touch these counters, and a forked child inherits the warm-up's
+         value via copy-on-write anyway; setting them explicitly makes the
+         guarantee independent of fork state. The child's own file then
+         numbers its universes from exactly where a fresh compile would. *)
+      UnivGen.set_counters warm_counters;
+      (* Resolve the file path exactly as Coqcargs.add_compile does for a stock
+         `rocq compile`: an implicit (cwd-relative, no leading ./ or ../) path
+         gets `./` prepended, and that literal string is what ends up in every
+         stored Loc. Skipping it would embed "F.v" where a fresh compile embeds
+         "./F.v" (likewise "dir/F.v" vs "./dir/F.v"). The output name is not
+         embedded, so it is passed through unchanged. *)
+      let file =
+        if Filename.is_implicit file
+        then Filename.concat Filename.current_dir_name file
+        else file
+      in
       let copts = Coqcargs.{ default with
         compile_file = Some (file, echo = "1");
         compilation_output_name = Some output;
@@ -303,7 +323,7 @@ let reap_finished_children () =
     done
   with Unix.Unix_error ((Unix.ECHILD | Unix.EINTR), _, _) -> ()
 
-let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~socket_path ~idle_timeout =
+let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~warm_counters ~socket_path ~idle_timeout =
   (try Unix.unlink socket_path with Sys_error _ | Unix.Unix_error _ -> ());
   let sock = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.bind sock (Unix.ADDR_UNIX socket_path);
@@ -329,7 +349,7 @@ let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~socket_pa
          (match Unix.fork () with
           | 0 ->
             Unix.close sock;
-            handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs conn
+            handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs ~warm_counters conn
           | _pid ->
             Unix.close conn;
             loop ())
@@ -352,23 +372,62 @@ let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
     Printf.eprintf "rocq-zygote: prefix file %s has no sentences, refusing to serve\n%!" prefix_file;
     exit 2
   end;
-  (* One-time warm-up: compile the shared prefix exactly as coqc would
-     compile any ordinary file, in THIS (pre-fork) process. This is the
-     only place the heavy Require/Nametab-registration work happens; every
-     later child skips it because library/library.ml's libraries_table
-     (a plain, process-global ref -- confirmed by direct reading) already
-     has these libraries loaded. *)
-  let warmup_copts = Coqcargs.{ default with
-    compile_file = Some (prefix_file, false);
-    compilation_output_name = None;
-  } in
-  let code = compile_like_coqc opts stm_opts warmup_copts injections in
-  if code <> 0 then begin
-    Printf.eprintf "rocq-zygote: prefix warm-up failed (exit %d), refusing to serve\n%!" code;
-    exit code
-  end;
+  (* One-time warm-up, done ONCE in this pre-fork process. Replay exactly the
+     opening of a fresh coqc compile -- new_doc (which opens a throwaway library
+     and loads the prelude injections) then load the shared prefix's Requires --
+     but STOP right after the Requires, before any Stm.finish / save. This is the
+     only place the heavy Require/Nametab work happens, and it leaves the process
+     at precisely the point a fresh compile reaches just before its file body:
+     the name counters here are the values that body would start from. *)
+  let long_f_dot_out = (try Filename.chop_extension prefix_file with _ -> prefix_file) ^ ".vo" in
+  let check = Stm.AsyncOpts.(stm_opts.async_proofs_mode = APoff) in
+  (* A fresh coqc process has allocated no global names when it reaches its
+     compile's new_doc; this daemon, however, has already run its own startup
+     (argument parsing, prefix peeking, feeder setup), which may have bumped the
+     name counters. Zero them here so the warm-up's trajectory -- and therefore
+     the post-Require snapshot below -- matches a fresh process exactly. *)
+  UnivGen.set_counters (0, 0);
+  (try
+    Topfmt.(in_phase ~phase:CompilationPhase) (fun () ->
+      let open Vernac.State in
+      let doc, sid = Topfmt.(in_phase ~phase:LoadingPrelude)
+          Stm.new_doc Stm.{ doc_type = VoDoc long_f_dot_out; injections } in
+      let state = { doc; sid; proof = None; time = None } in
+      let state = Load.load_init_vernaculars opts ~state in
+      let ldir = Stm.get_ldir ~doc:state.doc in
+      Dumpglob.push_output Dumpglob.NoGlob;
+      let source = Loc.InFile { dirpath = Some (Names.DirPath.to_string ldir); file = prefix_file } in
+      ignore (Vernac.load_vernac ~echo:false ~check ~state ~source prefix_file : Vernac.State.t))
+      ()
+  with exn ->
+    flush_all ();
+    Topfmt.print_err_exn exn;
+    flush_all ();
+    Printf.eprintf "rocq-zygote: prefix warm-up failed, refusing to serve\n%!";
+    exit 1);
+  (* Snapshot the universe/sort name counters NOW -- after the Requires, before
+     any finish/save could advance them -- so each child restores exactly the
+     value a fresh compile has when it starts the file body. *)
+  let warm_counters = UnivGen.get_counters () in
+  (* The load above left the process mid-library (the throwaway prefix's). Drop
+     that library's object stacks (Lib) and reset the kernel's module-building
+     state to its pristine, is_initial values -- but keep every summary the
+     Requires populated (the library table, nametab) and the kernel environment /
+     universes / opaque table they loaded. The result is exactly the state a
+     fresh process has at its initial top level, plus the prefix's Requires
+     already loaded, so each forked child's new_doc can start its own library on
+     top (Safe_typing.start_library asserts is_initial) without its Requires ever
+     touching disk again. *)
+  Lib.Synterp.init ();
+  Lib.Interp.init ();
+  Global.Internal.reset_safe_env
+    (Safe_typing.reset_to_initial_keeping_requires (Global.safe_env ()));
+  Stm.snapshot_root_state ();
+  let (uc, sc) = warm_counters in
+  Printf.eprintf "rocq-zygote: warm-up loaded %d-sentence prefix, name counters (univ=%d, sort=%d)\n%!"
+    (Array.length prefix_sentences) uc sc;
   serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs:zargs.coqlibs
-    ~socket_path ~idle_timeout:zargs.idle_timeout
+    ~warm_counters ~socket_path ~idle_timeout:zargs.idle_timeout
 
 let custom_zygote
   : ((zygote_args * Coqcargs.t * Colors.color) * Stm.AsyncOpts.stm_opt, Coqargs.injection_command list) Coqtop.custom_toplevel

@@ -74,6 +74,12 @@ val init_process : AsyncOpts.stm_opt -> unit
 (** [init_core] snapshots the initial system state *)
 val init_core : unit -> unit
 
+(** [snapshot_root_state ()] re-baselines the root state restored by
+    [new_doc], so later documents start from the current (e.g. warmed-up)
+    state rather than the pristine process-start state. Used by the coqc
+    fork server. *)
+val snapshot_root_state : unit -> unit
+
 (** [new_doc opt] Creates a new document with options [opt] *)
 val new_doc  : stm_init_options -> doc * Stateid.t
 

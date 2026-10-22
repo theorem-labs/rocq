@@ -133,6 +133,12 @@ let set_path dp lib =
   let local = VmTable.set_path dp lib.local in
   { lib with local }
 
+(* Reset the local VM table (its path back to dummy, no local code), keeping
+   the foreign tables already linked from required libraries. Used by the coqc
+   fork server to return a warmed-up environment to its initial, library-free
+   VM state so a child can [set_path] its own library. *)
+let reset_local lib = { lib with local = VmTable.empty }
+
 let add code lib =
   let tab, idx = VmTable.create code lib.local in
   let lib = { lib with local = tab } in

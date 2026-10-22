@@ -59,6 +59,15 @@ val new_sort_global : Id.t -> Sorts.QGlobal.t
 val fresh_level : unit -> Level.t
 val fresh_sort_quality : unit -> Sorts.QVar.t
 
+(** The process-global counters behind the level ([new_univ_global]) and
+    sort-quality ([fresh_sort_quality]) name generators. Not summary-backed:
+    a global name stays stable for the whole process run. Exposed so the coqc
+    fork server can snapshot them after its one-time warm-up and restore them
+    in each forked child, so a child emits the same names a fresh process
+    would after the same Requires. Do not use elsewhere. *)
+val get_counters : unit -> int * int
+val set_counters : int * int -> unit
+
 (** Build a fresh instance for a given context, its associated substitution and
     the instantiated constraints. *)
 

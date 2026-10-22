@@ -27,6 +27,10 @@ val empty : t
 
 val set_path : DirPath.t -> t -> t
 
+(** Reset the local table (path back to dummy, no local code) while keeping the
+    foreign tables linked from required libraries. Used by the coqc fork server. *)
+val reset_local : t -> t
+
 val add : to_patch -> t -> t * index
 
 val load : DirPath.t -> file:string -> ObjFile.in_handle -> on_disk
