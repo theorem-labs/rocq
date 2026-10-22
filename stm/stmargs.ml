@@ -53,7 +53,7 @@ let spawn_args (opts:Coqargs.t) =
      Flags.output_directory
      Flags.test_mode
      native output dir, native includes
-     Safe_typing.skip_qed_typecheck
+     Opaques.skip_qed_typecheck
 
      Coqargs whose effect is used before the summary is installed and matter for workers:
 
