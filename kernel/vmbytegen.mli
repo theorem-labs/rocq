@@ -22,6 +22,14 @@ val compile_constant_body : fail_on_error:bool ->
   env -> universes -> (Constr.t, 'opaque, 'symb) constant_def ->
   body_code option
 
+(** As {!compile_constant_body}, but the bytecode of a transparent constant is
+    compiled lazily (a [BCdeferred] thunk) on first use rather than now. The
+    checker uses this so the library walk does not compile bytecode the check
+    may never touch; the thunk yields the same result as the eager function. *)
+val compile_constant_body_deferred : fail_on_error:bool ->
+  env -> universes -> (Constr.t, 'opaque, 'symb) constant_def ->
+  body_code option
+
 (** Shortcut of the previous function used during module strengthening *)
 
 val compile_alias : Names.Constant.t -> 'a pbody_code

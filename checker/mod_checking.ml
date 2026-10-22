@@ -26,10 +26,11 @@ let push_bytecode vmtab code =
     vmtab, Some (BCdefined (mask, index, patches))
   | Some BCconstant -> vmtab, Some BCconstant
   | Some (BCalias kn) -> vmtab, Some (BCalias kn)
+  | Some (BCdeferred l) -> vmtab, Some (BCdeferred l)
 
 let compile_constant_bytecode env vmtab cb =
   let code =
-    Vmbytegen.compile_constant_body ~fail_on_error:false env
+    Vmbytegen.compile_constant_body_deferred ~fail_on_error:false env
       cb.const_universes cb.const_body
   in
   let vmtab, code = push_bytecode vmtab code in

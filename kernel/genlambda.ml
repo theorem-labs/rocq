@@ -545,6 +545,8 @@ let rec get_alias env sigma kn =
   | Vmemitcodes.BCalias kn' -> get_alias env sigma kn'
   | Vmemitcodes.BCconstant -> kn, [||]
   | Vmemitcodes.BCdefined (mask, _, _) -> kn, mask
+  | Vmemitcodes.BCdeferred l ->
+    (match Lazy.force l with Some (mask, _, _) -> kn, mask | None -> kn, [||])
 
 (* Translation of constructors *)
 

@@ -293,6 +293,12 @@ let rec slot_for_getglobal env sigma kn envcache table =
       set_global v table
     | BCalias kn' -> slot_for_getglobal env sigma kn' envcache table
     | BCconstant -> set_global (val_of_constant kn) table
+    | BCdeferred l ->
+      (match Lazy.force l with
+       | Some (_, code, patches) ->
+         let v = eval_to_patch env sigma (code, patches) envcache table in
+         set_global v table
+       | None -> set_global (val_of_constant kn) table)
     in
     rk := Some (CEphemeron.create pos);
     if real then !link_recorder kn;

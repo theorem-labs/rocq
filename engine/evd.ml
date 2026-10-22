@@ -818,7 +818,7 @@ let evar_handler sigma =
     | Some (Vmemitcodes.BCdefined (mask, idx, patch)) ->
       let code () = Environ.lookup_vm_code idx env in
       Vmemitcodes.BCdefined (mask, code, patch)
-    | Some (BCalias _ | BCconstant as code) -> code
+    | Some (BCalias _ | BCconstant | BCdeferred _ as code) -> code
     in
     { cb with const_body = drop_opaque cb.const_body; const_body_code = drop_code cb.const_body_code }
   in

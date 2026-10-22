@@ -152,7 +152,7 @@ let drop_code env = function
 | Some (Vmemitcodes.BCdefined (mask, idx, patch)) ->
   let code () = Environ.lookup_vm_code idx env in
   Vmemitcodes.BCdefined (mask, code, patch)
-| Some (BCalias _ | BCconstant as code) -> code
+| Some (BCalias _ | BCconstant | BCdeferred _ as code) -> code
 
 let lookup_constant_handler env sigma cst = match lookup_constant_opt cst env with
 | None -> sigma.abstr_const cst
@@ -432,6 +432,8 @@ end = struct
           let mask = match cb.const_body_code with
           | (Vmemitcodes.BCalias _ | Vmemitcodes.BCconstant) -> [||]
           | (Vmemitcodes.BCdefined (mask, _, _)) -> mask
+          | (Vmemitcodes.BCdeferred l) ->
+            (match Lazy.force l with Some (mask, _, _) -> mask | None -> [||])
           in
           Def (constant_value_in u cb.const_body, mask)
         | Symbol b ->

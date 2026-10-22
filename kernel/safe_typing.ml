@@ -548,6 +548,7 @@ let push_bytecode vmtab code =
     vmtab, Some (BCdefined (mask, index, patches))
   | Some BCconstant -> vmtab, Some BCconstant
   | Some (BCalias kn) -> vmtab, Some (BCalias kn)
+  | Some (BCdeferred l) -> vmtab, Some (BCdeferred l)
   in
   vmtab, code
 

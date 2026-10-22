@@ -26,6 +26,7 @@ type 'a pbody_code =
   | BCdefined of bool array * 'a * patches
   | BCalias of Constant.t
   | BCconstant
+  | BCdeferred of (bool array * to_patch * patches) option Lazy.t
 
 type body_code = to_patch pbody_code
 

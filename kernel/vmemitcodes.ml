@@ -632,6 +632,14 @@ type 'a pbody_code =
   | BCdefined of bool array * 'a * patches
   | BCalias of Names.Constant.t
   | BCconstant
+  | BCdeferred of (bool array * to_patch * patches) option Lazy.t
+    (** The checker compiles a transparent constant's bytecode lazily, in the
+        process (a worker, or the main process when it re-links a reported
+        global) that first needs it, instead of eagerly during the library
+        walk. The thunk recompiles from the body and yields the same [mask],
+        [to_patch] and [patches] the eager path would have produced; [None]
+        mirrors a non-fatal compile failure (then the constant is not
+        VM-reducible, as for [BCconstant]). It is never serialised. *)
 
 type body_code = to_patch pbody_code
 
@@ -639,6 +647,10 @@ let subst_body_code s = function
 | BCdefined (m, x, tp) -> BCdefined (m, x, subst_patches s tp)
 | BCalias cu -> BCalias (subst_constant s cu)
 | BCconstant -> BCconstant
+| BCdeferred l ->
+  BCdeferred (lazy (match Lazy.force l with
+    | Some (m, code, tp) -> Some (m, code, subst_patches s tp)
+    | None -> None))
 
 let to_memory fv code =
   let env = {

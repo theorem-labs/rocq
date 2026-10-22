@@ -985,29 +985,47 @@ let compile ~fail_on_error ~uinstance env sigma c =
       None
     end
 
+let body_alias env instance_size body =
+  match kind body with
+  | Const (kn',u) when is_univ_copy instance_size u ->
+      (* we use the canonical name of the constant*)
+      let con = Constant.make1 (Constant.canonical kn') in
+      let kn = get_alias env con in
+      let cb = lookup_constant kn env in
+      begin match cb.const_body with
+      | Primitive _ -> None
+      | _ -> Some kn
+      end
+  | _ -> None
+
 let compile_constant_body ~fail_on_error env univs = function
   | Undef _ | OpaqueDef _ -> Some BCconstant
   | Primitive _ | Symbol _ -> None
   | Def body ->
       let instance_size = UVars.AbstractContext.size (Declareops.universes_context univs) in
-      let alias =
-        match kind body with
-        | Const (kn',u) when is_univ_copy instance_size u ->
-            (* we use the canonical name of the constant*)
-            let con = Constant.make1 (Constant.canonical kn') in
-            let kn = get_alias env con in
-            let cb = lookup_constant kn env in
-            begin match cb.const_body with
-            | Primitive _ -> None
-            | _ -> Some kn
-            end
-        | _ -> None in
-      match alias with
+      match body_alias env instance_size body with
       | Some kn -> Some (BCalias kn)
-      | _ ->
+      | None ->
         let uinstance = Bound instance_size in
         let res = compile ~fail_on_error ~uinstance env (empty_evars env) body in
         Option.map (fun (mask, code, patch) -> BCdefined (mask, code, patch)) res
+
+(* As [compile_constant_body], but a transparent constant's bytecode is not
+   compiled now: the returned [BCdeferred] thunk compiles it on first use, in
+   whichever process (worker or main) needs the VM global or its argument mask.
+   Same result as the eager path; used by the proof checker so the library walk
+   does not compile bytecode the check may never touch. *)
+let compile_constant_body_deferred ~fail_on_error env univs = function
+  | Undef _ | OpaqueDef _ -> Some BCconstant
+  | Primitive _ | Symbol _ -> None
+  | Def body ->
+      let instance_size = UVars.AbstractContext.size (Declareops.universes_context univs) in
+      match body_alias env instance_size body with
+      | Some kn -> Some (BCalias kn)
+      | None ->
+        let uinstance = Bound instance_size in
+        Some (BCdeferred (lazy
+          (compile ~fail_on_error ~uinstance env (empty_evars env) body)))
 
 let compile ~fail_on_error env sigma c =
   compile ~fail_on_error ~uinstance:Global env sigma c
