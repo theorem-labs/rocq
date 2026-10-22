@@ -121,39 +121,46 @@ let check_constant_declaration env opac kn cb opacify =
   let jty = Typeops.infer_type env ty in
   if not (Sorts.relevance_equal cb.const_relevance (Sorts.relevance_of_sort jty.utj_type))
   then raise Pp.(BadConstant (kn, str "incorrect const_relevance"));
-  (* The boolean tells whether the body is opaque. *)
-  let body, env = match cb.const_body with
-    | Undef _ | Primitive _ | Symbol _ -> None, env
-    | Def c -> Some (false, c), env
-    | OpaqueDef o ->
-      let c, u = !indirect_accessor o in
-      let env = match u, cb.const_universes with
-        | Opaqueproof.PrivateMonomorphic (), Monomorphic -> env
-        | Opaqueproof.PrivatePolymorphic local, Polymorphic _ ->
-          push_subgraph local env
-        | _ -> assert false
-      in
-      Some (true, c), env
+  (* The body of an opaque constant, fetched from its library and cooked,
+     and the environment it is checked in. *)
+  let opaque_body env o =
+    let c, u = !indirect_accessor o in
+    let env = match u, cb.const_universes with
+      | Opaqueproof.PrivateMonomorphic (), Monomorphic -> env
+      | Opaqueproof.PrivatePolymorphic local, Polymorphic _ ->
+        push_subgraph local env
+      | _ -> assert false
+    in
+    c, env
   in
-  let () =
-    match body with
-    | Some (opaque, bd) ->
-      let check () =
-        let j = Typeops.infer env bd in
-        match conv_leq env j.uj_type ty with
-        | Result.Ok () -> ()
-        | Result.Error () -> Type_errors.error_actual_type env j ty
-      in
-      (* Nothing else that is checked looks into an opaque body, so its
-         check can be postponed, and possibly run in another process. A
-         transparent body may be unfolded by later checks, which rely
-         on it being well-typed, so it is checked here. *)
-      if opaque then CheckWorkers.defer kn check else check ()
-    | None -> ()
+  let check env bd () =
+    let j = Typeops.infer env bd in
+    match conv_leq env j.uj_type ty with
+    | Result.Ok () -> ()
+    | Result.Error () -> Type_errors.error_actual_type env j ty
   in
-  match body with
-  | Some (_, body) when opacify -> register_opacified_constant env opac kn body
-  | Some _ | None -> opac
+  match cb.const_body with
+  | Undef _ | Primitive _ | Symbol _ -> opac
+  | Def c ->
+    (* A transparent body may be unfolded by later checks, which rely on
+       it being well-typed, so it is checked here. *)
+    check env c ();
+    if opacify then register_opacified_constant env opac kn c else opac
+  | OpaqueDef o ->
+    (* Nothing else that is checked looks into an opaque body, so its
+       check can be postponed, and possibly run in another process. So is
+       fetching and cooking the body, which only the check needs, unless
+       the constant is opacified: then the body is cooked here, once, for
+       [register_opacified_constant], and the check is given it. *)
+    if opacify then begin
+      let c, env = opaque_body env o in
+      CheckWorkers.defer kn (check env c);
+      register_opacified_constant env opac kn c
+    end
+    else begin
+      CheckWorkers.defer kn (fun () -> let c, env = opaque_body env o in check env c ());
+      opac
+    end
 
 let check_constant_declaration env opac kn cb opacify =
   let opac = NewProfile.profile "check_constant" ~args:(fun () ->
