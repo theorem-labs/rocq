@@ -305,6 +305,7 @@ are now available through the dot notation.
          Check A.B.U.
 
    .. warn:: Cannot import local constant, it will be ignored.
+      :name: not-importable
 
       This warning is printed when a name in the list of names to
       import was declared as a local constant, and the name is not imported.
@@ -353,7 +354,21 @@ are now available through the dot notation.
       :undocumented:
 
    .. warn:: Trying to mask the absolute name @qualid!
-      :undocumented:
+      :name: masking-absolute-name
+
+      When a short name would shadow an absolute name of another
+      object, the meaning of the absolute name is preserved. This
+      avoids generating objects which are impossible to refer to.
+
+      .. example::
+
+         .. rocqtop:: reset all warn
+
+            Module Corelib. Module Init. Module Datatypes.
+            Definition nat := 0.
+
+         If we allowed shadowing absolute names, `nat` from the
+         corelib would become impossible to name after the above code.
 
 .. cmd:: Print Module @qualid
 
@@ -362,6 +377,13 @@ are now available through the dot notation.
 .. cmd:: Print Module Type @qualid
 
    Prints the module type corresponding to :n:`@qualid`.
+
+.. warn:: Could not print module contents; printing field names only.
+   :name: module-printing-fallback
+
+   The ``module-printing-fallback`` warning is emitted when :cmd:`Print Module`
+   or :cmd:`Print Module Type` falls back to printing field names.
+   Explicitly setting :flag:`Short Module Printing` does not emit this warning.
 
 .. flag:: Short Module Printing
 
