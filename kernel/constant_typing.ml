@@ -264,8 +264,17 @@ let infer_opaque ~sec_univs env entry =
     const_typing_flags = Environ.typing_flags env;
   }, context
 
-let check_delayed (type a) ~skip_typecheck (handle : a effect_handler) tyenv (body : a proof_output) =
-  let TyCtx (env, tyj, declared, usubst, univs) = tyenv in
+let check_delayed_section_variables tyenv body =
+  let TyCtx (env, tyj, declared, _, _) = tyenv in
+  let declared =
+    if List.is_empty (named_context env) then declared
+    else Environ.really_needed env (Id.Set.union declared (global_vars_set env tyj.utj_val))
+  in
+  let declared' = check_section_variables env declared (Some body) tyj.utj_val in
+  assert (Id.Set.equal declared declared')
+
+let check_delayed (type a) (handle : a effect_handler) tyenv (body : a proof_output) =
+  let TyCtx (env, tyj, _, usubst, univs) = tyenv in
   let ((body, uctx), side_eff) = body in
   let (body, uctx', valid_signatures) = handle env body side_eff in
   let uctx = Univ.ContextSet.union uctx uctx' in
@@ -280,29 +289,19 @@ let check_delayed (type a) ~skip_typecheck (handle : a effect_handler) tyenv (bo
   in
   (* Note: non-trivial usubst only in polymorphic case *)
   let body = Vars.subst_univs_level_constr usubst body in
-  let declared =
-    if List.is_empty (named_context env) then declared
-    else Environ.really_needed env (Id.Set.union declared (global_vars_set env tyj.utj_val))
-  in
-  let declared' = check_section_variables env declared (Some body) tyj.utj_val in
-  let () = assert (Id.Set.equal declared declared') in
-  if skip_typecheck then
-    (* The body is not kernel-typed, and the caller hash-conses [body] through
-       [Constr.hcons]. Returning no [hbody] skips building [HConstr.of_constr]
-       (the sharing-aware tree that here serves only the type check and its own
-       hash-consing), and hash-conses the same term into a structurally equal
-       one. *)
-    None, body, univs
-  else begin
-    let hbody = HConstr.of_constr env body in
-    (* Note: non-trivial trusted side-effects only in monomorphic case *)
+  let hbody = HConstr.of_constr env body in
+  (* Note: non-trivial trusted side-effects only in monomorphic case *)
+  let () =
     let eff_body, eff_env = skip_trusted_seff valid_signatures hbody env in
     let j = Typeops.infer_hconstr eff_env eff_body in
     let () = assert (HConstr.self eff_body == j.uj_val) in
     let j = { uj_val = HConstr.self hbody; uj_type = j.uj_type } in
-    let () = Typeops.check_cast eff_env j DEFAULTcast tyj in
-    Some hbody, HConstr.self hbody, univs
-  end
+    Typeops.check_cast eff_env j DEFAULTcast tyj
+  in
+  let () = check_delayed_section_variables tyenv body in
+  let def = HConstr.self hbody in
+  let hbody = Some hbody in
+  hbody, def, univs
 
 (*s Global and local constant declaration. *)
 

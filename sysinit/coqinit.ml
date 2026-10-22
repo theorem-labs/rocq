@@ -181,7 +181,7 @@ let init_document opts =
   Global.set_VM opts.config.enable_VM;
   Global.set_native_compiler (match opts.config.native_compiler with NativeOff -> false | NativeOn _ -> true);
   Global.set_rewrite_rules_allowed opts.config.logic.rewrite_rules;
-  Safe_typing.skip_qed_typecheck := opts.config.skip_qed_typecheck;
+  Opaques.skip_qed_typecheck := opts.config.skip_qed_typecheck;
 
   (* XXX these flags should probably be in the summary *)
   (* Native output dir *)
