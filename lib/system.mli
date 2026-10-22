@@ -88,6 +88,19 @@ val trust_file_cache : bool ref
     assumption greatly speeds up file search, but it is often
     inconvenient in interactive mode *)
 
+val reset_dir_cache : unit -> unit
+(** Drops every directory listing [exists_in_dir_respecting_case] has
+    cached so far, independent of {!trust_file_cache}. A cache entry for a
+    directory records which names were present AT THE TIME it was scanned;
+    with [trust_file_cache] true, a later query that finds the sought name
+    already in that entry trusts it without re-reading the directory, even
+    if the real file was deleted or replaced since. A process forked from a
+    long-lived parent whose cache may already hold directories later
+    rebuilt files live in (a rocq-zygote daemon's children, forking from
+    one shared pre-warmed state across many separate compiles) should call
+    this once on entry, before any of its own file discovery, to see every
+    directory exactly as fresh as a brand-new process would. *)
+
 val file_exists_respecting_case : string -> string -> bool
 
 (** {6 I/O functions } *)

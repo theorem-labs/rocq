@@ -125,6 +125,8 @@ let make_dir_table dir =
 (** Don't trust in interactive mode (the default) *)
 let trust_file_cache = ref false
 
+let reset_dir_cache () = dirmap := CString.Map.empty
+
 let exists_in_dir_respecting_case dir bf =
   let cache_dir dir =
     let contents = make_dir_table dir in

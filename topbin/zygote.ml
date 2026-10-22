@@ -243,6 +243,22 @@ let reopen_std fd path =
    documented in 20d). The chdir runs in the forked child only, so it
    never perturbs the parent zygote's own cwd for later forks. *)
 let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs ~warm_counters conn =
+  (* This runs in a child forked from the long-lived warmed-up daemon, which
+     may have cached directory listings (System.exists_in_dir_respecting_case's
+     module-level dirmap) when the warm-up scanned load paths. With
+     trust_file_cache=true (stock batch mode) a cache HIT short-circuits before
+     the freshness flag is consulted, so a sibling's `.vo` written to disk by an
+     EARLIER fork is invisible to a LATER fork's Require lookup in that same
+     directory (a real "Unable to locate library" race under -j16), and a
+     stale PRESENT-then-replaced entry would read as present too. Drop the whole
+     cache once, here, before any of this child's own file discovery: the
+     child's first query for each directory is then a real, uncached scan --
+     exactly what a brand-new process would see -- while later queries for the
+     same directory within THIS child still reuse that fresh scan, the same
+     one-compile trust a stock process applies. Affects only whether a Require
+     is DISCOVERED, never what is loaded once found, so it cannot change any
+     already-passing file's .vo bytes. *)
+  System.reset_dir_cache ();
   Unix.set_close_on_exec conn;
   (* Always move onto a fresh descriptor before we repoint fd 0/1/2 for the
      compile's own stdout/stderr -- stdin/stdout/stderr are already open in
