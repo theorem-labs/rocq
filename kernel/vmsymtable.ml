@@ -265,10 +265,19 @@ let envcache_of_rel i envcache = {
   rel_adjust = envcache.rel_adjust + i
 }
 
+(* A hook that observes which constants have their VM global freshly
+   linked in this process. It is inert by default; the proof checker's
+   worker processes install one to collect the names they linked, so the
+   main process can link them too and later forks inherit them. It never
+   affects the values computed, only records them. *)
+let link_recorder : (Constant.t -> unit) ref = ref (fun _ -> ())
+let set_link_recorder f = link_recorder := f
+
 let rec slot_for_getglobal env sigma kn envcache table =
   let cb = CClosure.lookup_constant_handler env sigma.Genlambda.evars_val kn in
+  let real = Environ.mem_constant kn env in
   let rk =
-    if Environ.mem_constant kn env then
+    if real then
       let (_, (_, rk),_) = lookup_constant_key kn env in
       rk
     else
@@ -286,6 +295,7 @@ let rec slot_for_getglobal env sigma kn envcache table =
     | BCconstant -> set_global (val_of_constant kn) table
     in
     rk := Some (CEphemeron.create pos);
+    if real then !link_recorder kn;
     pos
 
 and slot_for_fv env sigma fv envcache table =

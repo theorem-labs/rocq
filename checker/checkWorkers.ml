@@ -132,15 +132,30 @@ let tune_gc () =
            Gc.minor_heap_size = max gc.Gc.minor_heap_size (4 * 1024 * 1024);
            max_overhead = 1000000 }
 
-(* What a worker tells the main process: the number of checks it
-   completed, the first ones of its batch in order, as 8 bytes (big
-   endian). Nothing else is ever written to the pipe. *)
+(* What a worker tells the main process, in order on its pipe:
+   - the number of checks it completed, the first ones of its batch in
+     order, as [report_size] bytes (big endian); then
+   - the constants whose VM globals it linked while checking them, framed
+     with an 8-byte big-endian byte length followed by that many bytes of
+     a marshalled [Constant.t list].
+   The count is still a message of exactly [report_size] bytes, validated
+   as before. The main process links the same constants before its next
+   deal, so that later forks inherit them. Nothing but this count then
+   frame is ever written. *)
 let report_size = 8
 
-let default_report_writer fd completed =
-  let b = Bytes.create report_size in
-  Bytes.set_int64_be b 0 (Int64.of_int completed);
-  if Unix.write fd b 0 report_size <> report_size then failwith "short write"
+let write_all fd b =
+  let n = Bytes.length b in
+  let rec go off = if off < n then go (off + Unix.write fd b off (n - off)) in
+  go 0
+
+let default_report_writer fd completed linked =
+  let blob = Marshal.to_bytes (linked : Constant.t list) [] in
+  let header = Bytes.create (report_size + 8) in
+  Bytes.set_int64_be header 0 (Int64.of_int completed);
+  Bytes.set_int64_be header report_size (Int64.of_int (Bytes.length blob));
+  write_all fd header;
+  write_all fd blob
 
 let report_writer = ref default_report_writer
 let set_report_writer f = report_writer := f
@@ -162,6 +177,13 @@ let run_worker parent report (tasks : task array) =
      count as success. *)
   at_exit (fun () -> Unix._exit 2);
   let deadline = Unix.gettimeofday () +. !budget in
+  (* Collect the constants whose VM globals this worker links while
+     checking its batch, to report them so the main process links them
+     too and later forks inherit them. A constant is recorded once, when
+     first linked; globals inherited from the main process at fork time
+     are already linked and are not recorded. *)
+  let linked = ref [] in
+  Vmsymtable.set_link_recorder (fun kn -> linked := kn :: !linked);
   let code =
     try
       tune_gc ();
@@ -181,9 +203,8 @@ let run_worker parent report (tasks : task array) =
   in
   let code =
     if code <> 0 then code
-    else (try !report_writer report !completed; 0 with _ -> 3)
+    else (try !report_writer report !completed !linked; 0 with _ -> 3)
   in
-  (try flush_output () with _ -> ());
   (* Not [exit]: the at_exit functions of the main process must not run
      here. *)
   Unix._exit code
@@ -258,20 +279,63 @@ let abort () =
       close_report w.report)
     workers
 
-(* What the worker wrote, at most one byte more than a report. *)
-let read_report fd =
-  let buf = Bytes.create (report_size + 1) in
+(* The worker's message on its pipe: the [report_size]-byte count, then,
+   optionally, the constants whose VM globals it linked, framed with an
+   8-byte big-endian byte length and that many bytes of a marshalled
+   [Constant.t list]. A message of exactly the count and nothing else is a
+   complete report of no linked constants; the count is validated as
+   before either way. Reading drains the pipe to its end, so a worker
+   writing a large frame makes progress even before the main process waits
+   for it. A short count, a truncated or over-long frame, or anything
+   after the frame is rejected — the overrun check is kept exact — by
+   returning an empty count, which [completed_count] refuses. Returns the
+   count bytes and the linked constants. *)
+let max_frame = 1 lsl 30
+
+let read_exact fd n =
+  let buf = Bytes.create n in
   let rec go off =
-    if off = Bytes.length buf then off
-    else match Unix.read fd buf off (Bytes.length buf - off) with
-      | 0 -> off
-      | n -> go (off + n)
+    if off = n then `Full (Bytes.unsafe_to_string buf)
+    else match Unix.read fd buf off (n - off) with
+      | 0 -> if off = 0 then `Eof else `Short
+      | k -> go (off + k)
       | exception Unix.Unix_error (Unix.EINTR, _, _) -> go off
-      | exception Unix.Unix_error _ -> -1
+      | exception Unix.Unix_error _ -> `Short
   in
-  let n = go 0 in
+  go 0
+
+let rec at_eof fd =
+  match Unix.read fd (Bytes.create 1) 0 1 with
+  | 0 -> true
+  | _ -> false
+  | exception Unix.Unix_error (Unix.EINTR, _, _) -> at_eof fd
+  | exception Unix.Unix_error _ -> false
+
+let read_frame fd =
+  match read_exact fd 8 with
+  | `Eof -> Some []                (* no frame: no linked constants *)
+  | `Short -> None
+  | `Full lenb ->
+    let len = Int64.to_int (String.get_int64_be lenb 0) in
+    if len < 0 || len > max_frame then None
+    else match read_exact fd len with
+      | `Eof | `Short -> None
+      | `Full blob ->
+        if not (at_eof fd) then None
+        else (try Some (Marshal.from_string blob 0 : Constant.t list)
+              with _ -> None)
+
+let read_report fd =
+  let parsed =
+    match read_exact fd report_size with
+    | `Eof | `Short -> None
+    | `Full count ->
+      match read_frame fd with
+      | None -> None
+      | Some linked -> Some (count, linked)
+  in
   close_report fd;
-  if n < 0 then "" else Bytes.sub_string buf 0 n
+  match parsed with Some r -> r | None -> ("", [])
 
 (* The only way for a batch to be known to be correct, or partly so, is
    a normal exit with code 0 and a report of exactly the right form,
@@ -292,34 +356,78 @@ let push_front tasks =
   Queue.transfer queue front;
   Queue.transfer front queue
 
-(* A batch is known to be correct only for the checks its worker
-   reported as completed. The others are queued again: each check runs
-   once, in the worker or later, and its result counts only if the
-   process that ran it ended successfully. *)
-let reaped pid status =
-  match List.find_opt (fun w -> w.pid = pid) !running with
+(* The environment the main process links reported constants in. The
+   checker sets it to the environment it is checking in, which grows
+   monotonically, so the latest one holds every constant any reaped
+   worker could have linked. *)
+let link_env : Environ.env option ref = ref None
+let set_link_env env = link_env := Some env
+
+(* Link, in the main process, the VM globals the worker reported, so that
+   a later fork inherits them instead of linking them again. This fills
+   caches only: it computes the same values and never changes a verdict,
+   so a name that cannot be linked is skipped — merely not shared. *)
+let relink linked =
+  match !link_env with
   | None -> ()
-  | Some w ->
-    running := List.filter (fun w' -> w'.pid <> pid) !running;
-    let report = read_report w.report in
-    match completed_count ~size:w.batch.size status report with
-    | None ->
-      abort ();
-      raise (WorkerFailed (pid, status, w.batch))
-    | Some k when k = w.batch.size ->
-      debug (fun () -> str "worker " ++ int pid ++ str " succeeded")
-    | Some k ->
+  | Some env ->
+    let sigma = Genlambda.empty_evars env in
+    List.iter
+      (fun kn ->
+        try ignore (Vmsymtable.val_of_constr env sigma (Constr.UnsafeMonomorphic.mkConst kn))
+        with e ->
+          debug (fun () ->
+              str "could not pre-link " ++ Constant.print kn ++ str ": " ++
+              str (Printexc.to_string e)))
+      linked
+
+(* A batch is known to be correct only for the checks its worker reported
+   as completed. The others are queued again: each check runs once, in the
+   worker or later, and its result counts only if the process that ran it
+   ended successfully. The constants it linked are linked here too, before
+   the next deal, so later forks inherit them. Reading the report drains
+   the pipe, then the exited worker is waited for. *)
+let reap_worker w =
+  running := List.filter (fun w' -> w'.pid <> w.pid) !running;
+  let count, linked = read_report w.report in
+  let _, status = waitpid_non_intr [] w.pid in
+  match completed_count ~size:w.batch.size status count with
+  | None ->
+    abort ();
+    raise (WorkerFailed (w.pid, status, w.batch))
+  | Some k ->
+    relink linked;
+    if k = w.batch.size then
+      debug (fun () -> str "worker " ++ int w.pid ++ str " succeeded")
+    else begin
       incr early_stops;
       debug (fun () ->
-          str "worker " ++ int pid ++ str " stopped early after " ++ int k ++
+          str "worker " ++ int w.pid ++ str " stopped early after " ++ int k ++
           str " of " ++ int w.batch.size ++ str ", queueing the rest again");
       push_front (Array.sub w.tasks k (w.batch.size - k))
+    end
+
+(* A worker's report pipe becomes readable when it has finished checking
+   and is reporting, or has closed it by exiting. Reaping is driven by
+   that, not by [waitpid], so the main process drains a worker's pipe as
+   it writes and a large frame never blocks it. *)
+let ready_workers ~block =
+  match !running with
+  | [] -> []
+  | ws ->
+    let fds = List.map (fun w -> w.report) ws in
+    let timeout = if block then -1.0 else 0.0 in
+    let readable =
+      try let r, _, _ = Unix.select fds [] [] timeout in r
+      with Unix.Unix_error (Unix.EINTR, _, _) -> []
+    in
+    List.filter_map
+      (fun fd -> List.find_opt (fun w -> w.report = fd) !running) readable
 
 let rec reap_finished () =
-  if not (CList.is_empty !running) then
-    match waitpid_non_intr [Unix.WNOHANG] (-1) with
-    | 0, _ -> ()
-    | pid, status -> reaped pid status; reap_finished ()
+  match ready_workers ~block:false with
+  | [] -> ()
+  | ws -> List.iter reap_worker ws; reap_finished ()
 
 let free_slots slots = slots - List.length !running
 
@@ -373,10 +481,8 @@ let finish () =
       reap_finished ();
       if free_slots slots > 0 && not (Queue.is_empty queue) then
         deal 1 ((Queue.length queue + 2 * slots - 1) / (2 * slots))
-      else if not (CList.is_empty !running) then begin
-        let pid, status = waitpid_non_intr [] (-1) in
-        reaped pid status
-      end
+      else if not (CList.is_empty !running) then
+        List.iter reap_worker (ready_workers ~block:true)
     done;
     debug (fun () ->
         str "done: " ++ int !forks ++ str " workers forked, " ++

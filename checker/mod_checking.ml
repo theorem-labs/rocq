@@ -102,6 +102,9 @@ let register_opacified_constant env opac kn cb =
 exception BadConstant of Constant.t * Pp.t
 
 let check_constant_declaration env opac kn cb opacify =
+  (* The environment to link reported VM globals in; it grows as more
+     constants are checked, so the latest holds all a worker could link. *)
+  CheckWorkers.set_link_env env;
   Flags.if_verbose Feedback.msg_notice (str "  checking cst:" ++ Constant.print kn);
   let env = CheckFlags.set_local_flags cb.const_typing_flags env in
   let poly, env =

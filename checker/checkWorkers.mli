@@ -63,6 +63,11 @@ val finish : unit -> unit
     them. Raises [WorkerFailed] if a worker did not exit with code 0, or
     did not report between 1 and [size] completed checks. *)
 
+val set_link_env : Environ.env -> unit
+(** [set_link_env env] tells the main process the environment to link the
+    VM globals reported by workers in, so that later forks inherit them.
+    The checker sets it to the environment it is checking in. *)
+
 val abort : unit -> unit
 (** Kill all workers, wait for them, and drop the queued checks. *)
 
@@ -82,9 +87,12 @@ val signal_name : int -> string
 
 (** {2 For tests only} *)
 
-val default_report_writer : Unix.file_descr -> int -> unit
-(** What a worker does to report the number of checks it completed. *)
+val default_report_writer : Unix.file_descr -> int -> Names.Constant.t list -> unit
+(** What a worker does to report the number of checks it completed and the
+    constants whose VM globals it linked. *)
 
-val set_report_writer : (Unix.file_descr -> int -> unit) -> unit
+val set_report_writer :
+  (Unix.file_descr -> int -> Names.Constant.t list -> unit) -> unit
 (** [set_report_writer f] replaces what a worker does to report the number
-    of checks it completed, given the descriptor to write to. *)
+    of checks it completed and the constants it linked, given the
+    descriptor to write to. *)

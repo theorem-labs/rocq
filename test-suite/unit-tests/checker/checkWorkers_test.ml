@@ -451,42 +451,42 @@ let count_bytes k =
   Bytes.to_string b
 
 let () = add_test "no report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun _ _ -> ()))
+    assert_worker_failed ~status:(Unix.WEXITED 0) (fun _ _ _ -> ()))
 
 let () = add_test "short report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ -> write_raw fd "abcd"))
+    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ _ -> write_raw fd "abcd"))
 
 let () = add_test "long report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd c -> write_raw fd (count_bytes (Int64.of_int c) ^ "x")))
+    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd c _ -> write_raw fd (count_bytes (Int64.of_int c) ^ "x")))
 
 let () = add_test "report of 0 fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ -> write_raw fd (count_bytes 0L)))
+    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ _ -> write_raw fd (count_bytes 0L)))
 
 let () = add_test "negative report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ -> write_raw fd (count_bytes (-1L))))
+    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ _ -> write_raw fd (count_bytes (-1L))))
 
 let () = add_test "report above the batch size fails the worker" (fun () ->
     assert_worker_failed ~status:(Unix.WEXITED 0)
-      (fun fd _ -> write_raw fd (count_bytes (Int64.of_int 1_000_000))))
+      (fun fd _ _ -> write_raw fd (count_bytes (Int64.of_int 1_000_000))))
 
 let () = add_test "huge report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ -> write_raw fd (count_bytes Int64.max_int)))
+    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ _ -> write_raw fd (count_bytes Int64.max_int)))
 
 let () = add_test "report off by one above the batch size fails the worker" (fun () ->
     (* The batch is [n / stride] = 50 checks. *)
     assert_worker_failed ~status:(Unix.WEXITED 0)
-      (fun fd c -> write_raw fd (count_bytes (Int64.of_int (c + 1)))))
+      (fun fd c _ -> write_raw fd (count_bytes (Int64.of_int (c + 1)))))
 
 let () = add_test "exit code 7 after a good report fails the worker" (fun () ->
     assert_worker_failed ~status:(Unix.WEXITED 7)
-      (fun fd c -> CheckWorkers.default_report_writer fd c; Unix._exit 7))
+      (fun fd c l -> CheckWorkers.default_report_writer fd c l; Unix._exit 7))
 
 let () = add_test "kill after a good report fails the worker" (fun () ->
     assert_worker_failed
-      (fun fd c -> CheckWorkers.default_report_writer fd c; Unix.kill (Unix.getpid ()) Sys.sigkill))
+      (fun fd c l -> CheckWorkers.default_report_writer fd c l; Unix.kill (Unix.getpid ()) Sys.sigkill))
 
 let () = add_test "raise while reporting fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 3) (fun _ _ -> failwith "no report"))
+    assert_worker_failed ~status:(Unix.WEXITED 3) (fun _ _ _ -> failwith "no report"))
 
 let () = add_test "a good report is accepted" (fun () ->
     with_writer CheckWorkers.default_report_writer (fun () ->
