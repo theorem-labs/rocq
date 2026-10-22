@@ -362,41 +362,6 @@ let serve_forever opts stm_opts injections ~prefix_sentences ~coqlibs ~warm_coun
   in
   loop ()
 
-(* Rewrite a leading-Require sentence so it LOADS without IMPORTING: drop an
-   [Import]/[Export] keyword that immediately follows [Require]. The warm-up
-   compiles the stripped prefix, so the (expensive, universe-allocating for
-   stdpp/LPS) load is shared, while each forked child runs the real
-   [Require Import] itself -- finding the library already loaded, then importing
-   exactly once from the shared post-load counter base, as a fresh process does.
-   Leaves the originals for the per-request sentence guard. *)
-let strip_import s =
-  let n = String.length s in
-  let is_ws c = c = ' ' || c = '\t' || c = '\n' || c = '\r' in
-  let word_at j w =
-    let lw = String.length w in
-    j + lw <= n && String.sub s j lw = w
-    && (j = 0 || is_ws s.[j-1])
-    && (j + lw >= n || is_ws s.[j+lw] || s.[j+lw] = '.')
-  in
-  let b = Buffer.create n in
-  let i = ref 0 in
-  while !i < n do
-    if word_at !i "Require" then begin
-      Buffer.add_string b "Require";
-      i := !i + 7;
-      let j = ref !i in
-      while !j < n && is_ws s.[!j] do incr j done;
-      if word_at !j "Import" || word_at !j "Export" then begin
-        Buffer.add_char b ' ';
-        i := !j + 6
-      end
-    end else begin
-      Buffer.add_char b s.[!i];
-      incr i
-    end
-  done;
-  Buffer.contents b
-
 let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
   let prefix_file = Option.get zargs.prefix_file in
   let socket_path = Option.get zargs.socket_path in
@@ -415,26 +380,17 @@ let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
     Printf.eprintf "rocq-zygote: prefix file %s has no sentences, refusing to serve\n%!" prefix_file;
     exit 2
   end;
-  (* One-time warm-up, done ONCE in this pre-fork process. Compile an
-     Import-STRIPPED copy of the prefix: the heavy, universe-allocating LOAD of
-     each required library is shared, but no Import runs here, so the counters
-     Ccompile records in [after_load_counters] are the post-load/pre-import base
-     a fresh compile is at the instant before it imports -- and every forked
-     child, resetting to that base, runs the real [Require Import] itself and
-     imports exactly once, numbering its universe/sort names identically to a
-     fresh process. Zero the counters first: a fresh process has allocated no
-     global names when it reaches its compile, and this snapshot must be on that
-     same scale. This is the only place the heavy Require/Nametab work happens. *)
-  let warm_prefix_file = (Filename.remove_extension prefix_file) ^ "__noimport.v" in
-  let () =
-    let oc = open_out warm_prefix_file in
-    Array.iter (fun s -> output_string oc (strip_import s); output_char oc '\n')
-      prefix_sentences;
-    close_out oc
-  in
+  (* One-time warm-up, done ONCE in this pre-fork process. Compile the shared
+     Require-only prefix via the exact same Ccompile.compile_file a fresh coqc
+     uses, so the Requires are loaded identically and Ccompile records (in
+     after_load_counters) the universe/sort name counters at precisely the point
+     a fresh compile reaches just before its file body. Zero the counters first:
+     a fresh process has allocated no global names when it reaches its compile,
+     and this snapshot must be on that same scale. This is the only place the
+     heavy Require/Nametab work happens. *)
   UnivGen.set_counters (0, 0);
   let warmup_copts = Coqcargs.{ default with
-    compile_file = Some (warm_prefix_file, false);
+    compile_file = Some (prefix_file, false);
     compilation_output_name = None;
   } in
   let code = compile_like_coqc opts stm_opts warmup_copts injections in
@@ -442,15 +398,9 @@ let zygote_run (zargs : zygote_args) ~opts stm_opts injections =
     Printf.eprintf "rocq-zygote: prefix warm-up failed (exit %d), refusing to serve\n%!" code;
     exit code
   end;
-  (* The counter value a fresh compile has after it has LOADED (but not yet
-     imported) its leading requires: the warm-up compiles the prefix with
-     Import/Export stripped, so loading (which for stdpp/LPS allocates fresh
-     names) is shared, while each child performs the Import itself -- exactly
-     once, like a fresh process -- from this same base. (Resetting to the
-     after-new_doc snapshot would skip the shared load allocations the child
-     does NOT redo; resetting to a snapshot that included the warm-up's own
-     Import would double-count it. The stripped warm-up makes after-load the
-     correct post-load/pre-import base.) *)
+  (* The value a fresh compile has when it starts the file body, after exactly
+     these Requires (the prefix has no body, so its after-load snapshot is just
+     the Require loading). Each forked child restores this before its compile. *)
   let warm_counters = !Ccompile.after_load_counters in
   (* The load above left the process mid-library (the throwaway prefix's). Drop
      that library's object stacks (Lib) and reset the kernel's module-building
