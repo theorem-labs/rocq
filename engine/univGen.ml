@@ -121,9 +121,15 @@ let () = CErrors.register_handler (function
   | _ -> None)
 
 (* Generator of levels *)
-let new_univ_id =
-  let cnt = ref 0 in
-  fun () -> incr cnt; !cnt
+(* The level and sort-quality generators number their output with these
+   process-global counters. They are deliberately NOT summary-backed (so
+   Vernacstate freeze/unfreeze and Stm.new_doc do not reset them): a level's
+   global name stays stable for the whole process run. The coqc fork server
+   (topbin/zygote.ml) is the one place that must reset them, so a forked
+   child reproduces the names a fresh process would emit after the same
+   Requires; see [get_counters]/[set_counters]. *)
+let univ_id_cnt = ref 0
+let new_univ_id () = incr univ_id_cnt; !univ_id_cnt
 
 let new_univ_global () =
   let s = if Flags.async_proofs_is_worker() then !Flags.async_proofs_worker_id else "" in
@@ -132,9 +138,11 @@ let new_univ_global () =
 let fresh_level () =
   Univ.Level.make (new_univ_global ())
 
-let new_sort_id =
-  let cnt = ref 0 in
-  fun () -> incr cnt; !cnt
+let sort_id_cnt = ref 0
+let new_sort_id () = incr sort_id_cnt; !sort_id_cnt
+
+let get_counters () = (!univ_id_cnt, !sort_id_cnt)
+let set_counters (u, s) = univ_id_cnt := u; sort_id_cnt := s
 
 let new_sort_global id =
   Sorts.QGlobal.make (Global.current_dirpath ()) id

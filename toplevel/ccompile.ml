@@ -16,6 +16,13 @@ open Common_compile
 (* File Compilation                                                           *)
 (******************************************************************************)
 
+(* The universe/sort name counters captured right after a file's sentences are
+   loaded, before Stm.finish / save. The coqc fork server reads this after its
+   one-time warm-up compile of the shared (Require-only) prefix to learn the
+   exact value a fresh process reaches after those Requires, and restores it in
+   each forked child. Set on every compile; only the warm-up reads it. *)
+let after_load_counters = ref (0, 0)
+
 let source ldir file = Loc.InFile {
     dirpath=Some (Names.DirPath.to_string ldir);
     file = file;
@@ -36,6 +43,9 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
   in
   let long_f_dot_in, long_f_dot_out =
     ensure_exists_with_prefix ~src:f_in ~tgt:f_out ~src_ext:ext_in ~tgt_ext:ext_out in
+  (if Sys.getenv_opt "ZYG_DEBUG" <> None then
+     let (u,s) = UnivGen.get_counters () in
+     Printf.eprintf "ZYGDBG ccompile-entry univ=%d sort=%d\n%!" u s);
   match mode with
   | BuildVo | BuildVok ->
       let doc, sid = Topfmt.(in_phase ~phase:LoadingPrelude)
@@ -43,6 +53,9 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
           Stm.{ doc_type = VoDoc long_f_dot_out; injections; } in
       let state = { doc; sid; proof = None; time = Option.map Vernac.make_time_output opts.config.time } in
       let state = Load.load_init_vernaculars opts ~state in
+      (if Sys.getenv_opt "ZYG_DEBUG" <> None then
+         let (u,s) = UnivGen.get_counters () in
+         Printf.eprintf "ZYGDBG ccompile-after-newdoc univ=%d sort=%d\n%!" u s);
       let ldir = Stm.get_ldir ~doc:state.doc in
       Aux_file.(start_aux_file
         ~aux_file:(aux_file_name_for long_f_dot_out)
@@ -60,6 +73,10 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       let check = Stm.AsyncOpts.(stm_options.async_proofs_mode = APoff) in
       let source = source ldir long_f_dot_in in
       let state = Vernac.load_vernac ~echo ~check ~state ~source long_f_dot_in in
+      after_load_counters := UnivGen.get_counters ();
+      (if Sys.getenv_opt "ZYG_DEBUG" <> None then
+         let (u,s) = !after_load_counters in
+         Printf.eprintf "ZYGDBG ccompile-after-load univ=%d sort=%d\n%!" u s);
       let fullstate = Stm.finish ~doc:state.doc in
       ensure_no_pending_proofs ~filename:long_f_dot_in fullstate;
       let () = Stm.join ~doc:state.doc in

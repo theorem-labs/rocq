@@ -10,3 +10,9 @@
 
 (** [compile_file opts] compile file specified in [opts] *)
 val compile_file : Coqargs.t -> Stm.AsyncOpts.stm_opt -> Coqcargs.t -> Coqargs.injection_command list -> unit
+
+(** The universe/sort name counters captured right after a file's sentences are
+    loaded, before finish/save. Read by the coqc fork server after its warm-up
+    compile of the Require-only prefix to learn the value a fresh process reaches
+    after those Requires. *)
+val after_load_counters : (int * int) ref

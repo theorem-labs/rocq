@@ -2237,6 +2237,15 @@ let init_process stm_flags =
 let init_core () =
   State.register_root_state ()
 
+(* Re-baseline the root state that [new_doc] restores. After a one-time
+   warm-up has loaded a shared set of libraries, calling this makes every
+   later [new_doc] (hence every forked child of the coqc fork server) start
+   from the warmed-up state -- libraries already in the table, their summary
+   and kernel/nametab state intact -- instead of the pristine process-start
+   state. Only the coqc fork server (topbin/zygote.ml) uses it. *)
+let snapshot_root_state () =
+  State.register_root_state ()
+
 let new_doc { doc_type ; injections } =
 
   (* We must reset the whole state before creating a document! *)
