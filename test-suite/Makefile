@@ -350,9 +350,12 @@ unit-tests/src/utest.cmi: unit-tests/src/utest.mli
 unit-tests: $(UNIT_LOGFILES)
 
 # Build executable, run it to generate log file
+UNIT_PKGS := rocq-runtime.toplevel,ounit2
+# The micromega unit tests also need the micromega plugin (Polynomial, Vect, ...).
+unit-tests/micromega/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,ounit2,rocq-runtime.plugins.micromega
 unit-tests/%.ml.log: unit-tests/%.ml unit-tests/src/$(UNIT_LINK)
 	$(SHOW) 'TEST      $<'
-	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package rocq-runtime.toplevel,ounit2 \
+	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package $(UNIT_PKGS) \
 	     -I unit-tests/src $(UNIT_LINK) $< -o $<.test;
 	$(HIDE)$(call WITH_TIMER,$@,./$<.test)
 	$(HIDE)$(call REPORT_TIMER,$@)
