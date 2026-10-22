@@ -303,7 +303,12 @@ let handle_connection opts stm_opts injections ~prefix_sentences ~coqlibs ~warm_
         compile_file = Some (file, echo = "1");
         compilation_output_name = Some output;
       } in
-      let code = compile_like_coqc opts stm_opts copts injections in
+      (* Compile with NO injections: the warm-up already required AND imported
+         the prelude into the state each child restores, so re-running the
+         injections here would re-import it over the reused state and allocate a
+         fresh batch of universe/sort names (the +12 that shifted every body
+         universe's id). An empty injection list reuses the warm-up's import. *)
+      let code = compile_like_coqc opts stm_opts copts [] in
       flush_all ();
       send_line conn (Printf.sprintf "EXIT\t%d" code);
       Unix.close conn;
