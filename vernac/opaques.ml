@@ -98,8 +98,9 @@ let set_opaque_disk i (c, priv) t =
 let current_opaques = Summary.state
 
 let unchecked_opaque ~poly pf =
-  let c, ctx = Safe_typing.inline_private_constants (Global.env ()) pf in
-  let _, c = Constr.hcons c in
+  let env = Global.env () in
+  let c, ctx = Safe_typing.inline_private_constants env pf in
+  let _, c = HConstr.hcons (HConstr.of_constr env c) in
   let _, ctx = Univ.ContextSet.hcons ctx in
   let ctx =
     if poly then Opaqueproof.PrivatePolymorphic ctx
