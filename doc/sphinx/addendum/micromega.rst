@@ -63,6 +63,21 @@ or only for reals by ``Require Import Lra``.
 
    This :term:`flag` (set by default) instructs :tacn:`nra` to cache its results in the file `.nra.cache`
 
+.. flag:: Micromega Reuse
+
+   This :term:`flag` (set by default) lets :tacn:`lia`, :tacn:`nia`, :tacn:`wlia` and :tacn:`wnia`
+   fail sooner on a goal that they cannot prove. The tactics split the goal into cases: a
+   hypothesis with a disjunction, for instance, gives two, and they search a certificate for each
+   case. Before they search a case, they try the certificates found so far for the goal, newest
+   first. A certificate is tried on a case that contains every hypothesis it uses, and is
+   accepted when the reflexive checker accepts it on that case. The tactics search only the cases
+   that no certificate is accepted on. If a search fails, the tactic fails, as it does without
+   the flag. If every case is proved, the tactics search the cases that a reused certificate
+   proved. So when the tactic succeeds, its proof is the proof without the flag, and so are the
+   hypotheses that the proof uses and the output of :flag:`Info Micromega`.
+   A goal that succeeds costs the searches without the flag plus the checks of the stored
+   certificates on each case, so the flag never makes such a goal faster.
+
 .. flag:: Lia Depth
    :undocumented:
 
