@@ -27,9 +27,9 @@ let push_bytecode vmtab code =
   | Some BCconstant -> vmtab, Some BCconstant
   | Some (BCalias kn) -> vmtab, Some (BCalias kn)
 
-let compile_constant_bytecode env vmtab cb =
+let compile_constant_bytecode env vmtab c cb =
   let code =
-    Vmbytegen.compile_constant_body ~fail_on_error:false env
+    Vmbytegen.compile_constant_body ~name:c ~fail_on_error:false env
       cb.const_universes cb.const_body
   in
   let vmtab, code = push_bytecode vmtab code in
@@ -41,7 +41,7 @@ let rec compile_structure env vmtab mp res struc =
   let fold (env, vmtab, accu) (lab, sfb) = match sfb with
   | SFBconst cb ->
     let c = Mod_subst.constant_of_delta_kn res (KerName.make mp lab) in
-    let vmtab, cb = compile_constant_bytecode env vmtab cb in
+    let vmtab, cb = compile_constant_bytecode env vmtab c cb in
     Environ.add_constant c cb env, vmtab, (lab, SFBconst cb) :: accu
   | SFBmind mib ->
     let mind = Mod_subst.mind_of_delta_kn res (KerName.make mp lab) in

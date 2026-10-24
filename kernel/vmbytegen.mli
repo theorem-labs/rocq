@@ -18,9 +18,12 @@ val compile :
   env -> Genlambda.evars -> constr ->
   (bool array * to_patch * patches) option
 
-val compile_constant_body : fail_on_error:bool ->
+val compile_constant_body : ?name:Names.Constant.t -> fail_on_error:bool ->
   env -> universes -> (Constr.t, 'opaque, 'symb) constant_def ->
   body_code option
+(** The code of a constant's body. When {!Vmbinnum.recognize} binds the body
+    to routines, the code of each bound function starts with BINNUM. [name]
+    is only printed in the statistics of {!Vmbinnum}. *)
 
 (** Shortcut of the previous function used during module strengthening *)
 

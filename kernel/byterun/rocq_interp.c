@@ -28,6 +28,7 @@
 #include "rocq_fix_code.h"
 #include "rocq_memory.h"
 #include "rocq_values.h"
+#include "rocq_binnum.h"
 
 #if OCAML_VERSION < 41000
 extern void caml_minor_collection(void);
@@ -816,6 +817,33 @@ value rocq_interprete
             Code_val(block) = accumulate;
             Field(block, 1) = Val_int(2);
             accu = block;
+            pc = LoadRA(sp[0]);
+            rocq_env = sp[1];
+            rocq_extra_args = Long_val(sp[2]);
+            sp += 3;
+          }
+        }
+        Next;
+      }
+
+      /* BINNUM k n comes right after the entry sequence of a function or
+         fixpoint of n arguments (add_grab and add_grabrec in
+         kernel/vmbytegen.ml), where the n arguments are sp[0..n-1]. If
+         routine k accepts them, the instruction returns its result as
+         RETURN n does; otherwise it does nothing and the body runs. */
+      Instruct(BINNUM) {
+        int k = *pc++;
+        int n = *pc++;
+        value res;
+        print_instr("BINNUM");
+        if (rocq_binnum_run(k, n, sp, &res)) {
+          accu = res;
+          sp += n;
+          if (rocq_extra_args > 0) {
+            rocq_extra_args--;
+            pc = Code_val(accu);
+            rocq_env = accu;
+          } else {
             pc = LoadRA(sp[0]);
             rocq_env = sp[1];
             rocq_extra_args = Long_val(sp[2]);

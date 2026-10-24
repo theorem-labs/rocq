@@ -72,6 +72,11 @@ type instruction =
   | Ksequence of bytecodes
   | Kproj of int
   | Kensurestackcapacity of int
+  | Kbinnum of int * int                (** routine, number of arguments: run the
+                                           C routine of {!Vmbinnum} on the
+                                           arguments sp[0..n-1]; if it accepts
+                                           them, return its result as
+                                           [Kreturn n] does *)
 
   | Kbranch of Label.t                  (** jump to label, is it needed ? *)
   | Kprim of CPrimitives.t * pconstant

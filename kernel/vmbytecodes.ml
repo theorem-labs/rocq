@@ -74,6 +74,7 @@ type instruction =
   | Ksequence of bytecodes
   | Kproj of int
   | Kensurestackcapacity of int
+  | Kbinnum of int * int
   | Kbranch of Label.t                  (* jump to label *)
   | Kprim of CPrimitives.t * pconstant
   | Kcamlprim of caml_prim * Label.t
@@ -171,6 +172,8 @@ let rec pp_instr i =
   | Kproj p -> str "proj " ++ int p
 
   | Kensurestackcapacity size -> str "growstack " ++ int size
+
+  | Kbinnum (k, n) -> str "binnum " ++ int k ++ str ", " ++ int n
 
   | Kprim (op, id) -> str (CPrimitives.to_string op) ++ str " " ++
         (Constant.print (fst id))

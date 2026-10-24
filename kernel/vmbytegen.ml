@@ -440,6 +440,13 @@ let add_grabrec rec_arg arity lbl cont =
     Krestart :: Klabel lbl :: Kgrabrec rec_arg ::
     Krestart :: Kgrab (arity - 1) :: cont
 
+(* [BINNUM k n] goes after the entry sequence, where the [n] arguments of the
+   function are on the stack, if routine [k] takes [n] arguments. *)
+let add_binnum routine arity cont =
+  match routine with
+  | Some k when Int.equal (Vmbinnum.arity k) arity -> Kbinnum (k, arity) :: cont
+  | Some _ | None -> cont
+
 (* continuation of a cofix *)
 
 let cont_cofix arity =
@@ -563,8 +570,10 @@ let get_caml_prim = let open CPrimitives in function
   | Stringcompare -> Some CAML_Stringcompare
   | _ -> None
 
-(* sz is the size of the local stack *)
-let rec compile_lam env cenv lam sz cont =
+(* sz is the size of the local stack. [binnum i] is the BINNUM routine of
+   function [i] of [lam] when [lam] is a function (i = 0) or a fixpoint block;
+   only the top-level call of [compile] passes it. *)
+let rec compile_lam ?(binnum = Vmbinnum.no_binnum) env cenv lam sz cont =
   let () = set_max_stack_size cenv sz in
   match node lam with
   | Lrel(_, i) -> pos_rel i cenv sz :: cont
@@ -631,6 +640,7 @@ let rec compile_lam env cenv lam sz cont =
      let lbl_fun = Label.create() in
      let cont_fun = compile_lam env r_fun body arity [Kreturn arity] in
      let cont_fun = ensure_stack_capacity r_fun cont_fun in
+     let cont_fun = add_binnum (binnum 0) arity cont_fun in
      let () = push_fun env (add_grab arity lbl_fun cont_fun) in
      let fv = fv r_fun in
      compile_fv cenv fv.fv_rev sz (Kclosure(lbl_fun,fv.size) :: cont)
@@ -662,6 +672,7 @@ let rec compile_lam env cenv lam sz cont =
         let env_body = comp_env_fix ndef arity rfv in
         let cont1 = compile_lam env env_body body arity [Kreturn arity] in
         let cont1 = ensure_stack_capacity env_body cont1 in
+        let cont1 = add_binnum (binnum i) arity cont1 in
         let lbl = Label.create () in
         lbl_bodies.(i) <- lbl;
         let fcode =  add_grabrec rec_args.(i) arity lbl cont1 in
@@ -920,7 +931,7 @@ let skip_suffix l =
   in
   match aux l with None -> [] | Some l -> l
 
-let compile ~uinstance env sigma c =
+let compile ~uinstance ~binnum env sigma c =
   Label.reset_label_counter ();
   let lam = lambda_of_constr env sigma c in
   let params, body = decompose_Llam lam in
@@ -940,7 +951,7 @@ let compile ~uinstance env sigma c =
       if uclosed then
         let cenv = empty_comp_env () in
         let env = { env; fun_code = []; uinstance } in
-        let cont = compile_lam env cenv lam 0 cont in
+        let cont = compile_lam ~binnum env cenv lam 0 cont in
         let cont = ensure_stack_capacity cenv cont in
         cenv, cont, env.fun_code
       else
@@ -974,8 +985,8 @@ let warn_compile_error =
   CWarnings.create ~name:"bytecode-compiler-failed-compilation" ~category:CWarnings.CoreCategories.bytecode_compiler
     Vmerrors.pr_error
 
-let compile ~fail_on_error ~uinstance env sigma c =
-  try NewProfile.profile "vm_compile" (fun () -> Some (compile ~uinstance env sigma c)) ()
+let compile ~fail_on_error ~uinstance ?(binnum = Vmbinnum.no_binnum) env sigma c =
+  try NewProfile.profile "vm_compile" (fun () -> Some (compile ~uinstance ~binnum env sigma c)) ()
   with Vmerrors.CompileError msg as exn ->
     let exn = Exninfo.capture exn in
     if fail_on_error then
@@ -985,7 +996,7 @@ let compile ~fail_on_error ~uinstance env sigma c =
       None
     end
 
-let compile_constant_body ~fail_on_error env univs = function
+let compile_constant_body ?name ~fail_on_error env univs = function
   | Undef _ | OpaqueDef _ -> Some BCconstant
   | Primitive _ | Symbol _ -> None
   | Def body ->
@@ -1006,7 +1017,13 @@ let compile_constant_body ~fail_on_error env univs = function
       | Some kn -> Some (BCalias kn)
       | _ ->
         let uinstance = Bound instance_size in
-        let res = compile ~fail_on_error ~uinstance env (empty_evars env) body in
+        (* A universe polymorphic body is compiled under one more function
+           (see [compile]), so it gets no BINNUM. *)
+        let binnum =
+          if UVars.eq_sizes (0, 0) instance_size then Vmbinnum.recognize ?name env body
+          else Vmbinnum.no_binnum
+        in
+        let res = compile ~fail_on_error ~uinstance ~binnum env (empty_evars env) body in
         Option.map (fun (mask, code, patch) -> BCdefined (mask, code, patch)) res
 
 let compile ~fail_on_error env sigma c =

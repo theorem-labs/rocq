@@ -1035,8 +1035,8 @@ let is_empty_private = function
 | Opaqueproof.PrivateMonomorphic ctx -> Univ.ContextSet.is_empty ctx
 | Opaqueproof.PrivatePolymorphic ctx -> Univ.ContextSet.is_empty ctx
 
-let compile_bytecode env cb =
-  let code = Vmbytegen.compile_constant_body ~fail_on_error:false env cb.const_universes cb.const_body in
+let compile_bytecode ~name env cb =
+  let code = Vmbytegen.compile_constant_body ~name ~fail_on_error:false env cb.const_universes cb.const_body in
   { cb with const_body_code = code }
 
 (* Special function to call when the body of an opaque definition is provided.
@@ -1085,7 +1085,7 @@ let export_side_effects senv eff =
             | OpaqueEff ce ->
               infer_direct_opaque ~sec_univs env ce
           in
-          let cb = compile_bytecode env cb in
+          let cb = compile_bytecode ~name:eff.seff_constant env cb in
           let eff = { eff with seff_body = (hbody, cb) } in
           (push_seff env eff, export_eff eff)
         in
@@ -1158,7 +1158,7 @@ let add_constant l decl senv =
       | Entries.SymbolEntry entry ->
         senv, (None, Constant_typing.infer_symbol senv.env entry)
   in
-  let cb = compile_bytecode senv.env cb in
+  let cb = compile_bytecode ~name:kn senv.env cb in
   let senv = add_constant_aux senv ?hbody (kn, cb) in
   kn, senv
 
@@ -1242,7 +1242,7 @@ let add_private_constant l uctx decl senv : (Constant.t * private_constants) * s
         let () = assert (check_constraints uctx ce.Entries.definition_entry_universes) in
         Constant_typing.infer_definition ~sec_univs senv.env ce
     in
-  let cb = compile_bytecode senv.env cb in
+  let cb = compile_bytecode ~name:kn senv.env cb in
   let dcb = match cb.const_body with
   | Def _ as const_body -> { cb with const_body }
   | OpaqueDef _ ->
@@ -1726,7 +1726,7 @@ let close_section senv =
     let cb = Environ.lookup_constant kn env0 in
     let info = Section.segment_of_constant kn sections0 in
     let cb = Discharge.cook_constant senv.env info cb in
-    let cb = compile_bytecode senv.env cb in
+    let cb = compile_bytecode ~name:kn senv.env cb in
     (* Delayed constants are already in the global environment *)
     add_constant_aux senv (kn, cb)
   | SecInductive ind ->

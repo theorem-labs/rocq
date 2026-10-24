@@ -185,7 +185,8 @@ let run_worker parent report (tasks : task array) =
   in
   (try flush_output () with _ -> ());
   (* Not [exit]: the at_exit functions of the main process must not run
-     here. *)
+     here. So the worker prints its own VM counters, if they are on. *)
+  (try Vmbinnum.print_stats () with _ -> ());
   Unix._exit code
 
 let check_here (kn, check) =
@@ -221,6 +222,8 @@ let spawn tasks =
     | 0 ->
       Unix.close report;
       List.iter (fun w -> try Unix.close w.report with Unix.Unix_error _ -> ()) !running;
+      (* The worker counts only what it runs itself. *)
+      Vmbinnum.reset_stats ();
       run_worker parent report_out tasks
     | pid ->
       Unix.close report_out;

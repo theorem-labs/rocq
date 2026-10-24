@@ -1,0 +1,49 @@
+(************************************************************************)
+(*         *      The Rocq Prover / The Rocq Development Team           *)
+(*  v      *         Copyright INRIA, CNRS and contributors             *)
+(* <O___,, * (see version control and CREDITS file for authors & dates) *)
+(*   \VV/  **************************************************************)
+(*    //   *    This file is distributed under the terms of the         *)
+(*         *     GNU Lesser General Public License Version 2.1          *)
+(*         *     (see LICENSE file for the text of the license)         *)
+(************************************************************************)
+
+(** Functions on binary numbers that the bytecode VM runs as C routines.
+
+    The bytecode compiler asks {!recognize} about the body of each constant.
+    When the body is equal to a reference term of this module (up to binder
+    names, the printing annotation of matches, and the inductive types, which
+    may be any types of the expected shape), the compiler puts the
+    instruction [BINNUM k n] at the start of the code of the function, after
+    its entry sequence. Routine [k] (kernel/byterun/rocq_binnum.c) then
+    computes the result when the [n] arguments are closed values, and leaves
+    every other call to the bytecode.
+
+    Environment variables, for tests and measurement only:
+    - [ROCQ_VM_BINNUM=0] turns recognition off; [ROCQ_VM_BINNUM=-name1,-name2]
+      turns off the listed routines. Any other value stops the process.
+    - [ROCQ_VM_BINNUM_STATS=1] prints, at the exit of each process, the
+      calls, refusals and words read of each routine, and the constants bound
+      and the near misses of the recognizer; [2] also prints, for each near
+      miss, the first node that differs from the reference. *)
+
+val recognize : ?name:Names.Constant.t -> Environ.env -> Constr.t -> int -> int option
+(** [recognize ?name env body] is, for each function index [i] of the
+    top-level fixpoint block of [body] (index 0 for a body that is a
+    function), the routine of the function, if [body] is equal to a
+    reference term and every inductive type in it has the expected shape in
+    [env]. It never raises. [name] is only printed in the statistics. *)
+
+val no_binnum : int -> int option
+(** No routine for any function. *)
+
+val arity : int -> int
+(** The number of arguments of a routine. *)
+
+val reset_stats : unit -> unit
+(** Zeroes the counters, in a process forked from one that has used them. *)
+
+val print_stats : unit -> unit
+(** Prints the counters on stderr if [ROCQ_VM_BINNUM_STATS] is set. The
+    process prints them at exit by itself; this is for processes that end
+    with [Unix._exit]. *)

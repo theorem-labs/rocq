@@ -13,7 +13,10 @@
     It is used to generate the files [rocq_instruct.h], [rocq_jumptbl.h],
     [rocq_arity.h], and [vmopcodes.ml].
 
-    [STOP] needs to be the last opcode.
+    New opcodes go at the end: the opcode numbers are stored in the bytecode
+    of [.vo] files, and a build must keep loading the code that stock builds
+    wrote. [rocq_instruct.h] names the last opcode [LAST_OPCODE], which bounds
+    the opcodes that [rocq_tcode_of_code] accepts.
 
     Arity -1 designates opcodes that need special handling in [rocq_fix_code.c].
 *)
@@ -159,7 +162,8 @@ let opcodes =
     "CHECKCAMLCALL2", 2;
     "CHECKCAMLCALL3", 2;
     "CHECKCAMLCALL3_1", 2;
-    "STOP", 0
+    "STOP", 0;
+    "BINNUM", 2
   |]
 
 let pp_c_comment fmt =
@@ -179,6 +183,7 @@ let pp_rocq_instruct_h fmt =
   Array.iter (fun (name, _) ->
       Format.fprintf fmt "  %s,@." name
     ) opcodes;
+  Format.fprintf fmt "  LAST_OPCODE = %s@." (fst opcodes.(Array.length opcodes - 1));
   Format.fprintf fmt "};@."
 
 let pp_rocq_jumptbl_h fmt =
