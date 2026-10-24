@@ -97,9 +97,22 @@ let set_opaque_disk i (c, priv) t =
 
 let current_opaques = Summary.state
 
-let unchecked_opaque ~poly pf =
-  let env = Global.env () in
+let unchecked_opaque ~poly i pf =
+  let senv = Global.safe_env () in
+  let env = Safe_typing.env_of_safe_env senv in
   let c, ctx = Safe_typing.inline_private_constants env pf in
+  (* Store the proof over the constant's bound universes, as
+     [Constant_typing.check_delayed] does on the checked path: the body gets
+     the whole substitution (levels and sort qualities), and the private
+     constraints of a polymorphic constant get its level part. The private
+     levels stay as they are. The substitution is empty for a monomorphic
+     constant. *)
+  let usubst = Safe_typing.delayed_universe_subst senv i in
+  let c = Vars.subst_univs_level_constr usubst c in
+  let ctx =
+    if poly then Util.on_snd (UVars.subst_univs_constraints (snd usubst)) ctx
+    else ctx
+  in
   let _, c = HConstr.hcons (HConstr.of_constr env c) in
   let _, ctx = Univ.ContextSet.hcons ctx in
   let ctx =
@@ -115,7 +128,7 @@ let declare_defined_opaque ?feedback_id ~poly i (body : Safe_typing.private_cons
      otherwise the call to Safe_typing would throw an anomaly. *)
   let proof = Future.chain body begin fun pf ->
       let proof =
-        if !skip_qed_typecheck then unchecked_opaque ~poly pf
+        if !skip_qed_typecheck then unchecked_opaque ~poly i pf
         else Checked (Safe_typing.check_opaque (Global.safe_env ()) i pf)
       in
       let () = Option.iter (fun id -> Feedback.feedback ~id Feedback.Complete) feedback_id in

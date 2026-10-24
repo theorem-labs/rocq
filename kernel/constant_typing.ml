@@ -273,6 +273,8 @@ let check_delayed_section_variables tyenv body =
   let declared' = check_section_variables env declared (Some body) tyj.utj_val in
   assert (Id.Set.equal declared declared')
 
+let delayed_universe_subst (TyCtx (_, _, _, usubst, _)) = usubst
+
 let check_delayed (type a) (handle : a effect_handler) tyenv (body : a proof_output) =
   let TyCtx (env, tyj, _, usubst, univs) = tyenv in
   let ((body, uctx), side_eff) = body in

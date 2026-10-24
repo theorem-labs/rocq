@@ -1253,6 +1253,14 @@ let fill_unchecked_opaque i body ctx senv =
   in
   { senv with future_cst = HandleMap.remove i senv.future_cst }
 
+let delayed_universe_subst senv i =
+  let ty_ctx, _, _ =
+    try HandleMap.find i senv.future_cst
+    with Not_found ->
+      CErrors.anomaly Pp.(str "Missing opaque handle" ++ spc () ++ int (Opaqueproof.repr_handle i))
+  in
+  Constant_typing.delayed_universe_subst ty_ctx
+
 let fill_opaque { opq_univs = ctx; opq_handle = i; opq_nonce = n; _ } senv =
   let () = if not @@ HandleMap.mem i senv.future_cst then
     CErrors.anomaly Pp.(str "Missing opaque handle" ++ spc () ++ int (Opaqueproof.repr_handle i))
