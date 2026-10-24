@@ -137,6 +137,22 @@ val mk_deps_code : env -> Genlambda.evars -> string -> constr -> constr -> linka
 
 val definitions_of_updates : code_location_updates -> definition list
 
+(** {6 Dependency units in parts} *)
+
+(** The text [pp_global] prints for a global. *)
+val print_global : global -> string
+
+(** The line of a part's interface for a global, [None] for a global that
+    binds nothing. *)
+val interface_of_global : global -> string option
+
+(** Whether a part may end after this global: after a constant's own
+    global, which comes after the helpers emitted for it. *)
+val ends_item : global -> bool
+
+(** The definitions a global defines. *)
+val definitions_of_global : global -> definition list
+
 (** [link_definitions env prefix defs] marks [defs] as defined by the unit
     of [prefix]. The caller marks only what it has checked. *)
 val link_definitions : env -> string -> definition list -> unit

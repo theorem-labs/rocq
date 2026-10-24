@@ -17,12 +17,14 @@
     from compiling the same definitions, and the rules that keep the
     waits free of cycles and of orphans. *)
 
-val enable : unit -> unit
+val enable : ?jobs:int -> unit -> unit
 (** Turns the cache on and makes its directory, in the main process,
     before the first fork. It does nothing when nothing is deferred to a
-    worker, so the cache is off with [-j 1], with [-profile] and where
-    [Unix.fork] is not available. It sets [Nativelib.prepare_conversion]
-    and registers the directory's removal at exit. *)
+    worker, so the cache, the compile slots and the units in parts are
+    off with [-j 1], with [-profile] and where [Unix.fork] is not
+    available. It sets [Nativelib.prepare_conversion], the compile slots
+    ([jobs] of them, by default half the box's processors), and registers
+    the directory's removal at exit. *)
 
 val is_enabled : unit -> bool
 

@@ -2271,6 +2271,38 @@ let pp_global fmt g =
   | Gcomment s ->
       Format.fprintf fmt "@[(* %s *)@]@." s
 
+(** {6 Dependency units in parts} (checker/convCache.ml)
+
+    A large dependency unit is compiled as several OCaml modules, its
+    parts, in parallel. The helpers below print a global once, give the
+    line a part's interface has for it, and the definitions it defines. *)
+
+let print_global g = Format.asprintf "%a" pp_global g
+
+(* The interface of a top-level global, for every form the printer gives
+   a binding: [symbols_tbl] (no annotation in the source), a [Glet] at the
+   type [type_of_global] annotates it with, a [Gletcase] or a table as a
+   function of its parameters, a type verbatim. A wrong line makes the
+   part fail to compile, never load. *)
+let interface_of_global g =
+  let arrows n = String.concat "" (List.init n (fun _ -> "Nativevalues.t -> ")) in
+  match g with
+  | Glet (Ginternal "symbols_tbl", _) -> Some "val symbols_tbl : Nativevalues.symbols\n"
+  | Glet (gn, c) -> Some (Format.asprintf "val %a%s\n" pp_gname gn (type_of_global gn c))
+  | Gletcase (gn, params, _, _, _, _) ->
+    Some (Format.asprintf "val %a : %sNativevalues.t\n" pp_gname gn (arrows (Array.length params)))
+  | Gtblfixtype (gn, params, _) | Gtblnorm (gn, params, _) | Gtblcofix (gn, params, _) ->
+    Some (Format.asprintf "val %a : %sNativevalues.t array\n" pp_gname gn (arrows (Array.length params)))
+  | Gtype _ -> Some (print_global g)
+  | Gopen _ | Gcomment _ -> None
+
+(* A part ends after the global of a constant: the helpers emitted for a
+   constant come before it, and an inductive's globals contain none. *)
+let ends_item = function
+  | Glet (Gconstant _, _) -> true
+  | Glet _ | Gletcase _ | Gtblfixtype _ | Gtblnorm _ | Gtblcofix _ | Gtype _
+  | Gopen _ | Gcomment _ -> false
+
 (** Compilation of elements in environment **)
 let rec compile_with_fv ?(wrap = fun t -> t) cenv env sigma univ auxdefs l t =
   let const_prefix c = get_const_prefix env c in
@@ -2607,6 +2639,13 @@ let retained_canonical_name env = function
   | Dind m ->
     let _, _, canonical = lookup_mind_key m env in
     Some (injective_string_of_kn canonical)
+
+(* The definitions a global of a unit defines: a constant by its [Glet],
+   an inductive by the [Gtype] of each of its packets. *)
+let definitions_of_global = function
+  | Glet (Gconstant (_, c), _) -> [Dconst c]
+  | Gtype ((m, _), _) -> [Dind m]
+  | Glet _ | Gletcase _ | Gtblfixtype _ | Gtblnorm _ | Gtblcofix _ | Gopen _ | Gcomment _ -> []
 
 (* The globals that the code of [t] names, in the order they are met,
    following the local definitions that its code inlines, as

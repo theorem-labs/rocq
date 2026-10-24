@@ -62,10 +62,12 @@ let debug = CDebug.create ~name:"conv-cache" ()
 type entry = {
   e_def : definition;
   e_key : string;                      (* the marshalled key, see above *)
+  e_prefix : string;      (* the prefix of the part that defines it *)
 }
 
 type manifest = {
   m_prefix : string;                       (* the unit's module prefix *)
+  m_parts : string list;  (* the prefixes of its parts; [] for one module *)
   m_cmxs : string;                              (* the file's basename *)
   m_digest : string;                     (* [Digest.file] of that file *)
   m_units : string list;    (* prefixes of the units it refers to, in order *)
@@ -129,6 +131,8 @@ module DefMap = Map.Make (struct
   end)
 
 let units : (string, manifest) Hashtbl.t = Hashtbl.create 97
+(* Every prefix a unit registers, its own and its parts', to the unit's. *)
+let part_unit : (string, string) Hashtbl.t = Hashtbl.create 97
 let by_def : (string * entry) list DefMap.t ref = ref DefMap.empty
 let claims : (string, int) Hashtbl.t = Hashtbl.create 97   (* claim file -> pid *)
 let indexed : (string, unit) Hashtbl.t = Hashtbl.create 997       (* files read *)
@@ -140,6 +144,7 @@ let loaded_order : string list ref = ref []
 
 let add_manifest m =
   Hashtbl.replace units m.m_prefix m;
+  List.iter (fun p -> Hashtbl.replace part_unit p m.m_prefix) (m.m_prefix :: m.m_parts);
   List.iter (fun e ->
       let others = try DefMap.find e.e_def !by_def with Not_found -> [] in
       by_def := DefMap.add e.e_def ((m.m_prefix, e) :: others) !by_def)
@@ -288,8 +293,8 @@ let digest_ok m =
 
 (* Load a unit and the units it refers to, in order, each checked against
    the digest its producer published, skipping what this process has
-   loaded. Marks every definition of a loaded unit linked to it: they are
-   all verified. *)
+   loaded. Marks every definition of a loaded unit linked to the part
+   that defines it: they are all verified. *)
 let rec load env sigma prefix =
   if is_loaded_native_file prefix then true
   else match Hashtbl.find_opt units prefix with
@@ -297,9 +302,9 @@ let rec load env sigma prefix =
     | Some m ->
       List.for_all (fun p -> load env sigma p) m.m_units
       && digest_ok m
-      && (match Nativelib.load_unit ~prefix:m.m_prefix (unit_file m) with
+      && (match Nativelib.load_unit ~prefixes:(m.m_prefix :: m.m_parts) (unit_file m) with
           | () ->
-            link_definitions env m.m_prefix (List.map (fun e -> e.e_def) m.m_defs);
+            List.iter (fun e -> link_definitions env e.e_prefix [e.e_def]) m.m_defs;
             loaded_order := m.m_prefix :: !loaded_order;
             incr c_units;
             true
@@ -309,13 +314,16 @@ let rec load env sigma prefix =
             Hashtbl.replace verified prefix false;
             false)
 
+(* The published unit a prefix belongs to: its own or one of its parts'. *)
+let unit_of_prefix p = Hashtbl.find_opt part_unit p
+
 (* A definition is available to this worker when it is linked to a unit
    of the cache that is published. One linked otherwise (by a conversion
    unit of the main process, inherited at the fork, or by an unpublished
    unit of this worker) cannot be named by a published unit, so the cache
    counts it as not compiled: it is reused, claimed and emitted again. *)
 let available env d = match definition_prefix env d with
-  | Some p -> Hashtbl.mem units p
+  | Some p -> Option.has_some (unit_of_prefix p)
   | None -> false
 
 (* Load what the closure can take from the published units. *)
@@ -403,7 +411,10 @@ let wait_for files =
   let rec go () =
     let left = List.filter Sys.file_exists files in
     if CList.is_empty left then ()
-    else if Unix.gettimeofday () -. t0 > wait_limit then ()
+    else if Unix.gettimeofday () -. t0 > wait_limit then
+      (* r3-b instrumentation: a wait that ends at the backstop (B-54) *)
+      ConvLog.event "backstop" [Printf.sprintf "%.3f" (Unix.gettimeofday () -. t0);
+                                string_of_int (List.length left)]
     else if not (List.exists (fun f ->
         match read_file f with
         | Some s -> (try alive (int_of_string (String.trim s)) with _ -> false)
@@ -422,13 +433,22 @@ let wait_for files =
 
 (** {6 Publishing} *)
 
-let publish env prefix cmxs ~digest defs refs =
+(* The prefixes of a unit's parts, other than its root: by name, not by
+   their number. A unit cut into one actual part is the module
+   [<base>_p1], not [<base>], and that part's prefix must be recorded
+   and registered like any other. *)
+let part_prefixes prefix parts =
+  List.filter (fun p -> not (String.equal p prefix))
+    (List.map (fun p -> p.Nativelib.part_prefix) parts)
+
+let publish env prefix cmxs ~digest ~parts defs refs =
   let m = {
     m_prefix = prefix;
+    m_parts = part_prefixes prefix parts;
     m_cmxs = Filename.basename cmxs;
     m_digest = digest;
     m_units = refs;
-    m_defs = List.map (fun (d, k) -> { e_def = d; e_key = k }) defs;
+    m_defs = List.map (fun (d, k, p) -> { e_def = d; e_key = k; e_prefix = p }) defs;
   } in
   let s = Marshal.to_string m [] in
   c_manifest_bytes := !c_manifest_bytes + String.length s;
@@ -524,7 +544,7 @@ let prepare env t1 t2 =
          only to published units. Their links come back if this unit
          fails before it is loaded. *)
       let stale = List.filter_map (fun d -> match definition_prefix env d with
-          | Some p when not (Hashtbl.mem units p) -> Some (d, p)
+          | Some p when Option.is_empty (unit_of_prefix p) -> Some (d, p)
           | Some _ | None -> None) closure
       in
       unlink_definitions env (List.map fst stale);
@@ -556,18 +576,30 @@ let prepare env t1 t2 =
         let copied = List.filter (fun d -> not (List.exists (definition_equal d) mine)) defs in
         c_copied := List.length copied;
         c_copied_bytes := List.fold_left (fun acc d -> acc + size d) 0 copied;
-        let cmxs =
+        let cmxs, parts =
           (* r3-b instrumentation *)
           ConvLog.with_unit_kind ConvLog.Dep (fun () ->
-              Nativelib.compile ml code ~profile:false)
+              Nativelib.compile_unit ~ml ~prefix code)
         in
+        (* Each definition, with the prefix of the part that defines it. *)
+        let part_of = List.concat_map (fun p ->
+            List.map (fun d -> d, p.Nativelib.part_prefix) p.Nativelib.part_defs) parts in
+        let keyed = List.map (fun (d, k) ->
+            match List.find_opt (fun (d', _) -> definition_equal d d') part_of with
+            | Some (_, p) -> d, k, p
+            | None -> failwith ("no part of the unit defines " ^ definition_to_string d))
+            keyed
+        in
+        let prefixes = prefix :: part_prefixes prefix parts in
         (* The units this one refers to: those holding the definitions of
            the closure this process has linked. A unit may be published
            only when every one of them is itself published; a definition
            linked by an ordinary conversion unit of this worker is not. *)
         let refs =
           List.fold_left (fun acc d -> match definition_prefix env d with
-              | Some p when not (String.equal p prefix) && not (List.mem p acc) -> p :: acc
+              | Some p when not (List.mem p prefixes) ->
+                let u = Option.default p (unit_of_prefix p) in
+                if List.mem u acc then acc else u :: acc
               | Some _ | None -> acc)
             [] closure
         in
@@ -577,13 +609,16 @@ let prepare env t1 t2 =
            own load included. *)
         let digest = Digest.to_hex (Digest.file cmxs) in
         if publishable && List.length order = List.length refs then
-          publish env prefix cmxs ~digest keyed order
+          publish env prefix cmxs ~digest ~parts keyed order
         else
           c_status := "private";
         if not (String.equal (Digest.to_hex (Digest.file cmxs)) digest) then
           failwith ("the unit " ^ cmxs ^ " changed after its compile");
-        Nativelib.load_unit ~prefix cmxs;
-        link_definitions env prefix defs;
+        Nativelib.load_unit ~prefixes cmxs;
+        List.iter (fun (d, _, p) -> link_definitions env p [d]) keyed;
+        (* The unit is loaded here as a consumer's would be: a later cast
+           of this worker whose new unit refers to it finds it in the load
+           order, and can publish. *)
         loaded_order := prefix :: !loaded_order;
         (* r3-b instrumentation *)
         if not (String.equal !c_status "private") then
@@ -617,12 +652,34 @@ let remove_directory () =
          Unix.rmdir d
        with Unix.Unix_error _ | Sys_error _ -> ())
 
-let enable () =
+(* Half the processors the box has online, from /proc/cpuinfo; 1 when it
+   cannot be read. *)
+let half_the_cores () =
+  let n =
+    match open_in "/proc/cpuinfo" with
+    | exception Sys_error _ -> 0
+    | ch ->
+      let rec count n = match input_line ch with
+        | line ->
+          let p = "processor" in
+          let is_p = String.length line >= String.length p
+                     && String.equal (String.sub line 0 (String.length p)) p in
+          count (if is_p then n + 1 else n)
+        | exception End_of_file -> n
+      in
+      Fun.protect ~finally:(fun () -> close_in ch) (fun () -> count 0)
+  in
+  max 1 (Stdlib.( / ) n 2)
+
+let enable ?jobs () =
   if CheckWorkers.jobs () > 1 then begin
     enabled := true;
     main_pid := Unix.getpid ();
     cache_dir := Nativelib.cache_directory ();
     Nativelib.prepare_conversion := prepare;
+    (* Every compile of the check, in the main process and in the
+       workers, holds one of these slots while its compiler runs. *)
+    Nativelib.slots := Some (!cache_dir, (match jobs with Some n -> n | None -> half_the_cores ()));
     (* Registered after [Nativelib]'s handler, so it runs before it: the
        directory goes before the temp dir that holds it. A worker ends
        with [Unix._exit], so only the main process removes it. *)

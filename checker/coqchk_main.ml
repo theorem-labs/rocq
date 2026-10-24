@@ -169,6 +169,14 @@ let set_native_conversion_after s =
     fatal_error (str "Option -native-conversion-after expects 0 or a number of seconds of at least 0.001, got " ++
                  qstring s ++ str ".") 1
 
+let native_conversion_jobs = ref None
+let set_native_conversion_jobs s =
+  match int_of_string_opt s with
+  | Some n when n >= 1 -> native_conversion_jobs := Some n
+  | _ ->
+    fatal_error (str "Option -native-conversion-jobs expects a positive integer, got " ++
+                 qstring s ++ str ".") 1
+
 let set_worker_budget s =
   match float_of_string_opt s with
   | Some t when t >= 0. -> CheckWorkers.set_budget t
@@ -199,7 +207,7 @@ let init_native_conversion coqenv =
   Nativecode.set_native_vm_conversion !native_conversion;
   (* The cache serves the workers, so it is off with -j 1, with -profile
      and where fork is not available. *)
-  if !native_conversion then ConvCache.enable ()
+  if !native_conversion then ConvCache.enable ?jobs:!native_conversion_jobs ()
 
 let make_senv () =
   let senv = Safe_typing.empty_environment in
@@ -278,6 +286,10 @@ let print_usage_channel co command =
 \n  -native-conversion-after s  with -native-conversion yes, the VM decides a cast\
 \n                              for at most s seconds before native code does;\
 \n                              0 goes to native code at once (default is 1)\
+\n  -native-conversion-jobs n   with -native-conversion yes and -j, how many OCaml\
+\n                              compiles of generated code may run at the same\
+\n                              time in the whole check (default is half the\
+\n                              processors of the machine)\
 \n\
 \n  -h, --help                  print this list of options\
 \n"
@@ -450,6 +462,9 @@ let parse_args argv =
     | "-native-conversion-after" :: s :: rem ->
       set_native_conversion_after s; parse rem
     | "-native-conversion-after" :: [] -> usage 1
+    | "-native-conversion-jobs" :: s :: rem ->
+      set_native_conversion_jobs s; parse rem
+    | "-native-conversion-jobs" :: [] -> usage 1
 
     | "-coqlib" :: s :: rem ->
       if not (exists_dir s) then
