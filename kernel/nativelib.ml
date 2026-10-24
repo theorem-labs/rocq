@@ -358,6 +358,9 @@ let close_gate fd =
   gate_fds := List.filter (fun g -> g <> fd) !gate_fds;
   (try Unix.close fd with Unix.Unix_error _ -> ())
 
+(* The longest a supervisor waits before it looks at its child again. *)
+let supervise_poll = 0.5
+
 (* The supervisor of one compile. It is the leader of the compile's
    process group [pgid], starts the compiler in that group, and exits
    with the compiler's status, as the compiler itself did before. If the
@@ -372,10 +375,15 @@ let close_gate fd =
    processes it started, which is where the work is: [ocamlfind] runs
    [ocamlopt] as a child.)
 
-   The compiler is this process's only child, and a signal cannot
-   interrupt a [select] that has not begun, so SIGCHLD is turned into a
-   byte on a pipe that [select] watches: with the status read before
-   each wait, no exit is missed. *)
+   The compiler is this process's only child. SIGCHLD is turned into a
+   byte on a pipe that [select] watches, so the compiler's exit usually
+   ends the wait at once. OCaml runs a signal handler only at a safe
+   point, though: a SIGCHLD that arrives after the runtime's last check
+   before [select] enters the kernel writes its byte only once [select]
+   returns, and a SIGCHLD blocked in the mask this process inherited is
+   never handled. So [select] waits at most [supervise_poll] seconds, and
+   the child's status is read before each wait: a missed wake-up costs
+   that long, never a hang. *)
 let supervise ~gate ~pgid ocamlfind argv =
   let sigr, sigw = Unix.pipe ~cloexec:true () in
   Sys.set_signal Sys.sigchld
@@ -394,9 +402,12 @@ let supervise ~gate ~pgid ocamlfind argv =
   let rec wait () =
     match waitpid_non_intr [Unix.WNOHANG] pid with
     | 0, _ ->
-      let ready = match Unix.select [gate; sigr] [] [] (-1.) with
+      let ready = match Unix.select [gate; sigr] [] [] supervise_poll with
         | r, _, _ -> r
-        | exception Unix.Unix_error _ -> []
+        | exception Unix.Unix_error (Unix.EINTR, _, _) -> []
+        | exception Unix.Unix_error _ ->
+          (* A [select] that keeps failing must not spin: wait as long. *)
+          (try Unix.sleepf supervise_poll with Unix.Unix_error _ -> ()); []
       in
       let gone = List.exists (fun fd -> fd = gate) ready
                  && (match Unix.read gate buf 0 1 with
@@ -431,6 +442,7 @@ let supervise ~gate ~pgid ocamlfind argv =
    never sees it. *)
 let spawn_compiler ?slot args =
   let ocamlfind = Boot.Env.ocamlfind () in
+  debug_native_compiler (fun () -> Pp.str (ocamlfind ^ " " ^ (String.concat " " args)));
   let argv = Array.of_list (ocamlfind :: args) in
   let r, w = Unix.pipe ~cloexec:true () in
   match Unix.fork () with
@@ -479,10 +491,11 @@ let kill_compiler pid =
    its completion, the compiler is killed and reaped before the slot is
    released. Without slots, as [CUnix.sys_command] runs it. *)
 let run_command args =
-  let ocamlfind = Boot.Env.ocamlfind () in
-  debug_native_compiler (fun () -> Pp.str (ocamlfind ^ " " ^ (String.concat " " args)));
   match !slots with
-  | None -> CUnix.sys_command ocamlfind args
+  | None ->
+    let ocamlfind = Boot.Env.ocamlfind () in
+    debug_native_compiler (fun () -> Pp.str (ocamlfind ^ " " ^ (String.concat " " args)));
+    CUnix.sys_command ocamlfind args
   | Some _ ->
     let slot = acquire_slot () in
     Fun.protect ~finally:(fun () -> release_slot slot) (fun () ->
@@ -510,7 +523,8 @@ let call_compiler ?profile:(profile=false) ml_filename =
   in
   let args =
     initial_args @ ("-o" :: link_filename :: compiler_flags ~profile) @ ["-impl"; ml_filename] in
-  (* [run_command] prints the command under [debug_native_compiler]. *)
+  (* [run_command] (or [spawn_compiler] under slots) prints the command
+     under [debug_native_compiler]. *)
   try
     let res = run_command args in
     match res with

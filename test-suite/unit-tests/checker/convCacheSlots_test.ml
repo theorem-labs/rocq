@@ -11,11 +11,13 @@
    - an error on the slot files other than contention ends the wait at
      once, rather than retrying for ever;
    - a compile dies with the process that started it, and its slot frees;
-   - a compile interrupted by an exception is killed before its slot is
-     released, for the interface and link compiles too.
+   - a compile interrupted by an exception is killed by its holder, with
+     its supervisor unable to do it, and its slot released;
+   - a compile ends even when its supervisor never gets the compiler's
+     SIGCHLD.
 
    The compiler is a shell script standing in for [ocamlfind]: it writes
-   its pid to a file and sleeps. *)
+   its pid to a file, sleeps, and marks that it was not killed. *)
 
 open OUnit
 open Utest
@@ -84,10 +86,13 @@ let read_int f =
   | ch -> let s = (try input_line ch with End_of_file -> "") in close_in ch; int_of_string_opt (String.trim s)
 
 (* A stand-in for [ocamlfind]: writes its pid to $SLOT_TEST_PIDFILE, sleeps
-   [seconds], then exits with [code]. *)
+   [seconds], writes $SLOT_TEST_PIDFILE.done, then exits with [code]. A
+   [.done] file says that nothing killed it. *)
 let slow_compiler name ~seconds ~code =
   let f = Filename.concat temp_dir name in
-  write_file f (Printf.sprintf "#!/bin/sh\necho $$ > \"$SLOT_TEST_PIDFILE\"\nsleep %d\nexit %d\n" seconds code);
+  write_file f (Printf.sprintf
+                  "#!/bin/sh\necho $$ > \"$SLOT_TEST_PIDFILE\"\nsleep %d\ntouch \"$SLOT_TEST_PIDFILE.done\"\nexit %d\n"
+                  seconds code);
   Unix.chmod f 0o755;
   f
 
@@ -100,6 +105,23 @@ let wait_until_dead pid ~seconds =
   let t0 = Unix.gettimeofday () in
   while pid_alive pid && Unix.gettimeofday () -. t0 < seconds do Unix.sleepf 0.05 done;
   not (pid_alive pid)
+
+(* Reap the child [pid], killing it if it has not exited after [seconds]. *)
+let reap_within pid ~seconds =
+  let t0 = Unix.gettimeofday () in
+  let rec go () =
+    match Unix.waitpid [Unix.WNOHANG] pid with
+    | 0, _ ->
+      if Unix.gettimeofday () -. t0 < seconds then (Unix.sleepf 0.02; go ())
+      else begin
+        (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+        (try ignore (Unix.waitpid [] pid) with Unix.Unix_error _ -> ());
+        false
+      end
+    | _ -> true
+    | exception Unix.Unix_error _ -> true
+  in
+  go ()
 
 (* Open the write end of a fifo once a reader is there: [ENXIO] until
    then. This is how a test meets a process that is inside the [open] of
@@ -215,10 +237,12 @@ let () = add_test "a release while a taker reads the record never gives one slot
     let finish () =
       (try ignore (Unix.write_substring go_w "x" 0 1 : int) with Unix.Unix_error _ -> ());
       (try Unix.close go_w with Unix.Unix_error _ -> ());
-      (try ignore (Unix.waitpid [] taker) with Unix.Unix_error _ -> ())
+      (* A taker that came to the fifo too late is still blocked in its
+         [open]: it is killed rather than waited for. *)
+      ignore (reap_within taker ~seconds:10. : bool)
     in
     Fun.protect ~finally:finish (fun () ->
-        (match open_fifo_write fifo ~seconds:10. with
+        (match open_fifo_write fifo ~seconds:30. with
          | None -> assert_failure "the taker never read the slot's record"
          | Some w ->
            Unix.unlink fifo;                            (* the holder releases *)
@@ -287,9 +311,16 @@ let () = add_test "a killed holder's compile dies with it, and its slot frees" (
         | `Acquired s -> Nativelib.release_slot s
         | `Waited -> assert_failure "the slot of the dead holder was not freed"))
 
-let () = add_test "an interrupted compile is killed and reaped before its slot is released" (fun () ->
+(* The interrupted compile must be stopped by the process that ran it
+   ([kill_compiler] in [run_command]), not by its supervisor. Closing the
+   gate would also stop it (the test above), so the alarm handler first
+   forks a keeper that holds a copy of the gate's write end, as any child
+   would: the supervisor then never sees end-of-file, and only the
+   holder's own kill can end the compile before its 20 s are up. *)
+let () = add_test "an interrupted compile is killed by its holder, and its slot released" (fun () ->
   let dir = fresh_dir "interrupted" in
   let pidfile = Filename.concat dir "compiler.pid" in
+  let keeperfile = Filename.concat dir "keeper.pid" in
   let compiler = slow_compiler "slow20.sh" ~seconds:20 ~code:1 in
   match Unix.fork () with
   | 0 ->
@@ -297,7 +328,11 @@ let () = add_test "an interrupted compile is killed and reaped before its slot i
     Unix.putenv "SLOT_TEST_PIDFILE" pidfile;
     let code =
       with_slots dir 1 (fun () ->
-          Sys.set_signal Sys.sigalrm (Sys.Signal_handle (fun _ -> raise Exit));
+          Sys.set_signal Sys.sigalrm (Sys.Signal_handle (fun _ ->
+              (match Unix.fork () with
+               | 0 -> (try Unix.sleepf 60. with _ -> ()); Unix._exit 0
+               | keeper -> write_file keeperfile (string_of_int keeper));
+              raise Exit));
           ignore (Unix.alarm 1);
           match Nativelib.compile_part_files ~base:(Filename.concat dir "Interrupted") [| "", "" |] with
           | _ -> 1                                  (* not interrupted *)
@@ -310,6 +345,7 @@ let () = add_test "an interrupted compile is killed and reaped before its slot i
                  that reaps it is init; it dies with the group the kill
                  reaches, and goes in the moment after. *)
               if not (wait_until_dead p ~seconds:5.) then 2
+              else if Sys.file_exists (pidfile ^ ".done") then 8
               else if not (CList.is_empty !Nativelib.held_slots) then 3
               else if not (CList.is_empty (slot_files dir)) then 4
               else 0
@@ -321,15 +357,48 @@ let () = add_test "an interrupted compile is killed and reaped before its slot i
       | Unix.WEXITED n -> n
       | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> 7
     in
-    (* Do not leave the stand-in running if the test failed. *)
-    Option.iter (fun p -> try Unix.kill (- p) Sys.sigkill with _ -> (try Unix.kill p Sys.sigkill with _ -> ()))
-      (read_int pidfile);
+    (* Do not leave the keeper or the stand-in running if the test failed. *)
+    let kill p = try Unix.kill (- p) Sys.sigkill with _ -> (try Unix.kill p Sys.sigkill with _ -> ()) in
+    Option.iter kill (read_int keeperfile);
+    Option.iter kill (read_int pidfile);
+    assert_bool "the keeper of the gate was not started" (Sys.file_exists keeperfile);
     assert_equal ~printer:(function
-        | 0 -> "killed, reaped and released" | 1 -> "the compile was not interrupted"
+        | 0 -> "killed and released" | 1 -> "the compile was not interrupted"
         | 2 -> "the compiler was alive after its slot was released" | 3 -> "a slot was still held"
         | 4 -> "a slot file was left" | 5 -> "the compiler never started" | 6 -> "another exception"
+        | 8 -> "the compiler ran to its end: its holder did not kill it"
         | n -> "child status " ^ string_of_int n)
       0 code)
+
+(* OCaml runs a signal handler only at a safe point, so a SIGCHLD that
+   lands just before the supervisor's [select] enters the kernel writes
+   its wake-up byte only after [select] returns. A holder with SIGCHLD
+   blocked makes that happen on every compile: its supervisors inherit the
+   mask, and no handler runs at all. The compiles must still end, through
+   the supervisor's own periodic look at its child. *)
+let () = add_test "a compile ends when its supervisor misses the compiler's SIGCHLD" (fun () ->
+  let dir = fresh_dir "nosigchld" in
+  let pidfile = Filename.concat dir "compiler.pid" in
+  let compiler = slow_compiler "quick0.sh" ~seconds:0 ~code:0 in
+  match Unix.fork () with
+  | 0 ->
+    Unix.putenv "OCAMLFIND" compiler;
+    Unix.putenv "SLOT_TEST_PIDFILE" pidfile;
+    ignore (Unix.sigprocmask Unix.SIG_BLOCK [Sys.sigchld] : int list);
+    let code =
+      with_slots dir 1 (fun () ->
+          (* The interfaces, one part and the link: three compiles. *)
+          match Nativelib.compile_part_files ~base:(Filename.concat dir "NoSigchld") [| "", "" |] with
+          | _ -> 0
+          | exception _ -> 1)
+    in
+    Unix._exit code
+  | holder ->
+    (* If the supervisor waits for a wake-up that never comes, the holder
+       never ends: it is killed, which also ends its supervisors (the
+       gate closes). *)
+    let ended = reap_within holder ~seconds:20. in
+    assert_bool "the compiles never ended: a supervisor waited for a SIGCHLD it missed" ended)
 
 let () = add_test "a compiler named without a directory is found on the PATH" (fun () ->
   let dir = fresh_dir "bare" in
