@@ -6,12 +6,13 @@
      held: a second taker does not take the slot;
    - two live processes never hold one slot, and a slot whose holder has
      exited without starting a compiler is taken over;
+   - a holder that releases its slot while a taker reads the record
+     still leaves one holder at a time;
    - an error on the slot files other than contention ends the wait at
      once, rather than retrying for ever;
-   - a slot stays held while the compile of a holder that was killed still
-     runs, and frees when that compile ends;
-   - a compile interrupted by an exception is killed and reaped before its
-     slot is released, for the interface and link compiles too.
+   - a compile dies with the process that started it, and its slot frees;
+   - a compile interrupted by an exception is killed before its slot is
+     released, for the interface and link compiles too.
 
    The compiler is a shell script standing in for [ocamlfind]: it writes
    its pid to a file and sleeps. *)
@@ -100,6 +101,32 @@ let wait_until_dead pid ~seconds =
   while pid_alive pid && Unix.gettimeofday () -. t0 < seconds do Unix.sleepf 0.05 done;
   not (pid_alive pid)
 
+(* Open the write end of a fifo once a reader is there: [ENXIO] until
+   then. This is how a test meets a process that is inside the [open] of
+   a slot file. *)
+let open_fifo_write f ~seconds =
+  let t0 = Unix.gettimeofday () in
+  let rec go () =
+    match Unix.openfile f Unix.[O_WRONLY; O_NONBLOCK] 0 with
+    | fd -> Some fd
+    | exception Unix.Unix_error ((Unix.ENXIO | Unix.ENOENT), _, _) ->
+      if Unix.gettimeofday () -. t0 > seconds then None
+      else (Unix.sleepf 0.01; go ())
+  in
+  go ()
+
+(* What a process writes on [fd], or [None] after [seconds]. *)
+let read_within fd ~seconds =
+  match Unix.select [fd] [] [] seconds with
+  | exception Unix.Unix_error _ -> None
+  | [], _, _ -> None
+  | _ ->
+    let b = Bytes.create 64 in
+    match Unix.read fd b 0 64 with
+    | 0 -> None
+    | n -> Some (String.trim (Bytes.sub_string b 0 n))
+    | exception Unix.Unix_error _ -> None
+
 (** {6 Records} *)
 
 let () = add_test "a slot whose owner record is incomplete or unreadable is held" (fun () ->
@@ -146,6 +173,69 @@ let () = add_test "two live processes never hold one slot; an exited holder's sl
          | `Waited -> assert_failure "the slot of an exited holder was not taken over");
         assert_bool "this process still holds a slot" (CList.is_empty !Nativelib.held_slots)))
 
+(* The release that races a taker's read of the record, driven step by
+   step: the slot file is a fifo, so the taker's own [open] of it inside
+   the record's read is the meeting point. This process opens the write
+   end (the taker is now inside the read), removes the file as a holder
+   that releases does, and only then writes a record naming a process
+   that is gone.
+
+   A taker that counts the slot free here takes generation 1 while
+   generation 0 is missing, and the next taker takes generation 0: two
+   live holders of one slot with a cap of one. *)
+let () = add_test "a release while a taker reads the record never gives one slot two holders" (fun () ->
+  let dir = fresh_dir "release-race" in
+  let fifo = Filename.concat dir "slot.0.0" in
+  Unix.mkfifo fifo 0o600;
+  let gone = match Unix.fork () with
+    | 0 -> Unix._exit 0
+    | p -> ignore (Unix.waitpid [] p); p                     (* a pid that is dead *)
+  in
+  let name_r, name_w = Unix.pipe () in
+  let go_r, go_w = Unix.pipe () in
+  match Unix.fork () with
+  | 0 ->
+    Unix.close name_r; Unix.close go_w;
+    let code =
+      with_slots dir 1 (fun () ->
+          match acquire_within 300 with
+          | `Acquired (Some s) ->
+            let n = Filename.basename s in
+            ignore (Unix.write_substring name_w (n ^ "\n") 0 (String.length n + 1) : int);
+            let b = Bytes.create 1 in
+            ignore (Unix.read go_r b 0 1 : int);        (* hold it until told *)
+            Nativelib.release_slot (Some s); 0
+          | `Acquired None -> 2
+          | `Waited -> 1
+          | exception _ -> 3)
+    in
+    Unix._exit code
+  | taker ->
+    Unix.close name_w; Unix.close go_r;
+    let finish () =
+      (try ignore (Unix.write_substring go_w "x" 0 1 : int) with Unix.Unix_error _ -> ());
+      (try Unix.close go_w with Unix.Unix_error _ -> ());
+      (try ignore (Unix.waitpid [] taker) with Unix.Unix_error _ -> ())
+    in
+    Fun.protect ~finally:finish (fun () ->
+        (match open_fifo_write fifo ~seconds:10. with
+         | None -> assert_failure "the taker never read the slot's record"
+         | Some w ->
+           Unix.unlink fifo;                            (* the holder releases *)
+           let s = string_of_int gone in
+           ignore (Unix.write_substring w s 0 (String.length s) : int);
+           Unix.close w);
+        let got = read_within name_r ~seconds:30. in
+        Unix.close name_r;
+        assert_equal ~msg:"the slot the taker took" ~printer:(fun s -> s)
+          "slot.0.0" (Option.default "none" got);
+        (* The taker holds its slot; with a cap of one, nobody else may. *)
+        with_slots dir 1 (fun () ->
+            match acquire_within 10 with
+            | `Acquired s -> Nativelib.release_slot s;
+              assert_failure "a second process took a slot while the first held one"
+            | `Waited -> ())))
+
 (** {6 Errors} *)
 
 let () = add_test "an error on the slot files other than contention ends the wait" (fun () ->
@@ -163,10 +253,16 @@ let () = add_test "an error on the slot files other than contention ends the wai
 
 (** {6 Compilers} *)
 
-let () = add_test "a slot stays held while the compile of a killed holder runs" (fun () ->
+(* A compile belongs to the process that started it: coqchk, or the
+   worker that holds the slot. When that process dies, the compile and
+   everything it started die with it, so that no compiler keeps a core
+   and coqchk's output busy after the check is gone (a terminal's
+   Ctrl-C, [timeout], or [CheckWorkers.abort]). The slot frees with
+   them. *)
+let () = add_test "a killed holder's compile dies with it, and its slot frees" (fun () ->
   let dir = fresh_dir "killed" in
   let pidfile = Filename.concat dir "compiler.pid" in
-  let compiler = slow_compiler "slow3.sh" ~seconds:3 ~code:1 in
+  let compiler = slow_compiler "slow30.sh" ~seconds:30 ~code:1 in
   match Unix.fork () with
   | 0 ->
     Unix.putenv "OCAMLFIND" compiler;
@@ -180,16 +276,16 @@ let () = add_test "a slot stays held while the compile of a killed holder runs" 
     let compiler_pid = Option.get (read_int pidfile) in
     Unix.kill holder Sys.sigkill;
     ignore (Unix.waitpid [] holder);
-    assert_bool "the compiler died with its holder" (pid_alive compiler_pid);
+    let died = wait_until_dead compiler_pid ~seconds:1. in
+    (* Do not leave a 30 s compiler behind if it did not. *)
+    if not died then
+      (try Unix.kill (- compiler_pid) Sys.sigkill
+       with Unix.Unix_error _ -> (try Unix.kill compiler_pid Sys.sigkill with Unix.Unix_error _ -> ()));
+    assert_bool "the compile outlived the holder that started it" died;
     with_slots dir 1 (fun () ->
-        (match acquire_within 10 with
-         | `Acquired s -> Nativelib.release_slot s;
-           assert_failure "the slot of a killed holder was taken while its compiler ran"
-         | `Waited -> ());
-        assert_bool "the compiler did not end" (wait_until_dead compiler_pid ~seconds:10.);
         match acquire_within 100 with
         | `Acquired s -> Nativelib.release_slot s
-        | `Waited -> assert_failure "the slot was not freed when the compiler ended"))
+        | `Waited -> assert_failure "the slot of the dead holder was not freed"))
 
 let () = add_test "an interrupted compile is killed and reaped before its slot is released" (fun () ->
   let dir = fresh_dir "interrupted" in
@@ -210,7 +306,10 @@ let () = add_test "an interrupted compile is killed and reaped before its slot i
             match read_int pidfile with
             | None -> 5
             | Some p ->
-              if pid_alive p then 2                   (* the compiler outlived its slot *)
+              (* The compiler is the supervisor's child, so the process
+                 that reaps it is init; it dies with the group the kill
+                 reaches, and goes in the moment after. *)
+              if not (wait_until_dead p ~seconds:5.) then 2
               else if not (CList.is_empty !Nativelib.held_slots) then 3
               else if not (CList.is_empty (slot_files dir)) then 4
               else 0

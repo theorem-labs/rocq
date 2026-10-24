@@ -54,8 +54,10 @@ val load_unit : prefixes:string list -> string -> unit
     [Some (dir, cap)]: every compile of generated code holds one of [cap]
     slots in [dir] while its compiler runs (see nativelib.ml). A slot's
     owner record is installed whole; a slot is held while its holder or
-    the process group of the compile it runs is alive, and a record that
-    cannot be read counts as held. *)
+    the compile it runs is alive, a record that cannot be read counts as
+    held, and a record that goes while it is read counts as a release,
+    not as a holder to take the next generation above. A compile dies
+    with the process that started it. *)
 val slots : (string * int) option ref
 
 (** A slot, waiting until one frees and running [poll] between attempts;

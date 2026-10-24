@@ -186,6 +186,15 @@ let compiler_flags ~profile =
       every process it starts are in that group. When both are gone, the
       next taker creates the next generation; nobody removes a file another
       process made.
+    - A holder removes its own slot file when it releases it, and nothing
+      else removes one. So a file still present after its holder was seen
+      dead is the file of a holder that is gone, and the next generation
+      belongs above it; a file that went while it was read was released
+      by a live holder, and the slot itself is free again. Taking the
+      next generation there would leave a free generation below for
+      another taker, and two live holders in one slot. [slot_state] tells
+      the two apart on the descriptor it read the record from
+      ([Unix.fstat], [st_nlink]), and every slot file is a fresh file.
     - A slot file that cannot be parsed counts as held: only a recorded pid
       that no longer exists frees a slot.
     - Only [EEXIST] means contention. Any other error on the slot files
@@ -195,7 +204,12 @@ let compiler_flags ~profile =
       way.
     - A slot is released on every exit of the compile that holds it, after
       the compiler is killed and reaped. A process waits for a slot only
-      before a compile, never while it holds a claim it would wait on. *)
+      before a compile, never while it holds a claim it would wait on.
+    - A compile dies with the process that started it: its supervisor
+      ([spawn_compiler]) kills the compile's group when the gate pipe of
+      the process that asked for it closes. So the slot frees too, and
+      nothing of the check keeps a core or coqchk's output after coqchk
+      is gone. *)
 
 let slots : (string * int) option ref = ref None
 
@@ -214,15 +228,17 @@ let group_alive pgid = pid_alive (- pgid)
 (* The pid a slot file holds: [`Pid p], [`Garbled] for a file that exists
    but holds no pid, [`Gone] for a file removed meanwhile. Any other error
    is raised. *)
+let read_pid_fd fd =
+  let buf = Bytes.create 32 in
+  let n = Unix.read fd buf 0 32 in
+  match int_of_string_opt (String.trim (Bytes.sub_string buf 0 n)) with
+  | Some p when p > 0 -> `Pid p
+  | Some _ | None -> `Garbled
+
 let read_pid f =
   match Unix.openfile f Unix.[O_RDONLY; O_CLOEXEC] 0 with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> `Gone
-  | fd ->
-    let buf = Bytes.create 32 in
-    let n = Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> Unix.read fd buf 0 32) in
-    match int_of_string_opt (String.trim (Bytes.sub_string buf 0 n)) with
-    | Some p when p > 0 -> `Pid p
-    | Some _ | None -> `Garbled
+  | fd -> Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> read_pid_fd fd)
 
 (* Write [content] into a new private file, then install it as [dest];
    [Unix.link] fails with [EEXIST] when [dest] exists. *)
@@ -241,28 +257,45 @@ let install_new ~dest content =
 let rec live_generation dir k g =
   if Sys.file_exists (slot_file dir k (g + 1)) then live_generation dir k (g + 1) else g
 
-(* Whether slot [f] is held: its holder is alive, or the compile group it
-   recorded is. *)
-let slot_held f =
-  match read_pid f with
-  | `Gone -> false
-  | `Garbled -> true
-  | `Pid p ->
-    pid_alive p
-    || (match read_pid (child_file f) with
-        | `Pid g -> group_alive g
-        | `Garbled -> true
-        | `Gone -> false)
+(* The state of the slot file [f]: [`Held] (its holder is alive, or the
+   compile it recorded is, or its record cannot be read), [`Stale] (the
+   file of a holder that is gone: the next generation belongs above it)
+   or [`Free] (no file at all: the slot is free from generation 0).
+
+   The record is read through one descriptor, and the holder's life is
+   tested between that read and [Unix.fstat] of the same descriptor. A
+   link count of zero there says that this very file was removed, which
+   only its holder does, and only while it is alive: the holder released
+   the slot under the reader, so the slot is free rather than stale. A
+   new holder's file is always a new file ([install_new] links one), so
+   the count never answers for another holder's file. *)
+let slot_state f =
+  match Unix.openfile f Unix.[O_RDONLY; O_CLOEXEC] 0 with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> `Free
+  | fd ->
+    Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+        match read_pid_fd fd with
+        | `Garbled -> `Held
+        | `Pid p ->
+          let compiling () = match read_pid (child_file f) with
+            (* Until the compile's [setsid], only its pid exists. *)
+            | `Pid g -> pid_alive g || group_alive g
+            | `Garbled -> true
+            | `Gone -> false
+          in
+          if pid_alive p || compiling () then `Held
+          else if Int.equal (Unix.fstat fd).Unix.st_nlink 0 then `Free
+          else `Stale)
 
 let try_slot dir k =
   let g =
     if not (Sys.file_exists (slot_file dir k 0)) then Some 0
     else
       let g = live_generation dir k 0 in
-      let f = slot_file dir k g in
-      if not (Sys.file_exists f) then None   (* released meanwhile: look again *)
-      else if slot_held f then None
-      else Some (g + 1)
+      match slot_state (slot_file dir k g) with
+      | `Held -> None
+      | `Free -> None               (* released meanwhile: look again *)
+      | `Stale -> Some (g + 1)
   in
   match g with
   | None -> None
@@ -315,25 +348,100 @@ let rec waitpid_non_intr flags pid =
   try Unix.waitpid flags pid
   with Unix.Unix_error (Unix.EINTR, _, _) -> waitpid_non_intr flags pid
 
-(* Start [ocamlfind args] in a process group of its own, holding [slot].
-   The child makes its group, then waits on a pipe; the parent records the
-   group in [<slot>.child] and only then lets it exec. If the parent dies
-   before that, the child reads end-of-file and exits without running the
-   compiler, so no compile ever runs that its slot does not account for.
-   The child is reaped by its pid: in a worker, the main process's
-   [waitpid (-1)] never sees it. *)
+(* The write ends of the gate pipes of the compiles this process has
+   running. A new compile's supervisor closes every one of them, so that
+   the end of its own pipe reaches it when the process that started it
+   is gone, and not when that process's last other compile ends. *)
+let gate_fds : Unix.file_descr list ref = ref []
+
+let close_gate fd =
+  gate_fds := List.filter (fun g -> g <> fd) !gate_fds;
+  (try Unix.close fd with Unix.Unix_error _ -> ())
+
+(* The supervisor of one compile. It is the leader of the compile's
+   process group [pgid], starts the compiler in that group, and exits
+   with the compiler's status, as the compiler itself did before. If the
+   process that asked for the compile dies first, the supervisor reads
+   end-of-file on [gate] and kills the group, itself included: a compile
+   never outlives the coqchk process that started it, neither holding a
+   core nor keeping coqchk's output open. Ctrl-C and [timeout] signal
+   coqchk's process group, which the compile's own group is not part of
+   ([setsid] below), and [CheckWorkers.abort] kills a worker outright, so
+   this is what ends a compile in all three cases. (Linux's
+   [PR_SET_PDEATHSIG] would reach the compiler alone and leave the
+   processes it started, which is where the work is: [ocamlfind] runs
+   [ocamlopt] as a child.)
+
+   The compiler is this process's only child, and a signal cannot
+   interrupt a [select] that has not begun, so SIGCHLD is turned into a
+   byte on a pipe that [select] watches: with the status read before
+   each wait, no exit is missed. *)
+let supervise ~gate ~pgid ocamlfind argv =
+  let sigr, sigw = Unix.pipe ~cloexec:true () in
+  Sys.set_signal Sys.sigchld
+    (Sys.Signal_handle (fun _ -> try ignore (Unix.write_substring sigw "x" 0 1 : int) with _ -> ()));
+  let pid = match Unix.fork () with
+    | 0 ->
+      (try
+         Sys.set_signal Sys.sigchld Sys.Signal_default;
+         Unix.close gate; Unix.close sigr; Unix.close sigw;
+         Unix.execvp ocamlfind argv
+       with _ -> ());
+      Unix._exit 127
+    | pid -> pid
+  in
+  let buf = Bytes.create 64 in
+  let rec wait () =
+    match waitpid_non_intr [Unix.WNOHANG] pid with
+    | 0, _ ->
+      let ready = match Unix.select [gate; sigr] [] [] (-1.) with
+        | r, _, _ -> r
+        | exception Unix.Unix_error _ -> []
+      in
+      let gone = List.exists (fun fd -> fd = gate) ready
+                 && (match Unix.read gate buf 0 1 with
+                     | n -> Int.equal n 0
+                     | exception Unix.Unix_error _ -> true)
+      in
+      if gone then begin
+        (* The compiler, what it started, and this process. *)
+        (try Unix.kill (- pgid) Sys.sigkill with Unix.Unix_error _ -> ());
+        Unix._exit 137
+      end;
+      if List.exists (fun fd -> fd = sigr) ready then
+        (try ignore (Unix.read sigr buf 0 64 : int) with Unix.Unix_error _ -> ());
+      wait ()
+    | _, status -> status
+    | exception Unix.Unix_error _ -> Unix.WEXITED 127
+  in
+  match wait () with
+  | Unix.WEXITED n -> Unix._exit n
+  | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> Unix._exit 128
+
+(* Start [ocamlfind args] in a process group of its own, holding [slot],
+   under a supervisor ([supervise]) that ties it to this process. The
+   child makes its group, then waits on the gate pipe; the parent records
+   the group in [<slot>.child] and only then lets it start the compiler.
+   If the parent dies before that, the child reads end-of-file and exits
+   without running the compiler, so no compile ever runs that its slot
+   does not account for. The parent keeps the gate pipe's write end, and
+   closes it ([close_gate]) when the compile is over and reaped: its end
+   is how the supervisor learns that this process is gone. The supervisor
+   is reaped by its pid: in a worker, the main process's [waitpid (-1)]
+   never sees it. *)
 let spawn_compiler ?slot args =
   let ocamlfind = Boot.Env.ocamlfind () in
-  debug_native_compiler (fun () -> Pp.str (ocamlfind ^ " " ^ (String.concat " " args)));
   let argv = Array.of_list (ocamlfind :: args) in
   let r, w = Unix.pipe ~cloexec:true () in
   match Unix.fork () with
+  | exception e -> Unix.close r; Unix.close w; raise e
   | 0 ->
     (try
+       List.iter (fun fd -> try Unix.close fd with Unix.Unix_error _ -> ()) !gate_fds;
        Unix.close w;
-       ignore (Unix.setsid () : int);
+       let pgid = Unix.setsid () in
        let b = Bytes.create 1 in
-       if Int.equal (Unix.read r b 0 1) 1 then Unix.execvp ocamlfind argv
+       if Int.equal (Unix.read r b 0 1) 1 then supervise ~gate:r ~pgid ocamlfind argv
      with _ -> ());
     Unix._exit 127
   | pid ->
@@ -354,14 +462,14 @@ let spawn_compiler ?slot args =
       if Unix.write_substring w "x" 0 1 <> 1 then raise (Unix.Unix_error (Unix.EIO, "write", "gate"))
     in
     match gate () with
-    | () -> Unix.close w; pid
+    | () -> gate_fds := w :: !gate_fds; pid, w
     | exception e ->
-      (* The child sees end-of-file and exits without exec. *)
+      (* The child sees end-of-file and exits without starting it. *)
       Unix.close w;
       ignore (waitpid_non_intr [] pid);
       raise e
 
-(* Kill a compile's process group, and reap its leader. *)
+(* Kill a compile's process group, and reap its supervisor. *)
 let kill_compiler pid =
   (try Unix.kill (- pid) Sys.sigkill
    with Unix.Unix_error _ -> (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ()));
@@ -371,14 +479,18 @@ let kill_compiler pid =
    its completion, the compiler is killed and reaped before the slot is
    released. Without slots, as [CUnix.sys_command] runs it. *)
 let run_command args =
+  let ocamlfind = Boot.Env.ocamlfind () in
+  debug_native_compiler (fun () -> Pp.str (ocamlfind ^ " " ^ (String.concat " " args)));
   match !slots with
-  | None -> CUnix.sys_command (Boot.Env.ocamlfind ()) args
+  | None -> CUnix.sys_command ocamlfind args
   | Some _ ->
     let slot = acquire_slot () in
     Fun.protect ~finally:(fun () -> release_slot slot) (fun () ->
-        let pid = spawn_compiler ?slot args in
+        let pid, gate = spawn_compiler ?slot args in
         let finished = ref false in
-        Fun.protect ~finally:(fun () -> if not !finished then kill_compiler pid) (fun () ->
+        Fun.protect
+          ~finally:(fun () -> if not !finished then kill_compiler pid; close_gate gate)
+          (fun () ->
             let _, status = waitpid_non_intr [] pid in
             finished := true;
             status))
@@ -398,7 +510,7 @@ let call_compiler ?profile:(profile=false) ml_filename =
   in
   let args =
     initial_args @ ("-o" :: link_filename :: compiler_flags ~profile) @ ["-impl"; ml_filename] in
-  debug_native_compiler (fun () -> Pp.str (Boot.Env.ocamlfind () ^ " " ^ (String.concat " " args)));
+  (* [run_command] prints the command under [debug_native_compiler]. *)
   try
     let res = run_command args in
     match res with
@@ -518,15 +630,16 @@ let compile_part_files ~base files =
   let t0 = Unix.gettimeofday () in
   run_compiler (["opt"; "-c"] @ flags @ List.init n (fun k -> name (k + 1) ^ ".mli"));
   let t_intf = Unix.gettimeofday () -. t0 in
-  let running = ref [] in          (* (pid, slot, part, start) *)
+  let running = ref [] in          (* (pid, gate, slot, part, start) *)
   let times = Array.make n 0. in
   let failed = ref None in
   let reap ~block =
-    running := List.filter (fun (pid, slot, k, start) ->
+    running := List.filter (fun (pid, gate, slot, k, start) ->
         match waitpid_non_intr (if block then [] else [Unix.WNOHANG]) pid with
         | 0, _ -> true
         | _, status ->
           times.(k) <- Unix.gettimeofday () -. start;
+          close_gate gate;
           release_slot slot;
           (match status with
            | Unix.WEXITED 0 -> ()
@@ -536,7 +649,7 @@ let compile_part_files ~base files =
       !running
   in
   let kill_all () =
-    List.iter (fun (pid, slot, _, _) -> kill_compiler pid; release_slot slot) !running;
+    List.iter (fun (pid, gate, slot, _, _) -> kill_compiler pid; close_gate gate; release_slot slot) !running;
     running := []
   in
   let t1 = Unix.gettimeofday () in
@@ -546,7 +659,7 @@ let compile_part_files ~base files =
           let slot = acquire_slot ~poll:(fun () -> reap ~block:false) () in
           let args = ["opt"; "-c"; "-opaque"] @ flags @ ["-impl"; name (k + 1) ^ source_ext] in
           match spawn_compiler ?slot args with
-          | pid -> running := (pid, slot, k, Unix.gettimeofday ()) :: !running
+          | pid, gate -> running := (pid, gate, slot, k, Unix.gettimeofday ()) :: !running
           | exception e -> release_slot slot; raise e
         end
       done;
