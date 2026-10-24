@@ -60,3 +60,16 @@ val wpsatz_Z : int -> Names.Id.t -> EConstr.t -> unit Proofview.tactic
 
 (** [dump_proof_term] generates the Rocq representation of a Micromega proof witness *)
 val dump_proof_term : Micromega.zArithProof -> EConstr.t
+
+(** {5 For the unit tests. } *)
+
+(** [lia_witness_list ~reuse search cnf] finds a certificate for each clause of [cnf] as
+    {!xlia} does, with [search] in place of the search of one clause. [reuse] tells whether
+    the flag [Micromega Reuse] is set. *)
+val lia_witness_list :
+  reuse:bool ->
+  (Micromega.z Micromega.nFormula list -> Certificate.zres) ->
+  (Micromega.z Micromega.nFormula, 'tag) Micromega.clause list ->
+  ( Micromega.zArithProof list,
+    (int * Micromega.z list) * (Micromega.z Micromega.nFormula, 'tag) Micromega.clause )
+  Certificate.res

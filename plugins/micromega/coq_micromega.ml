@@ -79,6 +79,12 @@ let { Goptions.get = use_nra_cache } =
     ~value:true
     ()
 
+let { Goptions.get = use_reuse } =
+  declare_bool_option_and_ref
+    ~key:["Micromega"; "Reuse"]
+    ~value:true
+    ()
+
 let { Goptions.get = show_used_hyps } =
   declare_bool_option_and_ref
     ~key:["Info";"Micromega"]
@@ -1559,6 +1565,14 @@ let micromega_order_change spec cert cert_typ env ff (*: unit Proofview.tactic*)
 
 open Certificate
 
+(** What [witness_list] needs to prove a clause with a certificate found for another clause
+    of the same goal. *)
+type ('a, 'prf) reuse_check =
+  { checker : 'a list -> 'prf -> bool
+  ; (* the checker that the kernel runs on a clause and its certificate *)
+    hash : 'a -> int
+        (* a hash of a formula, equal on formulas that [witness_list] finds equal *) }
+
 type ('option, 'a, 'prf, 'model) prover =
   { name : string
   ; (* name of the prover *)
@@ -1570,6 +1584,8 @@ type ('option, 'a, 'prf, 'model) prover =
   ; (* extract the indexes of the hypotheses really used in the proof *)
     compact : 'prf -> (int -> int) -> 'prf
   ; (* remap the hyp indexes according to function *)
+    check : ('a, 'prf) reuse_check option
+  ; (* how to reuse a certificate on another clause; None if the prover does not *)
     pp_prf : out_channel -> 'prf -> unit
   ; (* pretting printing of proof *)
     pp_f : out_channel -> 'a -> unit
@@ -1590,7 +1606,7 @@ let find_witness p polys1 =
   * Return the proofs as a list.
   *)
 
-let witness_list prover l =
+let search_witness_list prover l =
   let rec xwitness_list stack l =
     match stack with
     | [] -> Prf l
@@ -1601,6 +1617,120 @@ let witness_list prover l =
       | Prf w -> xwitness_list stack (w :: l)
   in
   xwitness_list (List.rev l) []
+
+(**
+  * As [search_witness_list], with its result whenever that result is a success: reuse only
+  * makes a failing goal fail sooner. The first pass tries a clause with the certificates that
+  * search found for the clauses before it, newest first, before it searches the clause. A
+  * certificate is tried on a clause that contains every formula it cites ([eq_cst] compares the
+  * coefficients), renumbered to their positions there, and used if [check.checker] accepts it.
+  * A failed search ends the first pass with that failure, and [search_witness_list] fails on [l]
+  * too: it searches the same clause, which gives the same failure, or it fails on a clause before
+  * it.
+  * If reuse proved a clause, a second pass searches each clause that reuse proved, in the order
+  * of [search_witness_list], and takes the certificate that the first pass found for each other
+  * clause. A search depends only on its clause, so the second pass gives what
+  * [search_witness_list prover l] gives, failure included.
+  *)
+let reuse_witness_list check eq_cst prover l =
+  let eq_formula (p1, o1) (p2, o2) =
+    let open Mutils.Hash in
+    eq_pol eq_cst p1 p2 && eq_op1 o1 o2
+  in
+  (* the position of [f], of hash [h], in the clause of [tbl] (see [positions]) *)
+  let position tbl h f =
+    List.find_map
+      (fun (f', i) -> if eq_formula f f' then Some i else None)
+      (Hashtbl.find_all tbl h)
+  in
+  (* maps each formula of [fs] to its first position in [fs] *)
+  let positions fs =
+    let tbl = Hashtbl.create 17 in
+    List.iteri
+      (fun i f ->
+        let h = check.hash f in
+        if Option.is_empty (position tbl h f) then Hashtbl.add tbl h (f, i))
+      fs;
+    tbl
+  in
+  (* [cited] lists the formulas that [prf] cites, with their index in its own clause and
+     their hash *)
+  let renumber tbl (cited, prf) =
+    let rec remap m = function
+      | [] -> Some m
+      | (i, h, f) :: cited -> (
+        match position tbl h f with
+        | None -> None
+        | Some j -> remap (IMap.add i j m) cited )
+    in
+    match remap IMap.empty cited with
+    | None -> None
+    | Some m ->
+      (* [compact] maps only the indexes that [prf] cites *)
+      Some (prover.compact prf (fun i -> Option.default i (IMap.find_opt i m)))
+  in
+  let reuse found clause =
+    let fs = List.map fst clause in
+    let tbl = positions fs in
+    List.find_map
+      (fun c ->
+        match renumber tbl c with
+        | Some prf when check.checker fs prf -> Some prf
+        | _ -> None)
+      found
+  in
+  (* the formulas that [prf], found for [clause], cites, if they all are in [clause] *)
+  let cited clause prf =
+    let hyps = prover.hyps prf in
+    let cited =
+      CList.map_filter_i
+        (fun i (f, _) -> if ISet.mem i hyps then Some (i, check.hash f, f) else None)
+        clause
+    in
+    if Int.equal (List.length cited) (ISet.cardinal hyps) then Some (cited, prf) else None
+  in
+  (* The second pass. [visited]: each clause with [Some w] if the first pass searched it and
+     found [w], [None] if reuse proved it, last clause first, as [search_witness_list] visits
+     them. *)
+  let rec rerun visited acc =
+    match visited with
+    | [] -> Prf acc
+    | (_, Some w) :: visited -> rerun visited (w :: acc)
+    | (e, None) :: visited -> (
+      match find_witness prover e with
+      | Model m -> Model (m, e)
+      | Unknown -> Unknown
+      | Prf w -> rerun visited (w :: acc) )
+  in
+  (* The first pass. [found]: the certificates found by search that may be tried, newest first.
+     [reused]: reuse proved a clause. [visited]: the clauses visited so far, as in [rerun],
+     newest first. *)
+  let rec xwitness_list found reused stack visited =
+    match stack with
+    | [] ->
+      if reused then rerun (List.rev visited) [] else Prf (CList.map_filter snd visited)
+    | e :: stack -> (
+      match if CList.is_empty found then None else reuse found e with
+      | Some _ -> xwitness_list found true stack ((e, None) :: visited)
+      | None -> (
+        match find_witness prover e with
+        | Model m -> Model (m, e)
+        | Unknown -> Unknown
+        | Prf w ->
+          let found =
+            if CList.is_empty stack then found
+            else match cited e w with Some c -> c :: found | None -> found
+          in
+          xwitness_list found reused stack ((e, Some w) :: visited) ) )
+  in
+  xwitness_list [] false (List.rev l) []
+
+(** [witness_list ~reuse eq_cst prover l] finds a certificate for each clause of [l], trying
+    them across clauses when [reuse] holds and [prover] can check them. *)
+let witness_list ~reuse eq_cst prover l =
+  match prover.check with
+  | Some check when reuse -> reuse_witness_list check eq_cst prover l
+  | Some _ | None -> search_witness_list prover l
 
 (*  let t1 = System.get_time () in
   let res = witness_list p g in
@@ -1824,7 +1954,7 @@ let micromega_tauto ?(abstract=true) pre_process cnf spec prover
   (* Construction of cnf *)
   let pre_ff = pre_process mt (ff : 'a formula) in
   let cnf_ff, cnf_ff_tags = cnf Mc.IsProp pre_ff in
-  match witness_list prover cnf_ff with
+  match witness_list ~reuse:(use_reuse ()) spec.coeff_eq prover cnf_ff with
   | Model m -> Model m
   | Unknown -> Unknown
   | Prf res ->
@@ -2358,6 +2488,7 @@ let linear_prover_Q =
         lift_pexpr_prover (Certificate.linear_prover_with_cert o) l)
   ; hyps = hyps_of_cone
   ; compact = compact_cone
+  ; check = None
   ; pp_prf = pp_psatz pp_q
   ; pp_f = (fun o x -> pp_pol pp_q o (fst x)) }
 
@@ -2369,6 +2500,7 @@ let linear_prover_R =
         lift_pexpr_prover (Certificate.linear_prover_with_cert o) l)
   ; hyps = hyps_of_cone
   ; compact = compact_cone
+  ; check = None
   ; pp_prf = pp_psatz pp_q
   ; pp_f = (fun o x -> pp_pol pp_q o (fst x)) }
 
@@ -2378,6 +2510,7 @@ let nlinear_prover_R =
   ; prover = memo_nra
   ; hyps = hyps_of_cone
   ; compact = compact_cone
+  ; check = None
   ; pp_prf = pp_psatz pp_q
   ; pp_f = (fun o x -> pp_pol pp_q o (fst x)) }
 
@@ -2387,6 +2520,7 @@ let non_linear_prover_Q str o =
   ; prover = (fun (o, l) -> call_csdpcert_q o l)
   ; hyps = hyps_of_cone
   ; compact = compact_cone
+  ; check = None
   ; pp_prf = pp_psatz pp_q
   ; pp_f = (fun o x -> pp_pol pp_q o (fst x)) }
 
@@ -2396,6 +2530,7 @@ let non_linear_prover_R str o =
   ; prover = (fun (o, l) -> call_csdpcert_q o l)
   ; hyps = hyps_of_cone
   ; compact = compact_cone
+  ; check = None
   ; pp_prf = pp_psatz pp_q
   ; pp_f = (fun o x -> pp_pol pp_q o (fst x)) }
 
@@ -2405,8 +2540,14 @@ let non_linear_prover_Z str o =
   ; prover = (fun (o, l) -> lift_ratproof (call_csdpcert_z o) l)
   ; hyps = hyps_of_pt
   ; compact = compact_pt
+  ; check = None
   ; pp_prf = pp_proof_term
   ; pp_f = (fun o x -> pp_pol pp_z o (fst x)) }
+
+let zarith_reuse_check =
+  Some
+    { checker = Mc.zChecker
+    ; hash = (fun (p, o) -> Hash.hash_op1 (Hash.hash_pol Hash.hash_z 0 p) o) }
 
 let linear_Z =
   { name = "lia"
@@ -2414,6 +2555,7 @@ let linear_Z =
   ; prover = memo_lia
   ; hyps = hyps_of_pt
   ; compact = compact_pt
+  ; check = zarith_reuse_check
   ; pp_prf = pp_proof_term
   ; pp_f = (fun o x -> pp_pol pp_z o (fst x)) }
 
@@ -2423,8 +2565,12 @@ let nlinear_Z =
   ; prover = memo_nlia
   ; hyps = hyps_of_pt
   ; compact = compact_pt
+  ; check = zarith_reuse_check
   ; pp_prf = pp_proof_term
   ; pp_f = (fun o x -> pp_pol pp_z o (fst x)) }
+
+let lia_witness_list ~reuse search cnf =
+  witness_list ~reuse Mc.Z.eqb { linear_Z with prover = (fun (_, l) -> search l) } cnf
 
 (**
   * Functions instantiating micromega_gen with the appropriate theories and
