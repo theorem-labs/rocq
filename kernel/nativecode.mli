@@ -88,7 +88,33 @@ type definition = Dconst of Constant.t | Dind of MutInd.t
 
 val definition_equal : definition -> definition -> bool
 val definition_compare : definition -> definition -> int
+(** For messages only: a kernel identifier read from an object may hold
+    any bytes, '.' included, so two different kernel names can print the
+    same. What tells two definitions apart is [definition_compare], or
+    [definition_name] below. *)
 val definition_to_string : definition -> string
+
+(** The name of a definition for a cache: its user kernel name, in the
+    injective encoding of the generated code's names. Two definitions have
+    the same name exactly when [definition_equal] holds, which is the
+    identity the environment's maps and the generated globals use. It is a
+    string so that it marshals to the same bytes whatever it shares in
+    memory.
+
+    This name finds a definition; it does not decide that compiled code
+    can be reused. That also needs the declaration, and the canonical
+    identity the code keeps ([retained_canonical_name]). *)
+val definition_name : definition -> string
+val constant_name : Constant.t -> string
+
+(** [retained_canonical_name env d] is the canonical kernel name that the
+    generated code of [d] keeps, read from [env]'s own entry for [d]'s
+    user name and encoded as [definition_name] is; [None] when the code
+    keeps none. The code of a constant that is not a transparent [Def],
+    and of an inductive, holds the [Constant.t] or [MutInd.t] in its
+    accumulators, which the native conversion compares by canonical name:
+    such code is right only where the canonical name is the same. *)
+val retained_canonical_name : env -> definition -> string option
 
 (** [closure_graph env sigma ts] is what [mk_deps_code] would emit for
     [ts], without generating anything: each definition the code of [ts]

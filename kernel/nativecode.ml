@@ -2553,6 +2553,61 @@ let definition_to_string = function
   | Dconst c -> "c" ^ Constant.to_string c
   | Dind m -> "i" ^ MutInd.to_string m
 
+(* The name of a definition for a cache that must tell two definitions
+   apart: its user kernel name, in the injective encoding of the generated
+   code's names ("Printing to ocaml" above), which writes every identifier
+   escaped and length-prefixed and every module path with its structure.
+   The user name is what [definition_equal] and [definition_compare], the
+   environment's maps ([Cmap_env], [Mindmap_env]) and the generated
+   global names use: two constants with one user name are one entry of the
+   environment and one global of the generated code, so they are one
+   definition for the cache too, and an alias does not stop a reuse. The
+   printed name of [definition_to_string] is for messages only: a kernel
+   identifier read from an object may hold any bytes, '.' included, so two
+   different kernel names can print the same.
+
+   It is a string, not the kernel name itself, because the cache compares
+   marshalled keys byte for byte: a kernel name read back from a manifest
+   is a copy that shares nothing with the declarations in memory, and
+   [Marshal] writes shared and unshared values differently. *)
+let constant_name c = "c" ^ injective_string_of_kn (Constant.user c)
+
+let definition_name = function
+  | Dconst c -> constant_name c
+  | Dind m -> "i" ^ injective_string_of_kn (MutInd.user m)
+
+(* The canonical identity that the generated code of a definition keeps,
+   in this environment, encoded as above; [None] when its code keeps none.
+
+   A name, user or canonical, is not enough to decide that compiled code
+   can be used in another environment. The global names of the generated
+   code are user names, but [compile_constant] gives a constant that is
+   not a transparent [Def] (an axiom, an opaque proof, a primitive, a
+   symbol) the code of an accumulator that holds the [Constant.t] itself
+   ([SymbConst]), and [compile_mind] gives every inductive accumulators
+   and projections that hold the inductive ([SymbInd], [SymbProj]). The
+   conversion of [Nativeconv] compares those atoms by their canonical
+   names. So the code of such a definition, compiled where its canonical
+   name is one kernel name, gives the wrong answer where it is another.
+   The canonical name is read from this environment's entry for the user
+   name ([Environ.lookup_constant_key], [lookup_mind_key]), never from the
+   [Constant.t] or [MutInd.t] at hand, which can come from another
+   environment.
+
+   The code of a transparent [Def] constant keeps no identity of its own:
+   it calls the globals it names by their user names, and the atoms it
+   builds come from its body, whose terms carry their canonical names. *)
+let retained_canonical_name env = function
+  | Dconst c ->
+    let cb, _, canonical = lookup_constant_key c env in
+    begin match cb.const_body with
+      | Def _ -> None
+      | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> Some (injective_string_of_kn canonical)
+    end
+  | Dind m ->
+    let _, _, canonical = lookup_mind_key m env in
+    Some (injective_string_of_kn canonical)
+
 (* The globals that the code of [t] names, in the order they are met,
    following the local definitions that its code inlines, as
    [compile_deps] does, but not the bodies of the globals. *)

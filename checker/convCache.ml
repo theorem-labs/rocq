@@ -115,10 +115,21 @@ let read_file path =
 (* The claim files of a key share this base name; see [try_claim]. *)
 let claim_file key = !cache_dir / ("k" ^ Digest.to_hex (Digest.string key))
 
-(** {6 The index a worker keeps of what is published and claimed} *)
+(** {6 The index a worker keeps of what is published and claimed}
+
+    Everything that stands for a definition here is the definition
+    itself, never its printed name: a kernel identifier read from an
+    object may hold any bytes, '.' included, so two different kernel
+    names can print the same, and a cache that keyed on the printed name
+    would give one definition's code to another. *)
+
+module DefMap = Map.Make (struct
+    type t = definition
+    let compare = definition_compare
+  end)
 
 let units : (string, manifest) Hashtbl.t = Hashtbl.create 97
-let by_def : (string, (string * entry) list) Hashtbl.t = Hashtbl.create 997
+let by_def : (string * entry) list DefMap.t ref = ref DefMap.empty
 let claims : (string, int) Hashtbl.t = Hashtbl.create 97   (* claim file -> pid *)
 let indexed : (string, unit) Hashtbl.t = Hashtbl.create 997       (* files read *)
 
@@ -130,8 +141,8 @@ let loaded_order : string list ref = ref []
 let add_manifest m =
   Hashtbl.replace units m.m_prefix m;
   List.iter (fun e ->
-      let k = definition_to_string e.e_def in
-      Hashtbl.replace by_def k ((m.m_prefix, e) :: (try Hashtbl.find by_def k with Not_found -> [])))
+      let others = try DefMap.find e.e_def !by_def with Not_found -> [] in
+      by_def := DefMap.add e.e_def ((m.m_prefix, e) :: others) !by_def)
     m.m_defs
 
 let read_manifest file =
@@ -170,10 +181,29 @@ let refresh_index () =
 
 (** {6 Keys} *)
 
-let key_memo : (string, string option) Hashtbl.t = Hashtbl.create 997
+module DefHash = Hashtbl.Make (struct
+    type t = definition
+    let equal = definition_equal
+    let hash d = Hashtbl.hash (definition_name d)
+  end)
 
+let key_memo : string option DefHash.t = DefHash.create 997
+
+(* The key of a definition, computed from this process's environment. It
+   holds what decides whether code compiled elsewhere computes here what
+   this declaration computes:
+   - the user name, which finds the definition ([definition_name]);
+   - the canonical name that its code keeps, if any, as this
+     environment has it ([retained_canonical_name]): the code of an axiom,
+     an opaque proof, a primitive, a symbol or an inductive holds it in
+     its accumulators, which the conversion compares by canonical name;
+   - the declaration, and the names of the globals its code calls.
+   The canonical name is read from this environment's entry for the user
+   name, never from the [Constant.t] at hand: in [verify] that is the
+   producer's, from its manifest. *)
 let marshal_key env sigma d =
-  let refs = List.map definition_to_string (direct_references env sigma d) in
+  let refs = List.map definition_name (direct_references env sigma d) in
+  let canonical = retained_canonical_name env d in
   match d with
   | Dconst c ->
     let cb = Environ.lookup_constant c env in
@@ -185,17 +215,17 @@ let marshal_key env sigma d =
       | Declarations.Symbol b -> `Symbol b
     in
     let alias = match cb.Declarations.const_body_code with
-      | Some (Vmemitcodes.BCalias kn) -> Some (Constant.to_string kn)
+      | Some (Vmemitcodes.BCalias kn) -> Some (constant_name kn)
       | Some (Vmemitcodes.BCdefined _) | Some Vmemitcodes.BCconstant | None -> None
     in
     Marshal.to_string
-      (`Constant (Constant.to_string c, body, cb.Declarations.const_hyps,
+      (`Constant (definition_name d, canonical, body, cb.Declarations.const_hyps,
                   cb.Declarations.const_univ_hyps, cb.Declarations.const_universes, alias, refs))
       []
   | Dind m ->
     (* The whole declaration: a later step may read more of it than the
        relocation tables the code generation reads today. *)
-    Marshal.to_string (`Inductive (MutInd.to_string m, Environ.lookup_mind m env, refs)) []
+    Marshal.to_string (`Inductive (definition_name d, canonical, Environ.lookup_mind m env, refs)) []
 
 (* [None] when the declaration is not in this environment, or does not
    marshal: such a definition is neither reused nor claimed. A unit of a
@@ -203,8 +233,7 @@ let marshal_key env sigma d =
    [Environ.lookup_constant] raises an anomaly for it, so every failure
    here is caught, [Sys.Break] apart. *)
 let key env sigma d =
-  let name = definition_to_string d in
-  match Hashtbl.find_opt key_memo name with
+  match DefHash.find_opt key_memo d with
   | Some k -> k
   | None ->
     let known = match d with
@@ -218,7 +247,7 @@ let key env sigma d =
         | exception Sys.Break -> raise Sys.Break
         | exception _ -> None
     in
-    Hashtbl.replace key_memo name k;
+    DefHash.replace key_memo d k;
     k
 
 (** {6 Reusing} *)
@@ -226,10 +255,11 @@ let key env sigma d =
 let verified : (string, bool) Hashtbl.t = Hashtbl.create 97
 
 (* A unit may be reused when every definition it defines, and every
-   definition of the units it refers to, has in this environment the
-   declaration and the references it had in the producer. That is more
-   than the call graph of what is reused, and so never reuses code the
-   call-graph rule would refuse. *)
+   definition of the units it refers to, has in this environment the key
+   it had in the producer: the same declaration, the same references, and
+   the same canonical name where its code keeps one ([marshal_key]). That
+   is more than the call graph of what is reused, and so never reuses
+   code the call-graph rule would refuse. *)
 let rec verify env sigma prefix =
   match Hashtbl.find_opt verified prefix with
   | Some b -> b
@@ -292,7 +322,7 @@ let available env d = match definition_prefix env d with
 let reuse env sigma closure =
   List.iter (fun d ->
       if not (available env d) then
-        match Hashtbl.find_opt by_def (definition_to_string d) with
+        match DefMap.find_opt d !by_def with
         | None -> ()
         | Some candidates ->
           let ok (prefix, e) =
