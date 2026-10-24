@@ -65,8 +65,10 @@ val dump_proof_term : Micromega.zArithProof -> EConstr.t
 
 (** [lia_witness_list ~reuse search cnf] finds a certificate for each clause of [cnf] as
     {!xlia} does, with [search] in place of the search of one clause. [reuse] tells whether
-    the flag [Micromega Reuse] is set. *)
+    the flag [Micromega Reuse] is set. [clock] (default [Sys.time]) gives the time that the
+    time budget of reuse counts. *)
 val lia_witness_list :
+  ?clock:(unit -> float) ->
   reuse:bool ->
   (Micromega.z Micromega.nFormula list -> Certificate.zres) ->
   (Micromega.z Micromega.nFormula, 'tag) Micromega.clause list ->

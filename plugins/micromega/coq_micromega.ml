@@ -1620,10 +1620,11 @@ let search_witness_list prover l =
 
 (**
   * As [search_witness_list], with its result whenever that result is a success: reuse only
-  * makes a failing goal fail sooner. The first pass tries a clause with the certificates that
-  * search found for the clauses before it, newest first, before it searches the clause. A
-  * certificate is tried on a clause that contains every formula it cites ([eq_cst] compares the
-  * coefficients), renumbered to their positions there, and used if [check.checker] accepts it.
+  * makes a failing goal fail sooner. The first pass tries a clause with at most [max_tries] of
+  * the certificates that search found for the clauses before it, before it searches the clause,
+  * while the time spent in these tries is within the budget below. A certificate is tried on a
+  * clause that contains every formula it cites ([eq_cst] compares the coefficients), renumbered
+  * to their positions there, and used if [check.checker] accepts it.
   * A failed search ends the first pass with that failure, and [search_witness_list] fails on [l]
   * too: it searches the same clause, which gives the same failure, or it fails on a clause before
   * it.
@@ -1631,8 +1632,9 @@ let search_witness_list prover l =
   * of [search_witness_list], and takes the certificate that the first pass found for each other
   * clause. A search depends only on its clause, so the second pass gives what
   * [search_witness_list prover l] gives, failure included.
+  * [clock] gives the time that the budget counts; the tactics use [Sys.time].
   *)
-let reuse_witness_list check eq_cst prover l =
+let reuse_witness_list ~clock check eq_cst prover l =
   let eq_formula (p1, o1) (p2, o2) =
     let open Mutils.Hash in
     eq_pol eq_cst p1 p2 && eq_op1 o1 o2
@@ -1669,15 +1671,22 @@ let reuse_witness_list check eq_cst prover l =
       (* [compact] maps only the indexes that [prf] cites *)
       Some (prover.compact prf (fun i -> Option.default i (IMap.find_opt i m)))
   in
+  (* A clause tries at most [max_tries] certificates, so reuse adds at most a constant number of
+     checks to a clause's search. The certificate that proves a clause moves to the front of
+     [found]. *)
+  let max_tries = 8 in
   let reuse found clause =
     let fs = List.map fst clause in
     let tbl = positions fs in
-    List.find_map
-      (fun c ->
+    let rec try_found n before = function
+      | [] -> None
+      | _ when Int.equal n max_tries -> None
+      | c :: after -> (
         match renumber tbl c with
-        | Some prf when check.checker fs prf -> Some prf
-        | _ -> None)
-      found
+        | Some prf when check.checker fs prf -> Some (prf, c :: List.rev_append before after)
+        | _ -> try_found (n + 1) (c :: before) after )
+    in
+    try_found 0 [] found
   in
   (* the formulas that [prf], found for [clause], cites, if they all are in [clause] *)
   let cited clause prf =
@@ -1702,34 +1711,68 @@ let reuse_witness_list check eq_cst prover l =
       | Unknown -> Unknown
       | Prf w -> rerun visited (w :: acc) )
   in
-  (* The first pass. [found]: the certificates found by search that may be tried, newest first.
-     [reused]: reuse proved a clause. [visited]: the clauses visited so far, as in [rerun],
-     newest first. *)
-  let rec xwitness_list found reused stack visited =
+  (* The time budget. On a goal that succeeds, the time beyond stock's is [check_t]: the time of
+     the first pass outside its searches, that is the tries of stored certificates and their
+     bookkeeping. The cap above bounds the number of checks, not their cost: a check can cost a
+     good part of a search (with large coefficients, for instance). So a clause tries reuse only
+     while [check_t] is at most 1/16 of the search time of the goal: [search_t], the time of the
+     searches so far, plus, for each clause that reuse proved and that the second pass searches,
+     the mean time of a search so far. Then [check_t] stays below about 6% of the time of the
+     searches of the goal without reuse (as the mean estimates it), plus the cost of one try,
+     however much a check costs. A goal that stock proves within a Timeout is proved within it
+     with reuse unless the margin is below that, about the spread of stock's own time from run
+     to run. A clause that the budget keeps from reuse is searched, as stock does: the budget
+     changes which clauses the first pass searches, never the result. *)
+  let search_t = ref 0. and check_t = ref 0. and searched_n = ref 0 and reused_n = ref 0 in
+  let in_budget () =
+    let mean_search = !search_t /. float_of_int (max 1 !searched_n) in
+    !check_t <= (!search_t +. (float_of_int !reused_n *. mean_search)) /. 16.
+  in
+  let mark = ref (clock ()) in
+  (* adds the time since the last mark to [t] *)
+  let charge t =
+    let now = clock () in
+    t := !t +. (now -. !mark);
+    mark := now
+  in
+  (* The first pass. [found]: the certificates found by search that may be tried, in the order a
+     clause tries them: a certificate goes to the front when a search finds it and when it proves
+     a clause. [visited]: the clauses visited so far, as in [rerun], newest first. *)
+  let rec xwitness_list found stack visited =
     match stack with
     | [] ->
-      if reused then rerun (List.rev visited) [] else Prf (CList.map_filter snd visited)
+      if !reused_n > 0 then rerun (List.rev visited) []
+      else Prf (CList.map_filter snd visited)
     | e :: stack -> (
-      match if CList.is_empty found then None else reuse found e with
-      | Some _ -> xwitness_list found true stack ((e, None) :: visited)
+      let tried =
+        if CList.is_empty found || not (in_budget ()) then None else reuse found e
+      in
+      charge check_t;
+      match tried with
+      | Some (_, found) ->
+        incr reused_n;
+        xwitness_list found stack ((e, None) :: visited)
       | None -> (
         match find_witness prover e with
         | Model m -> Model (m, e)
         | Unknown -> Unknown
         | Prf w ->
+          charge search_t;
+          incr searched_n;
           let found =
             if CList.is_empty stack then found
             else match cited e w with Some c -> c :: found | None -> found
           in
-          xwitness_list found reused stack ((e, Some w) :: visited) ) )
+          xwitness_list found stack ((e, Some w) :: visited) ) )
   in
-  xwitness_list [] false (List.rev l) []
+  xwitness_list [] (List.rev l) []
 
 (** [witness_list ~reuse eq_cst prover l] finds a certificate for each clause of [l], trying
-    them across clauses when [reuse] holds and [prover] can check them. *)
-let witness_list ~reuse eq_cst prover l =
+    them across clauses when [reuse] holds and [prover] can check them. [clock] is for the unit
+    tests (see [reuse_witness_list]). *)
+let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
   match prover.check with
-  | Some check when reuse -> reuse_witness_list check eq_cst prover l
+  | Some check when reuse -> reuse_witness_list ~clock check eq_cst prover l
   | Some _ | None -> search_witness_list prover l
 
 (*  let t1 = System.get_time () in
@@ -2569,8 +2612,8 @@ let nlinear_Z =
   ; pp_prf = pp_proof_term
   ; pp_f = (fun o x -> pp_pol pp_z o (fst x)) }
 
-let lia_witness_list ~reuse search cnf =
-  witness_list ~reuse Mc.Z.eqb { linear_Z with prover = (fun (_, l) -> search l) } cnf
+let lia_witness_list ?clock ~reuse search cnf =
+  witness_list ?clock ~reuse Mc.Z.eqb { linear_Z with prover = (fun (_, l) -> search l) } cnf
 
 (**
   * Functions instantiating micromega_gen with the appropriate theories and
