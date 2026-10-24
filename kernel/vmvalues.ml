@@ -368,6 +368,11 @@ external accumulate : unit -> tcode = "rocq_accumulate"
 external set_bytecode_field : Obj.t -> int -> tcode -> unit = "rocq_set_bytecode_field"
 let accumulate = accumulate ()
 
+(* The chain of a packed positive number (kernel/byterun/rocq_binnum.h): a
+   fresh block of tag 1 or 2, the head of the chain. Packed blocks have
+   OCaml's [lazy_tag], which no other VM value has. *)
+external expand_packed : Obj.t -> Obj.t = "rocq_binnum_expand"
+
 let whd_val (v: values) =
   let o = Obj.repr v in
   if Obj.is_int o then Vconst (Obj.obj o)
@@ -388,6 +393,7 @@ let whd_val (v: values) =
     else if Int.equal tag Obj.custom_tag then Vint64 (Obj.magic v)
     else if Int.equal tag Obj.double_tag then Vfloat64 (Obj.magic v)
     else if Int.equal tag Obj.string_tag then Vstring (Obj.magic v)
+    else if Int.equal tag Obj.lazy_tag then Vblock (Obj.obj (expand_packed o))
     else
       Vblock (Obj.obj o)
 

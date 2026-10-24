@@ -20,19 +20,26 @@
     each time, through aliases). Routine [k] (kernel/byterun/rocq_binnum.c)
     then computes the result when every node of the arguments that it reads
     is a constructor of the expected type, and leaves every other call to the
-    bytecode. It reads at least the nodes that the bytecode reads.
+    bytecode. It reads at least the nodes that the bytecode reads. A
+    positive result that a routine computes whole, of 2 to 62 bits, is one
+    packed block (kernel/byterun/rocq_binnum.h), which [SWITCH] and
+    {!Vmvalues.whd_val} read as the chain of its number.
 
     Environment variables, for tests and measurement only, read when this
     module is loaded:
     - [ROCQ_VM_BINNUM=0] turns recognition off; [ROCQ_VM_BINNUM=-name1,-name2]
-      turns off the listed routines. Any other value stops the process.
+      turns off the listed routines, and [-pack] turns packing off. Any other
+      value stops the process.
     - [ROCQ_VM_BINNUM_STATS=1] prints, at the exit of each process, the
       calls, refusals and words read of each routine, in total, at function
-      entry and at call sites; the constants bound and the near misses of the
-      recognizer at function entry; and the counts of the recognitions at
-      call sites. [2] also prints, for each near miss at function entry, the
-      first node that differs from the reference. When the variable is unset,
-      the routines count nothing. *)
+      entry and at call sites, the positive arguments it read as chains,
+      packed blocks and chains over a packed tail, and the packed results it
+      made; the expansions of packed blocks by [SWITCH] and [whd_val]; the
+      constants bound and the near misses of the recognizer at function
+      entry; and the counts of the recognitions at call sites. [2] also
+      prints, for each near miss at function entry, the first node that
+      differs from the reference. When the variable is unset, the routines,
+      [SWITCH] and [whd_val] count nothing. *)
 
 val recognize : ?name:Names.Constant.t -> Environ.env -> Constr.t -> int -> int option
 (** [recognize ?name env body] is, for each function index [i] of the

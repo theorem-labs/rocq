@@ -59,6 +59,7 @@ external c_arities : unit -> int array = "rocq_binnum_arities"
 external c_counters : unit -> int array = "rocq_binnum_counters"
 external c_reset_counters : unit -> unit = "rocq_binnum_reset_counters"
 external c_set_stats : bool -> unit = "rocq_binnum_set_stats"
+external c_set_pack : bool -> unit = "rocq_binnum_set_pack"
 
 let () =
   if not (Array.equal Int.equal (c_arities ()) (Array.map (fun r -> r.arity) routines)) then
@@ -77,30 +78,35 @@ let routine_of_name name =
 let stop fmt =
   Printf.ksprintf (fun msg ->
       let names = String.concat ", " (Array.to_list (Array.map (fun r -> r.name) routines)) in
-      Printf.eprintf "%s\nThe routines are: %s.\n%!" msg names;
+      Printf.eprintf "%s\nThe routines are: %s; and -pack turns packing off.\n%!" msg names;
       exit 1)
     fmt
 
 (* ROCQ_VM_BINNUM: unset, every routine is on; 0, every routine is off;
-   -name1,-name2, the listed routines are off. *)
-let enabled =
+   -name1,-name2, the listed routines are off; -pack, the routines make no
+   packed results (kernel/byterun/rocq_binnum.h). *)
+let enabled, packing =
   let n = Array.length routines in
   match Sys.getenv_opt "ROCQ_VM_BINNUM" with
-  | None -> Array.make n true
-  | Some "0" -> Array.make n false
+  | None -> Array.make n true, true
+  | Some "0" -> Array.make n false, true
   | Some v ->
     let on = Array.make n true in
+    let pack = ref true in
     let off item =
       let len = String.length item in
       let name = if len > 1 && item.[0] = '-' then Some (String.sub item 1 (len - 1)) else None in
-      match Option.bind name routine_of_name with
-      | Some k -> on.(k) <- false
-      | None ->
-        stop "ROCQ_VM_BINNUM=%s: expected 0 or a comma-separated list of -name, \
-              not %S." v item
+      match name with
+      | Some "pack" -> pack := false
+      | _ ->
+        match Option.bind name routine_of_name with
+        | Some k -> on.(k) <- false
+        | None ->
+          stop "ROCQ_VM_BINNUM=%s: expected 0 or a comma-separated list of -name, \
+                not %S." v item
     in
     List.iter off (String.split_on_char ',' v);
-    on
+    on, !pack
 
 let stats_level =
   match Sys.getenv_opt "ROCQ_VM_BINNUM_STATS" with
@@ -108,6 +114,8 @@ let stats_level =
   | Some "1" -> 1
   | Some "2" -> 2
   | Some v -> stop "ROCQ_VM_BINNUM_STATS=%s: expected 0, 1 or 2." v
+
+let () = c_set_pack packing
 
 (** {6 Statistics} *)
 
@@ -149,15 +157,23 @@ let print_stats () =
     let pid = Unix.getpid () in
     let line s = Printf.eprintf "binnum[%d] %s\n" pid s in
     let c = c_counters () in
+    let nr = 10 in
     Array.iteri (fun k r ->
-        let ec = c.(6 * k) and er = c.(6 * k + 1) and ew = c.(6 * k + 2) in
-        let sc = c.(6 * k + 3) and sr = c.(6 * k + 4) and sw = c.(6 * k + 5) in
+        let b = nr * k in
+        let ec = c.(b) and er = c.(b + 1) and ew = c.(b + 2) in
+        let sc = c.(b + 3) and sr = c.(b + 4) and sw = c.(b + 5) in
+        let args = c.(b + 6) and packed = c.(b + 7) and tail = c.(b + 8) in
         line (Printf.sprintf "routine %s: calls=%d hits=%d refusals=%d words=%d \
                               entry-calls=%d entry-refusals=%d entry-words=%d \
-                              site-calls=%d site-refusals=%d site-words=%d"
+                              site-calls=%d site-refusals=%d site-words=%d \
+                              args-chain=%d args-packed=%d args-tail=%d packed-results=%d"
                 r.name (ec + sc) (ec + sc - er - sr) (er + sr) (ew + sw)
-                ec er ew sc sr sw))
+                ec er ew sc sr sw (args - packed - tail) packed tail c.(b + 9)))
       routines;
+    let b = nr * Array.length routines in
+    line (Printf.sprintf "packed: packing=%s switch-expansions=%d switch-nodes=%d \
+                          whd-expansions=%d whd-nodes=%d"
+            (if c.(b + 4) <> 0 then "on" else "off") c.(b) c.(b + 1) c.(b + 2) c.(b + 3));
     line (Printf.sprintf "recognizer: binds=%d near-misses=%d others=%d time=%.3fs"
             !nbinds !nnear !nothers !entry_time);
     line (Printf.sprintf "call-sites: binds=%d near-misses=%d others=%d time=%.3fs"

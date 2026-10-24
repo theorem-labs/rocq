@@ -876,7 +876,10 @@ value rocq_interprete
          which Setup_for_gc saves, a finished part of a pair on the VM stack,
          as MAKEBLOCK2 does, and the arguments on the VM stack, from which
          the base of a chain is read before the first allocation of that
-         chain. The description itself is C memory. */
+         chain. The description itself is C memory. A base is xH, a fresh
+         packed block (rocq_binnum.h), or a subterm of an argument reached
+         through blocks that the routine read as nodes of a Z or of a chain,
+         never through a packed block (binnum_base_step checks it). */
     binnum_build: {
         const struct binnum_result *res = binnum_res;
         if (res->nparts == 1 && res->part[0].kind == BINNUM_IMM) {
@@ -892,11 +895,16 @@ value rocq_interprete
               accu = part->imm;
             } else {
               uint64_t i;
-              if (part->base_arg < 0) {
+              if (part->base_arg == BINNUM_BASE_XH) {
                 accu = Val_int(0);
+              } else if (part->base_arg == BINNUM_BASE_PACKED) {
+                value block;
+                Rocq_alloc_small(block, 1, BINNUM_PACKED_TAG);
+                Field(block, 0) = Val_long(part->base_num);
+                accu = block;
               } else {
                 accu = sp[above + part->base_arg];
-                for (i = 0; i < part->base_depth; i++) accu = Field(accu, 0);
+                for (i = 0; i < part->base_depth; i++) accu = binnum_base_step(accu);
               }
               if (part->nnodes <= 64) {
                 uint64_t word = part->word;
@@ -1165,7 +1173,32 @@ value rocq_interprete
         print_instr("SWITCH");
         if (Is_block(accu)) {
           long index = Tag_val(accu);
-          if (index == Closure_tag) index = 0;
+          /* Tags 246 and up: a packed positive or an accumulator. The other
+             tags are tested with one compare, as before. */
+          if (index >= BINNUM_PACKED_TAG) {
+#if ROCQ_BINNUM_PACKING
+            /* A packed positive (rocq_binnum.h): accu becomes the full
+               chain of its number, built from the inside out with the
+               partial chain in accu under Setup_for_gc, and the match
+               dispatches on the head's tag. The packed block is not
+               changed; the branch's PUSHFIELDS and GETFIELD then read a
+               chain. */
+            if (index == BINNUM_PACKED_TAG) {
+              uint64_t n = binnum_packed_number(accu);
+              unsigned i, nodes = binnum_bitlen(n) - 1;
+              accu = Val_int(0);
+              for (i = nodes; i-- > 0;) {
+                value block;
+                Rocq_alloc_small(block, 1, (n >> i) & 1 ? 1 : 2);
+                Field(block, 0) = accu;
+                accu = block;
+              }
+              if (rocq_binnum_stats) rocq_binnum_count_expansion(0, nodes);
+              index = Tag_val(accu);
+            }
+#endif
+            if (index == Closure_tag) index = 0;
+          }
           print_instr("block");
           print_lint(index);
           pc += pc[(sizes >> 8) + index];

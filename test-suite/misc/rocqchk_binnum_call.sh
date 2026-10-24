@@ -189,13 +189,36 @@ Lemma r1 (p : positive) : Pos.add_carry (xO p) xH = Pos.add_carry (xO p) xH.
 Proof. vm_compute. reflexivity. Qed.
 """)
 
+# (d) Refusals at a call site in tail form (BINNUMCALL; APPTERM; L: RETURN),
+# whose value the bytecode then computes, against a right side by cbv (the
+# review of slice 3, N3): a tail call of Pos.add_carry; Z.add, whose body's
+# tail call of Z.pos_sub refuses too; a tail call of a 3-argument routine
+# (APPTERM3); a tail call after a let; and a hit that shares a variable,
+# under a match.
+open(d + "/TailRefuse.v", "w").write(HEADER + """
+Definition tail_carry (x y : positive) := Pos.add_carry x y.
+Lemma t1 (p : positive) : tail_carry (xO p) xH = cbv_val (tail_carry (xO p) xH).
+Proof. vm_compute. reflexivity. Qed.
+Lemma t2 (p : positive) : Z.add (Zpos (xO p)) (Zneg xH) = cbv_val (Z.add (Zpos (xO p)) (Zneg xH)).
+Proof. vm_compute. reflexivity. Qed.
+Definition tail_cc (r : comparison) (x y : positive) := Pos.compare_cont r x y.
+Lemma t4 (p : positive) : tail_cc Gt (xI p) (xO xH) = cbv_val (tail_cc Gt (xI p) (xO xH)).
+Proof. vm_compute. reflexivity. Qed.
+Definition let_tail (x y : positive) := let z := Pos.succ x in Pos.add_carry z y.
+Lemma t6 (p : positive) : let_tail (xI p) xH = cbv_val (let_tail (xI p) xH).
+Proof. vm_compute. reflexivity. Qed.
+Definition scrut (x y : positive) := match Pos.add x y with xI _ => true | _ => false end.
+Lemma t9 (p : positive) : scrut (xO p) xH = cbv_val (scrut (xO p) xH).
+Proof. vm_compute. reflexivity. Qed.
+""")
+
 with open(d + "/counts", "w") as f:
     for k, v in sorted(counts.items()):
         f.write("%s=%d\n" % (k, v))
 PY
 . "$d/counts"
 
-for lib in Forms Normal Edges Refuse; do
+for lib in Forms Normal Edges Refuse TailRefuse; do
   rocq c -native-compiler no -R "$d" "" "$d/$lib.v"
 done
 
@@ -276,8 +299,24 @@ expect "refuse Pos.add_carry site-words" "$(stat refuse.log Pos.add_carry site-w
 expect "refuse Pos.add_carry entry-words" "$(stat refuse.log Pos.add_carry entry-words)" -eq 6
 entry refuse.log Pos.succ 2 2
 
+# (d) Refusals at a call site in tail form, whose values are checked
+# against cbv: Pos.add_carry refuses at its call site in t1 (tail_carry) and
+# t6 (let_tail, after Pos.succ (xI p) refused and left a stuck successor),
+# Z.pos_sub in Z.add's body in t2, Pos.compare_cont in t4 (APPTERM3); in t9,
+# Pos.add (xO p) 1 hits at its call site and shares p. The values are also
+# checked with the statistics off, and with recognition off in (e).
+chk tail.log -norec TailRefuse
+expect "tail Pos.add_carry site-refusals" "$(stat tail.log Pos.add_carry site-refusals)" -eq 2
+expect "tail Z.pos_sub site-refusals" "$(stat tail.log Z.pos_sub site-refusals)" -eq 1
+expect "tail Pos.compare_cont site-refusals" "$(stat tail.log Pos.compare_cont site-refusals)" -eq 1
+expect "tail Pos.add site hits" \
+  "$(( $(stat tail.log Pos.add site-calls) - $(stat tail.log Pos.add site-refusals) ))" -eq 1
+rocqchk -silent -bytecode-compiler yes -R "$d" "" -norec TailRefuse > "$d/tail-nostats.log" 2>&1 \
+  || { cat "$d/tail-nostats.log" >&2; fail "rocqchk -norec TailRefuse without statistics failed"; }
+! grep -q "^binnum\[" "$d/tail-nostats.log" || fail "TailRefuse printed statistics"
+
 # (e) Recognition off, and -j 2.
-for lib in Forms Normal Edges Refuse; do
+for lib in Forms Normal Edges Refuse TailRefuse; do
   ROCQ_VM_BINNUM=0 chk "off-$lib.log" -norec "$lib"
   expect "$lib off binds" "$(line_stat "off-$lib.log" recognizer binds)" -eq 0
   expect "$lib off call-site binds" "$(line_stat "off-$lib.log" call-sites binds)" -eq 0
