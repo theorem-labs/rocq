@@ -1,0 +1,12 @@
+{
+  "source": "theorem-labs/rocq-read-file (opam package rocq-read-file.0.0.2)",
+  "commit": "68887ad0c3cdaf555a2dbef73d29008de8cf21de",
+  "scope": {"include": ["src"], "exclude": []},
+  "reasons": {
+    "readfile-command": "Both handlers resolve a file path for the plugin's own vernacular commands ReadFileBytes, ReadFileInt63 and ReadFileString (g_read_file.mlg:35-74; read_file.ml:16-47). No tactic reaches them. A proveequivN agent can run these commands, so a proof whose parsed sentences from statement to closer (key item 1) contain one of them is ineligible; this is the same check as any command inside a proof (spec 'Proofs that always run'). A ReadFile command outside that span declares a constant (read_file.ml:306-314), which the global-environment read (row 1) records."
+  },
+  "sites": {
+    "catchall:src/read_file.ml:resolve_file_path/_ -> None": {"ineligible": "@readfile-command"},
+    "catchall:src/read_file.ml:resolve_file_source/e -> CErrors.user_err Pp.(str \"Cannot resolve Extra Dependency \\\"\"": {"ineligible": "@readfile-command"}
+  }
+}

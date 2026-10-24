@@ -18,6 +18,22 @@ concurrency:
 # exercised here. The OCaml 5 entry keeps the fork building on current OCaml.
 # macOS and Windows are not targets of this fork and are not in the matrix.
 jobs:
+  census:
+    # Per-proof replay census (dev/tools/census/README.md): every Summary, Libobject and catch-all
+    # handler site has a census row or a written ruling.
+    name: Census check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 🔭 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🧪 Census check tests
+        run: python3 -m unittest discover -s dev/tools/census -v
+
+      - name: 📋 Census check
+        run: python3 dev/tools/census/census_check.py --root . --rulings dev/tools/census/rulings/rocq.json
+
   build:
     strategy:
       matrix:
