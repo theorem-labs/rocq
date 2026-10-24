@@ -27,6 +27,18 @@
     has completed at least one check, it stops after the check it is in
     and reports how many checks of its batch, the first ones in order, it
     completed. The main process queues the others again, at the front.
+
+    A worker also stops that way on request. When the main process has
+    dealt everything and a worker slot is free, it asks the worker with the
+    largest batch, with SIGUSR1, to give back the checks it has not
+    started; it asks each worker at most once, and never a batch of one
+    check. The worker answers with a release message saying how many
+    checks it will complete, which is at least one. The main process reads
+    that message at once and deals the others to the free slots, instead
+    of leaving them behind a long check in a batch that a busy worker
+    holds. The worker then stops after the check it is in, and its final
+    report must equal the number it announced.
+
     So every check is run exactly once, by a process that ends
     successfully, whichever way the work is cut into batches. *)
 
@@ -56,12 +68,16 @@ val set_error_printer : (exn -> unit) -> unit
 val defer : Names.Constant.t -> (unit -> unit) -> unit
 (** [defer kn check] runs or queues the check of the opaque body of
     [kn]. [check] must not depend on anything that happens after it
-    is queued, nor have effects that anything else depends on. *)
+    is queued, nor have effects that anything else depends on. [defer]
+    reaps the workers that have exited, so it can raise [WorkerFailed]
+    as [finish] does. *)
 
 val finish : unit -> unit
 (** Deal everything that is still queued to workers and wait for all of
-    them. Raises [WorkerFailed] if a worker did not exit with code 0, or
-    did not report between 1 and [size] completed checks. *)
+    them. Raises [WorkerFailed] if a worker did not exit with code 0, did
+    not report between 1 and [size] completed checks, wrote a malformed
+    release message or more than one, or completed a number of checks other
+    than the one its release message named. *)
 
 val abort : unit -> unit
 (** Kill all workers, wait for them, and drop the queued checks. *)

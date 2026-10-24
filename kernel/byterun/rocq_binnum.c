@@ -1453,8 +1453,13 @@ static int r_uint63_of_pos_rec(const value *a)
    calls nest in, and so is x^p. The bytecode reads p to its end and x at
    every one of those multiplications, and so does the routine.
 
-   One call allocates at most BINNUM_POW_BITS bits. With b the bits of |x|,
-   the result has at most b p bits, so the routine refuses b p larger than
+   One call computes at most BINNUM_POW_BITS bits, and so allocates at
+   most that many nodes for its result. (Reading x itself is not bounded
+   here: read_pos reads all of it before the test below, as every routine
+   does, into wx when |x| has at most 64 bits and into the static buffer
+   num_a otherwise; x is already in memory, and the buffer is C memory,
+   not the OCaml heap.) With b the bits of |x|, the
+   result has at most b p bits, so the routine refuses b p larger than
    BINNUM_POW_BITS, and it stops reading p as soon as p is larger. For
    1 <= p <= BINNUM_POW_BITS, the test b > BINNUM_POW_BITS / p is exactly
    b p > BINNUM_POW_BITS, with no product to overflow; it also refuses

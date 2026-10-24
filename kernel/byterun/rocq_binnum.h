@@ -28,7 +28,8 @@
     (a block of tag 1) if n is odd and xO (tag 2) if it is even, over the
     chain of n >> 1, which is xH (Val_int(0)) when n >> 1 = 1.
 
-    A block of size 1 is a result that a routine computed whole. A block of
+    A block of size 1 is a result that a routine computed whole, or the
+    rest of a number that PROJ peeled (rocq_interp.c). A block of
     size 2 is a literal: a chain in the VM value of a structured constant
     [Const_val] (Vmvalues.val_of_str_const, through
     rocq_binnum_pack_literal; the other kinds of structured constant, such
