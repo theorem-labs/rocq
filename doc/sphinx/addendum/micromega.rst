@@ -68,15 +68,20 @@ or only for reals by ``Require Import Lra``.
    This :term:`flag` (set by default) lets :tacn:`lia`, :tacn:`nia`, :tacn:`wlia` and :tacn:`wnia`
    fail sooner on a goal that they cannot prove. The tactics split the goal into cases: a
    hypothesis with a disjunction, for instance, gives two, and they search a certificate for each
-   case. Before they search a case, they try the certificates found so far for the goal, newest
-   first. A certificate is tried on a case that contains every hypothesis it uses, and is
+   case. Before they search a case, they try at most eight of the certificates found so far for
+   the goal. A certificate goes to the front of that list when a search finds it and when it
+   proves a case. A certificate is tried on a case that contains every hypothesis it uses, and is
    accepted when the reflexive checker accepts it on that case. The tactics search only the cases
    that no certificate is accepted on. If a search fails, the tactic fails, as it does without
    the flag. If every case is proved, the tactics search the cases that a reused certificate
    proved. So when the tactic succeeds, its proof is the proof without the flag, and so are the
    hypotheses that the proof uses and the output of :flag:`Info Micromega`.
-   A goal that succeeds costs the searches without the flag plus the checks of the stored
-   certificates on each case, so the flag never makes such a goal faster.
+   A goal that succeeds costs the searches without the flag plus the time of these tries, so the
+   flag never makes such a goal faster. A case tries certificates only while the tries of the
+   goal have taken at most 1/16 of the time of its searches, the searches that the cases proved
+   by reuse need included; otherwise the case is searched as it is without the flag. So reuse
+   adds about 6% at most to the time of a goal that succeeds; under :cmd:`Timeout`, a goal that
+   the tactic proves without the flag with a smaller margin can fail with it.
 
 .. flag:: Lia Depth
    :undocumented:
