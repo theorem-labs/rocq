@@ -173,14 +173,59 @@ let warn_no_native_compiler =
          (fun () -> strbrk "Native compiler is disabled," ++
                       strbrk " falling back to VM conversion test.")
 
-let native_conv_gen (type err) pb sigma env (state, check) t1 t2 =
+let w_native_conversion_failed = CWarnings.create_warning
+    ~from:[CWarnings.CoreCategories.native_compiler] ~name:"native-conversion-failed"
+    ()
+
+let warn_native_conversion_failed =
+  let open Pp in
+  CWarnings.create_in w_native_conversion_failed
+    (fun msg -> strbrk "The native code of a conversion test could not be built or loaded" ++
+                spc () ++ surround msg ++ str "," ++
+                strbrk " falling back to VM conversion test.")
+
+(* Raised by [native_conv_gen ~recover:true] when the OCaml compiler or the
+   dynamic linker failed on the unit of the conversion. *)
+exception Unit_failed of Pp.t
+
+let native_conv_gen (type err) ~recover pb sigma env (state, check) t1 t2 =
+  (* With [~recover], a failure to build or to load the unit is
+     [Unit_failed], and leaves nothing of the unit linked:
+     [Nativelib.execute_library] registers the unit and marks its globals
+     [Linked] only after [Dynlink.loadfile] returns. OCaml cannot unload a
+     unit whose initialisation failed inside [Dynlink.loadfile], but then
+     nothing refers to it, and its globals are compiled again in the next
+     unit that needs them. *)
+  let unit_step f =
+    if not recover then f ()
+    else
+      try f () with
+      | Dynlink.Error (Dynlink.Library's_module_initializers_failed Sys.Break) ->
+        raise Sys.Break
+      | Dynlink.Error err -> raise (Unit_failed (Pp.str (Dynlink.error_message err)))
+      | Unix.Unix_error (err, fn, arg) ->
+        raise (Unit_failed Pp.(str fn ++ str " " ++ str arg ++ str ": " ++ str (Unix.error_message err)))
+      | Sys_error msg -> raise (Unit_failed (Pp.str msg))
+      | CErrors.UserError msg -> raise (Unit_failed msg)
+  in
+  (* The checker's cache reuses here what another worker has compiled,
+     and compiles and publishes what it must compile itself, so that the
+     conversion's own unit holds the conversion and little else. *)
+  !Nativelib.prepare_conversion env t1 t2;
   Nativelib.link_libraries ();
-  let ml_filename, prefix = Nativelib.get_ml_filename () in
-  let code, symbols, upds = mk_conv_code env sigma prefix t1 t2 in
-  let fn = Nativelib.compile ml_filename code ~profile:false in
+  let ml_filename, prefix = unit_step Nativelib.get_ml_filename in
+  let code, symbols, upds =
+    (* r3-b instrumentation *)
+    ConvLog.time ConvLog.Codegen (fun () -> mk_conv_code env sigma prefix t1 t2) in
+  (* r3-b instrumentation *)
+  ConvLog.set_unit_file ml_filename;
+  let fn = unit_step (fun () -> Nativelib.compile ml_filename code ~profile:false) in
   debug_native_compiler (fun () -> Pp.str "Running test...");
   let t0 = Sys.time () in
-  let (rt1, rt2) = Nativelib.execute_library ~prefix fn symbols upds in
+  let (rt1, rt2) =
+    (* r3-b instrumentation *)
+    ConvLog.time ConvLog.Load (fun () ->
+        unit_step (fun () -> Nativelib.execute_library ~prefix fn symbols upds)) in
   let rt1 = Option.get rt1 and rt2 = Option.get rt2 in
   let t1 = Sys.time () in
   let time_info = Format.sprintf "Evaluation done in %.5f@." (t1 -. t0) in
@@ -193,27 +238,47 @@ let native_conv_gen (type err) pb sigma env (state, check) t1 t2 =
   | NotConvertible -> Result.Error None
   | Error e -> Result.Error (Some e)
 
-let native_conv_gen pb sigma env univs t1 t2 =
+let native_conv_gen ~recover pb sigma env univs t1 t2 =
   if not (typing_flags env).Declarations.enable_native_compiler then
     let () = warn_no_native_compiler () in
     Vconv.vm_conv_gen pb sigma env univs t1 t2
-  else native_conv_gen pb sigma env univs t1 t2
+  else begin
+    (* r3-b instrumentation *)
+    ConvLog.set_backend "native";
+    native_conv_gen ~recover pb sigma env univs t1 t2
+  end
 
-(* Wrapper for [native_conv] above *)
-let native_conv cv_pb sigma env t1 t2 =
+let native_conv_with ~recover cv_pb sigma env t1 t2 =
   let univs = Environ.universes env in
   let b =
     if cv_pb = CUMUL then Constr.leq_constr_univs univs t1 t2
     else Constr.eq_constr_univs univs t1 t2
   in
-  if b then Result.Ok ()
+  if b then begin
+    (* r3-b instrumentation *)
+    ConvLog.set_backend "syntactic";
+    Result.Ok ()
+  end
   else
     let state = (univs, checked_universes) in
     let t1 = Term.it_mkLambda_or_LetIn t1 (Environ.rel_context env) in
     let t2 = Term.it_mkLambda_or_LetIn t2 (Environ.rel_context env) in
-    match native_conv_gen cv_pb sigma env state t1 t2 with
+    match native_conv_gen ~recover cv_pb sigma env state t1 t2 with
     | Result.Ok (_ : UGraph.t) -> Result.Ok ()
     | Result.Error None -> Result.Error ()
     | Result.Error (Some _) ->
       (* checked_universes cannot raise this *)
       assert false
+
+(* Wrapper for [native_conv] above *)
+let native_conv cv_pb sigma env t1 t2 = native_conv_with ~recover:false cv_pb sigma env t1 t2
+
+let native_cast_conv cv_pb sigma env t1 t2 =
+  match native_conv_with ~recover:true cv_pb sigma env t1 t2 with
+  | ans -> Some ans
+  | exception Unit_failed msg ->
+    warn_native_conversion_failed msg;
+    None
+
+let native_conv_gen pb sigma env univs t1 t2 =
+  native_conv_gen ~recover:false pb sigma env univs t1 t2

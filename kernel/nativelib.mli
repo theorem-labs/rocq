@@ -24,6 +24,36 @@ val load_obj : (string -> unit) ref
 
 val get_ml_filename : unit -> string * string
 
+(** [force_temp_dir ()] makes now the directory where conversions and
+    normalisations write their code, which is otherwise made on first
+    use. A process forked later writes its code there too, and the
+    process that made it removes it at exit: coqchk's [-j] workers end
+    with [Unix._exit], which skips the [at_exit] removal. *)
+val force_temp_dir : unit -> unit
+
+(** {6 The checker's unit cache} (see checker/convCache.ml) *)
+
+(** The directory where the workers publish their units, made on first use
+    inside the process's temp dir (mode 0700) and added to the include
+    dirs. The cache makes it in the main process before the first fork,
+    and removes it itself, before the temp dir goes. *)
+val cache_directory : unit -> string
+val cache_directory_made : unit -> string option
+
+(** A fresh file name in [cache_directory ()], with its prefix. *)
+val cache_ml_filename : unit -> string * string
+
+(** [load_unit ~prefix file] loads a unit of the cache: the unit carries
+    its own symbols, and nothing is marked linked, so the caller marks
+    the definitions it has checked ([Nativecode.link_definitions]). *)
+val load_unit : prefix:string -> string -> unit
+
+(** What a process does before it generates the code of a conversion,
+    with the conversion's two terms. The cache reuses here what another
+    worker has compiled and publishes what it compiles itself; it does
+    nothing by default. *)
+val prepare_conversion : (Environ.env -> Constr.t -> Constr.t -> unit) ref
+
 (** [compile file code ~profile] will compile native [code] to [file],
    and return the name of the object file; this name depends on
    whether are in byte mode or not; file is expected to be .ml file *)

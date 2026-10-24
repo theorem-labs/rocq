@@ -37,6 +37,10 @@ val set_jobs : profiling:bool -> int -> unit
     back to checking in the main process, with a warning, when profiling
     or when [Unix.fork] is not available. *)
 
+val jobs : unit -> int
+(** How many processes may check at the same time, as [set_jobs] left it:
+    1 when nothing is deferred to a worker. *)
+
 val default_budget : float
 (** Seconds. *)
 
@@ -53,10 +57,14 @@ exception CheckError of Names.Constant.t * exn
 val set_error_printer : (exn -> unit) -> unit
 (** How a worker reports the [CheckError] it caught, before it exits. *)
 
-val defer : Names.Constant.t -> (unit -> unit) -> unit
-(** [defer kn check] runs or queues the check of the opaque body of
-    [kn]. [check] must not depend on anything that happens after it
-    is queued, nor have effects that anything else depends on. *)
+val defer : vm_cast:bool -> Names.Constant.t -> (unit -> unit) -> unit
+(** [defer ~vm_cast kn check] runs or queues the check of the opaque body
+    of [kn]. [check] must not depend on anything that happens after it
+    is queued, nor have effects that anything else depends on.
+    [vm_cast] says whether that body holds a VM or native cast: such a
+    check goes to a worker of its own, ahead of the others, and checks of
+    different compilation units take turns (see the scheduling comment in
+    checkWorkers.ml). *)
 
 val finish : unit -> unit
 (** Deal everything that is still queued to workers and wait for all of

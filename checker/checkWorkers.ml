@@ -50,6 +50,8 @@ let set_jobs ~profiling n =
         (str "Option -j is ignored when profiling; checking sequentially.")
     else max_workers := n - 1
 
+let jobs () = !max_workers + 1
+
 let error_printer = ref (fun _ -> ())
 let set_error_printer f = error_printer := f
 
@@ -93,16 +95,62 @@ let set_budget t =
    process checks nothing itself. It deals by guided self-scheduling:
    whenever a worker slot is free, it is given [1/(2N)] of what remains,
    and at least one check, so that all workers end at about the same
-   time. *)
+   time.
+
+   Proofs whose body holds a VM or native cast are the exception: one of
+   them can take a minute (its conversion may compile a whole closure of
+   definitions), and a batch that ends with one holds its worker for that
+   long, whatever its other checks are. So such a proof is dealt to a
+   worker of its own, ahead of the other proofs: in [finish], and in each
+   dispatch while the libraries are checked, where it is dealt to any free
+   slot even though it is below [min_batch]. And costly casts come from
+   the same library, deferred in a row, so the compilation units take
+   turns: one proof of each unit in turn, in the order their first such
+   proof was deferred. One library's casts cannot take every slot while
+   another's wait. *)
 let window = 1.0
 
 (* Below this, a batch is not worth a fork while the libraries are
-   being checked. *)
+   being checked. It does not hold back a proof with a VM cast. *)
 let min_batch = 50
 
-(* Deferred checks not yet given to a worker, oldest first. *)
+(* Deferred checks not yet given to a worker, oldest first, except those
+   whose body holds a VM cast. *)
 let queue : task Queue.t = Queue.create ()
 let last_dispatch = ref 0.
+
+(* Deferred checks whose body holds a VM cast, by compilation unit (the
+   library of the constant: [ModPath.dp] of its module path, so the
+   submodules of a library are one unit), each unit's oldest first. A
+   unit is in [vm_lanes] while it has such a check left; the next check
+   dealt comes from the unit at the front, which then goes to the back. *)
+let vm_lanes : (DirPath.t * task Queue.t) Queue.t = Queue.create ()
+let vm_queued = ref 0
+
+let push_vm_cast ((kn, _) as task) =
+  let dp = ModPath.dp (Constant.modpath kn) in
+  let lane =
+    Queue.fold (fun found (d, q) ->
+        match found with
+        | Some _ -> found
+        | None -> if DirPath.equal d dp then Some q else None)
+      None vm_lanes
+  in
+  let () = match lane with
+    | Some q -> Queue.push task q
+    | None ->
+      let q = Queue.create () in
+      Queue.push task q;
+      Queue.push (dp, q) vm_lanes
+  in
+  incr vm_queued
+
+let pop_vm_cast () =
+  let (dp, q) = Queue.pop vm_lanes in
+  let task = Queue.pop q in
+  if not (Queue.is_empty q) then Queue.push (dp, q) vm_lanes;
+  decr vm_queued;
+  task
 
 (* Running workers. *)
 let running : worker list ref = ref []
@@ -162,6 +210,8 @@ let run_worker parent report (tasks : task array) =
      count as success. *)
   at_exit (fun () -> Unix._exit 2);
   let deadline = Unix.gettimeofday () +. !budget in
+  (* r3-b instrumentation *)
+  ConvLog.event "worker-start" [string_of_int parent; string_of_int size];
   let code =
     try
       tune_gc ();
@@ -171,11 +221,17 @@ let run_worker parent report (tasks : task array) =
         (* Nobody is waiting for the result any more. *)
         if Unix.getppid () <> parent then Unix._exit 1;
         current := kn;
+        (* r3-b instrumentation *)
+        ConvLog.event "check-start" [Constant.to_string kn];
         check ();
+        (* r3-b instrumentation *)
+        ConvLog.event "check-end" [Constant.to_string kn];
         incr completed
       done;
       0
     with e ->
+      (* r3-b instrumentation *)
+      ConvLog.event "check-error" [Constant.to_string !current];
       (try !error_printer (CheckError (!current, e)) with _ -> ());
       CErrors.exit_code e
   in
@@ -183,6 +239,8 @@ let run_worker parent report (tasks : task array) =
     if code <> 0 then code
     else (try !report_writer report !completed; 0 with _ -> 3)
   in
+  (* r3-b instrumentation *)
+  ConvLog.event "worker-end" [string_of_int !completed; string_of_int size; string_of_int code];
   (try flush_output () with _ -> ());
   (* Not [exit]: the at_exit functions of the main process must not run
      here. *)
@@ -212,8 +270,12 @@ let spawn tasks =
     debug (fun () ->
         str "cannot fork (" ++ str err ++
         str "), checking here " ++ pr_batch batch);
+    (* r3-b instrumentation *)
+    ConvLog.event "check-here" [string_of_int (Array.length tasks); err];
     Array.iter check_here tasks
   in
+  (* r3-b instrumentation *)
+  let t_fork = Unix.gettimeofday () in
   match Unix.pipe ~cloexec:true () with
   | exception Unix.Unix_error (err, _, _) -> check_here_instead (Unix.error_message err)
   | report, report_out ->
@@ -226,7 +288,13 @@ let spawn tasks =
       Unix.close report_out;
       incr forks;
       debug (fun () -> str "worker " ++ int pid ++ str ": " ++ pr_batch batch);
-      running := { pid; batch; tasks; report } :: !running
+      running := { pid; batch; tasks; report } :: !running;
+      (* r3-b instrumentation *)
+      if ConvLog.enabled () then
+        ConvLog.event "fork"
+          [string_of_int pid; string_of_int (Array.length tasks);
+           Printf.sprintf "fork_s=%.6f" (Unix.gettimeofday () -. t_fork);
+           String.concat "," (Array.to_list (Array.map (fun (kn, _) -> Constant.to_string kn) tasks))]
     | exception Unix.Unix_error (err, _, _) ->
       Unix.close report;
       Unix.close report_out;
@@ -250,6 +318,8 @@ let abort () =
   let workers = !running in
   running := [];
   Queue.clear queue;
+  Queue.clear vm_lanes;
+  vm_queued := 0;
   List.iter (fun w ->
       try Unix.kill w.pid Sys.sigkill with Unix.Unix_error _ -> ())
     workers;
@@ -302,7 +372,17 @@ let reaped pid status =
   | Some w ->
     running := List.filter (fun w' -> w'.pid <> pid) !running;
     let report = read_report w.report in
-    match completed_count ~size:w.batch.size status report with
+    let completed = completed_count ~size:w.batch.size status report in
+    (* r3-b instrumentation *)
+    ConvLog.event "reaped"
+      [string_of_int pid;
+       (match status with
+        | Unix.WEXITED n -> "exit " ^ string_of_int n
+        | Unix.WSIGNALED s -> "signal " ^ string_of_int s
+        | Unix.WSTOPPED s -> "stopped " ^ string_of_int s);
+       (match completed with Some k -> string_of_int k | None -> "-");
+       string_of_int w.batch.size; string_of_int (List.length !running)];
+    match completed with
     | None ->
       abort ();
       raise (WorkerFailed (pid, status, w.batch))
@@ -343,17 +423,35 @@ let deal ?(newest_first = false) k size =
       if not (CList.is_empty l) then spawn (Array.of_list (if newest_first then l else List.rev l)))
     batches
 
-let defer kn check =
+(* Deal the checks whose body holds a VM cast, one per worker, to the
+   free slots among [slots], the compilation units taking turns. *)
+let deal_vm_casts slots =
+  while !vm_queued > 0 && free_slots slots > 0 do
+    spawn [| pop_vm_cast () |]
+  done
+
+let defer ~vm_cast kn check =
   if !max_workers = 0 then check ()
   else begin
-    Queue.push (kn, check) queue;
+    if vm_cast then push_vm_cast (kn, check) else Queue.push (kn, check) queue;
+    (* r3-b instrumentation *)
+    ConvLog.event "defer"
+      [Constant.to_string kn; string_of_int (Queue.length queue); string_of_int (List.length !running);
+       (if vm_cast then "vm_cast" else "-"); string_of_int !vm_queued];
     let now = Unix.gettimeofday () in
     if now -. !last_dispatch >= window then begin
       last_dispatch := now;
       reap_finished ();
+      (* r3-b instrumentation *)
+      let vm_before = !vm_queued in
+      deal_vm_casts !max_workers;
       let n = Queue.length queue in
       let size = max min_batch ((n + !max_workers) / (!max_workers + 1)) in
       let k = min (free_slots !max_workers) (n / size) in
+      (* r3-b instrumentation *)
+      ConvLog.event "dispatch-window"
+        [string_of_int n; string_of_int size; string_of_int k; string_of_int (List.length !running);
+         Printf.sprintf "vm_dealt=%d" (vm_before - !vm_queued); string_of_int !vm_queued];
       (* While the libraries are checked, a worker checks its batch
          newest first: costly proofs come late in a library, so one
          deferred last no longer waits for the rest of its batch and is
@@ -367,17 +465,37 @@ let finish () =
     (* The main process checks nothing from now on, so one more worker
        can run. *)
     let slots = !max_workers + 1 in
+    (* r3-b instrumentation *)
+    ConvLog.event "finish-start"
+      [string_of_int (Queue.length queue); string_of_int (List.length !running); string_of_int slots];
     (* A worker that stops early queues checks again, so the queue is
-       only known to be empty when no worker is left. *)
-    while not (Queue.is_empty queue) || not (CList.is_empty !running) do
+       only known to be empty when no worker is left. A check with a VM
+       cast is dealt alone, so its worker never stops early. *)
+    while not (Queue.is_empty queue) || !vm_queued > 0 || not (CList.is_empty !running) do
       reap_finished ();
-      if free_slots slots > 0 && not (Queue.is_empty queue) then
-        deal 1 ((Queue.length queue + 2 * slots - 1) / (2 * slots))
+      if free_slots slots > 0 && !vm_queued > 0 then begin
+        (* r3-b instrumentation *)
+        ConvLog.event "finish-deal-vm"
+          [string_of_int !vm_queued; string_of_int (List.length !running)];
+        spawn [| pop_vm_cast () |]
+      end
+      else if free_slots slots > 0 && not (Queue.is_empty queue) then begin
+        let size = (Queue.length queue + 2 * slots - 1) / (2 * slots) in
+        (* r3-b instrumentation *)
+        ConvLog.event "finish-deal"
+          [string_of_int (Queue.length queue); string_of_int size; string_of_int (List.length !running)];
+        deal 1 size
+      end
       else if not (CList.is_empty !running) then begin
+        (* r3-b instrumentation *)
+        ConvLog.event "finish-wait"
+          [string_of_int (Queue.length queue); string_of_int (List.length !running)];
         let pid, status = waitpid_non_intr [] (-1) in
         reaped pid status
       end
     done;
+    (* r3-b instrumentation *)
+    ConvLog.event "finish-end" [string_of_int !forks; string_of_int !early_stops];
     debug (fun () ->
         str "done: " ++ int !forks ++ str " workers forked, " ++
         int !early_stops ++ str " stopped early")

@@ -376,6 +376,73 @@ let type_of_product env _name s1 s2 =
   let s = sort_of_product env s1 s2 in
     mkSort s
 
+(* Native conversion of VM casts (coqchk).
+
+   While [Nativecode.native_vm_conversion ()] holds, a cast meant for the VM
+   or for the native compiler is first decided by the VM, for at most
+   [!native_conversion_after] seconds of wall-clock time. A VM verdict
+   reached within that budget is final. When the budget runs out, the VM
+   gives no verdict, and native code decides the cast; when the OCaml
+   compiler or the dynamic linker fails on its unit, the VM decides the cast
+   without a budget. Budget 0 goes to native code at once.
+
+   The budget is [Control.timeout]: ITIMER_REAL, whose SIGALRM handler
+   raises [Control.Timeout] at the next point where OCaml code or the VM
+   interpreter polls for signals. Nothing else in the checker sets a timer
+   or a SIGALRM handler. The VM stays usable after such an interruption:
+   the interpreter resets its stack when an exception leaves it
+   (rocq_interp.c, Handle_potential_exception); the global table and the
+   per-constant slots of [Vmsymtable] record a value only once it is
+   computed; and the other tables on the VM's path either are rebuilt
+   whole before they are replaced, or, as hash tables, at worst lose a
+   binding, which is then computed again. *)
+let native_conversion_after = ref 1.0
+
+let set_native_conversion_after t =
+  if not (Float.is_finite t && t >= 0.) then invalid_arg "Typeops.set_native_conversion_after";
+  native_conversion_after := t
+
+(* [Some verdict] when the VM decides within [budget] seconds. *)
+let vm_conv_within budget env ct expected_type =
+  let previous_handler = Sys.signal Sys.sigalrm Sys.Signal_default in
+  let () = Sys.set_signal Sys.sigalrm previous_handler in
+  match Control.timeout budget (fun () -> Vconv.vm_conv CUMUL env ct expected_type) () with
+  | Ok ans -> Some ans
+  | Error _ -> None
+  | exception (Control.Timeout | Fun.Finally_raised Control.Timeout) ->
+    (* The alarm went off while [Control.timeout] was putting the timer and
+       the handler back, after the VM had finished: the verdict is dropped,
+       and the timer and the handler are put back here. *)
+    let _ : Unix.interval_timer_status =
+      Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval = 0.; it_value = 0. } in
+    Sys.set_signal Sys.sigalrm previous_handler;
+    None
+
+let vm_cast_conv env ct expected_type =
+  let budget = !native_conversion_after in
+  let vm_verdict =
+    if budget > 0. then
+      (* r3-b instrumentation *)
+      ConvLog.time ConvLog.Vm (fun () -> vm_conv_within budget env ct expected_type)
+    else None
+  in
+  match vm_verdict with
+  | Some ans ->
+    (* r3-b instrumentation *)
+    ConvLog.set_backend "vm";
+    ans
+  | None ->
+    let sigma = Genlambda.empty_evars env in
+    match Nativeconv.native_cast_conv CUMUL sigma env ct expected_type with
+    | Some ans ->
+      (* r3-b instrumentation *)
+      if budget > 0. then ConvLog.set_backend "native-after-vm";
+      ans
+    | None ->
+      (* r3-b instrumentation *)
+      ConvLog.set_backend "vm-fallback";
+      Vconv.vm_conv CUMUL env ct expected_type
+
 (* Type of a type cast *)
 
 (* [judge_of_cast env (c,typ1) (typ2,s)] implements the rule
@@ -387,8 +454,20 @@ let type_of_product env _name s1 s2 =
 
 let check_cast env c ct k expected_type =
   let ans = match k with
+    | VMcast | NATIVEcast when Nativecode.native_vm_conversion () ->
+      (* r3-b instrumentation *)
+      let t0 = ConvLog.start () in
+      let ans = vm_cast_conv env ct expected_type in
+      (* r3-b instrumentation *)
+      ConvLog.finish t0;
+      ans
     | VMcast ->
-      Vconv.vm_conv CUMUL env ct expected_type
+      (* r3-b instrumentation *)
+      let t0 = ConvLog.start () in
+      let ans = Vconv.vm_conv CUMUL env ct expected_type in
+      (* r3-b instrumentation *)
+      ConvLog.finish t0;
+      ans
     | DEFAULTcast ->
       default_conv CUMUL env ct expected_type
     | NATIVEcast ->

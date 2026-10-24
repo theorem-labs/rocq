@@ -59,6 +59,15 @@ val sort_of_product : env -> Sorts.t -> Sorts.t -> Sorts.t
 val check_cast :
   env -> unsafe_judgment -> cast_kind -> unsafe_type_judgment -> unit
 
+(** While [Nativecode.native_vm_conversion ()] holds, [check_cast] decides
+    a [VMcast] or a [NATIVEcast] with the VM for at most this many seconds
+    of wall-clock time (default 1.0), then, without a VM verdict, with
+    native code; 0 goes to native code at once. It uses [Control.timeout]
+    (ITIMER_REAL and SIGALRM), so nothing else in the process may use that
+    timer while it is on. Raises [Invalid_argument] unless the number is
+    finite and at least 0. *)
+val set_native_conversion_after : float -> unit
+
 (** {6 Type of global references. } *)
 
 val type_of_global_in_context : env -> GlobRef.t -> types * UVars.AbstractContext.t

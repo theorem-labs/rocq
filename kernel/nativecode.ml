@@ -28,6 +28,17 @@ let debug_native_flag, debug_native_compiler = CDebug.create_full ~name:"native-
 let keep_debug_files () =
   CDebug.get_flag debug_native_flag
 
+(** {6 Native conversion of VM casts}
+
+   coqchk turns this switch on (see [set_native_vm_conversion] below).
+   While it is on, [Typeops.check_cast] decides [VMcast]s with native
+   code, and the printed code uses the injective names of "Printing to
+   ocaml" below. coqc never turns it on: the [.coq-native] units it
+   writes and links keep today's names. *)
+let native_vm_conversion_flag = ref false
+
+let native_vm_conversion () = !native_vm_conversion_flag
+
 (** Local names **)
 
 (* The first component is there for debugging purposes only *)
@@ -1757,17 +1768,18 @@ let string_of_dirpath = function
 (* OCaml as a module identifier.                                           *)
 let string_of_dirpath s = "N"^string_of_dirpath s
 
-let mod_uid_of_dirpath dir = string_of_dirpath (DirPath.repr dir)
-
-let link_info_of_dirpath dir =
-  Linked (mod_uid_of_dirpath dir ^ ".")
-
-let string_of_name x =
+(* Today's names, used while [native_vm_conversion ()] is off. They are
+   readable, and the [.coq-native] units that coqc writes and links
+   depend on them. But they are not injective: segments are joined with
+   "_", and a bound module keeps only its identifier, not its integer and
+   dirpath. And they copy the bytes of identifiers below 128 into the
+   printed code. *)
+let readable_string_of_name x =
   match x with
     | Anonymous -> "anonymous" (* assert false *)
     | Name id -> string_of_id id
 
-let string_of_label_def l =
+let readable_string_of_label_def l =
   match l with
     | None -> ""
     | Some l -> string_of_id l
@@ -1782,23 +1794,174 @@ let rec list_of_mp acc = function
 
 let list_of_mp mp = list_of_mp [] mp
 
-let string_of_kn kn =
+let readable_string_of_kn kn =
   let (mp,l) = KerName.repr kn in
   let mp = list_of_mp mp in
   String.concat "_" mp ^ "_" ^ string_of_id l
 
+(* The injective names, used while [native_vm_conversion ()] holds.
+   coqchk reads names from .vo files, and an identifier there can hold any
+   bytes. So these names are injective on the whole kernel name (the
+   [UserOrd] name, by which the environment and [eq_gname] tell globals
+   apart), and they take from it only bytes of [A-Za-z0-9_].
+
+   - An identifier is escaped: a byte of [A-Za-z0-9] stays, '_' becomes
+     "__", and any other byte becomes '_' and its two lowercase hexadecimal
+     digits.
+   - A segment is the length of the escaped identifier, '_', and the
+     escaped identifier.
+   - An integer is its decimal digits, after 'm' when it is negative.
+   - A dirpath is its number of identifiers, '_', and their segments,
+     outermost first.
+   - A module path is its root, then 'D' and the segment of each label:
+     the root of a file is 'F' and its dirpath; the root of a bound module
+     is 'B', its integer, '_', the segment of its identifier, and its
+     dirpath.
+   - A kernel name is its module path, then the segment of its label.
+
+   Each of these reads back from the left without lookahead (a segment
+   starts with a digit, never with 'D'), so two different names never
+   print the same, also with a suffix after them. And no injective name
+   starts with 'N' or 'X' as today's names do. *)
+
+let add_escaped_id buf id =
+  String.iter (fun c -> match c with
+      | 'A'..'Z' | 'a'..'z' | '0'..'9' -> Buffer.add_char buf c
+      | '_' -> Buffer.add_string buf "__"
+      | c -> Printf.bprintf buf "_%02x" (Char.code c))
+    (Id.to_string id)
+
+let injective_string_of_int i =
+  if i >= 0 then string_of_int i
+  else
+    let s = string_of_int i in
+    "m" ^ String.sub s 1 (String.length s - 1)
+
+let add_segment buf id =
+  let escaped = Buffer.create 16 in
+  add_escaped_id escaped id;
+  Buffer.add_string buf (string_of_int (Buffer.length escaped));
+  Buffer.add_char buf '_';
+  Buffer.add_buffer buf escaped
+
+let add_dirpath buf dp =
+  let ids = DirPath.repr dp in
+  Buffer.add_string buf (string_of_int (List.length ids));
+  Buffer.add_char buf '_';
+  List.iter (add_segment buf) (List.rev ids)
+
+let rec add_modpath buf = function
+  | MPfile dp ->
+    Buffer.add_char buf 'F';
+    add_dirpath buf dp
+  | MPbound mbid ->
+    let (i, id, dp) = MBId.repr mbid in
+    Buffer.add_char buf 'B';
+    Buffer.add_string buf (injective_string_of_int i);
+    Buffer.add_char buf '_';
+    add_segment buf id;
+    add_dirpath buf dp
+  | MPdot (mp, l) ->
+    add_modpath buf mp;
+    Buffer.add_char buf 'D';
+    add_segment buf l
+
+let injective_string_of_kn kn =
+  let (mp, l) = KerName.repr kn in
+  let buf = Buffer.create 64 in
+  add_modpath buf mp;
+  add_segment buf l;
+  Buffer.contents buf
+
+let segment id =
+  let buf = Buffer.create 16 in
+  add_segment buf id;
+  Buffer.contents buf
+
+(* "anonymous" does not start with a digit, as a segment does. *)
+let injective_string_of_name = function
+  | Anonymous -> "anonymous"
+  | Name id -> segment id
+
+let injective_string_of_label_def = function
+  | None -> "n"
+  | Some l -> "s" ^ segment l
+
+let string_of_name x =
+  if native_vm_conversion () then injective_string_of_name x
+  else readable_string_of_name x
+
+let string_of_label_def l =
+  if native_vm_conversion () then injective_string_of_label_def l
+  else readable_string_of_label_def l
+
+let string_of_kn kn =
+  if native_vm_conversion () then injective_string_of_kn kn
+  else readable_string_of_kn kn
+
+(* An integer inside a name. *)
+let string_of_int_in_name i =
+  if native_vm_conversion () then injective_string_of_int i
+  else string_of_int i
+
+let string_of_named id =
+  if native_vm_conversion () then segment id else string_of_id id
+
+(* The identifier that the code gives to a variable accumulator, which
+   [Nativeconv] compares with [Id.equal]: an injective escape, after a
+   letter so that [Id.of_string] accepts it. *)
+let string_of_var_id id =
+  if native_vm_conversion () then begin
+    let buf = Buffer.create 16 in
+    Buffer.add_char buf 'v';
+    add_escaped_id buf id;
+    Buffer.contents buf
+  end
+  else string_of_id id
+
+(* A primitive string: each of its bytes as a hexadecimal escape while
+   [native_vm_conversion ()] holds. *)
+let compile_pstring s =
+  if native_vm_conversion () then begin
+    let s = Pstring.to_string s in
+    let buf = Buffer.create (4 * String.length s + 32) in
+    Buffer.add_string buf "Pstring.unsafe_of_string \"";
+    String.iter (fun c -> Printf.bprintf buf "\\x%02x" (Char.code c)) s;
+    Buffer.add_char buf '"';
+    Buffer.contents buf
+  end
+  else Pstring.compile s
+
+(* The module of a library's [.coq-native] unit, to which
+   [Safe_typing.import] links the library's globals. coqchk never loads
+   such a unit ([is_code_loaded] then drops the link), but its name follows
+   the same rules as the others while [native_vm_conversion ()] holds. *)
+let mod_uid_of_dirpath dir =
+  if native_vm_conversion () then begin
+    let buf = Buffer.create 64 in
+    Buffer.add_char buf 'N';
+    add_dirpath buf dir;
+    Buffer.contents buf
+  end
+  else string_of_dirpath (DirPath.repr dir)
+
+let link_info_of_dirpath dir =
+  Linked (mod_uid_of_dirpath dir ^ ".")
+
 let string_of_con c = string_of_kn (Constant.user c)
 let string_of_mind mind = string_of_kn (MutInd.user mind)
-let string_of_ind (mind,i) = string_of_kn (MutInd.user mind) ^ "_" ^ string_of_int i
+let string_of_ind (mind,i) =
+  string_of_kn (MutInd.user mind) ^ "_" ^ string_of_int_in_name i
 
 let string_of_gname g =
   match g with
   | Gind (prefix, (mind, i)) ->
-      Format.sprintf "%sindaccu_%s_%i" prefix (string_of_mind mind) i
+      Format.sprintf "%sindaccu_%s_%s" prefix (string_of_mind mind) (string_of_int_in_name i)
   | Gconstant (prefix, c) ->
       Format.sprintf "%sconst_%s" prefix (string_of_con c)
   | Gproj (prefix, (mind, n), i) ->
-      Format.sprintf "%sproj_%s_%i_%i" prefix (string_of_mind mind) n i
+      Format.sprintf "%sproj_%s_%s_%s" prefix (string_of_mind mind)
+        (string_of_int_in_name n) (string_of_int_in_name i)
   | Gcase (l,i) ->
       Format.sprintf "case_%s_%i" (string_of_label_def l) i
   | Gpred (l,i) ->
@@ -1811,15 +1974,15 @@ let string_of_gname g =
   | Gnormtbl (l,i) ->
       Format.sprintf "normtbl_%s_%i" (string_of_label_def l) i
   | Grel i ->
-      Format.sprintf "rel_%i" i
+      Format.sprintf "rel_%s" (string_of_int_in_name i)
   | Gnamed id ->
-      Format.sprintf "named_%s" (string_of_id id)
+      Format.sprintf "named_%s" (string_of_named id)
 
 let pp_gname fmt g =
   Format.fprintf fmt "%s" (string_of_gname g)
 
 let pp_lname fmt ln =
-  Format.fprintf fmt "x_%s_%i" (string_of_name ln.lname) ln.luid
+  Format.fprintf fmt "x_%s_%s" (string_of_name ln.lname) (string_of_int_in_name ln.luid)
 
 let pp_ldecls fmt ids =
   let len = Array.length ids in
@@ -1829,7 +1992,7 @@ let pp_ldecls fmt ids =
 
 let string_of_construct prefix ~constant ind tag =
   let base = if constant then "Int" else "Construct" in
-  Format.sprintf "%s%s_%s_%i" prefix base (string_of_ind ind) tag
+  Format.sprintf "%s%s_%s_%s" prefix base (string_of_ind ind) (string_of_int_in_name tag)
 
 let string_of_accu_construct prefix ind =
   Format.sprintf "%sAccu_%s" prefix (string_of_ind ind)
@@ -1873,7 +2036,7 @@ let pp_mllam fmt l =
     | MLint i -> pp_int fmt i
     | MLuint i -> Format.fprintf fmt "(%s)" (Uint63.compile i)
     | MLfloat f -> Format.fprintf fmt "(%s)" (Float64.compile f)
-    | MLstring s -> Format.fprintf fmt "(%s)" (Pstring.compile s)
+    | MLstring s -> Format.fprintf fmt "(%s)" (compile_pstring s)
     | MLsetref (s, body) ->
         Format.fprintf fmt "@[%s@ :=@\n Some (%a)@]" s pp_mllam body
     | MLsequence(l1,l2) ->
@@ -1993,7 +2156,7 @@ let pp_mllam fmt l =
     | Mk_cofix(start) -> Format.fprintf fmt "mk_cofix_accu %i" start
     | Mk_rel i -> Format.fprintf fmt "mk_rel_accu %i" i
     | Mk_var id ->
-        Format.fprintf fmt "mk_var_accu (Names.Id.of_string \"%s\")" (string_of_id id)
+        Format.fprintf fmt "mk_var_accu (Names.Id.of_string \"%s\")" (string_of_var_id id)
     | Mk_proj -> Format.fprintf fmt "mk_proj_accu"
     | Mk_empty_instance -> Format.fprintf fmt "UVars.Instance.empty"
     | Is_int -> Format.fprintf fmt "is_int"
@@ -2210,6 +2373,15 @@ let is_loaded_native_file s = StringSet.mem s !loaded_native_files
 let register_native_file s =
   loaded_native_files := StringSet.add s !loaded_native_files
 
+(* A reference to a linked global prints its name in the scheme of
+   today, while its unit was printed in the scheme of then: so the switch
+   changes only while no native code is loaded. *)
+let set_native_vm_conversion b =
+  if not (Bool.equal b !native_vm_conversion_flag)
+  && not (StringSet.is_empty !loaded_native_files) then
+    anomaly Pp.(str "Nativecode.set_native_vm_conversion: native code is already loaded.");
+  native_vm_conversion_flag := b
+
 let is_code_loaded name =
   match !name with
   | NotLinked -> false
@@ -2353,6 +2525,153 @@ let compile_deps cenv env sigma prefix init t =
   | _ -> fold_constr_with_binders succ (aux env) lvl init t
   in
   aux env 0 init t
+
+(** {6 The closure of a conversion, without generating its code}
+
+    [closure_graph] walks what [compile_deps] above walks, and returns the
+    definitions it would emit and, for each, the globals its code names
+    directly. The checker's unit cache (checker/convCache.ml) uses it to
+    decide what another worker has already compiled, before it generates
+    anything. Nothing here is skipped for being linked: the cache needs the
+    whole graph, linked definitions included, to check that the code it
+    reuses calls the declarations it holds. *)
+
+type definition = Dconst of Constant.t | Dind of MutInd.t
+
+let definition_equal d1 d2 = match d1, d2 with
+  | Dconst c1, Dconst c2 -> Constant.UserOrd.equal c1 c2
+  | Dind m1, Dind m2 -> MutInd.UserOrd.equal m1 m2
+  | (Dconst _ | Dind _), _ -> false
+
+let definition_compare d1 d2 = match d1, d2 with
+  | Dconst c1, Dconst c2 -> Constant.UserOrd.compare c1 c2
+  | Dind m1, Dind m2 -> MutInd.UserOrd.compare m1 m2
+  | Dconst _, Dind _ -> -1
+  | Dind _, Dconst _ -> 1
+
+let definition_to_string = function
+  | Dconst c -> "c" ^ Constant.to_string c
+  | Dind m -> "i" ^ MutInd.to_string m
+
+(* The globals that the code of [t] names, in the order they are met,
+   following the local definitions that its code inlines, as
+   [compile_deps] does, but not the bodies of the globals. *)
+let direct_globals env sigma t =
+  let acc = ref [] in
+  let add d = if not (List.exists (definition_equal d) !acc) then acc := d :: !acc in
+  let rec aux env lvl () t = match kind t with
+    | Ind ((mind,_),_u) -> add (Dind mind)
+    | Const (c, _u) ->
+      let c, _ = get_alias env sigma c in
+      add (Dconst c)
+    | Construct (((mind,_),_),_u) -> add (Dind mind)
+    | Proj (p,_,c) ->
+      add (Dind (Projection.mind p));
+      aux env lvl () c
+    | Case (ci, _u, _pms, _p, _iv, _c, _ac) ->
+      add (Dind (fst ci.ci_ind));
+      fold_constr_with_binders succ (aux env) lvl () t
+    | Var id ->
+      let open Context.Named.Declaration in
+      begin match lookup_named id env with
+        | LocalDef (_,t,_) -> aux env lvl () t
+        | _ -> ()
+      end
+    | Rel n when n > lvl ->
+      let open Context.Rel.Declaration in
+      let decl = lookup_rel n env in
+      let env = env_of_rel n env in
+      begin match decl with
+        | LocalDef (_,t,_) -> aux env lvl () t
+        | LocalAssum _ -> ()
+      end
+    | _ -> fold_constr_with_binders succ (aux env) lvl () t
+  in
+  aux env 0 () t;
+  List.rev !acc
+
+(* The definitions the code of [ts] reaches, each with the globals its own
+   code names, callees before callers. *)
+let closure_graph env sigma ts =
+  let seen_c = ref Cset_env.empty and seen_m = ref Mindmap_env.empty in
+  let nodes = ref [] in
+  let rec visit d = match d with
+    | Dind mind ->
+      if not (Mindmap_env.mem mind !seen_m) then begin
+        seen_m := Mindmap_env.add mind () !seen_m;
+        nodes := (d, []) :: !nodes
+      end
+    | Dconst c ->
+      if not (Cset_env.mem c !seen_c) then begin
+        seen_c := Cset_env.add c !seen_c;
+        let cb = lookup_constant c env in
+        let refs = match cb.const_body with
+          | Def t -> direct_globals env sigma t
+          | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> []
+        in
+        List.iter visit refs;
+        nodes := (d, refs) :: !nodes
+      end
+  in
+  List.iter (fun t -> List.iter visit (direct_globals env sigma t)) ts;
+  List.rev !nodes
+
+let direct_references env sigma = function
+  | Dind _ -> []
+  | Dconst c ->
+    match (lookup_constant c env).const_body with
+    | Def t -> direct_globals env sigma t
+    | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> []
+
+let definition_is_linked env = function
+  | Dconst c -> let _,(r,_),_ = lookup_constant_key c env in is_code_loaded r
+  | Dind m -> let _,r,_ = lookup_mind_key m env in is_code_loaded r
+
+(* The unit a definition is linked to, if any. *)
+let definition_prefix env d =
+  let r = match d with
+    | Dconst c -> let _,(r,_),_ = lookup_constant_key c env in r
+    | Dind m -> let _,r,_ = lookup_mind_key m env in r
+  in
+  if is_code_loaded r then match !r with
+    | Linked s -> Some s
+    | NotLinked -> None
+  else None
+
+let definitions_of_updates (mind_updates, const_updates) =
+  let defs = Cmap_env.fold (fun c _ acc -> Dconst c :: acc) const_updates [] in
+  Mindmap_env.fold (fun m _ acc -> Dind m :: acc) mind_updates defs
+
+(* Mark definitions as defined by the unit of [prefix]. A process marks
+   only the definitions it has checked against its own declarations. *)
+let link_definitions env prefix defs =
+  List.iter (function
+      | Dconst c -> let _,(r,_),_ = lookup_constant_key c env in r := Linked prefix
+      | Dind m -> let _,r,_ = lookup_mind_key m env in r := Linked prefix)
+    defs
+
+(* Mark definitions as defined by no unit, so that the next unit this
+   process generates emits them again. *)
+let unlink_definitions env defs =
+  List.iter (function
+      | Dconst c -> let _,(r,_),_ = lookup_constant_key c env in r := NotLinked
+      | Dind m -> let _,r,_ = lookup_mind_key m env in r := NotLinked)
+    defs
+
+(* ML code for a unit of the cache: the closure of [t1] and [t2] that this
+   process has not linked, and nothing else. It carries its own symbols,
+   so a process that loads it needs nothing of this one. *)
+let mk_deps_code env sigma prefix t1 t2 =
+  let cenv = make_cenv () in
+  let gl, upds = compile_deps cenv env sigma prefix ([], empty_updates) t1 in
+  let gl, upds = compile_deps cenv env sigma prefix (gl, upds) t2 in
+  let gl = List.rev gl in
+  let symbols = get_cenv_symbols cenv in
+  let header =
+    Glet(Ginternal "symbols_tbl",
+         MLglobal (Ginternal (Format.sprintf "(str_decode \"%s\")" (str_encode symbols))))
+  in
+  header :: gl, symbols, upds
 
 let compile_constant_field cenv env con acc cb =
     let gl = compile_constant cenv env (empty_evars env) con cb in

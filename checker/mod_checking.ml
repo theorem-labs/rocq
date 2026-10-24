@@ -101,6 +101,27 @@ let register_opacified_constant env opac kn cb =
 
 exception BadConstant of Constant.t * Pp.t
 
+(* Whether an opaque body holds a VM or native cast. [CheckWorkers] deals
+   such proofs one per worker, ahead of the others (see [defer] there).
+   The walk does not share the work of a subterm that occurs many times,
+   as the typing does, so it stops after [vm_cast_walk_limit] nodes, and
+   a body that large counts as holding a cast: such a proof is costly
+   anyway, and a worker of its own costs it nothing. *)
+exception Found_cast
+
+let vm_cast_walk_limit = 20_000_000
+
+let has_vm_cast body =
+  let steps = ref 0 in
+  let rec aux () c =
+    incr steps;
+    if !steps > vm_cast_walk_limit then raise Found_cast;
+    match Constr.kind c with
+    | Constr.Cast (_, (Constr.VMcast | Constr.NATIVEcast), _) -> raise Found_cast
+    | _ -> Constr.fold aux () c
+  in
+  try aux () body; false with Found_cast -> true
+
 let check_constant_declaration env opac kn cb opacify =
   Flags.if_verbose Feedback.msg_notice (str "  checking cst:" ++ Constant.print kn);
   let env = CheckFlags.set_local_flags cb.const_typing_flags env in
@@ -139,6 +160,8 @@ let check_constant_declaration env opac kn cb opacify =
     match body with
     | Some (opaque, bd) ->
       let check () =
+        (* r3-b instrumentation *)
+        ConvLog.with_constant kn @@ fun () ->
         let j = Typeops.infer env bd in
         match conv_leq env j.uj_type ty with
         | Result.Ok () -> ()
@@ -148,7 +171,18 @@ let check_constant_declaration env opac kn cb opacify =
          check can be postponed, and possibly run in another process. A
          transparent body may be unfolded by later checks, which rely
          on it being well-typed, so it is checked here. *)
-      if opaque then CheckWorkers.defer kn check else check ()
+      if opaque then begin
+        (* r3-b instrumentation *)
+        let t0 = if ConvLog.enabled () then Unix.gettimeofday () else 0. in
+        let vm_cast = has_vm_cast bd in
+        (* r3-b instrumentation *)
+        if ConvLog.enabled () then
+          ConvLog.event "defer-body"
+            [Constant.to_string kn; (if vm_cast then "1" else "0");
+             Printf.sprintf "walk_s=%.6f" (Unix.gettimeofday () -. t0)];
+        CheckWorkers.defer ~vm_cast kn check
+      end
+      else check ()
     | None -> ()
   in
   match body with
@@ -158,7 +192,9 @@ let check_constant_declaration env opac kn cb opacify =
 let check_constant_declaration env opac kn cb opacify =
   let opac = NewProfile.profile "check_constant" ~args:(fun () ->
       [("name", `String (Constant.to_string kn))])
-      (fun () -> check_constant_declaration env opac kn cb opacify)
+      (fun () ->
+         (* r3-b instrumentation *)
+         ConvLog.with_constant kn (fun () -> check_constant_declaration env opac kn cb opacify))
       ()
   in
   Environ.add_constant kn cb env, opac

@@ -65,7 +65,7 @@ let run ?(jobs = 2) ?refuse ?(work = fun _ -> ()) ?(windows = 0)
              try
                for i = 0 to n - 1 do
                  if part > 0 && i mod part = part - 1 then Unix.sleepf 1.05;
-                 CheckWorkers.defer (constant i) (fun () ->
+                 CheckWorkers.defer ~vm_cast:false (constant i) (fun () ->
                      if Some i = refuse then failwith "refused";
                      record fd i;
                      work i)
@@ -497,5 +497,97 @@ let () = add_test "a good report is accepted" (fun () ->
 let () = add_test "negative budget is refused" (fun () ->
     assert_raises (Invalid_argument "CheckWorkers.set_budget") (fun () -> CheckWorkers.set_budget (-1.));
     assert_raises (Invalid_argument "CheckWorkers.set_budget") (fun () -> CheckWorkers.set_budget nan))
+
+(* VM-cast proofs: each is dealt to a worker of its own, ahead of the
+   other proofs, and the compilation units take turns, so that one
+   library's costly casts cannot take every worker slot. *)
+
+(* A deferred proof: its index in the log, its constant, whether its body
+   holds a VM cast. *)
+type proof = { index : int; kn : Names.Constant.t; vm_cast : bool }
+
+(* Proof [i] of library [lib], in its submodule [sub] if given. *)
+let proof ?sub ~vm_cast lib i =
+  let open Names in
+  let file = ModPath.MPfile (DirPath.make [Id.of_string lib]) in
+  let mp = match sub with None -> file | Some s -> ModPath.MPdot (file, Id.of_string s) in
+  { index = i; kn = Constant.make2 mp (Id.of_string (Printf.sprintf "p%d" i)); vm_cast }
+
+(* Defers [proofs] in order with [-j jobs], then [finish]. Before the
+   proofs of index [sleep_before] the main process sleeps past the
+   dispatch window. [before_finish] gets the log reader. *)
+let run_proofs ?(jobs = 2) ?(sleep_before = -1) ?(before_finish = fun _ -> ()) proofs =
+  with_log (fun fd read ->
+      CheckWorkers.set_jobs ~profiling:false jobs;
+      Fun.protect ~finally:(fun () -> CheckWorkers.set_jobs ~profiling:false 1) (fun () ->
+          let result =
+            try
+              List.iter (fun p ->
+                  if p.index = sleep_before then Unix.sleepf 1.05;
+                  CheckWorkers.defer ~vm_cast:p.vm_cast p.kn (fun () -> record fd p.index))
+                proofs;
+              before_finish read;
+              CheckWorkers.finish (); None
+            with e -> CheckWorkers.abort (); Some e
+          in
+          result, read ()))
+
+(* The checks of each worker, workers in the order they were forked: with
+   [-j 2], [finish] forks a worker only when a slot is free, so pids grow
+   in the order batches are dealt. *)
+let batches_in_fork_order log = List.map (fun p -> checks_of p log) (pids_of log)
+
+let () = add_test "VM-cast proofs are dealt alone, first, libraries taking turns" (fun () ->
+    (* A first proof without a cast, so that no window dispatch deals a
+       cast before [finish]; then casts of two libraries, one of them in a
+       submodule of library A, which is the same compilation unit; and
+       proofs without a cast. *)
+    let proofs = [
+      proof ~vm_cast:false "LibO" 0;
+      proof ~vm_cast:false "LibO" 1;
+      proof ~vm_cast:true "LibA" 2;
+      proof ~vm_cast:true "LibA" 3;
+      proof ~vm_cast:true ~sub:"Sub" "LibA" 4;
+      proof ~vm_cast:true "LibB" 5;
+      proof ~vm_cast:true "LibB" 6;
+      proof ~vm_cast:false "LibO" 7;
+      proof ~vm_cast:false "LibO" 8;
+      proof ~vm_cast:false "LibO" 9;
+      proof ~vm_cast:false "LibO" 10;
+    ] in
+    let result, log = run_proofs proofs in
+    assert_no_exception result;
+    assert_exactly_once (List.length proofs) log;
+    assert_main_checked_nothing log;
+    (* Singletons alternating A and B while both have casts left, then the
+       rest of A; then the six proofs without a cast, dealt as [finish]
+       deals any queue. *)
+    let expected = [[2]; [5]; [3]; [6]; [4]] @ finish_batches ~slots:2 [0; 1; 7; 8; 9; 10] in
+    assert_equal ~printer:pr_batches expected (batches_in_fork_order log))
+
+let () = add_test "a VM-cast proof is dealt while libraries are checked, below the batch threshold" (fun () ->
+    (* Fewer than [min_batch] proofs, so no batch of proofs without a cast
+       is dealt before [finish]; the cast deferred after the window is. *)
+    let proofs = [
+      proof ~vm_cast:false "LibO" 0;
+      proof ~vm_cast:false "LibO" 1;
+      proof ~vm_cast:true "LibA" 2;
+      proof ~vm_cast:false "LibO" 3;
+    ] in
+    let dealt_before_finish = ref false in
+    let before_finish read =
+      let deadline = Unix.gettimeofday () +. 5. in
+      while not !dealt_before_finish && Unix.gettimeofday () < deadline do
+        if List.exists (fun (_, i) -> i = 2) (read ()) then dealt_before_finish := true
+        else Unix.sleepf 0.01
+      done
+    in
+    let result, log = run_proofs ~sleep_before:2 ~before_finish proofs in
+    assert_no_exception result;
+    assert_exactly_once (List.length proofs) log;
+    assert_bool "the VM-cast proof waited for finish" !dealt_before_finish;
+    (* It ran alone in its worker, and the others were not dealt with it. *)
+    let alone = List.exists (fun b -> b = [2]) (batches_in_fork_order log) in
+    assert_bool "the VM-cast proof shared its worker" alone)
 
 let () = run_tests __FILE__ (open_log_out_ch __FILE__) (List.rev !tests)

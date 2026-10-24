@@ -36,6 +36,8 @@ let ( / ) = Filename.concat
    (as opposed to compiling the library itself, which uses [output_dir]). *)
 let my_temp_dir = lazy (CUnix.mktemp_dir "Coq_native" "")
 
+let force_temp_dir () = ignore (Lazy.force my_temp_dir : string)
+
 let () = at_exit (fun () ->
     if not (keep_debug_files ()) && Lazy.is_val my_temp_dir then
       try
@@ -80,9 +82,50 @@ let rt2 = ref None
 
 let get_symbols () = !rsymbols
 
+(* coqchk's [-j] workers are forked with one copy of [Filename]'s random
+   state, and write their units in one directory ([force_temp_dir]): the
+   names that [Filename.temp_file] draws in one worker are those it draws
+   in the next, and after 1000 names taken it fails. So while
+   [Nativecode.native_vm_conversion ()] holds, a unit is named after the
+   pid of its process and a counter of that process; [O_EXCL] settles a
+   pid that an earlier worker had. *)
+let unit_counter = ref 0
+
+let rec fresh_unit_filename temp_dir =
+  incr unit_counter;
+  let base = Printf.sprintf "Coq_native%d_%d" (Unix.getpid ()) !unit_counter in
+  let filename = temp_dir / (base ^ source_ext) in
+  match Unix.openfile filename Unix.[O_WRONLY; O_CREAT; O_EXCL; O_CLOEXEC] 0o600 with
+  | fd -> Unix.close fd; filename
+  | exception Unix.Unix_error (Unix.EEXIST, _, _) -> fresh_unit_filename temp_dir
+
 let get_ml_filename () =
   let temp_dir = Lazy.force my_temp_dir in
-  let filename = Filename.temp_file ~temp_dir "Coq_native" source_ext in
+  let filename =
+    if Nativecode.native_vm_conversion () then fresh_unit_filename temp_dir
+    else Filename.temp_file ~temp_dir "Coq_native" source_ext
+  in
+  let prefix = Filename.chop_extension (Filename.basename filename) ^ "." in
+  filename, prefix
+
+(* The directory of the checker's unit cache (see checker/convCache.ml),
+   made by the main process before the first fork and added to the include
+   dirs, so that a unit finds the .cmi of the units it refers to. The cache
+   removes it itself, before the temp dir goes. *)
+let cache_dir = ref None
+
+let cache_directory () = match !cache_dir with
+  | Some d -> d
+  | None ->
+    let d = CUnix.mktemp_dir ~temp_dir:(Lazy.force my_temp_dir) "cache" "" in
+    cache_dir := Some d;
+    include_dirs := d :: !include_dirs;
+    d
+
+let cache_directory_made () = !cache_dir
+
+let cache_ml_filename () =
+  let filename = fresh_unit_filename (cache_directory ()) in
   let prefix = Filename.chop_extension (Filename.basename filename) ^ "." in
   filename, prefix
 
@@ -155,8 +198,11 @@ let call_compiler ?profile:(profile=false) ml_filename =
     error_native_compiler_failed (Inr e)
 
 let compile fn code ~profile:profile =
-  write_ml_code fn code;
-  let r = call_compiler ~profile fn in
+  (* r3-b instrumentation *)
+  ConvLog.time ConvLog.Codegen (fun () -> write_ml_code fn code);
+  let r =
+    (* r3-b instrumentation *)
+    ConvLog.time ConvLog.Compile (fun () -> call_compiler ~profile fn) in
   (* NB: to prevent reusing the same filename we MUST NOT remove the file until exit
      cf #15263 *)
   delay_cleanup_file fn;
@@ -179,6 +225,28 @@ let compile_library (code, symb) fn =
   let _ = call_compiler fn in
   delay_cleanup_file fn
 
+(* A unit of the checker's cache: it defines constants and inductives
+   only, and carries its own symbols in its source, so the loading process
+   needs nothing of the process that generated it. It leaves [rt1] and
+   [rt2] alone, and marks nothing linked: the caller marks the definitions
+   it has checked ([Nativecode.link_definitions]). *)
+let load_unit ~prefix f =
+  if not (Sys.file_exists f) then
+    CErrors.user_err Pp.(str "Cannot find native compiler file " ++ str f);
+  if Dynlink.is_native then Dynlink.loadfile f else !load_obj f;
+  (* Only now: a unit that fails to load must not be referred to, and
+     OCaml cannot unload it (see [Nativeconv.native_conv_gen]). *)
+  register_native_file prefix
+
+(* What a process does before it generates the code of a conversion: the
+   checker's cache reuses here the definitions another worker has already
+   compiled, and compiles and publishes the rest, so that the conversion
+   itself compiles almost nothing. It does nothing in a process that has
+   no cache. *)
+let prepare_conversion :
+  (Environ.env -> Constr.t -> Constr.t -> unit) ref =
+  ref (fun _ _ _ -> ())
+
 let execute_library ~prefix f symbols upds =
   let () = rt1 := None in
   let () = rt2 := None in
@@ -186,6 +254,8 @@ let execute_library ~prefix f symbols upds =
   if not (Sys.file_exists f) then
     CErrors.user_err Pp.(str "Cannot find native compiler file " ++ str f);
   if Dynlink.is_native then Dynlink.loadfile f else !load_obj f;
+  (* Only now: a unit that fails to load must not be referred to, and
+     OCaml cannot unload it (see [Nativeconv.native_conv_gen]). *)
   register_native_file prefix;
   update_locations upds;
   (!rt1, !rt2)

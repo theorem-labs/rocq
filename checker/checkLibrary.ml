@@ -118,8 +118,12 @@ let check_one_lib admit senv (dir,m) =
   (* Look up if the library is to be admitted correct. We could
      also check if it carries a validation certificate (yet to
      be implemented). *)
+  let admitted = LibrarySet.mem dir admit in
+  (* r3-b instrumentation *)
+  ConvLog.event "lib-check-start"
+    [DirPath.to_string dir; (if admitted then "admit" else "check")];
   let senv =
-    if LibrarySet.mem dir admit then
+    if admitted then
       (Flags.if_verbose Feedback.msg_notice
          (str "Admitting library: " ++ pr_dirpath dir);
        Safe_checking.unsafe_import (fst senv) md dig),
@@ -129,6 +133,8 @@ let check_one_lib admit senv (dir,m) =
          (str "Checking library: " ++ pr_dirpath dir);
        Safe_checking.import (fst senv) (snd senv) md dig)
   in
+  (* r3-b instrumentation *)
+  ConvLog.event "lib-check-end" [DirPath.to_string dir];
     register_loaded_library m; senv
 
 (*************************************************************************)
@@ -375,10 +381,18 @@ let intern_from_file ~intern_mode ~validated (dir, f) =
   mk_library sd md f table digest
 
 let intern_from_file ~intern_mode ~validated dirf : library_t =
-  NewProfile.profile "intern_from_file"
-    ~args:(fun () -> [("name", `String (DirPath.to_string (fst dirf)))])
-    (fun () -> intern_from_file ~intern_mode ~validated dirf)
-    ()
+  (* r3-b instrumentation *)
+  let name = DirPath.to_string (fst dirf) in
+  ConvLog.event "lib-load-start" [name];
+  let lib =
+    NewProfile.profile "intern_from_file"
+      ~args:(fun () -> [("name", `String (DirPath.to_string (fst dirf)))])
+      (fun () -> intern_from_file ~intern_mode ~validated dirf)
+      ()
+  in
+  (* r3-b instrumentation *)
+  ConvLog.event "lib-load-end" [name];
+  lib
 
 (* Read a compiled library and all dependencies, in reverse order.
    Do not include files that are already in the context. *)

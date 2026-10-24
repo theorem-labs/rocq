@@ -149,11 +149,25 @@ let indices_matter = ref false
 
 let enable_vm = ref false
 
+(* On by default while speed lane R3 measures it; the release makes it
+   opt-in. *)
+let native_conversion = ref true
+
 let jobs = ref 1
 let set_jobs s =
   match int_of_string_opt s with
   | Some n when n >= 1 -> jobs := n
   | _ -> fatal_error (str "Option -j expects a positive integer, got " ++ qstring s ++ str ".") 1
+
+(* 0, or at least 1 ms: [setitimer] rounds to microseconds, and a value
+   that rounds to 0 would disarm the timer instead of arming it. *)
+let set_native_conversion_after s =
+  match float_of_string_opt s with
+  | Some t when Float.is_finite t && (t = 0. || t >= 0.001) ->
+    Typeops.set_native_conversion_after t
+  | _ ->
+    fatal_error (str "Option -native-conversion-after expects 0 or a number of seconds of at least 0.001, got " ++
+                 qstring s ++ str ".") 1
 
 let set_worker_budget s =
   match float_of_string_opt s with
@@ -161,13 +175,39 @@ let set_worker_budget s =
   | _ ->
     fatal_error (str "Option -worker-budget expects a number of seconds, got " ++ qstring s ++ str ".") 1
 
+(* With native conversion, the checker compiles and loads only the OCaml
+   code it generates in this check, from the terms it checks. It never
+   links a [.coq-native] unit of the libraries it reads: their load path is
+   empty, and nothing in the checker calls [Nativelib.enable_library].
+   Native conversion needs the kernel's .cmi files, which [-boot] does not
+   locate, and a native checker, which can [Dynlink] native code. The
+   directory of the generated code is made here, in the main process, so
+   that the [-j] workers, which end with [Unix._exit], write into it too
+   and the main process removes it at exit. *)
+let init_native_conversion coqenv =
+  let native_checker = match Sys.backend_type with
+    | Sys.Native -> true
+    | Sys.Bytecode | Sys.Other _ -> false
+  in
+  let () = match coqenv with
+    | Boot.Env.Env env when !native_conversion && native_checker ->
+      Nativelib.include_dirs := Nativelib.default_include_dirs env;
+      Nativelib.get_load_paths := (fun () -> []);
+      Nativelib.force_temp_dir ()
+    | Boot.Env.Env _ | Boot.Env.Boot -> native_conversion := false
+  in
+  Nativecode.set_native_vm_conversion !native_conversion;
+  (* The cache serves the workers, so it is off with -j 1, with -profile
+     and where fork is not available. *)
+  if !native_conversion then ConvCache.enable ()
+
 let make_senv () =
   let senv = Safe_typing.empty_environment in
   let senv = Safe_typing.set_impredicative_set !impredicative_set senv in
   let senv = Safe_typing.set_indices_matter !indices_matter senv in
   let senv = Safe_typing.set_VM !enable_vm senv in
   let senv = Safe_typing.set_allow_sprop true senv in (* be smarter later *)
-  Safe_typing.set_native_compiler false senv
+  Safe_typing.set_native_compiler !native_conversion senv
 
 let admit_list = ref ([] : CheckLibrary.object_file list)
 let add_admit s =
@@ -228,6 +268,16 @@ let print_usage_channel co command =
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
 \n                              contribute to the level of inductives\
 \n  -bytecode-compiler (yes|no) enable the vm_compute reduction machine (default is no)\
+\n  -native-conversion (yes|no) decide the casts of vm_compute and native_compute\
+\n                              with OCaml code that coqchk generates, compiles\
+\n                              and loads in this check, when the VM has not\
+\n                              decided them within the time below; the VM\
+\n                              decides a cast whose code fails to compile or\
+\n                              load (default is yes; no with -boot or a\
+\n                              bytecode coqchk)\
+\n  -native-conversion-after s  with -native-conversion yes, the VM decides a cast\
+\n                              for at most s seconds before native code does;\
+\n                              0 goes to native code at once (default is 1)\
 \n\
 \n  -h, --help                  print this list of options\
 \n"
@@ -393,6 +443,13 @@ let parse_args argv =
       enable_vm := true; parse rem
     | "-bytecode-compiler" :: "no" :: rem ->
       enable_vm := false; parse rem
+    | "-native-conversion" :: "yes" :: rem ->
+      native_conversion := true; parse rem
+    | "-native-conversion" :: "no" :: rem ->
+      native_conversion := false; parse rem
+    | "-native-conversion-after" :: s :: rem ->
+      set_native_conversion_after s; parse rem
+    | "-native-conversion-after" :: [] -> usage 1
 
     | "-coqlib" :: s :: rem ->
       if not (exists_dir s) then
@@ -484,6 +541,7 @@ let init_with_argv argv =
           (List.rev !includes))
       ();
     includes := [];
+    init_native_conversion coqenv;
     make_senv ()
   with e ->
     fatal_error (str "Error during initialization :" ++ (explain_exn e)) (CErrors.exit_code e)
@@ -511,7 +569,15 @@ let run senv =
     fatal_error (explain_exn e) (exit_code e)
 
 let main () =
+  (* r3-b instrumentation *)
+  ConvLog.process_start ();
   let senv = init() in
+  (* r3-b instrumentation *)
+  ConvLog.event "init-done" [];
   let senv, opac = run senv in
+  (* r3-b instrumentation *)
+  ConvLog.event "run-end" [];
   Check_stat.stats (Safe_typing.env_of_safe_env senv) opac;
+  (* r3-b instrumentation *)
+  ConvLog.event "stats-end" [];
   exit 0
