@@ -14,11 +14,14 @@
 #      -Pos.eqb turns off only that routine; a bad value stops rocqchk;
 #  (c) copies over a user inductive of the same shape (and a copy of the
 #      Stdlib body over Corelib's types) bind, and their results are right;
-#  (d) a copy with one branch changed, and a copy over an inductive with its
-#      constructors in another order, do not bind, and their own results
-#      still check;
-#  (e) inputs with a free variable: the routine refuses them and the bytecode
-#      computes; a partial application gets its last argument later and hits;
+#  (d) a copy with one branch changed, a copy over an inductive with its
+#      constructors in another order, and two copies that differ in one
+#      variable only (a call argument, a match scrutinee) do not bind, each
+#      for the reason the recognizer gives, and their own results still
+#      check;
+#  (e) inputs of both routines with a free variable: the routine refuses
+#      them and the bytecode computes, with exact counts; a partial
+#      application gets its last argument later and hits;
 #  (f) the -j 2 run of (a): each worker prints its own counters.
 set -eu
 : "${BIN:=$(dirname "$(command -v rocq)")/}"
@@ -180,8 +183,9 @@ counts["N_COPY_CC"] = 2 * ncc
 counts["N_COPY_EQB"] = 2 * neq
 open(d + "/Copy.v", "w").write("".join(out))
 
-# (d) Near misses: one branch changed (p~1, 1 => Lt instead of Gt), and the
-# same function over an inductive whose constant constructor comes first.
+# (d) Near misses: one branch changed (p~1, 1 => Lt instead of Gt), the same
+# function over an inductive whose constant constructor comes first, and two
+# bodies that differ from the reference in one variable only.
 out = [HEADER, """
 Fixpoint cc_bad (r:comparison) (x y:positive) {struct y} : comparison :=
   match x, y with
@@ -211,29 +215,81 @@ Fixpoint cc_ord (r:comparison) (x y:opos) {struct y} : comparison :=
     | oH, oH => r
   end.
 
-(* Where cc_bad differs from Pos.compare_cont. *)
+(* The reference with one variable changed: in the branch p~1, q~1 the
+   second argument of the recursive call is q, not p. *)
+Fixpoint cc_swap (r:comparison) (x y:positive) {struct y} : comparison :=
+  match x, y with
+    | _~1, q~1 => cc_swap r q q
+    | p~1, q~0 => cc_swap Gt p q
+    | p~1, 1 => Gt
+    | p~0, q~1 => cc_swap Lt p q
+    | p~0, q~0 => cc_swap r p q
+    | p~0, 1 => Gt
+    | 1, q~1 => Lt
+    | 1, q~0 => Lt
+    | 1, 1 => r
+  end.
+
+(* The reference with one variable changed: the branch x = 1 matches x, not
+   y. *)
+Fixpoint cc_scr (r:comparison) (x y:positive) {struct y} : comparison :=
+  match x with
+    | p~1 => match y with q~1 => cc_scr r p q | q~0 => cc_scr Gt p q | 1 => Gt end
+    | p~0 => match y with q~1 => cc_scr Lt p q | q~0 => cc_scr r p q | 1 => Gt end
+    | 1 => match x with _~1 => Lt | _~0 => Lt | 1 => r end
+  end.
+
+(* Where each of them differs from Pos.compare_cont. The values of
+   Pos.compare_cont are checked by the kernel's own conversion, not by the
+   VM, so that no lemma of this library calls the routine. *)
 Lemma bad_differs : cc_bad Eq (1~1) 1 = Lt.
 Proof. vm_compute. reflexivity. Qed.
+Lemma bad_ref : Pos.compare_cont Eq (1~1) 1 = Gt.
+Proof. reflexivity. Qed.
+Lemma swap_differs : cc_swap Eq (1~1) (1~0~1) = Eq.
+Proof. vm_compute. reflexivity. Qed.
+Lemma swap_ref : Pos.compare_cont Eq (1~1) (1~0~1) = Lt.
+Proof. reflexivity. Qed.
+Lemma scr_differs : cc_scr Eq 1 (1~1) = Eq.
+Proof. vm_compute. reflexivity. Qed.
+Lemma scr_ref : Pos.compare_cont Eq 1 (1~1) = Lt.
+Proof. reflexivity. Qed.
 """]
 n = 0
 for a, b in compare_pairs(10):
     for r in ("Eq", "Lt", "Gt"):
         out.append(lemma("bcc%d" % n, "cc_bad %s %s %s" % (r, pos(a), pos(b))))
         out.append(lemma("occ%d" % n, "cc_ord %s %s %s" % (r, opos(a), opos(b))))
+        out.append(lemma("wcc%d" % n, "cc_swap %s %s %s" % (r, pos(a), pos(b))))
+        out.append(lemma("scc%d" % n, "cc_scr %s %s %s" % (r, pos(a), pos(b))))
         n += 1
 open(d + "/Bad.v", "w").write("".join(out))
 
-# (e) Free variables. A free variable in a non-recursive argument; in the
-# recursive argument under 1 and under 65 constructors; in the recursive
-# argument itself, where GRABREC returns before BINNUM.
+# (e) Free variables. For Pos.compare_cont: a free variable in a
+# non-recursive argument; in the recursive argument under 1 and under 65
+# constructors; the recursive argument itself, where GRABREC returns before
+# BINNUM. For Pos.eqb: a free variable under 1 constructor of p; under 1 and
+# under 65 constructors of q; q itself. The lemmas named *f have a constructor
+# (computed by cbv) as their right side, so that the value the bytecode
+# computes after a refusal is checked too.
 def refl(name, lhs):
     return ("Lemma %s (p : positive) : %s = %s.\nProof. vm_compute. reflexivity. Qed.\n"
+            % (name, lhs, lhs))
+def free_cbv(name, lhs):
+    return ("Lemma %s (p : positive) : %s = cbv_val (%s).\nProof. vm_compute. reflexivity. Qed.\n"
             % (name, lhs, lhs))
 open(d + "/Free0.v", "w").write(HEADER + refl("f0", "Pos.compare_cont Eq p (1~1)"))
 open(d + "/Free1.v", "w").write(HEADER + refl("f1", "Pos.compare_cont Eq (1~0~1) (p~0)"))
 open(d + "/Free65.v", "w").write(
     HEADER + refl("f65", "Pos.compare_cont Eq %s (p%s)" % (pos(bits(70)), "~0" * 65)))
 open(d + "/FreeRec.v", "w").write(HEADER + refl("frec", "Pos.compare_cont Eq (1~1) p"))
+open(d + "/EqP1.v", "w").write(HEADER + refl("ep1", "Pos.eqb (p~1) (1~1)"))
+open(d + "/EqP1f.v", "w").write(HEADER + free_cbv("ep1f", "Pos.eqb (p~1) (1~0)"))
+open(d + "/EqQ1.v", "w").write(HEADER + refl("eq1", "Pos.eqb (1~0~0) (p~0)"))
+open(d + "/EqQ1f.v", "w").write(HEADER + free_cbv("eq1f", "Pos.eqb (1~0~1) (p~0)"))
+open(d + "/EqQ65.v", "w").write(
+    HEADER + refl("eq65", "Pos.eqb %s (p%s)" % (pos(1 << 69), "~0" * 65)))
+open(d + "/EqRec.v", "w").write(HEADER + refl("erec", "Pos.eqb (1~1) p"))
 
 # (e) A partial application that gets its last argument from map.
 open(d + "/Partial.v", "w").write(HEADER + """
@@ -247,7 +303,7 @@ with open(d + "/counts", "w") as f:
 PY
 . "$d/counts"
 
-for lib in Diff Copy Bad Free0 Free1 Free65 FreeRec Partial; do
+for lib in Diff Copy Bad Free0 Free1 Free65 FreeRec EqP1 EqP1f EqQ1 EqQ1f EqQ65 EqRec Partial; do
   rocq c -native-compiler no -R "$d" "" "$d/$lib.v"
 done
 
@@ -280,7 +336,15 @@ expect() {
 }
 
 bound() { grep -q "^binnum\[[0-9]*\] bind $2: $3\$" "$d/$1"; }
-missed() { grep -q "^binnum\[[0-9]*\] near-miss $2: " "$d/$1"; }
+# missed LOG NAME REASON: NAME is a near miss of the reference of
+# Pos.compare_cont, rejected for REASON.
+missed() { grep -q "^binnum\[[0-9]*\] near-miss $2: Pos.compare_cont: $3\$" "$d/$1"; }
+# first_diff LOG NAME: with ROCQ_VM_BINNUM_STATS=2, the path to the first node
+# where NAME differs from the reference.
+first_diff() {
+  awk -v n="near-miss $2: " 'hit { sub(/^binnum\[[0-9]*\]   at /, ""); print; exit }
+    index($0, n) { hit = 1 }' "$d/$1"
+}
 
 # (a) One call per lemma: the cast of each proof is checked once.
 chk a.log -norec Diff
@@ -328,55 +392,93 @@ expect "(c) Pos.compare_cont refusals" "$(stat c.log Pos.compare_cont refusals)"
 expect "(c) Pos.eqb hits" "$(stat c.log Pos.eqb hits)" -eq "$N_COPY_EQB"
 expect "(c) Pos.eqb refusals" "$(stat c.log Pos.eqb refusals)" -eq 0
 
-# (d) The near misses do not bind: no routine runs for their lemmas.
+# (d) The near misses do not bind: no routine runs for their lemmas. Each is
+# rejected by the guard named in its reason; cc_swap and cc_scr only by the
+# comparison of a variable, at the path given.
 STATS=2 chk d.log -norec Bad
-missed d.log Bad.cc_bad || fail "(d) Bad.cc_bad is not reported as a near miss"
-missed d.log Bad.cc_ord || fail "(d) Bad.cc_ord is not reported as a near miss"
-! bound d.log Bad.cc_bad Pos.compare_cont || fail "(d) Bad.cc_bad is bound"
-! bound d.log Bad.cc_ord Pos.compare_cont || fail "(d) Bad.cc_ord is bound"
-grep -q "^binnum\[[0-9]*\]   at " "$d/d.log" || fail "(d) ROCQ_VM_BINNUM_STATS=2 prints no first difference"
+missed d.log Bad.cc_bad constructor || fail "(d) Bad.cc_bad is not a near miss for its constructor"
+missed d.log Bad.cc_ord "case info" || fail "(d) Bad.cc_ord is not a near miss for its case info"
+missed d.log Bad.cc_swap "de Bruijn index" || fail "(d) Bad.cc_swap is not a near miss for a variable"
+missed d.log Bad.cc_scr "de Bruijn index" || fail "(d) Bad.cc_scr is not a near miss for a variable"
+for f in cc_bad cc_ord cc_swap cc_scr; do
+  ! bound d.log "Bad.$f" Pos.compare_cont || fail "(d) Bad.$f is bound"
+done
+top="fixpoint body 1 > lambda body > lambda body > lambda body"
+expect "(d) first difference of cc_swap" "'$(first_diff d.log Bad.cc_swap)'" = \
+  "'$top > branch 1 > branch 1 > argument 2'"
+expect "(d) first difference of cc_scr" "'$(first_diff d.log Bad.cc_scr)'" = \
+  "'$top > branch 3 > match scrutinee'"
 expect "(d) Pos.compare_cont calls" "$(stat d.log Pos.compare_cont calls)" -eq 0
 
-# (e) Refusals. Each lemma is [l = l] with a free variable p in l, proved by
-# vm_compute, so rocqchk compares the normal form of the goal (which no
-# longer calls Pos.compare_cont) with the goal, whose two sides it evaluates.
-# A stuck match is compared by running each of its branches on a fresh
-# variable, and a stuck fixpoint by running its body on fresh variables:
-# BINNUM refuses that call at once, since r is then a variable.
+# (e) Refusals. Each lemma has a free variable p in its left side l and is
+# proved by vm_compute, so rocqchk compares the normal form of the goal (which
+# no longer calls the routine) with the goal, and evaluates each occurrence of
+# l in it: twice for [l = l], once for [l = c]. A stuck match is compared by
+# running each of its branches on a fresh variable, and a stuck fixpoint by
+# running its body on fresh variables (mk_fix_body, kernel/vmvalues.ml): the
+# routine refuses that call at its first argument.
 #
-# l = Pos.compare_cont Eq p 3. Each side: the call is refused (p in x), the
+# Words read: Pos.compare_cont reads 1 for r, then 2 per step (one node of
+# each number) up to and including the step that finds the variable, and the
+# rest of the longer number if the other ends first. Pos.eqb reads 2 per
+# step.
+#
+# ecase LIB ROUTINE HITS REFUSALS WORDS: rocqchk LIB; the counts of ROUTINE.
+ecase() {
+  chk "$1.log" -norec "$1"
+  expect "(e) $1 $2 hits" "$(stat "$1.log" "$2" hits)" -eq "$3"
+  expect "(e) $1 $2 refusals" "$(stat "$1.log" "$2" refusals)" -eq "$4"
+  expect "(e) $1 $2 words" "$(stat "$1.log" "$2" words)" -eq "$5"
+}
+# l = Pos.compare_cont Eq p 3. Each side: the call is refused (p is x), the
 # match on x is stuck, and its branches p'~1 and p'~0 call
 # Pos.compare_cont Eq p' 1 and Pos.compare_cont Lt p' 1, both refused: 6.
-chk e0.log -norec Free0
-expect "(e) Free0 hits" "$(stat e0.log Pos.compare_cont hits)" -eq 0
-expect "(e) Free0 refusals" "$(stat e0.log Pos.compare_cont refusals)" -eq 6
+# Each reads r and one step: 6 x 3 = 18 words.
+ecase Free0 Pos.compare_cont 0 6 18
 # l = Pos.compare_cont Eq 5 p~0. Each side: the call is refused (p under one
-# constructor of y); the recursive call has y = p, so GRABREC returns a stuck
-# fixpoint before BINNUM; reading back that fixpoint is refused once: 4.
-chk e1.log -norec Free1
-expect "(e) Free1 hits" "$(stat e1.log Pos.compare_cont hits)" -eq 0
-expect "(e) Free1 refusals" "$(stat e1.log Pos.compare_cont refusals)" -eq 4
+# constructor of y; r and two steps, 5 words); the recursive call has y = p,
+# so GRABREC returns a stuck fixpoint before BINNUM; its read-back is refused
+# (r is a variable, 1 word): 4 refusals, 12 words.
+ecase Free1 Pos.compare_cont 0 4 12
 # l = Pos.compare_cont Eq x (p~0...~0), x of 70 bits, 65 constructors above
-# p. Each side recurses 65 times while y is still a constructor, and each of
-# these calls is refused, then the stuck fixpoint is read back once: 132. The
-# call at depth k reads the k constructors of y above p before it refuses, so
-# the words read are at least 2 x (1 + ... + 65) = 4290.
-chk e65.log -norec Free65
-expect "(e) Free65 hits" "$(stat e65.log Pos.compare_cont hits)" -eq 0
-expect "(e) Free65 refusals" "$(stat e65.log Pos.compare_cont refusals)" -eq 132
-expect "(e) Free65 words" "$(stat e65.log Pos.compare_cont words)" -ge 4290
+# p. Each side: the calls with m = 65, ..., 1 constructors of y above p are
+# refused, each after r and m + 1 steps; then y = p, and the read-back is
+# refused: 2 x 66 = 132 refusals, 2 x (65 + 2 x (2145 + 65) + 1) = 8972 words.
+ecase Free65 Pos.compare_cont 0 132 8972
 # l = Pos.compare_cont Eq 3 p. The variable is the recursive argument:
 # GRABREC returns a stuck fixpoint before BINNUM, so evaluation never calls
-# the routine; only the read-back of each side's stuck fixpoint does: 2.
-chk erec.log -norec FreeRec
-expect "(e) FreeRec hits" "$(stat erec.log Pos.compare_cont hits)" -eq 0
-expect "(e) FreeRec refusals" "$(stat erec.log Pos.compare_cont refusals)" -eq 2
+# the routine; only the read-back of each side's stuck fixpoint does: 2
+# refusals, 2 words.
+ecase FreeRec Pos.compare_cont 0 2 2
+# l = Pos.eqb (p~1) 3. Each side: the call is refused (p under one
+# constructor of x, two steps, 4 words); the bytecode calls Pos.eqb p 1,
+# refused at once (p is x, 2 words); the match on p is then stuck, and its
+# branches do not call Pos.eqb: 4 refusals, 12 words.
+ecase EqP1 Pos.eqb 0 4 12
+# Pos.eqb (p~1) 2 = false. The call is refused after two steps, although the
+# first already differs; the bytecode answers false at the first step: 1
+# refusal, 4 words.
+ecase EqP1f Pos.eqb 0 1 4
+# l = Pos.eqb 4 (p~0). Each side: the call is refused (p under one constructor
+# of y, 4 words); the recursive call has y = p, so GRABREC returns a stuck
+# fixpoint; its read-back is refused (2 words): 4 refusals, 12 words.
+ecase EqQ1 Pos.eqb 0 4 12
+# Pos.eqb 5 (p~0) = false. Refused after two steps; the bytecode answers
+# false at the first: 1 refusal, 4 words.
+ecase EqQ1f Pos.eqb 0 1 4
+# l = Pos.eqb x (p~0...~0), x = 2^69, 65 constructors above p, all xO as the
+# 69 of x. Each side: the calls with m = 65, ..., 1 constructors of y above p
+# are refused, each after m + 1 steps; then y = p, and the read-back is
+# refused: 2 x 66 = 132 refusals, 2 x (2 x (2145 + 65) + 2) = 8844 words.
+ecase EqQ65 Pos.eqb 0 132 8844
+# l = Pos.eqb 3 p. Only the read-back of each side's stuck fixpoint calls the
+# routine: 2 refusals, 4 words.
+ecase EqRec Pos.eqb 0 2 4
 # The partial application Pos.compare_cont Eq 3 is a closure until map gives
 # it its last argument; then all three arguments are closed numbers: three
-# hits, no refusal.
-chk ep.log -norec Partial
-expect "(e) Partial hits" "$(stat ep.log Pos.compare_cont hits)" -eq 3
-expect "(e) Partial refusals" "$(stat ep.log Pos.compare_cont refusals)" -eq 0
+# hits, no refusal. Words: 5 for 2 and for 3 (r and two steps), 6 for 4 (r,
+# two steps, and the xH of 4): 16.
+ecase Partial Pos.compare_cont 3 0 16
 
 # (f) -j 2: the workers check the proofs and print their own counters; the
 # counters they inherit from the main process are zeroed at the fork.

@@ -709,6 +709,9 @@ value rocq_interprete
         print_instr("RETURN");
         print_int(*pc);
         sp += *pc++;
+        /* BINNUM jumps here, with its result in accu and its n arguments
+           popped. */
+      return_after_pop:
         print_instr("stack=");
         print_lint(sp[0]);
         print_lint(sp[1]);
@@ -829,26 +832,66 @@ value rocq_interprete
       /* BINNUM k n comes right after the entry sequence of a function or
          fixpoint of n arguments (add_grab and add_grabrec in
          kernel/vmbytegen.ml), where the n arguments are sp[0..n-1]. If
-         routine k accepts them, the instruction returns its result as
-         RETURN n does; otherwise it does nothing and the body runs. */
+         routine k accepts them, the instruction allocates the result that
+         the routine describes (rocq_binnum.h) and returns it as RETURN n
+         does, through RETURN's own code; otherwise it does nothing and the
+         body runs.
+
+         The allocation keeps every heap value where the GC sees it: the
+         chain being built in accu, which Setup_for_gc saves, a finished
+         part of a pair on the VM stack, as MAKEBLOCK2 does, and the
+         arguments on the VM stack, from which the base of a chain is read
+         before the first allocation of that chain. The description itself
+         is C memory. */
       Instruct(BINNUM) {
         int k = *pc++;
         int n = *pc++;
-        value res;
+        const struct binnum_result *res;
         print_instr("BINNUM");
-        if (rocq_binnum_run(k, n, sp, &res)) {
-          accu = res;
-          sp += n;
-          if (rocq_extra_args > 0) {
-            rocq_extra_args--;
-            pc = Code_val(accu);
-            rocq_env = accu;
-          } else {
-            pc = LoadRA(sp[0]);
-            rocq_env = sp[1];
-            rocq_extra_args = Long_val(sp[2]);
-            sp += 3;
+        res = rocq_binnum_run(k, n, sp);
+        if (res != NULL) {
+          int p;
+          for (p = res->nparts - 1; p >= 0; p--) {
+            const struct binnum_part *part = &res->part[p];
+            /* The parts after this one are on the stack, above the
+               arguments. */
+            int above = res->nparts - 1 - p;
+            if (part->kind == BINNUM_IMM) {
+              accu = part->imm;
+            } else {
+              uint64_t i;
+              if (part->base_arg < 0) {
+                accu = Val_int(0);
+              } else {
+                accu = sp[above + part->base_arg];
+                for (i = 0; i < part->base_depth; i++) accu = Field(accu, 0);
+              }
+              for (i = part->nnodes; i > 0; i--) {
+                value block;
+                tag_t tag = (part->bits[(i - 1) >> 5] >> ((i - 1) & 31)) & 1 ? 1 : 2;
+                Rocq_alloc_small(block, 1, tag);
+                Field(block, 0) = accu;
+                accu = block;
+              }
+              if (part->wrap) {
+                value block;
+                Rocq_alloc_small(block, 1, part->wrap);
+                Field(block, 0) = accu;
+                accu = block;
+              }
+            }
+            if (p > 0) *--sp = accu;
           }
+          if (res->nparts == 2) {
+            value block;
+            Rocq_alloc_small(block, 2, 1);
+            Field(block, 0) = accu;
+            Field(block, 1) = sp[0];
+            sp += 1;
+            accu = block;
+          }
+          sp += n;
+          goto return_after_pop;
         }
         Next;
       }

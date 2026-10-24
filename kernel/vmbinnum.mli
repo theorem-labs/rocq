@@ -15,11 +15,15 @@
     names, the printing annotation of matches, and the inductive types, which
     may be any types of the expected shape), the compiler puts the
     instruction [BINNUM k n] at the start of the code of the function, after
-    its entry sequence. Routine [k] (kernel/byterun/rocq_binnum.c) then
-    computes the result when the [n] arguments are closed values, and leaves
-    every other call to the bytecode.
+    its entry sequence. A constant that a reference calls must itself have a
+    body equal to the reference of that callee (read from the environment
+    each time, through aliases). Routine [k] (kernel/byterun/rocq_binnum.c)
+    then computes the result when every node of the arguments that it reads
+    is a constructor of the expected type, and leaves every other call to the
+    bytecode. It reads at least the nodes that the bytecode reads.
 
-    Environment variables, for tests and measurement only:
+    Environment variables, for tests and measurement only, read when this
+    module is loaded:
     - [ROCQ_VM_BINNUM=0] turns recognition off; [ROCQ_VM_BINNUM=-name1,-name2]
       turns off the listed routines. Any other value stops the process.
     - [ROCQ_VM_BINNUM_STATS=1] prints, at the exit of each process, the
