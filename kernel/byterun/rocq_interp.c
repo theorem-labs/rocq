@@ -315,6 +315,12 @@ value rocq_interprete
 #else
   opcode_t curr_instr;
 #endif
+  /* The routine's result, its number of arguments, and where BINNUMCALL
+     goes on (NULL for BINNUM, which returns), between the two instructions
+     and the code that allocates the result. */
+  const struct binnum_result *binnum_res = NULL;
+  int binnum_nargs = 0;
+  code_t binnum_next = NULL;
   print_instr("Enter Interpreter");
   if (rocq_pc == NULL) {           /* Interpreter is initializing */
     print_instr("Interpreter is initializing");
@@ -835,21 +841,47 @@ value rocq_interprete
          routine k accepts them, the instruction allocates the result that
          the routine describes (rocq_binnum.h) and returns it as RETURN n
          does, through RETURN's own code; otherwise it does nothing and the
-         body runs.
-
-         The allocation keeps every heap value where the GC sees it: the
-         chain being built in accu, which Setup_for_gc saves, a finished
-         part of a pair on the VM stack, as MAKEBLOCK2 does, and the
-         arguments on the VM stack, from which the base of a chain is read
-         before the first allocation of that chain. The description itself
-         is C memory. */
+         body runs. */
       Instruct(BINNUM) {
-        int k = *pc++;
-        int n = *pc++;
-        const struct binnum_result *res;
         print_instr("BINNUM");
-        res = rocq_binnum_run(k, n, sp);
-        if (res != NULL) {
+        binnum_nargs = pc[1];
+        binnum_res = rocq_binnum_run(pc[0], binnum_nargs, sp, 0);
+        pc += 2;
+        if (binnum_res == NULL) Next;
+        binnum_next = NULL;
+        goto binnum_build;
+      }
+
+      /* BINNUMCALL k n L comes at a call site of a function of n arguments,
+         after the arguments are pushed (vmbytegen.ml, compile_constant),
+         where they are sp[0..n-1], as at the entry of the function. If
+         routine k accepts them, the instruction allocates the result, pops
+         the n arguments and goes to L, which is the instruction after the
+         call (APPLY), or a RETURN of the frame after a tail call (APPTERM).
+         Otherwise it does nothing and the call runs. */
+      Instruct(BINNUMCALL) {
+        print_instr("BINNUMCALL");
+        binnum_nargs = pc[1];
+        binnum_res = rocq_binnum_run(pc[0], binnum_nargs, sp, 1);
+        if (binnum_res == NULL) {
+          pc += 3;
+          Next;
+        }
+        binnum_next = pc + 2 + pc[2];
+        goto binnum_build;
+      }
+
+      /* The allocation of the result of BINNUM and BINNUMCALL keeps every
+         heap value where the GC sees it: the chain being built in accu,
+         which Setup_for_gc saves, a finished part of a pair on the VM stack,
+         as MAKEBLOCK2 does, and the arguments on the VM stack, from which
+         the base of a chain is read before the first allocation of that
+         chain. The description itself is C memory. */
+    binnum_build: {
+        const struct binnum_result *res = binnum_res;
+        if (res->nparts == 1 && res->part[0].kind == BINNUM_IMM) {
+          accu = res->part[0].imm;
+        } else {
           int p;
           for (p = res->nparts - 1; p >= 0; p--) {
             const struct binnum_part *part = &res->part[p];
@@ -866,12 +898,24 @@ value rocq_interprete
                 accu = sp[above + part->base_arg];
                 for (i = 0; i < part->base_depth; i++) accu = Field(accu, 0);
               }
-              for (i = part->nnodes; i > 0; i--) {
-                value block;
-                tag_t tag = (part->bits[(i - 1) >> 5] >> ((i - 1) & 31)) & 1 ? 1 : 2;
-                Rocq_alloc_small(block, 1, tag);
-                Field(block, 0) = accu;
-                accu = block;
+              if (part->nnodes <= 64) {
+                uint64_t word = part->word;
+                for (i = part->nnodes; i > 0; i--) {
+                  value block;
+                  tag_t tag = (word >> (i - 1)) & 1 ? 1 : 2;
+                  Rocq_alloc_small(block, 1, tag);
+                  Field(block, 0) = accu;
+                  accu = block;
+                }
+              } else {
+                const uint32_t *bits = part->bits;
+                for (i = part->nnodes; i > 0; i--) {
+                  value block;
+                  tag_t tag = (bits[(i - 1) >> 5] >> ((i - 1) & 31)) & 1 ? 1 : 2;
+                  Rocq_alloc_small(block, 1, tag);
+                  Field(block, 0) = accu;
+                  accu = block;
+                }
               }
               if (part->wrap) {
                 value block;
@@ -890,9 +934,10 @@ value rocq_interprete
             sp += 1;
             accu = block;
           }
-          sp += n;
-          goto return_after_pop;
         }
+        sp += binnum_nargs;
+        if (binnum_next == NULL) goto return_after_pop;
+        pc = binnum_next;
         Next;
       }
 

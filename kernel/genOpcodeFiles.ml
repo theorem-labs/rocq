@@ -163,7 +163,8 @@ let opcodes =
     "CHECKCAMLCALL3", 2;
     "CHECKCAMLCALL3_1", 2;
     "STOP", 0;
-    "BINNUM", 2
+    "BINNUM", 2;
+    "BINNUMCALL", 3
   |]
 
 let pp_c_comment fmt =

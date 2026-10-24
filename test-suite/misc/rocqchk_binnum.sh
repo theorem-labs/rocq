@@ -423,62 +423,78 @@ expect "(d) Pos.compare_cont calls" "$(stat d.log Pos.compare_cont calls)" -eq 0
 # rest of the longer number if the other ends first. Pos.eqb reads 2 per
 # step.
 #
-# ecase LIB ROUTINE HITS REFUSALS WORDS: rocqchk LIB; the counts of ROUTINE.
+# Each occurrence of l is a call at a call site: BINNUMCALL runs the routine
+# there first. When it refuses, the call runs, and the routine runs again at
+# the entry of the function (BINNUM), with the same reads, unless GRABREC
+# returns first. The counts at function entry are those described below for
+# each case; the counts at the call sites are one call per occurrence of l,
+# with the reads of the first entry call of that occurrence.
+#
+# ecase LIB ROUTINE HITS REFUSALS WORDS SHITS SREFUSALS SWORDS: rocqchk LIB;
+# the counts of ROUTINE at function entry, then at call sites.
 ecase() {
   chk "$1.log" -norec "$1"
-  expect "(e) $1 $2 hits" "$(stat "$1.log" "$2" hits)" -eq "$3"
-  expect "(e) $1 $2 refusals" "$(stat "$1.log" "$2" refusals)" -eq "$4"
-  expect "(e) $1 $2 words" "$(stat "$1.log" "$2" words)" -eq "$5"
+  expect "(e) $1 $2 entry hits" "$(( $(stat "$1.log" "$2" entry-calls) - $(stat "$1.log" "$2" entry-refusals) ))" -eq "$3"
+  expect "(e) $1 $2 entry refusals" "$(stat "$1.log" "$2" entry-refusals)" -eq "$4"
+  expect "(e) $1 $2 entry words" "$(stat "$1.log" "$2" entry-words)" -eq "$5"
+  expect "(e) $1 $2 site hits" "$(( $(stat "$1.log" "$2" site-calls) - $(stat "$1.log" "$2" site-refusals) ))" -eq "$6"
+  expect "(e) $1 $2 site refusals" "$(stat "$1.log" "$2" site-refusals)" -eq "$7"
+  expect "(e) $1 $2 site words" "$(stat "$1.log" "$2" site-words)" -eq "$8"
 }
 # l = Pos.compare_cont Eq p 3. Each side: the call is refused (p is x), the
 # match on x is stuck, and its branches p'~1 and p'~0 call
 # Pos.compare_cont Eq p' 1 and Pos.compare_cont Lt p' 1, both refused: 6.
-# Each reads r and one step: 6 x 3 = 18 words.
-ecase Free0 Pos.compare_cont 0 6 18
+# Each reads r and one step: 6 x 3 = 18 words. At the call site, each side
+# is refused after r and one step: 2 refusals, 6 words.
+ecase Free0 Pos.compare_cont 0 6 18 0 2 6
 # l = Pos.compare_cont Eq 5 p~0. Each side: the call is refused (p under one
 # constructor of y; r and two steps, 5 words); the recursive call has y = p,
 # so GRABREC returns a stuck fixpoint before BINNUM; its read-back is refused
-# (r is a variable, 1 word): 4 refusals, 12 words.
-ecase Free1 Pos.compare_cont 0 4 12
+# (r is a variable, 1 word): 4 refusals, 12 words. At the call site: 2 x 5.
+ecase Free1 Pos.compare_cont 0 4 12 0 2 10
 # l = Pos.compare_cont Eq x (p~0...~0), x of 70 bits, 65 constructors above
 # p. Each side: the calls with m = 65, ..., 1 constructors of y above p are
 # refused, each after r and m + 1 steps; then y = p, and the read-back is
 # refused: 2 x 66 = 132 refusals, 2 x (65 + 2 x (2145 + 65) + 1) = 8972 words.
-ecase Free65 Pos.compare_cont 0 132 8972
+# At the call site, m = 65: 2 x (1 + 2 x 66) = 266 words.
+ecase Free65 Pos.compare_cont 0 132 8972 0 2 266
 # l = Pos.compare_cont Eq 3 p. The variable is the recursive argument:
-# GRABREC returns a stuck fixpoint before BINNUM, so evaluation never calls
-# the routine; only the read-back of each side's stuck fixpoint does: 2
-# refusals, 2 words.
-ecase FreeRec Pos.compare_cont 0 2 2
+# GRABREC returns a stuck fixpoint before BINNUM, so the entry runs the
+# routine only for the read-back of each side's stuck fixpoint: 2 refusals,
+# 2 words. The call site reads r and one step: 2 x 3.
+ecase FreeRec Pos.compare_cont 0 2 2 0 2 6
 # l = Pos.eqb (p~1) 3. Each side: the call is refused (p under one
 # constructor of x, two steps, 4 words); the bytecode calls Pos.eqb p 1,
 # refused at once (p is x, 2 words); the match on p is then stuck, and its
-# branches do not call Pos.eqb: 4 refusals, 12 words.
-ecase EqP1 Pos.eqb 0 4 12
+# branches do not call Pos.eqb: 4 refusals, 12 words. Call site: 2 x 4.
+ecase EqP1 Pos.eqb 0 4 12 0 2 8
 # Pos.eqb (p~1) 2 = false. The call is refused after two steps, although the
 # first already differs; the bytecode answers false at the first step: 1
-# refusal, 4 words.
-ecase EqP1f Pos.eqb 0 1 4
+# refusal, 4 words, at the entry and at the call site.
+ecase EqP1f Pos.eqb 0 1 4 0 1 4
 # l = Pos.eqb 4 (p~0). Each side: the call is refused (p under one constructor
 # of y, 4 words); the recursive call has y = p, so GRABREC returns a stuck
-# fixpoint; its read-back is refused (2 words): 4 refusals, 12 words.
-ecase EqQ1 Pos.eqb 0 4 12
+# fixpoint; its read-back is refused (2 words): 4 refusals, 12 words. Call
+# site: 2 x 4.
+ecase EqQ1 Pos.eqb 0 4 12 0 2 8
 # Pos.eqb 5 (p~0) = false. Refused after two steps; the bytecode answers
-# false at the first: 1 refusal, 4 words.
-ecase EqQ1f Pos.eqb 0 1 4
+# false at the first: 1 refusal, 4 words, at the entry and at the call site.
+ecase EqQ1f Pos.eqb 0 1 4 0 1 4
 # l = Pos.eqb x (p~0...~0), x = 2^69, 65 constructors above p, all xO as the
 # 69 of x. Each side: the calls with m = 65, ..., 1 constructors of y above p
 # are refused, each after m + 1 steps; then y = p, and the read-back is
 # refused: 2 x 66 = 132 refusals, 2 x (2 x (2145 + 65) + 2) = 8844 words.
-ecase EqQ65 Pos.eqb 0 132 8844
-# l = Pos.eqb 3 p. Only the read-back of each side's stuck fixpoint calls the
-# routine: 2 refusals, 4 words.
-ecase EqRec Pos.eqb 0 2 4
+# Call site, m = 65: 2 x 2 x 66 = 264 words.
+ecase EqQ65 Pos.eqb 0 132 8844 0 2 264
+# l = Pos.eqb 3 p. Only the read-back of each side's stuck fixpoint runs the
+# routine at the entry: 2 refusals, 4 words. Call site: 2 x 2.
+ecase EqRec Pos.eqb 0 2 4 0 2 4
 # The partial application Pos.compare_cont Eq 3 is a closure until map gives
-# it its last argument; then all three arguments are closed numbers: three
-# hits, no refusal. Words: 5 for 2 and for 3 (r and two steps), 6 for 4 (r,
-# two steps, and the xH of 4): 16.
-ecase Partial Pos.compare_cont 3 0 16
+# it its last argument (APPLY1 to the closure, then its entry); then all
+# three arguments are closed numbers: three hits at the entry, none at a
+# call site. Words: 5 for 2 and for 3 (r and two steps), 6 for 4 (r, two
+# steps, and the xH of 4): 16.
+ecase Partial Pos.compare_cont 3 0 16 0 0 0
 
 # (f) -j 2: the workers check the proofs and print their own counters; the
 # counters they inherit from the main process are zeroed at the fork.

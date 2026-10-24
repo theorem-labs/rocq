@@ -27,9 +27,12 @@
     - [ROCQ_VM_BINNUM=0] turns recognition off; [ROCQ_VM_BINNUM=-name1,-name2]
       turns off the listed routines. Any other value stops the process.
     - [ROCQ_VM_BINNUM_STATS=1] prints, at the exit of each process, the
-      calls, refusals and words read of each routine, and the constants bound
-      and the near misses of the recognizer; [2] also prints, for each near
-      miss, the first node that differs from the reference. *)
+      calls, refusals and words read of each routine, in total, at function
+      entry and at call sites; the constants bound and the near misses of the
+      recognizer at function entry; and the counts of the recognitions at
+      call sites. [2] also prints, for each near miss at function entry, the
+      first node that differs from the reference. When the variable is unset,
+      the routines count nothing. *)
 
 val recognize : ?name:Names.Constant.t -> Environ.env -> Constr.t -> int -> int option
 (** [recognize ?name env body] is, for each function index [i] of the
@@ -37,6 +40,13 @@ val recognize : ?name:Names.Constant.t -> Environ.env -> Constr.t -> int -> int 
     function), the routine of the function, if [body] is equal to a
     reference term and every inductive type in it has the expected shape in
     [env]. It never raises. [name] is only printed in the statistics. *)
+
+val recognize_call : Environ.env -> Names.Constant.t -> int option
+(** [recognize_call env cst] is the routine of the function that [cst]
+    denotes, for a call site of [cst]: [cst] must be a transparent definition
+    with an empty universe context in [env], and its body must be recognized
+    as by {!recognize}. The function is the one at the init index of a
+    fixpoint body, or the body itself. It never raises. *)
 
 val no_binnum : int -> int option
 (** No routine for any function. *)

@@ -147,6 +147,9 @@ type glob_env = {
   env : Environ.env;
   uinstance : uinstance;
   mutable fun_code : instruction list; (** Code of closures *)
+  mutable binnum_calls : int option Cmap_env.t;
+  (** The BINNUM routine of each constant called in this compilation: the
+      decision is the same at every call site, since the environment is. *)
 }
 
 let push_fun env c =
@@ -446,6 +449,23 @@ let add_binnum routine arity cont =
   match routine with
   | Some k when Int.equal (Vmbinnum.arity k) arity -> Kbinnum (k, arity) :: cont
   | Some _ | None -> cont
+
+(* The routine that a call of the constant [kn] to [nargs] arguments can run
+   at its call site, if the routine takes exactly [nargs] arguments. The
+   decision is taken once per compilation and constant. *)
+let binnum_call env kn nargs =
+  if nargs < 1 || nargs > 3 then None
+  else
+    let routine = match Cmap_env.find_opt kn env.binnum_calls with
+      | Some r -> r
+      | None ->
+        let r = Vmbinnum.recognize_call env.env kn in
+        env.binnum_calls <- Cmap_env.add kn r env.binnum_calls;
+        r
+    in
+    match routine with
+    | Some k when Int.equal (Vmbinnum.arity k) nargs -> Some k
+    | Some _ | None -> None
 
 (* continuation of a cofix *)
 
@@ -878,12 +898,34 @@ and compile_instance env cenv u sz cont =
 
 and compile_constant env cenv kn u args sz cont =
   let () = set_max_stack_size cenv sz in
-  if UVars.Instance.is_empty u then
-    (* normal compilation *)
-    comp_app (fun _ _ sz cont ->
-        compile_get_global env cenv (kn,u) sz cont)
-      (compile_lam env) cenv () args sz cont
-  else
+  if UVars.Instance.is_empty u then begin
+    let nargs = Array.length args in
+    match binnum_call env kn nargs with
+    | Some k ->
+      (* [BINNUMCALL k n L] comes after the arguments are pushed, where they
+         are sp[0..n-1] as at the entry of the function after its APPLY or
+         APPTERM. If the routine accepts them, it pops them, sets accu to the
+         result and goes to L: the instruction after the APPLY, or, after
+         the APPTERM of a tail call, a RETURN of the caller's frame. That is
+         what the callee's own RETURN n does after the call. *)
+      let () = set_max_stack_size cenv (sz + nargs) in
+      let call lbl apply = Kpush :: Kgetglobal kn :: Kbinnumcall (k, nargs, lbl) :: apply in
+      begin match is_tailcall cont with
+      | Some slots ->
+        let lbl = Label.create () in
+        comp_args (compile_lam env) cenv args sz
+          (call lbl (Kappterm (nargs, slots + nargs) ::
+                     Klabel lbl :: Kreturn slots :: discard_dead_code cont))
+      | None ->
+        let lbl, cont = label_code cont in
+        comp_args (compile_lam env) cenv args sz (call lbl (Kshort_apply nargs :: cont))
+      end
+    | None ->
+      (* normal compilation *)
+      comp_app (fun _ _ sz cont ->
+          compile_get_global env cenv (kn,u) sz cont)
+        (compile_lam env) cenv () args sz cont
+  end else
     let compile_arg cenv constr_or_uni sz cont =
       match constr_or_uni with
       | ArgLambda t -> compile_lam env cenv t sz cont
@@ -950,7 +992,7 @@ let compile ~uinstance ~binnum env sigma c =
     let cenv, init_code, fun_code =
       if uclosed then
         let cenv = empty_comp_env () in
-        let env = { env; fun_code = []; uinstance } in
+        let env = { env; fun_code = []; uinstance; binnum_calls = Cmap_env.empty } in
         let cont = compile_lam ~binnum env cenv lam 0 cont in
         let cont = ensure_stack_capacity cenv cont in
         cenv, cont, env.fun_code
@@ -962,7 +1004,7 @@ let compile ~uinstance ~binnum env sigma c =
         let full_arity = arity + 1 in
         let r_fun = comp_env_fun ~univs:true arity in
         let lbl_fun = Label.create () in
-        let env = { env; fun_code = []; uinstance } in
+        let env = { env; fun_code = []; uinstance; binnum_calls = Cmap_env.empty } in
         let cont_fun = compile_lam env r_fun body full_arity [Kreturn full_arity] in
         let cont_fun = ensure_stack_capacity r_fun cont_fun in
         let () = push_fun env (add_grab full_arity lbl_fun cont_fun) in

@@ -58,6 +58,7 @@ let arity k = routines.(k).arity
 external c_arities : unit -> int array = "rocq_binnum_arities"
 external c_counters : unit -> int array = "rocq_binnum_counters"
 external c_reset_counters : unit -> unit = "rocq_binnum_reset_counters"
+external c_set_stats : bool -> unit = "rocq_binnum_set_stats"
 
 let () =
   if not (Array.equal Int.equal (c_arities ()) (Array.map (fun r -> r.arity) routines)) then
@@ -110,9 +111,21 @@ let stats_level =
 
 (** {6 Statistics} *)
 
+(* The C routines count their calls only when the statistics are on. *)
+let () = c_set_stats (stats_level > 0)
+
+(* Recognitions of bodies at function entry, and of the constants called at
+   call sites (once per compilation and constant). *)
 let nbinds = ref 0
 let nnear = ref 0
 let nothers = ref 0
+let site_binds = ref 0
+let site_near = ref 0
+let site_others = ref 0
+
+(* Seconds spent recognizing, measured only when [stats_level > 0]. *)
+let entry_time = ref 0.
+let site_time = ref 0.
 
 (* Printed lines, the last first; filled only when [stats_level > 0]. *)
 let bind_lines = ref []
@@ -123,6 +136,11 @@ let reset_stats () =
   nbinds := 0;
   nnear := 0;
   nothers := 0;
+  site_binds := 0;
+  site_near := 0;
+  site_others := 0;
+  entry_time := 0.;
+  site_time := 0.;
   bind_lines := [];
   near_lines := []
 
@@ -132,12 +150,18 @@ let print_stats () =
     let line s = Printf.eprintf "binnum[%d] %s\n" pid s in
     let c = c_counters () in
     Array.iteri (fun k r ->
-        let calls = c.(3 * k) and refusals = c.(3 * k + 1) and words = c.(3 * k + 2) in
-        line (Printf.sprintf "routine %s: calls=%d hits=%d refusals=%d words=%d"
-                r.name calls (calls - refusals) refusals words))
+        let ec = c.(6 * k) and er = c.(6 * k + 1) and ew = c.(6 * k + 2) in
+        let sc = c.(6 * k + 3) and sr = c.(6 * k + 4) and sw = c.(6 * k + 5) in
+        line (Printf.sprintf "routine %s: calls=%d hits=%d refusals=%d words=%d \
+                              entry-calls=%d entry-refusals=%d entry-words=%d \
+                              site-calls=%d site-refusals=%d site-words=%d"
+                r.name (ec + sc) (ec + sc - er - sr) (er + sr) (ew + sw)
+                ec er ew sc sr sw))
       routines;
-    line (Printf.sprintf "recognizer: binds=%d near-misses=%d others=%d"
-            !nbinds !nnear !nothers);
+    line (Printf.sprintf "recognizer: binds=%d near-misses=%d others=%d time=%.3fs"
+            !nbinds !nnear !nothers !entry_time);
+    line (Printf.sprintf "call-sites: binds=%d near-misses=%d others=%d time=%.3fs"
+            !site_binds !site_near !site_others !site_time);
     List.iter line (List.rev !bind_lines);
     List.iter line (List.rev !near_lines);
     flush stderr
@@ -762,14 +786,13 @@ let near_miss path why =
 
 (* [Ok ()] if [body] is equal to [r] and its inductive types have the shapes
    of their slots; otherwise whether it is a near miss, why not, and, with
-   [ROCQ_VM_BINNUM_STATS=2], the lines that show the first node that
-   differs. *)
-let compare_reference env body r =
+   [~detail:true], the lines that show the first node that differs. *)
+let compare_reference ~detail env body r =
   let slots = Array.make (Array.length shapes) None in
   match same env Any_index slots [] body r.term with
   | exception Differ (path, c, r', why) ->
     let detail =
-      if stats_level < 2 then []
+      if not detail then []
       else
         let pr label c =
           let lines = String.split_on_char '\n' (Pp.string_of_ppcmds (Constr.debug_print c)) in
@@ -786,52 +809,90 @@ let compare_reference env body r =
 
 let no_binnum (_ : int) = None
 
+let any_enabled = Array.exists (fun b -> b) enabled
+
+(* The routines of the functions of [body]'s top-level fixpoint block (or of
+   the function at index 0), if [body] is equal to a reference; otherwise the
+   near misses, as (reference, why, detail). *)
+let match_body ~detail env body =
+  let sg = signature body in
+  let candidate r =
+    Array.exists (function Some k -> enabled.(k) | None -> false) r.funs
+    && (match sg, r.ref_signature with
+        | Some s, Some s' -> same_signature s s'
+        | (Some _ | None), _ -> false)
+  in
+  let rec try_refs k misses =
+    if k = Array.length references then Error (List.rev misses)
+    else
+      let r = references.(k) in
+      if not (candidate r) then try_refs (k + 1) misses
+      else match compare_reference ~detail env body r with
+        | Error (true, why, detail) -> try_refs (k + 1) ((r, why, detail) :: misses)
+        | Error (false, _, _) -> try_refs (k + 1) misses
+        | Ok () ->
+          Ok (Array.map (function
+              | Some rk when enabled.(rk) -> Some rk
+              | Some _ | None -> None) r.funs)
+  in
+  try_refs 0 []
+
+let timed time f =
+  if stats_level > 0 then begin
+    let t0 = Unix.gettimeofday () in
+    let r = f () in
+    time := !time +. (Unix.gettimeofday () -. t0);
+    r
+  end
+  else f ()
+
 let recognize ?name env body =
-  if not (Array.exists (fun b -> b) enabled) then no_binnum
+  if not any_enabled then no_binnum
   else
     let name () = match name with
       | Some c -> Constant.to_string c
       | None -> "<anonymous>"
     in
-    let sg = signature body in
-    let candidate r =
-      Array.exists (function Some k -> enabled.(k) | None -> false) r.funs
-      && (match sg, r.ref_signature with
-          | Some s, Some s' -> same_signature s s'
-          | (Some _ | None), _ -> false)
-    in
-    let rec try_refs k misses =
-      if k = Array.length references then begin
-        if List.is_empty misses then incr nothers
-        else begin
-          incr nnear;
-          if stats_level > 0 then
-            List.iter (fun (r, why, detail) ->
-                near_lines := List.rev_append
-                    (Printf.sprintf "near-miss %s: %s: %s" (name ()) r.ref_name why :: detail)
-                    !near_lines)
-              (List.rev misses)
-        end;
-        no_binnum
-      end
-      else
-        let r = references.(k) in
-        if not (candidate r) then try_refs (k + 1) misses
-        else match compare_reference env body r with
-          | Error (true, why, detail) -> try_refs (k + 1) ((r, why, detail) :: misses)
-          | Error (false, _, _) -> try_refs (k + 1) misses
-          | Ok () ->
-            let funs = Array.map (function
-                | Some rk when enabled.(rk) -> Some rk
-                | Some _ | None -> None) r.funs
-            in
-            incr nbinds;
-            if stats_level > 0 then begin
-              let bound = List.map_filter (Option.map (fun rk -> routines.(rk).name))
-                  (Array.to_list funs) in
-              bind_lines := Printf.sprintf "bind %s: %s" (name ()) (String.concat "," bound)
-                            :: !bind_lines
-            end;
-            fun i -> if 0 <= i && i < Array.length funs then funs.(i) else None
-    in
-    try_refs 0 []
+    match timed entry_time (fun () -> match_body ~detail:(stats_level >= 2) env body) with
+    | Error [] -> incr nothers; no_binnum
+    | Error misses ->
+      incr nnear;
+      if stats_level > 0 then
+        List.iter (fun (r, why, detail) ->
+            near_lines := List.rev_append
+                (Printf.sprintf "near-miss %s: %s: %s" (name ()) r.ref_name why :: detail)
+                !near_lines)
+          misses;
+      no_binnum
+    | Ok funs ->
+      incr nbinds;
+      if stats_level > 0 then begin
+        let bound = List.map_filter (Option.map (fun rk -> routines.(rk).name))
+            (Array.to_list funs) in
+        bind_lines := Printf.sprintf "bind %s: %s" (name ()) (String.concat "," bound)
+                      :: !bind_lines
+      end;
+      fun i -> if 0 <= i && i < Array.length funs then funs.(i) else None
+
+(* At a call site of [cst]: the routine of the function that [cst] denotes,
+   which is the function at the init index of a fixpoint body, and the
+   function itself otherwise. As at function entry, [cst] must be a
+   transparent definition with an empty universe context, and its body is
+   read from [env]. Near misses are counted, not named. *)
+let recognize_call env cst =
+  if not any_enabled then None
+  else match Environ.lookup_constant_opt cst env with
+    | None -> None
+    | Some cb ->
+      let univs = UVars.AbstractContext.size (Declareops.universes_context cb.const_universes) in
+      match cb.const_body with
+      | Def body when UVars.eq_sizes (0, 0) univs ->
+        let index = match kind body with Fix ((_, init), _) -> init | _ -> 0 in
+        begin match timed site_time (fun () -> match_body ~detail:false env body) with
+          | Error [] -> incr site_others; None
+          | Error _ -> incr site_near; None
+          | Ok funs ->
+            incr site_binds;
+            if 0 <= index && index < Array.length funs then funs.(index) else None
+        end
+      | Def _ | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> None

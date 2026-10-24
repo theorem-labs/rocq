@@ -77,6 +77,12 @@ type instruction =
                                            arguments sp[0..n-1]; if it accepts
                                            them, return its result as
                                            [Kreturn n] does *)
+  | Kbinnumcall of int * int * Label.t  (** routine, number of arguments,
+                                           label: at a call site, run the C
+                                           routine on sp[0..n-1]; if it
+                                           accepts them, set accu to its
+                                           result, pop the n arguments and
+                                           jump to the label *)
 
   | Kbranch of Label.t                  (** jump to label, is it needed ? *)
   | Kprim of CPrimitives.t * pconstant
