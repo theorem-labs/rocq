@@ -51,6 +51,9 @@ let routines = [|
   { name = "Z.pos_div_eucl"; arity = 2 };
   { name = "Nat.eqb"; arity = 2 };
   { name = "Nat.leb"; arity = 2 };
+  { name = "Uint63.to_Z_rec"; arity = 2 };
+  { name = "Uint63.of_pos_rec"; arity = 2 };
+  { name = "Z.pow"; arity = 2 };
 |]
 
 let arity k = routines.(k).arity
@@ -60,10 +63,21 @@ external c_counters : unit -> int array = "rocq_binnum_counters"
 external c_reset_counters : unit -> unit = "rocq_binnum_reset_counters"
 external c_set_stats : bool -> unit = "rocq_binnum_set_stats"
 external c_set_pack : bool -> unit = "rocq_binnum_set_pack"
+external c_set_packlit : bool -> unit = "rocq_binnum_set_packlit"
 
 let () =
   if not (Array.equal Int.equal (c_arities ()) (Array.map (fun r -> r.arity) routines)) then
     failwith "Vmbinnum: the routines differ from those of rocq_binnum.c"
+
+(* The counters of rocq_binnum.c: [routine_counters] of each routine, then
+   [tail_counters] shared ones. *)
+let routine_counters = 10
+let tail_counters = 10
+
+let () =
+  if not (Int.equal (Array.length (c_counters ()))
+            (routine_counters * Array.length routines + tail_counters)) then
+    failwith "Vmbinnum: the counters differ from those of rocq_binnum.c"
 
 let routine_of_name name =
   let rec find k =
@@ -75,38 +89,47 @@ let routine_of_name name =
 
 (** {6 Environment variables} *)
 
-let stop fmt =
+(* Stops with [msg], and [hint] after it. *)
+let stop ?(hint = "") fmt =
   Printf.ksprintf (fun msg ->
-      let names = String.concat ", " (Array.to_list (Array.map (fun r -> r.name) routines)) in
-      Printf.eprintf "%s\nThe routines are: %s; and -pack turns packing off.\n%!" msg names;
+      Printf.eprintf "%s%s\n%!" msg hint;
       exit 1)
     fmt
 
+(* The hint of ROCQ_VM_BINNUM alone. *)
+let binnum_hint () =
+  Printf.sprintf "\nThe routines are: %s; -pack turns all packing off, and \
+                  -packlit the packing of literals."
+    (String.concat ", " (Array.to_list (Array.map (fun r -> r.name) routines)))
+
 (* ROCQ_VM_BINNUM: unset, every routine is on; 0, every routine is off;
-   -name1,-name2, the listed routines are off; -pack, the routines make no
-   packed results (kernel/byterun/rocq_binnum.h). *)
-let enabled, packing =
+   -name1,-name2, the listed routines are off; -pack, no packed value is
+   made at all; -packlit, the chains of structured constants are not packed
+   (kernel/byterun/rocq_binnum.h). *)
+let enabled, packing, packing_lit =
   let n = Array.length routines in
   match Sys.getenv_opt "ROCQ_VM_BINNUM" with
-  | None -> Array.make n true, true
-  | Some "0" -> Array.make n false, true
+  | None -> Array.make n true, true, true
+  | Some "0" -> Array.make n false, true, true
   | Some v ->
     let on = Array.make n true in
-    let pack = ref true in
+    let pack = ref true and packlit = ref true in
     let off item =
       let len = String.length item in
       let name = if len > 1 && item.[0] = '-' then Some (String.sub item 1 (len - 1)) else None in
       match name with
       | Some "pack" -> pack := false
+      | Some "packlit" -> packlit := false
       | _ ->
         match Option.bind name routine_of_name with
         | Some k -> on.(k) <- false
         | None ->
-          stop "ROCQ_VM_BINNUM=%s: expected 0 or a comma-separated list of -name, \
-                not %S." v item
+          stop ~hint:(binnum_hint ())
+            "ROCQ_VM_BINNUM=%s: expected 0 or a comma-separated list of -name, \
+             not %S." v item
     in
     List.iter off (String.split_on_char ',' v);
-    on, !pack
+    on, !pack, !packlit
 
 let stats_level =
   match Sys.getenv_opt "ROCQ_VM_BINNUM_STATS" with
@@ -116,6 +139,7 @@ let stats_level =
   | Some v -> stop "ROCQ_VM_BINNUM_STATS=%s: expected 0, 1 or 2." v
 
 let () = c_set_pack packing
+let () = c_set_packlit (packing && packing_lit)
 
 (** {6 Statistics} *)
 
@@ -157,7 +181,7 @@ let print_stats () =
     let pid = Unix.getpid () in
     let line s = Printf.eprintf "binnum[%d] %s\n" pid s in
     let c = c_counters () in
-    let nr = 10 in
+    let nr = routine_counters in
     Array.iteri (fun k r ->
         let b = nr * k in
         let ec = c.(b) and er = c.(b + 1) and ew = c.(b + 2) in
@@ -171,9 +195,14 @@ let print_stats () =
                 ec er ew sc sr sw (args - packed - tail) packed tail c.(b + 9)))
       routines;
     let b = nr * Array.length routines in
-    line (Printf.sprintf "packed: packing=%s switch-expansions=%d switch-nodes=%d \
-                          whd-expansions=%d whd-nodes=%d"
-            (if c.(b + 4) <> 0 then "on" else "off") c.(b) c.(b + 1) c.(b + 2) c.(b + 3));
+    line (Printf.sprintf "packed: packing=%s packing-literals=%s \
+                          switch-expansions=%d switch-nodes=%d \
+                          whd-expansions=%d whd-nodes=%d \
+                          proj-expansions=%d proj-nodes=%d \
+                          literals=%d literal-nodes=%d"
+            (if c.(b + 8) <> 0 then "on" else "off")
+            (if c.(b + 9) <> 0 then "on" else "off")
+            c.(b) c.(b + 1) c.(b + 2) c.(b + 3) c.(b + 4) c.(b + 5) c.(b + 6) c.(b + 7));
     line (Printf.sprintf "recognizer: binds=%d near-misses=%d others=%d time=%.3fs"
             !nbinds !nnear !nothers !entry_time);
     line (Printf.sprintf "call-sites: binds=%d near-misses=%d others=%d time=%.3fs"
@@ -469,9 +498,30 @@ type reference = {
    of callees whatever the environment holds. *)
 let defined = ref []
 
-(* Callees: [Const (callee_k_j)] in a reference stands for a constant whose
-   body is equal to function [j] of reference [k]. *)
-let callee_table : (string, int * int) Hashtbl.t = Hashtbl.create 31
+(* The constants of a reference term are markers of [reference_mp], which no
+   body names, and which a constant of the body matches as the marker says. *)
+type marker =
+  (* A constant whose body is equal to function [j] of reference [k]. *)
+  | Callee of int * int
+  (* A constant that the environment declares as this primitive operation.
+     The bytecode compiler compiles every call of a [Primitive op] constant
+     to that operation (kernel/genlambda.ml:781-783), so the routine and the
+     bytecode compute the same operation. *)
+  | Prim of CPrimitives.t
+  (* The primitive type int (Environ.is_int63_type). *)
+  | Int63_type
+  (* In the place of a sort: Set or Type@{l} for any level l, and not Prop,
+     SProp or a quality variable. It stands for the sort of the type
+     argument of a polymorphic iterator, whose binder keeps only its name
+     and relevance in the bytecode (kernel/genlambda.ml:28), so no value
+     depends on it. *)
+  | Sort_any
+
+let marker_table : (string, marker) Hashtbl.t = Hashtbl.create 31
+
+let marker label m =
+  Hashtbl.replace marker_table label m;
+  mkConstU (Constant.make1 (KerName.make reference_mp (Id.of_string label)), UVars.Instance.empty)
 
 let callee name j =
   let rec find k = function
@@ -479,13 +529,16 @@ let callee name j =
     | r :: l -> if String.equal r.ref_name name then k else find (k - 1) l
   in
   let k = find (List.length !defined - 1) !defined in
-  let label = Printf.sprintf "callee_%d_%d" k j in
-  Hashtbl.replace callee_table label (k, j);
-  mkConstU (Constant.make1 (KerName.make reference_mp (Id.of_string label)), UVars.Instance.empty)
+  marker (Printf.sprintf "callee_%d_%d" k j) (Callee (k, j))
 
-let callee_of cst =
+let prim op = marker ("prim_" ^ CPrimitives.to_string op) (Prim op)
+let int_t = marker "int63_type" Int63_type
+let sort_any = marker "sort_any" Sort_any
+let int_lit n = mkInt (Uint63.of_int n)
+
+let marker_of cst =
   if ModPath.equal (Constant.modpath cst) reference_mp then
-    Hashtbl.find_opt callee_table (Id.to_string (Constant.label cst))
+    Hashtbl.find_opt marker_table (Id.to_string (Constant.label cst))
   else None
 
 let define name funs term =
@@ -667,7 +720,59 @@ let () =
     (fix1 0 (arrows [nat_t; nat_t] bool_t) (fun leb ->
          lam2 nat_t nat_t (fun n m ->
              mnat bool_t n ~o:b_true
-               ~sn:(fun n' -> mnat bool_t m ~o:b_false ~sn:(fun m' -> app leb [n'; m'])))))
+               ~sn:(fun n' -> mnat bool_t m ~o:b_false ~sn:(fun m' -> app leb [n'; m'])))));
+  (* fun i : int => eqb i 0 *)
+  define "Uint63.is_zero" [| None |]
+    (let eqb = prim CPrimitives.Int63eq in
+     lam int_t (fun i -> app eqb [i; int_lit 0]));
+  (* fun i : int => is_zero (land i 1) *)
+  define "Uint63.is_even" [| None |]
+    (let is_zero = callee "Uint63.is_zero" 0 and land_ = prim CPrimitives.Int63land in
+     lam int_t (fun i -> app is_zero [app land_ [i; int_lit 1]]));
+  (* fix to_Z_rec (n : nat) (i : int) {struct n} : Z *)
+  define "Uint63.to_Z_rec" [| Some "Uint63.to_Z_rec" |]
+    (let is_even = callee "Uint63.is_even" 0 and lsr_ = prim CPrimitives.Int63lsr in
+     let double = callee "Z.double" 0 and succ_double = callee "Z.succ_double" 0 in
+     fix1 0 (arrows [nat_t; int_t] z_t) (fun to_Z_rec ->
+         lam2 nat_t int_t (fun n i ->
+             mnat z_t n ~o:z0
+               ~sn:(fun n0 ->
+                   app (mbool (arrows [z_t] z_t) (app is_even [i])
+                          ~tt:double ~ff:succ_double)
+                     [app to_Z_rec [n0; app lsr_ [i; int_lit 1]]]))));
+  (* fix of_pos_rec (n : nat) (p : positive) {struct p} : int *)
+  define "Uint63.of_pos_rec" [| Some "Uint63.of_pos_rec" |]
+    (let lor_ = prim CPrimitives.Int63lor and lsl_ = prim CPrimitives.Int63lsl in
+     fix1 1 (arrows [nat_t; pos] int_t) (fun of_pos_rec ->
+         lam2 nat_t pos (fun n p ->
+             mnat int_t n ~o:(int_lit 0)
+               ~sn:(fun n0 ->
+                   mpos int_t p
+                     ~xi:(fun p0 -> app lor_ [app lsl_ [app of_pos_rec [n0; p0]; int_lit 1];
+                                              int_lit 1])
+                     ~xo:(fun p0 -> app lsl_ [app of_pos_rec [n0; p0]; int_lit 1])
+                     ~xh:(int_lit 1)))));
+  (* fun (A : Type) (f : A -> A) =>
+       fix iter_fix (x : A) (n : positive) {struct n} : A *)
+  define "Pos.iter" [| None |]
+    (lam sort_any (fun a ->
+         lam (arrows [a] a) (fun f ->
+             fix1 1 (arrows [a; pos] a) (fun iter_fix ->
+                 lam2 a pos (fun x n ->
+                     let it x n = app iter_fix [x; n] in
+                     mpos a n
+                       ~xi:(fun n' -> app f [it (it x n') n'])
+                       ~xo:(fun n' -> it (it x n') n')
+                       ~xh:(app f [x]))))));
+  (* fun z : Z => Pos.iter Z (Z.mul z) 1 *)
+  define "Z.pow_pos" [| None |]
+    (let iter = callee "Pos.iter" 0 and zmul = callee "Z.mul" 0 in
+     lam z_t (fun z -> app iter [z_t; app zmul [z]; zpos xH]));
+  (* fun x y : Z => match y with Z0 => 1 | Zpos p => Z.pow_pos x p | Zneg _ => 0 end *)
+  define "Z.pow" [| Some "Z.pow" |]
+    (let pow_pos = callee "Z.pow_pos" 0 in
+     lam2 z_t z_t (fun x y ->
+         mz z_t y ~zero:(zpos xH) ~zp:(fun p -> app pow_pos [x; p]) ~zn:(fun _ -> z0)))
 
 let references = Array.of_list (List.rev !defined)
 
@@ -677,27 +782,47 @@ let references = Array.of_list (List.rev !defined)
    innermost step first, the two subterms there, and why they differ. *)
 exception Differ of string list * constr * constr * string
 
-(* The body of the constant [cst], through aliases (a body that is only a
-   constant). Opaque, undefined, missing and universe polymorphic constants
-   have none. *)
+(* The constant [cst] through aliases (a body that is only a constant), with
+   its declaration. A missing or universe polymorphic constant has none. *)
 let max_aliases = 32
 
-let callee_body env cst =
+let follow_alias env cst =
   let rec follow cst n =
-    if n > max_aliases then Error "callee: too many aliases"
+    if n > max_aliases then Error "too many aliases"
     else match Environ.lookup_constant_opt cst env with
-      | None -> Error "callee not in the environment"
+      | None -> Error "not in the environment"
       | Some cb ->
         match cb.const_universes, cb.const_body with
-        | Polymorphic _, _ -> Error "callee is universe polymorphic"
+        | Polymorphic _, _ -> Error "universe polymorphic"
         | Monomorphic, Def body ->
           (match kind body with
            | Const (cst', u) when UVars.Instance.is_empty u -> follow cst' (n + 1)
-           | _ -> Ok body)
-        | Monomorphic, (Undef _ | OpaqueDef _ | Primitive _ | Symbol _) ->
-          Error "callee is not a transparent definition"
+           | _ -> Ok (cst, cb))
+        | Monomorphic, (Undef _ | OpaqueDef _ | Primitive _ | Symbol _) -> Ok (cst, cb)
   in
   follow cst 0
+
+(* The body of a callee: a transparent definition, which is not an alias. *)
+let callee_body env cst = match follow_alias env cst with
+  | Error why -> Error ("callee: " ^ why)
+  | Ok (_, cb) ->
+    match cb.const_body with
+    | Def body -> Ok body
+    | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ ->
+      Error "callee is not a transparent definition"
+
+(* Whether the environment declares [cst] as the primitive operation [op],
+   and whether it declares it as the primitive type int. *)
+let is_primitive env cst op = match follow_alias env cst with
+  | Error _ -> false
+  | Ok (_, cb) ->
+    match cb.const_body with
+    | Primitive op' -> CPrimitives.equal op op'
+    | Def _ | Undef _ | OpaqueDef _ | Symbol _ -> false
+
+let is_int_type env cst = match follow_alias env cst with
+  | Error _ -> false
+  | Ok (cst', _) -> Environ.is_int63_type env cst'
 
 (* Where the comparison is: inside a term, at the top of a body whose
    fixpoint may be any function of its block, or at the top of a callee,
@@ -729,6 +854,11 @@ let rec same env top slots path c r =
   in
   match kind c, kind r with
   | Rel i, Rel j -> if not (Int.equal i j) then differ "de Bruijn index"
+  | Int i, Int j -> if not (Uint63.equal i j) then differ "integer"
+  | Sort s, Const (cst', _) when (match marker_of cst' with Some Sort_any -> true | _ -> false) ->
+    (match s with
+     | Sorts.Set | Sorts.Type _ -> ()
+     | Sorts.SProp | Sorts.Prop | Sorts.QSort _ -> differ "the sort of the type argument")
   | Ind (ind, u), Ind ((_, slot), _) -> empty u; bind slot ind
   | Construct ((ind, j), u), Construct (((_, slot), j'), _) ->
     empty u;
@@ -736,9 +866,15 @@ let rec same env top slots path c r =
     bind slot ind
   | Const (cst, u), Const (cst', _) ->
     empty u;
-    (match callee_of cst' with
+    (match marker_of cst' with
      | None -> differ "constant"
-     | Some (k, j) ->
+     | Some Sort_any -> differ "a sort was expected"
+     | Some Int63_type ->
+       if not (is_int_type env cst) then differ "not the primitive type int"
+     | Some (Prim op) ->
+       if not (is_primitive env cst op) then
+         differ ("not the primitive " ^ CPrimitives.to_string op)
+     | Some (Callee (k, j)) ->
        let callee = references.(k) in
        match callee_body env cst with
        | Error why -> differ why

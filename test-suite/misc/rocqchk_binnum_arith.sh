@@ -34,7 +34,10 @@
 #  (f) the -j 2 run of (a): each worker prints its own counters;
 #  (g) large numbers with a 4096-word minor heap, so that the allocation of
 #      the results runs the GC many times, also for chains built over a
-#      young subterm of an argument.
+#      young subterm of an argument;
+#  (h) the packing of literals on: the same calls and refusals. The words
+#      of (a) to (g) are those of chain literals, so those checks run with
+#      ROCQ_VM_BINNUM=-packlit.
 set -eu
 : "${BIN:=$(dirname "$(command -v rocq)")/}"
 export PATH="$BIN:$PATH"
@@ -807,10 +810,21 @@ done
 fail() { >&2 echo "FAILURE: $*"; exit 1; }
 
 # chk LOG ARGS...: rocqchk with the counters on; its output goes to LOG.
+# The words counted below are those of chain literals: ROCQ_VM_BINNUM
+# defaults to -packlit here, since a packed literal is one word (see (h)).
 chk() {
   local log=$1; shift
-  ROCQ_VM_BINNUM_STATS=${STATS:-1} rocqchk -silent -bytecode-compiler yes -R "$d" "" "$@" \
+  ROCQ_VM_BINNUM=${ROCQ_VM_BINNUM--packlit} ROCQ_VM_BINNUM_STATS=${STATS:-1} \
+    rocqchk -silent -bytecode-compiler yes -R "$d" "" "$@" \
     > "$d/$log" 2>&1 || { cat "$d/$log" >&2; fail "rocqchk $* failed"; }
+}
+
+# per_routine LOG FIELD: "routine value" lines of FIELD, summed over every
+# process.
+per_routine() {
+  awk -v f="$2" '$2 == "routine" {
+      for (i = 4; i <= NF; i++) { split($i, kv, "="); if (kv[1] == f) s[$3] += kv[2] } }
+    END { for (r in s) print r, s[r] }' "$d/$1" | sort
 }
 
 # stat LOG ROUTINE FIELD: FIELD of ROUTINE, summed over every process.
@@ -1141,6 +1155,19 @@ OCAMLRUNPARAM=s=4096 chk gs.log -norec BigShare
 for r in Pos.succ Pos.mul Z.mul Z.succ_double; do
   expect "(g) shared $r hits" "$(stat gs.log "$r" hits)" -eq "$(count_of NS "$r")"
   expect "(g) shared $r refusals" "$(stat gs.log "$r" refusals)" -eq 0
+done
+
+# (h) The packing of literals on, as by default (rocqchk_binnum_literal.sh
+# tests it): a literal is then read as one packed word, which changes the
+# words above, but no routine makes or refuses another call.
+for lib in Diff Copy Bad $ELIBS Big BigShare; do
+  chk "h-$lib.log" -norec "$lib"
+  ROCQ_VM_BINNUM_STATS=1 rocqchk -silent -bytecode-compiler yes -R "$d" "" -norec "$lib" \
+    > "$d/h-$lib-lit.log" 2>&1 || { cat "$d/h-$lib-lit.log" >&2; fail "(h) rocqchk -norec $lib failed"; }
+  for f in entry-calls entry-refusals site-calls site-refusals; do
+    [ "$(per_routine "h-$lib.log" $f)" = "$(per_routine "h-$lib-lit.log" $f)" ] \
+      || fail "(h) $lib: the $f of the routines change with the packing of literals"
+  done
 done
 
 exit 0

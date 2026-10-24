@@ -23,23 +23,45 @@
 /** Packed numbers.
 
     A positive number n with 2 <= n < 2^62 can be held as one block of tag
-    BINNUM_PACKED_TAG (OCaml's Lazy_tag, 246, which the VM never uses) with
-    one field, Val_long(n). The block stands for the chain of n: xI (a block
-    of tag 1) if n is odd and xO (tag 2) if it is even, over the chain of
-    n >> 1, which is xH (Val_int(0)) when n >> 1 = 1.
+    BINNUM_PACKED_TAG (OCaml's Lazy_tag, 246, which the VM never uses),
+    whose field 0 is Val_long(n). The block stands for the chain of n: xI
+    (a block of tag 1) if n is odd and xO (tag 2) if it is even, over the
+    chain of n >> 1, which is xH (Val_int(0)) when n >> 1 = 1.
 
-    Only the routines make packed blocks, as results that they compute
-    whole. SWITCH (rocq_interp.c) and whd_val (vmvalues.ml, through
-    rocq_binnum_expand) replace a packed block by the chain of its number
-    before they read it, and the routines read it as its number. No other
-    reader of a positive's structure exists (see the census of the readers
-    in the report of slice 4 of the design).
+    A block of size 1 is a result that a routine computed whole. A block of
+    size 2 is a literal: a chain in the VM value of a structured constant
+    [Const_val] (Vmvalues.val_of_str_const, through
+    rocq_binnum_pack_literal; the other kinds of structured constant, such
+    as universe instances, hold OCaml data and are never packed). Its field
+    1 is the chain itself, which the structured constant keeps alive, so a
+    reader of the chain takes it rather than building it.
+
+    The same block stands for a Z, an N or a nat as well, because their
+    constructors have the same tags: Zpos, Npos and S are the blocks of tag
+    1 with one field, Zneg the block of tag 2, and Z0, N0 and O are
+    Val_int(0). A reader of an N or of a nat refuses tag 2 (cur_node_nat,
+    rocq_binnum.c).
+
+    The routines, the packing of literals and the peel in PROJ (a size-1
+    block of the rest of a number, rocq_interp.c) make packed blocks.
+    SWITCH and PROJ (rocq_interp.c) and whd_val (vmvalues.ml, through
+    rocq_binnum_expand) replace a packed block by its chain before they read
+    it: field 1 when the block has one, a fresh chain otherwise. The
+    routines read it as its number. No other code reads the structure of
+    such a value: PUSHFIELDS and GETFIELD follow their own SWITCH, Kfield
+    and SETFIELD act on cofix accumulators and on nested blocks of size 2,
+    and the OCaml side reads a value only through whd_val. The tests
+    test-suite/misc/rocqchk_binnum_packed.sh and rocqchk_binnum_literal.sh
+    check the readers on packed results and on packed literals.
 
     Packing exists only on 64-bit builds, where Val_long has 63 bits, with
-    OCaml before 5.0, whose runtime scans a block of tag 246, size 1 and an
-    immediate field as an ordinary block. The OCaml 5 runtime was not read.
-    Elsewhere ROCQ_BINNUM_PACKING is 0, no packed block is ever made, and
-    binnum_is_packed is always false. */
+    OCaml before 5.0, whose runtime copies and scans a block of tag 246 as
+    an ordinary block of its size: in OCaml 4.14, minor_gc.c oldify_one and
+    major_gc.c mark_slice treat Closure_tag, Infix_tag, Forward_tag and the
+    no-scan tags apart, and name Lazy_tag only as the target of a
+    Forward_tag block, which the VM never makes. The OCaml 5 runtime was not
+    read. Elsewhere ROCQ_BINNUM_PACKING is 0, no packed block is ever made,
+    and binnum_is_packed is always false. */
 #if defined(ARCH_SIXTYFOUR) && OCAML_VERSION < 50000
 #define ROCQ_BINNUM_PACKING 1
 #else
@@ -49,24 +71,44 @@
 #define BINNUM_PACKED_TAG Lazy_tag
 #define BINNUM_PACKED_LIMIT ((uint64_t)1 << 62)
 
+/* The tag of the node of bit [i] of [n]: xI (tag 1) where the bit is set,
+   xO (tag 2) where it is clear. Every expansion of a packed number, and the
+   check of a literal at packing time, use this one expression. */
+#define BINNUM_NODE_TAG(n, i) ((((n) >> (i)) & 1) ? 1 : 2)
+
 static inline int binnum_is_packed(value v)
 {
   return ROCQ_BINNUM_PACKING && Is_block(v) && Tag_val(v) == BINNUM_PACKED_TAG;
 }
 
 /* The number of the packed block v. The checks below hold for every block
-   that a routine makes; if one fails, the block was not made by a routine,
-   or was changed, and the process stops rather than compute with it. */
+   that a routine or the packing of a literal makes; if one fails, the block
+   was not made by them, or was changed, and the process stops rather than
+   compute with it. */
 static inline uint64_t binnum_packed_number(value v)
 {
   value f;
   uint64_t n;
-  if (Wosize_val(v) != 1) abort();
+  mlsize_t size = Wosize_val(v);
+  if (size != 1 && size != 2) abort();
   f = Field(v, 0);
   if (!Is_long(f)) abort();
   n = (uint64_t) Long_val(f);
   if (n < 2 || n >= BINNUM_PACKED_LIMIT) abort();
+  if (size == 2) {
+    value c = Field(v, 1);
+    if (!Is_block(c) || Wosize_val(c) != 1 || Tag_val(c) != BINNUM_NODE_TAG(n, 0))
+      abort();
+  }
   return n;
+}
+
+/* The chain of the packed block v, or 0 when it keeps none (a result of a
+   routine, of size 1). The caller has checked the block with
+   binnum_packed_number. */
+static inline value binnum_packed_chain(value v)
+{
+  return Wosize_val(v) == 2 ? Field(v, 1) : (value) 0;
 }
 
 /* The number of bits of n > 0. */
@@ -90,7 +132,8 @@ static inline value binnum_base_step(value v)
 extern int rocq_binnum_stats;
 
 /* Counts an expansion of a packed block into [nodes] chain nodes, by SWITCH
-   ([where] = 0) or by rocq_binnum_expand ([where] = 1). */
+   ([where] = 0), by rocq_binnum_expand ([where] = 1) or by PROJ ([where] =
+   2). Any other [where] stops the process. */
 void rocq_binnum_count_expansion(int where, uint64_t nodes);
 
 /** Results.

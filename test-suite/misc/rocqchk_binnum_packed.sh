@@ -27,7 +27,16 @@
 #  (e) a packed value matched 50 times: 50 SWITCH expansions;
 #  (f) all of these with a minor heap of 4096 words, with the statistics
 #      off, with ROCQ_VM_BINNUM=-pack (no packed value at all) and with
-#      ROCQ_VM_BINNUM=0.
+#      ROCQ_VM_BINNUM=0;
+#  (g) the packing of literals on: the same calls and refusals. The models
+#      of (a) to (f) count chain literals, so those checks run with
+#      ROCQ_VM_BINNUM=-packlit.
+# Review.v and Refuse.v reach the branches named in the review of slice 4:
+# packed rests with an accumulated comparison, read_pos going to limbs in
+# its first loop, refused calls next to a packed argument, and two packed
+# blocks of one number compared. Where packing is compiled out (a 32-bit
+# build, or OCaml 5 and later), the lemmas still hold and every packed count
+# is 0; the state that the toolchain implies is checked first.
 set -eu
 : "${BIN:=$(dirname "$(command -v rocq)")/}"
 export PATH="$BIN:$PATH"
@@ -273,23 +282,69 @@ for v in (5, 6, bits(40), LIMIT - 1):
     count("E_NODES", 50 * (v.bit_length() - 1))
 open(d + "/Many.v", "w").write("".join(out))
 
+# Branches that the libraries above do not reach (review notes of slice 4):
+#  (a) Pos.compare_cont with an accumulated r other than Eq when both rests
+#      are packed and equal, P2 being a second packed block of P's number;
+#  (b) read_pos on a chain of 3 to 63 nodes over a packed tail, of more than
+#      64 bits in all, which goes to limbs in its first loop;
+#  (d) the conversion of two distinct packed blocks of the same number.
+out = [HEADER]
+for _ in range(4):
+    u = bits(rng.randint(20, 58))
+    P, P2 = padd(u), padd(u)
+    for lhs in ("Pos.compare_cont Lt %s %s" % (P, P2), "Pos.compare_cont Gt %s %s" % (P, P2),
+                "Pos.compare (xI %s) (xO %s)" % (P, P2), "Pos.compare (xO %s) (xI %s)" % (P, P2)):
+        out.append(lemma("na%d" % len(out), lhs))
+P62, P60, C = padd(bits(62)), padd(bits(60)), pos(bits(rng.randint(2, 80)))
+for lhs in ("Pos.mul (xo 10 %s) %s" % (P62, C), "Pos.mul (xo 40 %s) %s" % (P62, C),
+            "Z.pos_sub (xo 40 %s) %s" % (P60, C), "Z.pos_sub %s (xo 40 %s)" % (C, P60)):
+    out.append(lemma("nb%d" % len(out), lhs))
+for _ in range(4):
+    a, b = bits(rng.randint(2, 30)), bits(rng.randint(2, 30))
+    out.append("Lemma nd%d : Pos.mul %s %s = Pos.mul %s %s.\n"
+               "Proof. vm_cast_no_check (@eq_refl positive (Pos.mul %s %s)). Qed.\n"
+               % (len(out), pos(a), pos(b), pos(b), pos(a), pos(a), pos(b)))
+open(d + "/Review.v", "w").write("".join(out))
+
+#  (c) Refused calls whose other argument is packed: p is free, and P a
+#      packed result of 8 to 12 bits.
+out = [HEADER]
+for _ in range(3):
+    P = padd(bits(rng.randint(8, 12)))
+    for lhs in ("Pos.add_carry (xI p) %s" % P, "Pos.compare_cont Gt (xO p) %s" % P,
+                "Z.add (Zneg (xI p)) (Zneg %s)" % P):
+        out.append("Lemma nc%d (p : positive) : %s = cbv_val (%s).\n"
+                   "Proof. vm_compute. reflexivity. Qed.\n" % (len(out), lhs, lhs))
+open(d + "/Refuse.v", "w").write("".join(out))
+
 with open(d + "/counts", "w") as f:
     for k, v in sorted(counts.items()):
         f.write("%s=%d\n" % (k, v))
 PY
 . "$d/counts"
 
-LIBS="Match Tail Share Conv Many"
-for lib in $LIBS ConvBad; do
+LIBS="Match Tail Share Conv Many Review"
+for lib in $LIBS ConvBad Refuse; do
   rocq c -native-compiler no -R "$d" "" "$d/$lib.v"
 done
 
 fail() { >&2 echo "FAILURE: $*"; exit 1; }
 
+# chk LOG ARGS...: rocqchk with the counters on; its output goes to LOG.
+# The models below count chain literals, which slice 5 packs as well (see
+# rocqchk_binnum_literal.sh): ROCQ_VM_BINNUM defaults to -packlit here, and
+# (g) checks the same calls with the packing of literals on.
 chk() {
   local log=$1; shift
-  ROCQ_VM_BINNUM_STATS=1 rocqchk -silent -bytecode-compiler yes -R "$d" "" "$@" \
+  ROCQ_VM_BINNUM=${ROCQ_VM_BINNUM--packlit} ROCQ_VM_BINNUM_STATS=1 \
+    rocqchk -silent -bytecode-compiler yes -R "$d" "" "$@" \
     > "$d/$log" 2>&1 || { cat "$d/$log" >&2; fail "rocqchk $* failed"; }
+}
+
+# field LOG LINE FIELD: the value of FIELD on the line LINE, as printed.
+field() {
+  awk -v l="$2:" -v f="$3" '$2 == l {
+      for (i = 3; i <= NF; i++) { split($i, kv, "="); if (kv[1] == f) { print kv[2]; exit } } }' "$d/$1"
 }
 
 # stat LOG ROUTINE FIELD: FIELD of ROUTINE, summed over every process.
@@ -320,9 +375,31 @@ expect() {
 
 SHARING="Pos.succ Pos.pred_double Pos.div2 Z.double Z.succ_double Z.pred_double Z.div2"
 
-for lib in $LIBS; do chk "$lib.log" -norec "$lib"; done
+for lib in $LIBS Refuse; do chk "$lib.log" -norec "$lib"; done
 for lib in $LIBS; do
   expect "$lib refusals" "$(total "$lib.log" refusals)" -eq 0
+done
+
+# The state of packing, which is compiled out on a 32-bit build and with
+# OCaml 5 or later (kernel/byterun/rocq_binnum.h). The expected state is
+# read from the toolchain, so that a wrongly compiled-out build still fails.
+packing=$(field Match.log packed packing)
+config=$( { ocamlfind ocamlc -config || ocamlc -config; } 2>/dev/null || true)
+word=$(printf '%s\n' "$config" | awk '$1 == "word_size:" { print $2 }')
+major=$(printf '%s\n' "$config" | awk '$1 == "version:" { split($2, v, "."); print v[1] }')
+if [ -z "$word" ] || [ -z "$major" ]; then want=$packing
+elif [ "$word" = 64 ] && [ "$major" -lt 5 ]; then want=on
+else want=off; fi
+expect "the packing of results" "$packing" = "$want"
+
+# (c) of the review notes: refused calls next to a packed argument, which
+# the routine read before it met p. Packing or not, the calls are refused.
+for r in Pos.add_carry Pos.compare_cont Z.add; do
+  expect "(n1c) $r refusals" "$(stat Refuse.log "$r" refusals)" -gt 0
+done
+
+if [ "$want" = on ]; then
+for lib in $LIBS; do
   expect "$lib packed results" "$(total "$lib.log" packed-results)" -gt 0
 done
 
@@ -338,18 +415,25 @@ for r in Pos.add Pos.add_carry Pos.mul Pos.compare_cont Pos.eqb Z.pos_sub Z.pos_
          Pos.succ Pos.pred_double Z.compare Z.eqb; do
   expect "(b) $r args-tail" "$(stat Tail.log "$r" args-tail)" -gt 0
 done
-for r in Pos.add Pos.mul Pos.compare_cont Pos.eqb Z.pos_sub Z.pos_div_eucl Z.add Z.mul; do
+for r in Pos.add Pos.mul Pos.compare_cont Pos.eqb Z.pos_sub Z.pos_div_eucl; do
   expect "(b) $r args-packed" "$(stat Tail.log "$r" args-packed)" -gt 0
+done
+# A routine reads a Z from its node, so the packed positive of Zpos P is a
+# packed tail one node down.
+for r in Z.add Z.mul; do
+  expect "(b) $r args-tail" "$(stat Tail.log "$r" args-tail)" -gt 0
 done
 
 # (c) The sharing routines: packed results exactly as modelled; each packed
-# argument is read as one.
+# argument is read as one: as a packed argument of the Pos routines, and as
+# a packed tail of the Z routines, which read the Zpos or Zneg node above it.
 for r in $SHARING; do
   k="C_$(echo "$r" | tr . _)"
   expect "(c) $r packed results" "$(stat Share.log "$r" packed-results)" -eq "${!k:-0}"
 done
 expect "(c) packed arguments of the sharing routines" \
-  "$(for r in $SHARING; do stat Share.log "$r" args-packed; done | awk '{ s += $1 } END { print s }')" \
+  "$(for r in $SHARING; do stat Share.log "$r" args-packed; stat Share.log "$r" args-tail; done \
+     | awk '{ s += $1 } END { print s }')" \
   -eq "$C_PACKS"
 
 # (d) One whd_val expansion per conversion of a packed value.
@@ -358,6 +442,30 @@ expect "(d) whd expansions" "$(line Conv.log packed whd-expansions)" -eq "$D_WHD
 # (e) 50 expansions per lemma, each building the whole chain.
 expect "(e) switch expansions" "$(line Many.log packed switch-expansions)" -eq "$E_EXP"
 expect "(e) switch nodes" "$(line Many.log packed switch-nodes)" -eq "$E_NODES"
+
+# The review notes: (a) packed rests on both sides of compare_cont; (b)
+# chains over a packed tail of more than 64 bits; (c) a packed argument
+# read before a refusal; (d) two packed blocks of one number compared.
+expect "(n1a) Pos.compare_cont args-packed" "$(stat Review.log Pos.compare_cont args-packed)" -gt 0
+expect "(n1a) Pos.compare_cont args-tail" "$(stat Review.log Pos.compare_cont args-tail)" -gt 0
+for r in Pos.mul Z.pos_sub; do
+  expect "(n1b) $r args-tail" "$(stat Review.log "$r" args-tail)" -gt 0
+done
+for r in Pos.add_carry Pos.compare_cont; do
+  expect "(n1c) $r args-packed" "$(stat Refuse.log "$r" args-packed)" -gt 0
+done
+expect "(n1c) Z.add args-tail" "$(stat Refuse.log Z.add args-tail)" -gt 0
+expect "(n1d) whd expansions" "$(line Review.log packed whd-expansions)" -ge 8
+else
+# Packing is compiled out: the lemmas above still hold, and no value is
+# packed or expanded.
+for lib in $LIBS Refuse; do
+  expect "$lib packed results" "$(total "$lib.log" packed-results)" -eq 0
+  expect "$lib packed arguments" "$(total "$lib.log" args-packed)" -eq 0
+  expect "$lib switch expansions" "$(line "$lib.log" packed switch-expansions)" -eq 0
+  expect "$lib whd expansions" "$(line "$lib.log" packed whd-expansions)" -eq 0
+done
+fi
 
 # (f) A minor heap of 4096 words; the statistics off; no packing; no
 # routine.
@@ -375,6 +483,22 @@ for lib in $LIBS; do
   expect "(f) $lib -pack refusals" "$(total "$lib-nopack.log" refusals)" -eq 0
   ROCQ_VM_BINNUM=0 chk "$lib-off.log" -norec "$lib"
   expect "(f) $lib off calls" "$(total "$lib-off.log" calls)" -eq 0
+done
+
+# (g) The packing of literals on, as by default: no routine makes or
+# refuses another call.
+per_routine() {
+  awk -v f="$2" '$2 == "routine" {
+      for (i = 4; i <= NF; i++) { split($i, kv, "="); if (kv[1] == f) s[$3] += kv[2] } }
+    END { for (r in s) print r, s[r] }' "$d/$1" | sort
+}
+for lib in $LIBS Refuse; do
+  ROCQ_VM_BINNUM_STATS=1 rocqchk -silent -bytecode-compiler yes -R "$d" "" -norec "$lib" \
+    > "$d/$lib-lit.log" 2>&1 || { cat "$d/$lib-lit.log" >&2; fail "(g) rocqchk -norec $lib failed"; }
+  for f in entry-calls entry-refusals site-calls site-refusals; do
+    [ "$(per_routine "$lib.log" $f)" = "$(per_routine "$lib-lit.log" $f)" ] \
+      || fail "(g) $lib: the $f of the routines change with the packing of literals"
+  done
 done
 
 exit 0

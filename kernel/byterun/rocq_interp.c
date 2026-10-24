@@ -1177,23 +1177,29 @@ value rocq_interprete
              tags are tested with one compare, as before. */
           if (index >= BINNUM_PACKED_TAG) {
 #if ROCQ_BINNUM_PACKING
-            /* A packed positive (rocq_binnum.h): accu becomes the full
-               chain of its number, built from the inside out with the
-               partial chain in accu under Setup_for_gc, and the match
-               dispatches on the head's tag. The packed block is not
-               changed; the branch's PUSHFIELDS and GETFIELD then read a
-               chain. */
+            /* A packed positive (rocq_binnum.h): accu becomes the chain of
+               its number, the chain the block keeps when it is a literal,
+               and otherwise one built from the inside out with the partial
+               chain in accu under Setup_for_gc. The match then dispatches
+               on the head's tag. The packed block is not changed; the
+               branch's PUSHFIELDS and GETFIELD then read a chain. */
             if (index == BINNUM_PACKED_TAG) {
               uint64_t n = binnum_packed_number(accu);
-              unsigned i, nodes = binnum_bitlen(n) - 1;
-              accu = Val_int(0);
-              for (i = nodes; i-- > 0;) {
-                value block;
-                Rocq_alloc_small(block, 1, (n >> i) & 1 ? 1 : 2);
-                Field(block, 0) = accu;
-                accu = block;
+              value kept = binnum_packed_chain(accu);
+              if (kept != 0) {
+                accu = kept;
+                if (rocq_binnum_stats) rocq_binnum_count_expansion(0, 0);
+              } else {
+                unsigned i, nodes = binnum_bitlen(n) - 1;
+                accu = Val_int(0);
+                for (i = nodes; i-- > 0;) {
+                  value block;
+                  Rocq_alloc_small(block, 1, BINNUM_NODE_TAG(n, i));
+                  Field(block, 0) = accu;
+                  accu = block;
+                }
+                if (rocq_binnum_stats) rocq_binnum_count_expansion(0, nodes);
               }
-              if (rocq_binnum_stats) rocq_binnum_count_expansion(0, nodes);
               index = Tag_val(accu);
             }
 #endif
@@ -1297,6 +1303,36 @@ value rocq_interprete
             }
           }
         } else {
+#if ROCQ_BINNUM_PACKING
+          /* A one-field record whose field is a chain is itself a chain, so
+             a packed literal (rocq_binnum.h) can reach PROJ, which reads a
+             field with no SWITCH before it. accu becomes the chain the
+             block keeps, or the chain's head with the rest of the number
+             below it. Either way it is a block of one field, so the index
+             is 0; the packed block is not changed. */
+          if (Is_block(accu) && Tag_val(accu) == BINNUM_PACKED_TAG) {
+            uint64_t n = binnum_packed_number(accu);
+            value kept = binnum_packed_chain(accu);
+            if (*pc != 0) abort();
+            if (kept != 0) {
+              accu = kept;
+              if (rocq_binnum_stats) rocq_binnum_count_expansion(2, 0);
+            } else {
+              value block;
+              uint64_t rest = n >> 1;
+              if (rest == 1) accu = Val_int(0);
+              else {
+                Rocq_alloc_small(block, 1, BINNUM_PACKED_TAG);
+                Field(block, 0) = Val_long(rest);
+                accu = block;
+              }
+              Rocq_alloc_small(block, 1, BINNUM_NODE_TAG(n, 0));
+              Field(block, 0) = accu;
+              accu = block;
+              if (rocq_binnum_stats) rocq_binnum_count_expansion(2, 1);
+            }
+          }
+#endif
           accu = Field(accu, *pc);
           pc++;
         }

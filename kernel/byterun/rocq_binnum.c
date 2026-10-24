@@ -16,7 +16,9 @@
    [mind_reloc_tbl] of kernel/indtypes.ml). A positive is a chain of nodes,
    a packed block (rocq_binnum.h), or a chain over a packed tail; every
    positive is read through a cursor (below), which reads a packed block as
-   its number and never reads its field.
+   its number and never reads its fields as chain nodes. A Z, an N and a
+   nat are read through the same cursor, because their constructors have
+   the tags of a positive's (see cur_node_nat).
 
    A routine reads at least the nodes that the bytecode of the reference
    reads, and stops at the first node that is not a constructor of the
@@ -77,22 +79,28 @@ enum {
   BINNUM_Z_POS_DIV_EUCL,
   BINNUM_NAT_EQB,
   BINNUM_NAT_LEB,
+  BINNUM_UINT63_TO_Z_REC,
+  BINNUM_UINT63_OF_POS_REC,
+  BINNUM_Z_POW,
   BINNUM_COUNT
 };
 
 static const int binnum_arity[BINNUM_COUNT] = {
   3, 2, 1, 2, 2, 1, 2, 1, 1,
   1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2,
-  2, 2
+  2, 2,
+  2, 2, 2
 };
 
 /* Counters, printed by vmbinnum.ml when ROCQ_VM_BINNUM_STATS is set, and
    kept only then: the calls of each routine, the calls it refused, and the
    nodes it read (in accepted and refused calls), at function entry (site 0)
-   and at call sites (site 1); the positive arguments it started to read,
-   those that were packed and those that were chains over a packed tail; the
-   packed results it made; and the expansions of packed blocks by SWITCH
-   (0) and rocq_binnum_expand (1), with the nodes they made. */
+   and at call sites (site 1); the arguments whose nodes it started to read
+   (a positive, a Z, an N or a nat), those that were a packed block and
+   those that were a chain over a packed tail; the packed results it made;
+   the expansions of packed blocks by SWITCH (0), rocq_binnum_expand (1)
+   and PROJ (2), with the nodes they made; and the literals packed, with
+   their nodes. */
 int rocq_binnum_stats;
 static uint64_t binnum_calls[2][BINNUM_COUNT];
 static uint64_t binnum_refusals[2][BINNUM_COUNT];
@@ -101,12 +109,18 @@ static uint64_t binnum_args[BINNUM_COUNT];
 static uint64_t binnum_args_packed[BINNUM_COUNT];
 static uint64_t binnum_args_tail[BINNUM_COUNT];
 static uint64_t binnum_packed_results[BINNUM_COUNT];
-static uint64_t binnum_expansions[2];
-static uint64_t binnum_expansion_nodes[2];
+static uint64_t binnum_expansions[3];
+static uint64_t binnum_expansion_nodes[3];
+static uint64_t binnum_literals, binnum_literal_nodes;
 
 /* Packing of results: on unless ROCQ_VM_BINNUM=-pack, and never where
    ROCQ_BINNUM_PACKING is 0. */
 static int binnum_pack = ROCQ_BINNUM_PACKING;
+
+/* Packing of the chains in the VM values of structured constants: on unless
+   ROCQ_VM_BINNUM=-pack or -packlit. Vmbinnum sets both flags when it is
+   loaded, before any constant is compiled. */
+static int binnum_packlit = ROCQ_BINNUM_PACKING;
 
 /* The result of the call in progress. */
 static struct binnum_result R;
@@ -134,27 +148,15 @@ static struct binnum_result R;
 #define POS_XO 2
 
 /* A node of a Z: Z0 is Val_int(0), Zpos and Zneg the blocks of tag 1 and 2
-   with one field (a positive). */
+   with one field (a positive). A node of an N: N0 is Val_int(0), Npos the
+   block of tag 1. A node of a nat: O is Val_int(0), S the block of tag 1.
+
+   The three sets of tags are those of a positive, so cur_node reads a node
+   of any of them, and a packed block stands for any of them (rocq_binnum.h).
+   A reader of an N or of a nat refuses tag 2 (cur_node_nat). */
 #define Z_ZERO 0
 #define Z_POS 1
 #define Z_NEG 2
-
-static inline int z_node(value v)
-{
-  if (Is_long(v)) return v == Val_int(0) ? Z_ZERO : -1;
-  if (Wosize_val(v) != 1) return -1;
-  if (Tag_val(v) == Z_POS) return Z_POS;
-  if (Tag_val(v) == Z_NEG) return Z_NEG;
-  return -1;
-}
-
-/* A node of a nat: O is Val_int(0), S the block of tag 1 with one field. 0
-   for O, 1 for S, -1 for any other value. */
-static inline int nat_node(value v)
-{
-  if (Is_long(v)) return v == Val_int(0) ? 0 : -1;
-  return Wosize_val(v) == 1 && Tag_val(v) == 1 ? 1 : -1;
-}
 
 /** The cursor.
 
@@ -163,9 +165,10 @@ static inline int nat_node(value v)
     field 0. When it reads a packed block it goes to packed mode, where [m]
     is the rest of the number, from the bit at the cursor up (1 is xH): it
     reads the bits of [m] without memory reads, and never reads the block's
-    field. So a chain, a packed block and a chain over a packed tail are all
-    read as the same number. A cursor counts one word per chain node it
-    reads and one per packed block, only when the statistics are on. */
+    fields again, in particular not as chain nodes. So a chain, a packed
+    block and a chain over a packed tail are all read as the same number. A
+    cursor counts one word per chain node it reads and one per packed
+    block, only when the statistics are on. */
 
 struct cursor {
   value v;
@@ -234,6 +237,44 @@ HOT int cur_closed(struct cursor *c)
   }
 }
 
+/* The node of an N or of a nat at the cursor: POS_XH (0) for N0 or O,
+   POS_XI (1) for Npos or S, -1 for any other value. Tag 2 is a constructor
+   of neither type: a packed even number is refused here, as is a block of
+   tag 2. */
+HOT int cur_node_nat(struct cursor *c)
+{
+  int k = cur_node(c);
+  return k == POS_XO ? -1 : k;
+}
+
+/* The number of S nodes of the nat of the packed rest [m] (m > 1), or -1
+   when it is not one. The chain of m is a nat only if every node is tag 1,
+   that is if every bit of m is set: S^k O is 2^(k+1) - 1. */
+HOT int64_t nat_packed_length(uint64_t m)
+{
+  if ((m & (m + 1)) != 0) return -1;
+  return (int64_t)(binnum_bitlen(m) - 1);
+}
+
+/* The number of S nodes of the nat at the cursor, or -1 when one of its
+   nodes is not a constructor of nat. A packed rest is read whole, in O(1).
+   A nat has no sharing to keep, so no routine needs its cursor afterwards. */
+HOT int64_t nat_length(struct cursor *c)
+{
+  int64_t k = 0;
+  for (;;) {
+    int kn = cur_node_nat(c);
+    if (kn < 0) return -1;
+    if (kn == POS_XH) return k;
+    if (c->packed) {
+      int64_t rest = nat_packed_length(c->m);
+      return rest < 0 ? -1 : k + rest;
+    }
+    k++;
+    cur_next(c);
+  }
+}
+
 /** Large numbers, in C buffers: little-endian arrays of 32-bit limbs. A
     number is normalized when its top limb is not zero. The same type holds
     the bits of a long chain of fresh nodes. The buffers are static and grow
@@ -244,6 +285,9 @@ typedef uint32_t limb;
 struct num { limb *d; size_t n; size_t cap; };
 
 static struct num num_a, num_b, num_r, num_q, num_m;
+
+/* Three more buffers, for the powers of Z.pow alone. */
+static struct num num_p1, num_p2, num_p3;
 
 static int num_reserve(struct num *x, size_t n)
 {
@@ -402,6 +446,41 @@ static int num_is_pow2(const struct num *x)
   return x->n > 0 && (x->d[x->n - 1] & (x->d[x->n - 1] - 1)) == 0;
 }
 
+static int num_copy(struct num *d, const struct num *s)
+{
+  size_t i;
+  if (!num_reserve(d, s->n + 1)) return 0;
+  for (i = 0; i < s->n; i++) d->d[i] = s->d[i];
+  d->n = s->n;
+  return 1;
+}
+
+/* num_r = base^e, for e >= 1, by squaring. The three buffers it works in
+   are always distinct, because each step swaps two of the three pointers,
+   and num_mul needs a result that is neither of its arguments. */
+static int num_pow(const struct num *base, uint64_t e)
+{
+  struct num *acc = &num_p1, *sq = &num_p2, *tmp = &num_p3, *swap;
+  int started = 0;
+  if (!num_copy(sq, base)) return 0;
+  for (;;) {
+    if (e & 1) {
+      if (!started) {
+        if (!num_copy(acc, sq)) return 0;
+        started = 1;
+      } else {
+        if (!num_mul(tmp, acc, sq)) return 0;
+        swap = acc; acc = tmp; tmp = swap;
+      }
+    }
+    e >>= 1;
+    if (e == 0) break;
+    if (!num_mul(tmp, sq, sq)) return 0;
+    swap = sq; sq = tmp; tmp = swap;
+  }
+  return num_copy(&num_r, acc);
+}
+
 /* Reads the rest of the positive at the cursor, to its end: returns its
    number of bits L, with its value in *w when L <= 64, and in x otherwise.
    Returns 0 if one of its nodes is not a constructor of positive. */
@@ -447,6 +526,34 @@ HOT uint64_t read_pos(struct cursor *c, uint64_t *w, struct num *x)
     cur_next(c);
     i++;
   }
+}
+
+/* The positive at the cursor when it is at most [cap], which is a power of
+   two: 1 with its value in *out, and 0 when it is larger or is not a
+   positive. It stops reading as soon as the number is known to be larger. */
+HOT int read_pos_small(struct cursor *c, uint64_t cap, uint64_t *out)
+{
+  uint64_t acc = 0, i = 0, v;
+  for (;;) {
+    int k = cur_node(c);
+    if (k < 0) return 0;
+    if (c->packed) {
+      if (c->m > (cap >> i)) return 0;
+      v = acc | c->m << i;
+      break;
+    }
+    if (k == POS_XH) {
+      v = acc | (uint64_t)1 << i;
+      break;
+    }
+    if (k == POS_XI) acc |= (uint64_t)1 << i;
+    i++;
+    if (((uint64_t)1 << i) > cap) return 0;
+    cur_next(c);
+  }
+  if (v > cap) return 0;
+  *out = v;
+  return 1;
 }
 
 /** The bits of a chain of fresh nodes, from the outermost: in a word while
@@ -765,22 +872,22 @@ HOT int pos_add_core(struct cursor *x, struct cursor *y, int c, int wrap,
    of two, 2^t, the bytecode does not read y and the result is y below t xO
    nodes; otherwise the bytecode reads all of y (in add y _, whose second
    argument is longer), and so does the routine, and the result is computed
-   whole. [ya] and [yd] are the argument and depth of y, [y] its value. */
-HOT int pos_mul_core(struct cursor *x, value y, int ya, uint64_t yd, int wrap,
+   whole. [y] is a cursor that the caller has set up and not read, unless it
+   is already inside a packed block, which holds nothing to share. */
+HOT int pos_mul_core(struct cursor *x, struct cursor *y, int wrap,
                      struct binnum_part *p)
 {
   uint64_t wx = 0, wy = 0, prod, lx, ly;
-  struct cursor cy;
   lx = read_pos(x, &wx, &num_a);
   if (lx == 0) return 0;
   if (lx <= 64 ? (wx & (wx - 1)) == 0 : num_is_pow2(&num_a)) {
     uint64_t t = lx - 1, j;
     struct sink s = { 0, 0 };
     for (j = 0; j < t; j++) if (!sink_put(&s, 0)) return 0;
-    return part_sink(p, wrap, &s, ya, yd);
+    if (y->packed) return part_sink_high(p, wrap, &s, y->m);
+    return part_sink(p, wrap, &s, y->arg, y->depth);
   }
-  cur_init(&cy, y, ya, yd);
-  ly = read_pos(&cy, &wy, &num_b);
+  ly = read_pos(y, &wy, &num_b);
   if (ly == 0) return 0;
   if (lx <= 64 && ly <= 64 && !__builtin_mul_overflow(wx, wy, &prod))
     return part_word(p, prod, wrap);
@@ -822,13 +929,14 @@ HOT int pos_sub_core(struct cursor *x, struct cursor *y, struct binnum_part *p)
    sign, through CompOpp when both are negative. */
 HOT int z_compare_core(const value *a, value *res)
 {
-  int kx = z_node(a[0]), ky;
   struct cursor cx, cy;
+  int kx, ky;
   value c;
-  COUNT(words, 1);
+  cur_init(&cx, a[0], 0, 0);
+  kx = cur_node(&cx);
   if (kx < 0) return 0;
-  ky = z_node(a[1]);
-  COUNT(words, 1);
+  cur_init(&cy, a[1], 1, 0);
+  ky = cur_node(&cy);
   if (ky < 0) return 0;
   if (kx == Z_ZERO) {
     *res = ky == Z_ZERO ? CMP_EQ : ky == Z_POS ? CMP_LT : CMP_GT;
@@ -838,8 +946,8 @@ HOT int z_compare_core(const value *a, value *res)
     *res = kx == Z_POS ? CMP_GT : CMP_LT;
     return 1;
   }
-  cur_init(&cx, Field(a[0], 0), 0, 1);
-  cur_init(&cy, Field(a[1], 0), 1, 1);
+  cur_next(&cx);
+  cur_next(&cy);
   if (!pos_compare_core(CMP_EQ, &cx, &cy, &c)) return 0;
   *res = kx == Z_POS ? c : c == CMP_LT ? CMP_GT : c == CMP_GT ? CMP_LT : CMP_EQ;
   return 1;
@@ -905,9 +1013,10 @@ static int r_pos_pred_double(const value *a)
 
 static int r_pos_mul(const value *a)
 {
-  struct cursor x;
+  struct cursor x, y;
   cur_init(&x, a[0], 0, 0);
-  return pos_mul_core(&x, a[1], 1, 0, 0, &R.part[0]);
+  cur_init(&y, a[1], 1, 0);
+  return pos_mul_core(&x, &y, 0, &R.part[0]);
 }
 
 /* Pos.div2 p: 1 for 1, and the number below the node of p otherwise: the
@@ -925,27 +1034,14 @@ static int r_pos_div2(const value *a)
   return 1;
 }
 
-/* The number of S nodes of the nat v, or -1 if one of its nodes is not a
-   constructor of nat. */
-static int64_t nat_count(value v)
-{
-  int64_t k = 0;
-  int kn;
-  for (;;) {
-    kn = nat_node(v);
-    if (kn <= 0) break;
-    k++;
-    v = Field(v, 0);
-  }
-  COUNT(words, (uint64_t)k + 1);
-  return kn < 0 ? -1 : k;
-}
-
 /* Pos.of_succ_nat n: of_succ_nat O = 1, of_succ_nat (S x) = succ
    (of_succ_nat x). It reads all of n; the result is n + 1. */
 static int r_pos_of_succ_nat(const value *a)
 {
-  int64_t k = nat_count(a[0]);
+  struct cursor c;
+  int64_t k;
+  cur_init(&c, a[0], 0, 0);
+  k = nat_length(&c);
   if (k < 0) return 0;
   return part_word(&R.part[0], (uint64_t)k + 1, 0);
 }
@@ -956,24 +1052,21 @@ static int r_pos_of_succ_nat(const value *a)
    Z.pred_double of a Zpos run Pos.pred_double on the number. */
 static int r_z_double(const value *a)
 {
-  int k = z_node(a[0]);
-  value p;
-  COUNT(words, 1);
+  struct cursor c;
+  int k;
+  cur_init(&c, a[0], 0, 0);
+  k = cur_node(&c);
   if (k < 0) return 0;
   if (k == Z_ZERO) {
     part_imm(&R.part[0], Val_int(0));
     return 1;
   }
-  p = Field(a[0], 0);
-  if (binnum_is_packed(p)) {
-    struct cursor c;
-    cur_init(&c, p, 0, 1);
-    cur_node(&c);
-    return part_word(&R.part[0], c.m << 1, k);
-  }
+  cur_next(&c);
+  if (!c.packed && binnum_is_packed(c.v)) cur_node(&c);
+  if (c.packed) return part_word(&R.part[0], c.m << 1, k);
   {
     struct sink s = { 0, 1 };
-    return part_sink(&R.part[0], k, &s, 0, 1);
+    return part_sink(&R.part[0], k, &s, c.arg, c.depth);
   }
 }
 
@@ -981,28 +1074,19 @@ static int r_z_double(const value *a)
    that keeps the number, whose result is 2 p + 1. */
 static int z_double_plus_one(const value *a, int k, int other)
 {
-  int kz = z_node(a[0]);
-  value p;
-  COUNT(words, 1);
+  struct cursor c;
+  int kz;
+  cur_init(&c, a[0], 0, 0);
+  kz = cur_node(&c);
   if (kz < 0) return 0;
   if (kz == Z_ZERO) return part_share(&R.part[0], k, BINNUM_BASE_XH, 0);
-  p = Field(a[0], 0);
-  if (kz == k) {
-    if (binnum_is_packed(p)) {
-      struct cursor c;
-      cur_init(&c, p, 0, 1);
-      cur_node(&c);
-      return part_word(&R.part[0], (c.m << 1) + 1, k);
-    }
-    {
-      struct sink s = { 1, 1 };
-      return part_sink(&R.part[0], k, &s, 0, 1);
-    }
-  }
+  cur_next(&c);
+  if (kz != k) return pos_pred_double_core(&c, other, &R.part[0]);
+  if (!c.packed && binnum_is_packed(c.v)) cur_node(&c);
+  if (c.packed) return part_word(&R.part[0], (c.m << 1) + 1, k);
   {
-    struct cursor c;
-    cur_init(&c, p, 0, 1);
-    return pos_pred_double_core(&c, other, &R.part[0]);
+    struct sink s = { 1, 1 };
+    return part_sink(&R.part[0], k, &s, c.arg, c.depth);
   }
 }
 
@@ -1032,49 +1116,44 @@ static int r_z_pos_sub(const value *a)
    sign are added as Pos.add; of opposite signs, subtracted as Z.pos_sub. */
 static int r_z_add(const value *a)
 {
-  int kx = z_node(a[0]), ky;
   struct cursor x, y;
-  COUNT(words, 1);
+  int kx, ky;
+  cur_init(&x, a[0], 0, 0);
+  kx = cur_node(&x);
   if (kx < 0) return 0;
   if (kx == Z_ZERO) return part_share(&R.part[0], 0, 1, 0);
-  ky = z_node(a[1]);
-  COUNT(words, 1);
+  cur_init(&y, a[1], 1, 0);
+  ky = cur_node(&y);
   if (ky < 0) return 0;
   if (ky == Z_ZERO) return part_share(&R.part[0], 0, 0, 0);
-  if (kx == ky) {
-    cur_init(&x, Field(a[0], 0), 0, 1);
-    cur_init(&y, Field(a[1], 0), 1, 1);
-    return pos_add_core(&x, &y, 0, kx, &R.part[0]);
-  }
-  if (kx == Z_POS) {
-    cur_init(&x, Field(a[0], 0), 0, 1);
-    cur_init(&y, Field(a[1], 0), 1, 1);
-  } else {
-    cur_init(&x, Field(a[1], 0), 1, 1);
-    cur_init(&y, Field(a[0], 0), 0, 1);
-  }
-  return pos_sub_core(&x, &y, &R.part[0]);
+  cur_next(&x);
+  cur_next(&y);
+  if (kx == ky) return pos_add_core(&x, &y, 0, kx, &R.part[0]);
+  if (kx == Z_POS) return pos_sub_core(&x, &y, &R.part[0]);
+  return pos_sub_core(&y, &x, &R.part[0]);
 }
 
 static int r_z_mul(const value *a)
 {
-  int kx = z_node(a[0]), ky;
-  struct cursor x;
-  COUNT(words, 1);
+  struct cursor x, y;
+  int kx, ky;
+  cur_init(&x, a[0], 0, 0);
+  kx = cur_node(&x);
   if (kx < 0) return 0;
   if (kx == Z_ZERO) {
     part_imm(&R.part[0], Val_int(0));
     return 1;
   }
-  ky = z_node(a[1]);
-  COUNT(words, 1);
+  cur_init(&y, a[1], 1, 0);
+  ky = cur_node(&y);
   if (ky < 0) return 0;
   if (ky == Z_ZERO) {
     part_imm(&R.part[0], Val_int(0));
     return 1;
   }
-  cur_init(&x, Field(a[0], 0), 0, 1);
-  return pos_mul_core(&x, Field(a[1], 0), 1, 1, kx == ky ? Z_POS : Z_NEG, &R.part[0]);
+  cur_next(&x);
+  cur_next(&y);
+  return pos_mul_core(&x, &y, kx == ky ? Z_POS : Z_NEG, &R.part[0]);
 }
 
 static int r_z_compare(const value *a)
@@ -1106,18 +1185,19 @@ static int r_z_ltb(const value *a)
    have the same sign. */
 static int r_z_eqb(const value *a)
 {
-  int kx = z_node(a[0]), ky;
   struct cursor x, y;
+  int kx, ky;
   value b;
-  COUNT(words, 1);
+  cur_init(&x, a[0], 0, 0);
+  kx = cur_node(&x);
   if (kx < 0) return 0;
-  ky = z_node(a[1]);
-  COUNT(words, 1);
+  cur_init(&y, a[1], 1, 0);
+  ky = cur_node(&y);
   if (ky < 0) return 0;
   if (kx == Z_ZERO || kx != ky) b = kx == ky ? BOOL_TRUE : BOOL_FALSE;
   else {
-    cur_init(&x, Field(a[0], 0), 0, 1);
-    cur_init(&y, Field(a[1], 0), 1, 1);
+    cur_next(&x);
+    cur_next(&y);
     if (!pos_eqb_core(&x, &y, &b)) return 0;
   }
   part_imm(&R.part[0], b);
@@ -1127,42 +1207,51 @@ static int r_z_eqb(const value *a)
 /* Z.div2 z: Z0 -> Z0; Zpos p -> Z0 if p is 1, else Zpos (Pos.div2 p), the
    number below the node of p; Zneg p -> Zneg (Pos.div2_up p), where
    div2_up (p~1) = succ p, div2_up (p~0) = p, div2_up 1 = 1. For a packed
-   p = m, Pos.div2 p is m >> 1 and div2_up p is (m + 1) >> 1. */
+   p = m, Pos.div2 p is m >> 1 and div2_up p is (m + 1) >> 1. The node is
+   tested before the rest, because a packed rest of 1 is the node xH, whose
+   Pos.div2 is 1 and not m >> 1 = 0. */
 HOT int z_div2_core(int kz, struct cursor *c)
 {
   int kp = cur_node(c);
   if (kp < 0) return 0;
   if (kz == Z_POS) {
+    if (kp == POS_XH) {
+      part_imm(&R.part[0], Val_int(0));
+      return 1;
+    }
     if (c->packed) return part_word(&R.part[0], c->m >> 1, Z_POS);
-    if (kp == POS_XH) part_imm(&R.part[0], Val_int(0));
-    else part_share(&R.part[0], Z_POS, 0, 2);
+    part_share(&R.part[0], Z_POS, c->arg, c->depth + 1);
     return 1;
   }
-  if (c->packed) return part_word(&R.part[0], (c->m + 1) >> 1, Z_NEG);
   if (kp == POS_XH) return part_share(&R.part[0], Z_NEG, BINNUM_BASE_XH, 0);
-  if (kp == POS_XO) return part_share(&R.part[0], Z_NEG, 0, 2);
+  if (c->packed) return part_word(&R.part[0], (c->m + 1) >> 1, Z_NEG);
+  if (kp == POS_XO) return part_share(&R.part[0], Z_NEG, c->arg, c->depth + 1);
   cur_next(c);
   return pos_succ_core(c, Z_NEG, &R.part[0]);
 }
 
 static int r_z_div2(const value *a)
 {
-  int kz = z_node(a[0]);
   struct cursor c;
-  COUNT(words, 1);
+  int kz;
+  cur_init(&c, a[0], 0, 0);
+  kz = cur_node(&c);
   if (kz < 0) return 0;
   if (kz == Z_ZERO) {
     part_imm(&R.part[0], Val_int(0));
     return 1;
   }
-  cur_init(&c, Field(a[0], 0), 0, 1);
+  cur_next(&c);
   return z_div2_core(kz, &c);
 }
 
 /* Z.of_nat n: O -> Z0, S n0 -> Zpos (of_succ_nat n0), that is Zpos n. */
 static int r_z_of_nat(const value *a)
 {
-  int64_t k = nat_count(a[0]);
+  struct cursor c;
+  int64_t k;
+  cur_init(&c, a[0], 0, 0);
+  k = nat_length(&c);
   if (k < 0) return 0;
   return part_z_word(&R.part[0], (uint64_t)k);
 }
@@ -1174,14 +1263,12 @@ static int r_z_pos_div_eucl(const value *a)
 {
   uint64_t wa = 0, wb = 0, la, lb;
   struct cursor ca, cb;
-  int kb;
   cur_init(&ca, a[0], 0, 0);
   la = read_pos(&ca, &wa, &num_a);
   if (la == 0) return 0;
-  kb = z_node(a[1]);
-  COUNT(words, 1);
-  if (kb != Z_POS) return 0;
-  cur_init(&cb, Field(a[1], 0), 1, 1);
+  cur_init(&cb, a[1], 1, 0);
+  if (cur_node(&cb) != Z_POS) return 0;
+  cur_next(&cb);
   lb = read_pos(&cb, &wb, &num_b);
   if (lb == 0) return 0;
   R.nparts = 2;
@@ -1197,20 +1284,26 @@ static int r_z_pos_div_eucl(const value *a)
    eqb n' m'. It reads the node of n, then of m, at each step. */
 static int r_nat_eqb(const value *a)
 {
-  value n = a[0], m = a[1];
+  struct cursor x, y;
+  cur_init(&x, a[0], 0, 0);
+  cur_init(&y, a[1], 1, 0);
   for (;;) {
-    int kn = nat_node(n), km;
-    COUNT(words, 1);
+    int kn = cur_node_nat(&x), km;
     if (kn < 0) return 0;
-    km = nat_node(m);
-    COUNT(words, 1);
+    km = cur_node_nat(&y);
     if (km < 0) return 0;
-    if (kn == 0 || km == 0) {
+    if (kn == POS_XH || km == POS_XH) {
       part_imm(&R.part[0], kn == km ? BOOL_TRUE : BOOL_FALSE);
       return 1;
     }
-    n = Field(n, 0);
-    m = Field(m, 0);
+    if (x.packed && y.packed) {
+      int64_t ln = nat_packed_length(x.m), lm = nat_packed_length(y.m);
+      if (ln < 0 || lm < 0) return 0;
+      part_imm(&R.part[0], ln == lm ? BOOL_TRUE : BOOL_FALSE);
+      return 1;
+    }
+    cur_next(&x);
+    cur_next(&y);
   }
 }
 
@@ -1218,25 +1311,184 @@ static int r_nat_eqb(const value *a)
    S n', S m' -> leb n' m'. */
 static int r_nat_leb(const value *a)
 {
-  value n = a[0], m = a[1];
+  struct cursor x, y;
+  cur_init(&x, a[0], 0, 0);
+  cur_init(&y, a[1], 1, 0);
   for (;;) {
-    int kn = nat_node(n), km;
-    COUNT(words, 1);
+    int kn = cur_node_nat(&x), km;
     if (kn < 0) return 0;
-    if (kn == 0) {
+    if (kn == POS_XH) {
       part_imm(&R.part[0], BOOL_TRUE);
       return 1;
     }
-    km = nat_node(m);
-    COUNT(words, 1);
+    km = cur_node_nat(&y);
     if (km < 0) return 0;
-    if (km == 0) {
+    if (km == POS_XH) {
       part_imm(&R.part[0], BOOL_FALSE);
       return 1;
     }
-    n = Field(n, 0);
-    m = Field(m, 0);
+    if (x.packed && y.packed) {
+      int64_t ln = nat_packed_length(x.m), lm = nat_packed_length(y.m);
+      if (ln < 0 || lm < 0) return 0;
+      part_imm(&R.part[0], ln <= lm ? BOOL_TRUE : BOOL_FALSE);
+      return 1;
+    }
+    cur_next(&x);
+    cur_next(&y);
   }
+}
+
+/** The conversions between primitive 63-bit integers and binary numbers
+    (Corelib.Numbers.Cyclic.Int63.Uint63Axioms), and Z.pow.
+
+    On a 64-bit build a closed primitive integer is the immediate Val_long
+    of its value (rocq_uint63_native.h:11-14: Is_uint63 is Is_long, and
+    uint63_of_value is the value shifted right by one). That header defines
+    functions that are not static, so including it here would define them
+    twice in one program; the three macros below are its two definitions
+    and their inverse, for this file alone.
+
+    On a 32-bit build a primitive integer is a custom block
+    (rocq_uint63_emul.h:17), which these two routines do not read: their
+    table entries stay, because the table is append only, and every call is
+    refused. */
+#ifdef ARCH_SIXTYFOUR
+
+#define BINNUM_IS_UINT63(v) Is_long(v)
+#define BINNUM_UINT63_OF_VALUE(v) (((uint64_t)(v)) >> 1)
+#define BINNUM_UINT63_TO_VALUE(n) ((value)((((uint64_t)(n)) << 1) | 1))
+#define BINNUM_UINT63_MASK ((((uint64_t)1) << 63) - 1)
+
+/* Uint63Axioms.to_Z_rec n i {struct n}: O -> Z0; S n0 -> (if is_even i
+   then IntDef.Z.double else IntDef.Z.succ_double) (to_Z_rec n0 (lsr i 1)).
+   It reads n down to O, as the bytecode does, and reads i only where the
+   bytecode does, that is where n is not O. Each level takes the lowest bit
+   of i and shifts i right, and lsr shifts in zeros, so the result is the Z
+   of i mod 2^k for k the length of n, which is i itself for k >= 63. */
+static int r_uint63_to_Z_rec(const value *a)
+{
+  struct cursor c;
+  int64_t k;
+  uint64_t i;
+  cur_init(&c, a[0], 0, 0);
+  k = nat_length(&c);
+  if (k < 0) return 0;
+  if (k == 0) {
+    part_imm(&R.part[0], Val_int(0));
+    return 1;
+  }
+  if (!BINNUM_IS_UINT63(a[1])) return 0;
+  i = BINNUM_UINT63_OF_VALUE(a[1]);
+  if (k < 63) i &= ((uint64_t)1 << k) - 1;
+  return part_z_word(&R.part[0], i);
+}
+
+/* Uint63Axioms.of_pos_rec n p {struct p}: O -> 0; S n0 -> (xI p0 ->
+   lor (lsl (of_pos_rec n0 p0) 1) 1; xO p0 -> lsl (of_pos_rec n0 p0) 1;
+   xH -> 1).
+
+   The fixpoint is structural on p, so the bytecode needs the node of p at
+   every level, even at the level where n is O and the body does not look at
+   p: of_pos_rec 2 (xO (xO q)) with q an accumulator is a stuck term. The
+   routine therefore reads the node of p and then the node of n at each
+   level, and stops at the first O of n or xH of p. Below that level the
+   value is 0 (for O) or 1 (for xH); above it, each level shifts left by one
+   and adds its bit. lsl drops the bits above 63, so the value is
+   p mod 2^min(length of n, bits of p, 63). */
+static int r_uint63_of_pos_rec(const value *a)
+{
+  struct cursor cn, cp;
+  uint64_t bits = 0, t = 0, term, v;
+  cur_init(&cn, a[0], 0, 0);
+  cur_init(&cp, a[1], 1, 0);
+  for (;;) {
+    int kp = cur_node(&cp), kn;
+    if (kp < 0) return 0;
+    kn = cur_node_nat(&cn);
+    if (kn < 0) return 0;
+    if (kn == POS_XH) { term = 0; break; }
+    if (kp == POS_XH) { term = 1; break; }
+    if (cn.packed && cp.packed) {
+      /* Both rests are numbers: the levels below cost nothing. */
+      int64_t rest = nat_packed_length(cn.m);
+      uint64_t k;
+      if (rest < 0) return 0;
+      k = (uint64_t) rest;
+      if (k > 63) k = 63;
+      term = k >= binnum_bitlen(cp.m) ? cp.m : cp.m & (((uint64_t)1 << k) - 1);
+      break;
+    }
+    if (kp == POS_XI && t < 63) bits |= (uint64_t)1 << t;
+    t++;
+    cur_next(&cn);
+    cur_next(&cp);
+  }
+  v = t >= 63 ? bits : (term << t | bits);
+  part_imm(&R.part[0], BINNUM_UINT63_TO_VALUE(v & BINNUM_UINT63_MASK));
+  return 1;
+}
+
+#else
+
+static int r_uint63_to_Z_rec(const value *a)
+{
+  (void) a;
+  return 0;
+}
+
+static int r_uint63_of_pos_rec(const value *a)
+{
+  (void) a;
+  return 0;
+}
+
+#endif /* ARCH_SIXTYFOUR */
+
+/* The largest result of Z.pow, in bits. */
+#define BINNUM_POW_BITS 4096
+
+/* Z.pow x y: Z0 -> 1 and Zneg _ -> 0, both with x unread, as the bytecode
+   leaves it; Zpos p -> Z.pow_pos x p, that is Pos.iter (Z.mul x) 1 p, which
+   applies the multiplication by x exactly p times to 1, whatever order the
+   calls nest in, and so is x^p. The bytecode reads p to its end and x at
+   every one of those multiplications, and so does the routine.
+
+   One call allocates at most BINNUM_POW_BITS bits. With b the bits of |x|,
+   the result has at most b p bits, so the routine refuses b p larger than
+   BINNUM_POW_BITS, and it stops reading p as soon as p is larger. For
+   1 <= p <= BINNUM_POW_BITS, the test b > BINNUM_POW_BITS / p is exactly
+   b p > BINNUM_POW_BITS, with no product to overflow; it also refuses
+   b > BINNUM_POW_BITS with p >= 2. */
+static int r_z_pow(const value *a)
+{
+  struct cursor cx, cy;
+  int kx, ky, sign;
+  uint64_t p = 0, wx = 0, b;
+  cur_init(&cy, a[1], 1, 0);
+  ky = cur_node(&cy);
+  if (ky < 0) return 0;
+  if (ky == Z_NEG) {
+    part_imm(&R.part[0], Val_int(0));
+    return 1;
+  }
+  if (ky == Z_ZERO) return part_word(&R.part[0], 1, Z_POS);
+  cur_next(&cy);
+  if (!read_pos_small(&cy, BINNUM_POW_BITS, &p)) return 0;
+  cur_init(&cx, a[0], 0, 0);
+  kx = cur_node(&cx);
+  if (kx < 0) return 0;
+  if (kx == Z_ZERO) {
+    part_imm(&R.part[0], Val_int(0));
+    return 1;
+  }
+  cur_next(&cx);
+  b = read_pos(&cx, &wx, &num_a);
+  if (b == 0) return 0;
+  if (b > BINNUM_POW_BITS / p) return 0;
+  sign = kx == Z_NEG && (p & 1) ? Z_NEG : Z_POS;
+  if (b <= 64 && !num_set_u64(&num_a, wx)) return 0;
+  if (!num_pow(&num_a, p)) return 0;
+  return part_num(&R.part[0], &num_r, sign);
 }
 
 typedef int (*binnum_fn)(const value *);
@@ -1246,7 +1498,8 @@ static const binnum_fn binnum_fns[BINNUM_COUNT] = {
   r_pos_pred_double, r_pos_mul, r_pos_div2, r_pos_of_succ_nat,
   r_z_double, r_z_succ_double, r_z_pred_double, r_z_pos_sub, r_z_add, r_z_mul,
   r_z_compare, r_z_leb, r_z_ltb, r_z_eqb, r_z_div2, r_z_of_nat, r_z_pos_div_eucl,
-  r_nat_eqb, r_nat_leb
+  r_nat_eqb, r_nat_leb,
+  r_uint63_to_Z_rec, r_uint63_of_pos_rec, r_z_pow
 };
 
 static void count_call(int k, int site, int ok)
@@ -1283,27 +1536,89 @@ const struct binnum_result *rocq_binnum_run(int k, int n, const value *args, int
 void rocq_binnum_count_expansion(int where, uint64_t nodes)
 {
   if (rocq_binnum_stats) {
-    binnum_expansions[where != 0]++;
-    binnum_expansion_nodes[where != 0] += nodes;
+    if (where < 0 || where > 2) abort();
+    binnum_expansions[where]++;
+    binnum_expansion_nodes[where] += nodes;
   }
 }
 
-/* The chain of the packed block v, for whd_val (kernel/vmvalues.ml): its
-   head, a fresh block of tag 1 or 2, as SWITCH builds it. The block itself
-   is not changed. */
+/* The chain of the packed block v, for whd_val (kernel/vmvalues.ml): the
+   chain it keeps when it has one, and otherwise a fresh head, a block of
+   tag 1 or 2, as SWITCH builds it. The block itself is not changed. */
 value rocq_binnum_expand(value v)
 {
   CAMLparam1(v);
   CAMLlocal2(res, block);
   uint64_t n = binnum_packed_number(v);
-  unsigned i, nodes = binnum_bitlen(n) - 1;
+  value kept = binnum_packed_chain(v);
+  unsigned i, nodes;
+  if (kept != 0) CAMLreturn(kept);
+  nodes = binnum_bitlen(n) - 1;
   res = Val_int(0);
   for (i = nodes; i-- > 0;) {
-    block = caml_alloc_small(1, (n >> i) & 1 ? POS_XI : POS_XO);
+    block = caml_alloc_small(1, BINNUM_NODE_TAG(n, i));
     Field(block, 0) = res;
     res = block;
   }
   rocq_binnum_count_expansion(1, nodes);
+  CAMLreturn(res);
+}
+
+/* Packs the chain v into a block of tag BINNUM_PACKED_TAG and size 2 whose
+   field 1 is v itself. It returns v unchanged when v is not a chain of 1 to
+   61 nodes, or when the packing of literals is off.
+   Vmvalues.val_of_str_const calls it on the subterms of the VM value of a
+   structured constant (Const_val alone), from the outside in, so v never
+   holds a packed block.
+
+   The number is derived with the cursor that the routines read with, and
+   the expansion of that number is then compared with the chain, node by
+   node. Fields 0 and 1 that disagreed would make the routines (which read
+   field 0) and the bytecode (which reads field 1) compute different values,
+   so a disagreement stops the process. Structured constants are cached
+   (Vmsymtable.slot_for_str_cst), so this runs once per literal. */
+value rocq_binnum_pack_literal(value v)
+{
+  CAMLparam1(v);
+  CAMLlocal1(res);
+  uint64_t n = 0, i = 0, j;
+  value w;
+  int saved;
+  if (!binnum_packlit || !Is_block(v)) CAMLreturn(v);
+  /* The nodes this reads belong to no routine call, so they are not counted
+     as the words of one. */
+  saved = rocq_binnum_stats;
+  rocq_binnum_stats = 0;
+  {
+    struct cursor c;
+    cur_init(&c, v, 0, 0);
+    for (;;) {
+      int k = cur_node(&c);
+      if (k < 0 || c.packed) { i = 0; break; }
+      if (k == POS_XH) break;
+      if (k == POS_XI) n |= (uint64_t)1 << i;
+      i++;
+      if (i > 61) { i = 0; break; }
+      cur_next(&c);
+    }
+  }
+  rocq_binnum_stats = saved;
+  if (i == 0) CAMLreturn(v);
+  n |= (uint64_t)1 << i;
+  w = v;
+  for (j = 0; j < i; j++) {
+    if (!Is_block(w) || Wosize_val(w) != 1 || Tag_val(w) != BINNUM_NODE_TAG(n, j))
+      abort();
+    w = Field(w, 0);
+  }
+  if (w != Val_int(0)) abort();
+  res = caml_alloc_small(2, BINNUM_PACKED_TAG);
+  Field(res, 0) = Val_long(n);
+  Field(res, 1) = v;
+  if (rocq_binnum_stats) {
+    binnum_literals++;
+    binnum_literal_nodes += i;
+  }
   CAMLreturn(res);
 }
 
@@ -1329,18 +1644,27 @@ value rocq_binnum_set_pack(value on)
   return Val_unit;
 }
 
+value rocq_binnum_set_packlit(value on)
+{
+  binnum_packlit = ROCQ_BINNUM_PACKING && Bool_val(on);
+  return Val_unit;
+}
+
 /* Of each routine, in routine order: [entry calls; entry refusals; entry
    words; site calls; site refusals; site words; arguments; packed
    arguments; arguments with a packed tail; packed results]; then [SWITCH
-   expansions; their nodes; whd_val expansions; their nodes; packing]. */
+   expansions; their nodes; whd_val expansions; their nodes; PROJ
+   expansions; their nodes; literals packed; their nodes; packing of
+   results; packing of literals]. */
 #define BINNUM_ROUTINE_COUNTERS 10
+#define BINNUM_TAIL_COUNTERS 10
 
 value rocq_binnum_counters(value unit)
 {
   CAMLparam1(unit);
   CAMLlocal1(res);
   int k, s, b;
-  res = caml_alloc(BINNUM_ROUTINE_COUNTERS * BINNUM_COUNT + 5, 0);
+  res = caml_alloc(BINNUM_ROUTINE_COUNTERS * BINNUM_COUNT + BINNUM_TAIL_COUNTERS, 0);
   for (k = 0; k < BINNUM_COUNT; k++) {
     b = BINNUM_ROUTINE_COUNTERS * k;
     for (s = 0; s < 2; s++) {
@@ -1354,11 +1678,14 @@ value rocq_binnum_counters(value unit)
     Store_field(res, b + 9, Val_long(binnum_packed_results[k]));
   }
   b = BINNUM_ROUTINE_COUNTERS * BINNUM_COUNT;
-  Store_field(res, b, Val_long(binnum_expansions[0]));
-  Store_field(res, b + 1, Val_long(binnum_expansion_nodes[0]));
-  Store_field(res, b + 2, Val_long(binnum_expansions[1]));
-  Store_field(res, b + 3, Val_long(binnum_expansion_nodes[1]));
-  Store_field(res, b + 4, Val_long(binnum_pack));
+  for (s = 0; s < 3; s++) {
+    Store_field(res, b + 2 * s, Val_long(binnum_expansions[s]));
+    Store_field(res, b + 2 * s + 1, Val_long(binnum_expansion_nodes[s]));
+  }
+  Store_field(res, b + 6, Val_long(binnum_literals));
+  Store_field(res, b + 7, Val_long(binnum_literal_nodes));
+  Store_field(res, b + 8, Val_long(binnum_pack));
+  Store_field(res, b + 9, Val_long(binnum_packlit));
   CAMLreturn(res);
 }
 
@@ -1376,9 +1703,11 @@ value rocq_binnum_reset_counters(value unit)
     binnum_args_tail[k] = 0;
     binnum_packed_results[k] = 0;
   }
-  for (s = 0; s < 2; s++) {
+  for (s = 0; s < 3; s++) {
     binnum_expansions[s] = 0;
     binnum_expansion_nodes[s] = 0;
   }
+  binnum_literals = 0;
+  binnum_literal_nodes = 0;
   return Val_unit;
 }

@@ -22,7 +22,10 @@
 #  (e) inputs of both routines with a free variable: the routine refuses
 #      them and the bytecode computes, with exact counts; a partial
 #      application gets its last argument later and hits;
-#  (f) the -j 2 run of (a): each worker prints its own counters.
+#  (f) the -j 2 run of (a): each worker prints its own counters;
+#  (g) the packing of literals on: the same calls and refusals. The words
+#      of (a) to (f) are those of chain literals, so those checks run with
+#      ROCQ_VM_BINNUM=-packlit.
 set -eu
 : "${BIN:=$(dirname "$(command -v rocq)")/}"
 export PATH="$BIN:$PATH"
@@ -310,10 +313,21 @@ done
 fail() { >&2 echo "FAILURE: $*"; exit 1; }
 
 # chk LOG ARGS...: rocqchk with the counters on; its output goes to LOG.
+# The words counted below are those of chain literals: ROCQ_VM_BINNUM
+# defaults to -packlit here, since a packed literal is one word (see (g)).
 chk() {
   local log=$1; shift
-  ROCQ_VM_BINNUM_STATS=${STATS:-1} rocqchk -silent -bytecode-compiler yes -R "$d" "" "$@" \
+  ROCQ_VM_BINNUM=${ROCQ_VM_BINNUM--packlit} ROCQ_VM_BINNUM_STATS=${STATS:-1} \
+    rocqchk -silent -bytecode-compiler yes -R "$d" "" "$@" \
     > "$d/$log" 2>&1 || { cat "$d/$log" >&2; fail "rocqchk $* failed"; }
+}
+
+# per_routine LOG FIELD: "routine value" lines of FIELD, summed over every
+# process.
+per_routine() {
+  awk -v f="$2" '$2 == "routine" {
+      for (i = 4; i <= NF; i++) { split($i, kv, "="); if (kv[1] == f) s[$3] += kv[2] } }
+    END { for (r in s) print r, s[r] }' "$d/$1" | sort
 }
 
 # stat LOG ROUTINE FIELD: FIELD of ROUTINE, summed over every process.
@@ -504,5 +518,18 @@ expect "(f) Pos.eqb hits" "$(stat f.log Pos.eqb hits)" -eq "$N_EQB"
 expect "(f) binds" "$(recog f.log binds)" -eq "$binds_a"
 pids=$(awk '$2 == "routine" { print $1 }' "$d/f.log" | sort -u | wc -l)
 expect "(f) processes that print counters" "$pids" -ge 3
+
+# (g) The packing of literals on, as by default (rocqchk_binnum_literal.sh
+# tests it): a literal is then read as one packed word, which changes the
+# words above, but no routine makes or refuses another call.
+for lib in Diff Copy Bad Free0 Free1 Free65 FreeRec EqP1 EqP1f EqQ1 EqQ1f EqQ65 EqRec Partial; do
+  chk "g-$lib.log" -norec "$lib"
+  ROCQ_VM_BINNUM_STATS=1 rocqchk -silent -bytecode-compiler yes -R "$d" "" -norec "$lib" \
+    > "$d/g-$lib-lit.log" 2>&1 || { cat "$d/g-$lib-lit.log" >&2; fail "(g) rocqchk -norec $lib failed"; }
+  for f in entry-calls entry-refusals site-calls site-refusals; do
+    [ "$(per_routine "g-$lib.log" $f)" = "$(per_routine "g-$lib-lit.log" $f)" ] \
+      || fail "(g) $lib: the $f of the routines change with the packing of literals"
+  done
+done
 
 exit 0
