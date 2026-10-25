@@ -1171,7 +1171,13 @@ let rec subterm_specif cache ?evars renv stack t =
           (nbfix-i, lazy (Subterm(Int.Set.empty,Strict,recargs))) in
         let decrArg = recindxs.(i) in
         let theBody = bodies.(i)   in
-        let sign,strippedBody = split_struct_arg ?evars renv.env decrArg theBody in
+        (* Reduce in [renv'.env], where the body's own declarations are, for
+           the reason given at the call of [find_uniform_parameters]. A body
+           with too few abstractions gives no subterm information rather than
+           an anomaly: the guard condition then refuses what depends on it. *)
+        match split_struct_arg ?evars renv'.env decrArg theBody with
+        | exception Invalid_argument _ -> Not_subterm
+        | sign, strippedBody ->
                    (* pushing the fix parameters *)
         let stack' = push_stack_closures renv l stack in
         let renv'' = push_ctxt_renv renv' sign in
@@ -1524,7 +1530,15 @@ let check_one_fix cache ?evars renv recpos trees def =
                 (pi1 recdef) k (push_rec_types recdef renv.env)
                 (judgment_of_fixpoint recdef)
             in
-            let nuniformparams = find_uniform_parameters illformed ?evars renv.env recindxs (List.length stack) bodies in
+            (* The bodies live under the block's own declarations, so the
+               analysis reduces them in [renv'.env], the environment the
+               kernel checks them in. With [renv.env], which is short by
+               [nbodies] declarations and is what upstream passes, every
+               lookup that [split_struct_arg]'s reduction makes is shifted,
+               and a body whose head resolves to a different local definition
+               is analysed in place of the real one. That admits closed proofs
+               of False: test-suite/failure/guard_uniform_params_envshift.v. *)
+            let nuniformparams = find_uniform_parameters illformed ?evars renv'.env recindxs (List.length stack) bodies in
             let bodies = drop_uniform_parameters (fun () -> illformed i) nuniformparams bodies in
             let fix_stack = filter_fix_stack_domain cache ?evars (redex_level rs) decrArg stack nuniformparams in
             let fix_stack = if List.length stack > decrArg then List.firstn (decrArg+1) fix_stack else fix_stack in
