@@ -1954,6 +1954,7 @@ let rec codomain_is_coind ?evars env c =
 let check_one_cofix cache ?evars env nbfix def deftype =
   let rec check_rec_call env alreadygrd n tree vlra t =
     if not (noccur_with_meta n nbfix t) then
+      let () = check_erased env alreadygrd n tree vlra t in
       let c,args = decompose_app_list (whd_all ?evars env t) in
       match kind c with
         | Rel p when  n <= p && p < n+nbfix ->
@@ -2031,7 +2032,53 @@ let check_one_cofix cache ?evars env nbfix def deftype =
         | Rel _ | Var _ | Sort _ | Cast _ | Prod _ | LetIn _ | App _ | Const _
           | Ind _ | Fix _ | Proj _ | Int _ | Float _ | String _
           | Array _ ->
-           raise (CoFixGuardError (env,NotGuardedForm t)) in
+           raise (CoFixGuardError (env,NotGuardedForm t))
+
+  (* The analysis above runs on [whd_all t] while the kernel stores [t] as
+     written, so every position that head reduction ERASES is checked by
+     nothing and is still evaluated later — the co-recursive form of the
+     binder-prefix defect in [check_one_fix]. Walk the same head-reduction
+     path and submit each erased position to the ordinary analysis, so that
+     a definition is refused exactly when the erased material would have
+     been refused had the reduction kept it. Three positions are erased:
+     the value of a [let] whose binder the body does not read, the argument
+     of a beta redex whose binder the body does not read (the head may need
+     a delta step before the abstraction shows), and the branches a match
+     on a known constructor does not select. A [Cast]'s type is not a
+     position: it is erased as a TYPE, which no evaluation turns into a
+     recursive call. *)
+  and check_erased env alreadygrd n tree vlra t =
+    match kind t with
+    | Cast (c, _, _) -> check_erased env alreadygrd n tree vlra c
+    | LetIn (_, v, _, b) ->
+      let () = if noccurn 1 b then check_rec_call env alreadygrd n tree vlra v in
+      check_erased env alreadygrd n tree vlra (subst1 v b)
+    | App (f, args) ->
+      let f = whd_all ?evars env f in
+      (match kind f with
+       | Lambda _ -> check_erased_beta env alreadygrd n tree vlra f (Array.to_list args)
+       | _ -> ())
+    | Case (ci, u, pms, p, iv, tm, br) ->
+      let (ci, _, _iv, tm, brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
+      let hd, cargs = decompose_app_list (whd_all ?evars env tm) in
+      (match kind hd with
+       | Construct (((_, i), _) as cstr) ->
+         let () = Array.iteri (fun j b ->
+             if not (Int.equal j (i-1)) then check_rec_call env alreadygrd n tree vlra b)
+             brs in
+         check_erased env alreadygrd n tree vlra (apply_branch cstr cargs ci brs)
+       | _ -> ())
+    | _ -> ()
+
+  and check_erased_beta env alreadygrd n tree vlra f args =
+    match args with
+    | [] -> check_erased env alreadygrd n tree vlra f
+    | a :: rest ->
+      match kind f with
+      | Lambda (_, _, b) ->
+        let () = if noccurn 1 b then check_rec_call env alreadygrd n tree vlra a in
+        check_erased_beta env alreadygrd n tree vlra (subst1 a b) rest
+      | _ -> () in
 
   let ((mind, _),_) = codomain_is_coind ?evars env deftype in
   let vlra = lookup_subterms env mind in
