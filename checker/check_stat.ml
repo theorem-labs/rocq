@@ -50,10 +50,13 @@ let admitted = ref []
 let record_admitted name =
   if !unsafe_flags <> None then admitted := name :: !admitted
 
+(* Printed after the last section, with the blank line that separates
+   sections, so that a summary with no admitted library is byte for byte what
+   it was before this list existed. *)
 let pr_admitted () = match List.rev !admitted with
   | [] -> mt ()
   | libs ->
-    str "* " ++
+    fnl() ++ str "* " ++
     hv 2 (str "Libraries admitted without checking, so the sections above cannot \
                see unsafe flags inside their sealed modules:" ++ fnl() ++
           prlist_with_sep fnl str libs) ++ fnl() ++ fnl()
@@ -208,7 +211,7 @@ let print_context env opac = match opac with
     str "* " ++ hov 0 (pr_type_in_type env flags ++ fnl()) ++ fnl() ++
     str "* " ++ hov 0 (pr_unguarded env flags ++ fnl()) ++ fnl() ++
     str "* " ++ hov 0 (pr_nonpositive env flags ++ fnl()) ++ fnl() ++
-    str "* " ++ hov 0 (pr_indices_matter env flags ++ fnl()) ++ fnl() ++
+    str "* " ++ hov 0 (pr_indices_matter env flags ++ fnl()) ++
     pr_admitted ())
     )
 
