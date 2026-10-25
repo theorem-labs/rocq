@@ -25,7 +25,6 @@ type t =
   ; glob_out    : glob_output option
 
   ; proof_record : bool
-  ; proof_record_tables : bool
 
   ; output_context : bool
   }
@@ -41,7 +40,6 @@ let default =
   ; glob_out = None
 
   ; proof_record = false
-  ; proof_record_tables = false
 
   ; output_context = false
   }
@@ -137,8 +135,6 @@ let parse arglist : t =
         (* Per-proof record (BET-84) *)
         |"-proof-record" ->
           { oval with proof_record = true }
-        |"-proof-record-tables" ->
-          { oval with proof_record = true; proof_record_tables = true }
 
         (* Rest *)
         | s ->

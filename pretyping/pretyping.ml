@@ -60,7 +60,12 @@ let add_bidirectionality_hint env gr n =
   bidi_hints := GlobRefMap.add env gr n !bidi_hints
 
 let get_bidirectionality_hint env gr =
-  GlobRefMap.find_opt env gr !bidi_hints
+  let hint = GlobRefMap.find_opt env gr !bidi_hints in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"12" ~channel:"bidirectionality_hint"
+      ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print gr))
+      ~value:(fun () -> Option.map (Proof_recorder.digest ~what:"bidirectionality_hint") hint);
+  hint
 
 let clear_bidirectionality_hint env gr =
   bidi_hints := GlobRefMap.remove env gr !bidi_hints

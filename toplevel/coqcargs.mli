@@ -38,10 +38,6 @@ type t =
 
   ; proof_record : bool
   (** [-proof-record]: write a {!Proof_record} file beside each [.vo]. *)
-  ; proof_record_tables : bool
-  (** [-proof-record-tables]: record, at each proof's start, a digest of
-      every hint database and typeclass table, not only of the ones the
-      proof searches. Implies [-proof-record]. *)
 
   ; output_context : bool
   }

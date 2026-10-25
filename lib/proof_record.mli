@@ -184,3 +184,11 @@ val digest_value : ?locs:Loc.source -> 'a -> string
     Raises [Unhashable] on a closure, an unforced lazy value, an object,
     an abstract block, a cycle, or a value of more than 2{^25} distinct
     blocks. *)
+
+val reset_memo : unit -> unit
+(** Empties the digest memo. It holds a digest for every block of at least
+    32 blocks that {!digest_value} has walked, so that a persistent value
+    digested again after a change costs its delta and not its whole size.
+    {!Proof_recorder.stop} calls this, so a compile without the option holds
+    nothing. A value that is digested must not be mutated in place
+    afterwards: its memoized digest is the one before the mutation. *)

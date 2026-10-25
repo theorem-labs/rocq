@@ -176,7 +176,25 @@ let vo_path =
     (R.path_of_vo "dir/Foo.vo" = "dir/Foo.proof-record.jsonl"
      && R.path_of_vo "Foo.vo" = "Foo.proof-record.jsonl")
 
+(* The memo of blocks lives from one call to the next, so a persistent value
+   digested again after a change costs its delta. It must not change a digest:
+   the same value digested with an empty memo and with a full one is the same,
+   and a big value digested once and shared is the digest of its copy. *)
+let memo =
+  mk_bool_test "proof-record-digest-memo"
+    "the memo kept between calls does not change a digest"
+    (let big () = List.init 200 (fun i -> (i, string_of_int i)) in
+     let a = big () in
+     let first = R.digest_value a in
+     R.reset_memo ();
+     let again = R.digest_value a in
+     let fresh = R.digest_value (big ()) in
+     first = again && first = fresh
+     && R.digest_value (a, a) = R.digest_value (a, big ())
+     && R.digest_value (a, a) <> R.digest_value (a, List.tl (big ())))
+
 let tests =
-  [ roundtrip; bad_input; toolchain_key_fields; sharing; kinds; deep; locations; unhashable; vo_path ]
+  [ roundtrip; bad_input; toolchain_key_fields; sharing; kinds; deep; locations; unhashable; memo;
+    vo_path ]
 
 let _ = run_tests __FILE__ log_out_ch tests

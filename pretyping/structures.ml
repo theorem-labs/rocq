@@ -94,6 +94,15 @@ let record_structure ind v =
         | None -> None
         | Some s -> Some (Proof_recorder.digest_cached ~what:"structure" s))
 
+let record_projection cst v =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"structure_projection"
+      ~key:(fun () -> Names.Constant.to_string cst)
+      ~value:(fun () -> match v with
+          | None -> None
+          | Some s ->
+            Some (Proof_recorder.digest_cached ~what:"structure_projection" s))
+
 let mem env ind =
   let res = Environ.QInd.Map.find_opt env ind !structure_table in
   record_structure ind res;
@@ -109,14 +118,18 @@ let find_projections env indsp =
   List.map (fun { proj_body } -> proj_body)
 
 let find_from_projection env cst =
-  Environ.QConstant.Map.find env cst !projection_table
+  let res = Environ.QConstant.Map.find_opt env cst !projection_table in
+  record_projection cst res;
+  match res with Some s -> s | None -> raise Not_found
 
 let projection_nparams env cst =
-  (Environ.QConstant.Map.find env cst !projection_table).nparams
+  (find_from_projection env cst).nparams
 
 let is_projection cst =
   let env = Global.env () in
-  Environ.QConstant.Map.mem env cst !projection_table
+  let res = Environ.QConstant.Map.find_opt env cst !projection_table in
+  record_projection cst res;
+  res <> None
 
 let projection_number env cst =
   let s = find_from_projection env cst in
@@ -490,10 +503,21 @@ let prim_table =
 let register p c =
   prim_table := Cmap_env.add c p !prim_table
 
-let mem c = Cmap_env.mem c !prim_table
+let record_primitive_projection c v =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"primitive_projection"
+      ~key:(fun () -> Names.Constant.to_string c)
+      ~value:(fun () -> match v with
+          | None -> None
+          | Some p ->
+            Some (Proof_recorder.digest_cached ~what:"primitive_projection" p))
 
 let find_opt c =
-  try Some (Cmap_env.find c !prim_table) with Not_found -> None
+  let res = try Some (Cmap_env.find c !prim_table) with Not_found -> None in
+  record_primitive_projection c res;
+  res
+
+let mem c = Option.has_some (find_opt c)
 
 let find_opt_with_relevance (c,u) =
   find_opt c |>

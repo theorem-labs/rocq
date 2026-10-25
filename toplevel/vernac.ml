@@ -150,7 +150,32 @@ let load_vernac_core ~echo ~check ~state ?source file =
                         ~detail:(Pp.string_of_ppcmds (Topfmt.pr_cmd_header ast))
                     | exception e when CErrors.noncritical e -> ()
                   end;
-                  Flags.silently (interp_vernac ~check ~state) ast)) ())
+                  let v = Flags.silently (interp_vernac ~check ~state) ast in
+                  (* The recorder is not part of [Vernacstate], so a command
+                     that drops or restores the proof stack behind its back
+                     ([Abort All], a reset, a rewind, [Fail]) would leave it
+                     holding a proof that no longer exists, and every proof
+                     after it in the file would be taken for a nested one and
+                     lose its entry. One test a sentence catches that. With no
+                     proof left there is no entry to mark, so what the recorder
+                     holds is dropped and writes nothing; with other proofs
+                     open but not the one it holds, the entry says that it
+                     cannot be trusted. *)
+                  (match Proof_recorder.current_name () with
+                   | None -> ()
+                   | Some held ->
+                     match Vernacstate.Declare.get_all_proof_names () with
+                     | [] -> Proof_recorder.drop_all_proofs ()
+                     | live ->
+                       let base = match String.rindex_opt held '.' with
+                         | None -> held
+                         | Some i -> String.sub held (i + 1) (String.length held - i - 1)
+                       in
+                       if not (List.exists (fun id -> String.equal base (Names.Id.to_string id)) live)
+                       then
+                         Proof_recorder.ineligible ~reason:"recorder_desync"
+                           ~detail:(held ^ " vs " ^ String.concat "," (List.map Names.Id.to_string live)));
+                  v)) ())
           ()
           (fun () ->
              let tend = System.get_time () in

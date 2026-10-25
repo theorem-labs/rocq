@@ -51,15 +51,26 @@ val start :
   unit
 (** Turns the recorder on and starts the file's clocks. [toolchain] is
     called now for the header, and at each proof's start for its
-    [toolchain_key] (a [Require] moves it). With [tables_at_start], each
-    proof's [start_tables] is filled from the functions given to
-    {!register_tables}. *)
+    [toolchain_key] (a [Require] moves it). [tables_at_start] is the header
+    field of the same name; the tables themselves are always sampled. *)
 
 val register_tables : (unit -> Proof_record.read list) -> unit
 (** Adds a source of start-of-proof table digests (hint databases, typeclass
-    tables). Called at each proof's start, and only when the compile ran
-    with [tables_at_start]. A no-op otherwise, so its argument is never
-    called. *)
+    tables, the Rocqlib table). Every registered function runs at each
+    proof's start and its reads become the proof's [start_tables], which a
+    matcher compares exactly like [reads]. Use it for a table with many read
+    points, or with read points behind a process-wide cache that no choke
+    point can reach. *)
+
+val set_library_digest : (string -> string option) -> unit
+(** Installs the lookup from a library's name to its [.vo] digest. The kernel
+    records a constant of a required library by that digest instead of by its
+    body. Without it every constant is digested, which costs a megabyte of
+    term for each memory image a registration file requires. *)
+
+val library_digest : string -> string option
+(** The digest the toplevel installed for that library, [None] for the
+    library being compiled and for one that is not loaded. *)
 
 val write : string -> unit
 (** Writes the record to that path and turns the recorder off. Call it
@@ -93,6 +104,20 @@ val close_proof : closer:string -> kernel_check:bool -> unit
     since {!open_proof}. [kernel_check] says whether the kernel typed the
     proof at this closer. Call it after the declaration, inside
     {!without_recording}. *)
+
+val drop_proof : unit -> unit
+(** Ends the innermost open proof and writes NO entry: the [Abort] of a
+    proof, which declares nothing. Without it the recorder keeps the aborted
+    proof open and every proof after it in the file is taken for a nested one
+    and loses its entry. *)
+
+val drop_all_proofs : unit -> unit
+(** {!drop_proof} for every open proof at once ([Abort All], a reset). *)
+
+val set_name : string -> unit
+(** Replaces the name of the open outermost proof. [Save id] declares [id],
+    not the name the proof was opened with, and the record's [name] is what a
+    matcher joins to the opaque term. A no-op inside a nested proof. *)
 
 (** {6 Writes} *)
 
