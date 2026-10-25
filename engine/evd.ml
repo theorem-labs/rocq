@@ -712,9 +712,9 @@ let () = Proof_recorder.register_tables (fun () ->
     [ Proof_record.{ row = "18"; channel = "counter_start"; key = evar_counter_summary_name;
                      value = Some (string_of_int !evar_ctr) } ])
 
-(* BET-84 P3: a replayed proof's tactics make no evar, so replay puts the
-   counter where they would have left it. *)
-let () = Proof_replay.register_counter "evar" ~get:(fun () -> !evar_ctr) ~set:(fun n -> evar_ctr := n)
+(* BET-84 P3: a Summary counter, which the STM rolls back when a proof
+   closes; replay leaves it alone ([Proof_replay.register_summary_counter]). *)
+let () = Proof_replay.register_summary_counter "evar"
 
 let new_untyped_evar () =
   incr evar_ctr;

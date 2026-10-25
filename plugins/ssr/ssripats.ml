@@ -378,11 +378,9 @@ let () =
       [ Proof_record.{ row = "18"; channel = "counter_start"; key = "ssr_abstract_id";
                        value = Some (Proof_recorder.digest ~what:"ssr_abstract_id" !ssr_abstract_id) } ])
 
-(* BET-84 P3: an SSR abstract variable's name holds this counter, so a
-   replayed proof must leave it where its tactics would have. *)
-let () =
-  Proof_replay.register_counter "ssr_abstract_id"
-    ~get:(fun () -> !ssr_abstract_id) ~set:(fun n -> ssr_abstract_id := n)
+(* BET-84 P3: a Summary counter, which the STM rolls back when a proof
+   closes; replay leaves it alone ([Proof_replay.register_summary_counter]). *)
+let () = Proof_replay.register_summary_counter "ssr_abstract_id"
 
 let mk_abstract_id =
   let open Rocqlib in

@@ -60,7 +60,23 @@ let counter_io : (string, (unit -> int) * (int -> unit)) Hashtbl.t = Hashtbl.cre
 
 let register_counter name ~get ~set = Hashtbl.replace counter_io name (get, set)
 
-let can_advance name = Hashtbl.mem counter_io name
+(* A counter kept in the Summary ([Summary.ref]): the evar and meta
+   counters, the two hint counters, the SSR abstract counter. The STM
+   rolls such a counter back with the rest of the Summary when the proof
+   closes, so stock keeps only what the closing itself made. Measured on
+   speed-r1, 2026-10-25: a proof whose record shows the evar counter
+   advanced by 4 (meta by 2) left the next proof starting 2 above its own
+   start in stock, the statement's and the closing's share. Moving such a
+   counter after a replay put it at 5 where stock has 2, and every proof
+   after a replayed one missed on its [counter_start] read. So replay
+   leaves these counters alone: the declaration of the stored term makes
+   the closing's share itself. If a case rolls back differently, the next
+   proof's [counter_start] read differs and that proof runs its tactics. *)
+let summary_counters : (string, unit) Hashtbl.t = Hashtbl.create 8
+
+let register_summary_counter name = Hashtbl.replace summary_counters name ()
+
+let can_advance name = Hashtbl.mem counter_io name || Hashtbl.mem summary_counters name
 
 (* The counters of the proof being replayed: where each stood when the
    proof opened, and the advance its record holds. The start is taken at

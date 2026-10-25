@@ -142,6 +142,12 @@ val register_counter : string -> get:(unit -> int) -> set:(int -> unit) -> unit
     proof that moved it is never replayed. The universe and sort counters
     are not registered: the stored term carries them. *)
 
+val register_summary_counter : string -> unit
+(** A counter kept in the Summary, which the STM rolls back when a proof
+    closes: replay leaves it where it is, as stock's rollback does, and a
+    proof that moved it can still be replayed. The next proof's
+    [counter_start] read checks that the rollback came out the same. *)
+
 val apply_counters : unit -> unit
 (** Puts each counter of the proof just replayed where its tactics would
     have left it. Call it after the declaration. A no-op with no hit. *)

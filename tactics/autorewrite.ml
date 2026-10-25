@@ -446,9 +446,7 @@ let () =
                       value = Some (string_of_int !rewrite_hint_counter) }])
 
 (* BET-84 P3: see the hint counter in [Hints]. *)
-let () =
-  Proof_replay.register_counter "rewrite_hint_counter"
-    ~get:(fun () -> !rewrite_hint_counter) ~set:(fun n -> rewrite_hint_counter := n)
+let () = Proof_replay.register_summary_counter "rewrite_hint_counter"
 
 let fresh_key () =
   let cur = incr rewrite_hint_counter; !rewrite_hint_counter in
