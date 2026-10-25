@@ -595,11 +595,18 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
   let ch_of_path = SI.summary_name ^ "/of_path"
   let ch_exists = SI.summary_name ^ "/exists"
 
+  (* BET-84: ONE value for each of this nametab's channels. The record sites
+     below and the replay evaluators at the end of this module both call it,
+     so a lookup's value is never computed two ways
+     (dev/tools/census/replay_channels.py). A lookup that finds nothing
+     records [None], which is a value the record can hold. *)
+  let recorded_lookup lookup =
+    match lookup () with
+    | v -> Some (Proof_recorder.digest ~what:SI.summary_name v)
+    | exception Not_found -> None
+
   let record ~channel ~id key value =
-    Proof_recorder.read_by ~row:"6" ~channel ~id ~key
-      ~value:(fun () -> match value () with
-          | v -> Some (Proof_recorder.digest ~what:SI.summary_name v)
-          | exception Not_found -> None)
+    Proof_recorder.read_by ~row:"6" ~channel ~id ~key ~value:(fun () -> recorded_lookup value)
 
   (* The qualid's location is not part of its identity: one name read twice
      in a proof is one read. *)
@@ -665,12 +672,12 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
      answers [Unknown], and the proof runs its tactics. *)
   let () =
     let value f =
-      match f () with
-      | v ->
-        (match Proof_record.digest_value v with
-         | d -> Proof_replay.Value (Some d)
-         | exception Proof_record.Unhashable _ -> Proof_replay.Unknown)
-      | exception Not_found -> Proof_replay.Value None
+      (* The same function the record sites call, so the two sides cannot
+         drift apart. A value this nametab cannot digest answers Unknown,
+         and the proof runs its tactics. *)
+      match recorded_lookup f with
+      | v -> Proof_replay.Value v
+      | exception Proof_record.Unhashable _ -> Proof_replay.Unknown
     in
     let qualid key =
       let qid = Libnames.qualid_of_string key in
