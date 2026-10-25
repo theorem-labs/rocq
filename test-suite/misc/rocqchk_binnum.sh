@@ -19,9 +19,10 @@
 #      variable only (a call argument, a match scrutinee) do not bind, each
 #      for the reason the recognizer gives, and their own results still
 #      check;
-#  (e) inputs of both routines with a free variable: the routine refuses
-#      them and the bytecode computes, with exact counts; a partial
-#      application gets its last argument later and hits;
+#  (e) inputs of both routines with a free variable: where the bytecode
+#      inspects it, the routine refuses and the bytecode computes; where
+#      the bytecode stops before it, the routine hits; with exact counts. A
+#      partial application gets its last argument later and hits;
 #  (f) the -j 2 run of (a): each worker prints its own counters;
 #  (g) the packing of literals on: the same calls and refusals. The words
 #      of (a) to (f) are those of chain literals, so those checks run with
@@ -432,10 +433,12 @@ expect "(d) Pos.compare_cont calls" "$(stat d.log Pos.compare_cont calls)" -eq 0
 # running its body on fresh variables (mk_fix_body, kernel/vmvalues.ml): the
 # routine refuses that call at its first argument.
 #
-# Words read: Pos.compare_cont reads 1 for r, then 2 per step (one node of
-# each number) up to and including the step that finds the variable, and the
-# rest of the longer number if the other ends first. Pos.eqb reads 2 per
-# step.
+# Words read (since slice 7 of the design, misc/rocqchk_binnum_inspect.sh):
+# both routines read what the bytecode inspects, 2 per step (one node of
+# each number) up to and including the step that finds the variable, or
+# where one number ends, and nothing below. Pos.compare_cont reads r (1)
+# only when the result is r itself: both numbers end at the same step with
+# no difference. Pos.eqb stops at the first step whose nodes differ.
 #
 # Each occurrence of l is a call at a call site: BINNUMCALL runs the routine
 # there first. When it refuses, the call runs, and the routine runs again at
@@ -458,42 +461,42 @@ ecase() {
 # l = Pos.compare_cont Eq p 3. Each side: the call is refused (p is x), the
 # match on x is stuck, and its branches p'~1 and p'~0 call
 # Pos.compare_cont Eq p' 1 and Pos.compare_cont Lt p' 1, both refused: 6.
-# Each reads r and one step: 6 x 3 = 18 words. At the call site, each side
-# is refused after r and one step: 2 refusals, 6 words.
-ecase Free0 Pos.compare_cont 0 6 18 0 2 6
+# Each reads the two nodes of the first step: 6 x 2 = 12 words. At the call
+# site, each side is refused after that step: 2 refusals, 4 words.
+ecase Free0 Pos.compare_cont 0 6 12 0 2 4
 # l = Pos.compare_cont Eq 5 p~0. Each side: the call is refused (p under one
-# constructor of y; r and two steps, 5 words); the recursive call has y = p,
-# so GRABREC returns a stuck fixpoint before BINNUM; its read-back is refused
-# (r is a variable, 1 word): 4 refusals, 12 words. At the call site: 2 x 5.
-ecase Free1 Pos.compare_cont 0 4 12 0 2 10
+# constructor of y; two steps, 4 words); the recursive call has y = p, so
+# GRABREC returns a stuck fixpoint before BINNUM; its read-back, on fresh
+# variables, is refused at the first step (2 words): 4 refusals, 12 words.
+# At the call site: 2 x 4.
+ecase Free1 Pos.compare_cont 0 4 12 0 2 8
 # l = Pos.compare_cont Eq x (p~0...~0), x of 70 bits, 65 constructors above
 # p. Each side: the calls with m = 65, ..., 1 constructors of y above p are
-# refused, each after r and m + 1 steps; then y = p, and the read-back is
-# refused: 2 x 66 = 132 refusals, 2 x (65 + 2 x (2145 + 65) + 1) = 8972 words.
-# At the call site, m = 65: 2 x (1 + 2 x 66) = 266 words.
-ecase Free65 Pos.compare_cont 0 132 8972 0 2 266
+# refused, each after m + 1 steps; then y = p, and the read-back is refused
+# after one step: 2 x 66 = 132 refusals, 2 x (2 x (2145 + 65) + 2) = 8844
+# words. At the call site, m = 65: 2 x 2 x 66 = 264 words.
+ecase Free65 Pos.compare_cont 0 132 8844 0 2 264
 # l = Pos.compare_cont Eq 3 p. The variable is the recursive argument:
 # GRABREC returns a stuck fixpoint before BINNUM, so the entry runs the
-# routine only for the read-back of each side's stuck fixpoint: 2 refusals,
-# 2 words. The call site reads r and one step: 2 x 3.
-ecase FreeRec Pos.compare_cont 0 2 2 0 2 6
+# routine only for the read-back of each side's stuck fixpoint, refused
+# after one step: 2 refusals, 4 words. The call site reads one step: 2 x 2.
+ecase FreeRec Pos.compare_cont 0 2 4 0 2 4
 # l = Pos.eqb (p~1) 3. Each side: the call is refused (p under one
 # constructor of x, two steps, 4 words); the bytecode calls Pos.eqb p 1,
 # refused at once (p is x, 2 words); the match on p is then stuck, and its
 # branches do not call Pos.eqb: 4 refusals, 12 words. Call site: 2 x 4.
 ecase EqP1 Pos.eqb 0 4 12 0 2 8
-# Pos.eqb (p~1) 2 = false. The call is refused after two steps, although the
-# first already differs; the bytecode answers false at the first step: 1
-# refusal, 4 words, at the entry and at the call site.
-ecase EqP1f Pos.eqb 0 1 4 0 1 4
+# Pos.eqb (p~1) 2 = false. The first step differs (xI against xO), where the
+# bytecode answers false without inspecting p: a hit at the call site, 2
+# words, and no entry. Before slice 7 the routine read on to p and refused.
+ecase EqP1f Pos.eqb 0 0 0 1 0 2
 # l = Pos.eqb 4 (p~0). Each side: the call is refused (p under one constructor
 # of y, 4 words); the recursive call has y = p, so GRABREC returns a stuck
 # fixpoint; its read-back is refused (2 words): 4 refusals, 12 words. Call
 # site: 2 x 4.
 ecase EqQ1 Pos.eqb 0 4 12 0 2 8
-# Pos.eqb 5 (p~0) = false. Refused after two steps; the bytecode answers
-# false at the first: 1 refusal, 4 words, at the entry and at the call site.
-ecase EqQ1f Pos.eqb 0 1 4 0 1 4
+# Pos.eqb 5 (p~0) = false: the first step differs; a hit at the call site.
+ecase EqQ1f Pos.eqb 0 0 0 1 0 2
 # l = Pos.eqb x (p~0...~0), x = 2^69, 65 constructors above p, all xO as the
 # 69 of x. Each side: the calls with m = 65, ..., 1 constructors of y above p
 # are refused, each after m + 1 steps; then y = p, and the read-back is
@@ -506,9 +509,10 @@ ecase EqRec Pos.eqb 0 2 4 0 2 4
 # The partial application Pos.compare_cont Eq 3 is a closure until map gives
 # it its last argument (APPLY1 to the closure, then its entry); then all
 # three arguments are closed numbers: three hits at the entry, none at a
-# call site. Words: 5 for 2 and for 3 (r and two steps), 6 for 4 (r, two
-# steps, and the xH of 4): 16.
-ecase Partial Pos.compare_cont 3 0 16 0 0 0
+# call site. Words: 4 for 2 (two steps; the first differs, so r is not
+# read), 5 for 3 (two steps and r, since 3 = 3), 4 for 4 (two steps: 3 ends
+# first, and the xH of 4 is not read): 13.
+ecase Partial Pos.compare_cont 3 0 13 0 0 0
 
 # (f) -j 2: the workers check the proofs and print their own counters; the
 # counters they inherit from the main process are zeroed at the fork.

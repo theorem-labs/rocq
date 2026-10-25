@@ -31,6 +31,18 @@
    the argument. A packed block holds no accumulator, so reading it whole
    reads no more than the bytecode could.
 
+   The comparison routines (Pos.compare_cont, Pos.eqb, Z.compare, Z.leb,
+   Z.ltb, Z.eqb, Nat.eqb, Nat.leb) read exactly the nodes that the
+   reference's bytecode inspects: the scrutinee of each SWITCH, and the
+   structural argument that GRABREC tests at each entry of a fixpoint,
+   including the first one, since BINNUMCALL runs before it. PUSHFIELDS and
+   GETFIELD copy a field without reading its tag, so a node below the last
+   SWITCH is not read, whatever it is. Every stuck match in these bodies is
+   returned or matched again, so the bytecode's result is a fixed function
+   of the inspected nodes when they are all constructors; the routine
+   computes that function, and refuses where an inspected node is not a
+   constructor. One extra read: compare_cont's r on its equal path.
+
    A positive result that the routine computes whole, rather than over a
    shared subterm of a chain argument, is packed when it has 2 to 62 bits
    and packing is on.
@@ -224,17 +236,6 @@ HOT void cur_next(struct cursor *c)
   if (c->packed) c->m >>= 1;
   else c->v = Field(c->v, 0);
   c->depth++;
-}
-
-/* Reads the rest of the positive at the cursor. Returns 1 if it is closed. */
-HOT int cur_closed(struct cursor *c)
-{
-  for (;;) {
-    int k = cur_node(c);
-    if (k < 0) return 0;
-    if (k == POS_XH || c->packed) return 1;
-    cur_next(c);
-  }
 }
 
 /* The node of an N or of a nat at the cursor: POS_XH (0) for N0 or O,
@@ -691,12 +692,65 @@ static int part_z_num(struct binnum_part *p, const struct num *x)
      x~1, y~0 -> compare_cont Gt x y     x~0, y~0 -> compare_cont r x y
      x~1, 1   -> Gt                      x~0, 1   -> Gt
      1,   y~1 -> Lt     1, y~0 -> Lt     1,   1   -> r
-   The loop runs these steps on both numbers at once, from their outermost
-   constructors; r is the result if both end together. It reads both numbers
-   to their ends. When both cursors are in packed mode, the rests of the two
-   numbers are known: the one with the larger rest is the larger number, and
-   equal rests leave r. */
-HOT int pos_compare_core(value r, struct cursor *x, struct cursor *y, value *res)
+   What the bytecode inspects, at each level from the outermost
+   constructors: the node of y, which GRABREC tests at every entry of the
+   fixpoint (BINNUMCALL runs before the first one), then the node of x and
+   the node of y, which the two SWITCHes read: every branch on x matches y.
+   At the first level where x or y is xH it returns Lt, Gt or r, and
+   inspects nothing below; the branches load the fields below with
+   PUSHFIELDS, which does not read them. The loop reads the same nodes, x's
+   then y's at each level, and stops at the same level. When both cursors
+   are in packed mode both rests are closed numbers, read in O(1): the one
+   with the larger rest is the larger number, and equal rests leave r.
+
+   r is never matched: the bytecode returns it unread when the numbers are
+   equal, and drops it otherwise. *[passed] says that the result is that r
+   itself, so that the caller can read it there and nowhere else. */
+HOT int pos_compare_core(value r, struct cursor *x, struct cursor *y, value *res,
+                         int *passed)
+{
+  int kx, ky, same = 1;
+  for (;;) {
+    kx = cur_node(x);
+    ky = cur_node(y);
+    if (kx < 0 || ky < 0) return 0;
+    if (x->packed && y->packed) {
+      if (x->m != y->m) {
+        *res = x->m < y->m ? CMP_LT : CMP_GT;
+        *passed = 0;
+        return 1;
+      }
+      break;
+    }
+    if (kx == POS_XH || ky == POS_XH) {
+      if (kx != ky) {
+        *res = kx == POS_XH ? CMP_LT : CMP_GT;
+        *passed = 0;
+        return 1;
+      }
+      break;
+    }
+    if (kx != ky) {
+      r = kx == POS_XI ? CMP_GT : CMP_LT;
+      same = 0;
+    }
+    cur_next(x);
+    cur_next(y);
+  }
+  *res = r;
+  *passed = same;
+  return 1;
+}
+
+/* Pos.eqb p q {struct q}:
+     p~1, q~1 -> eqb p q    p~0, q~0 -> eqb p q    1, 1 -> true    _ -> false
+   What the bytecode inspects, at each level: the node of q (GRABREC's
+   test), the node of p, and the node of q, since every branch on p matches
+   q. It stops at the first level whose nodes differ, with false, or where
+   both are xH, with true. The loop reads the same nodes and stops at the
+   same level. When both cursors are in packed mode, the numbers are equal
+   if their rests are. */
+HOT int pos_eqb_core(struct cursor *x, struct cursor *y, value *res)
 {
   int kx, ky;
   for (;;) {
@@ -704,62 +758,20 @@ HOT int pos_compare_core(value r, struct cursor *x, struct cursor *y, value *res
     ky = cur_node(y);
     if (kx < 0 || ky < 0) return 0;
     if (x->packed && y->packed) {
-      if (x->m != y->m) r = x->m < y->m ? CMP_LT : CMP_GT;
-      *res = r;
+      *res = x->m == y->m ? BOOL_TRUE : BOOL_FALSE;
       return 1;
     }
-    if (kx == POS_XH || ky == POS_XH) break;
-    if (kx != ky) r = kx == POS_XI ? CMP_GT : CMP_LT;
-    cur_next(x);
-    cur_next(y);
-  }
-  if (kx == ky) {
-    *res = r;
-    return 1;
-  }
-  if (kx == POS_XH) {
-    cur_next(y);
-    if (!cur_closed(y)) return 0;
-    *res = CMP_LT;
-    return 1;
-  }
-  cur_next(x);
-  if (!cur_closed(x)) return 0;
-  *res = CMP_GT;
-  return 1;
-}
-
-/* Pos.eqb p q {struct q}:
-     p~1, q~1 -> eqb p q    p~0, q~0 -> eqb p q    1, 1 -> true    _ -> false
-   The loop runs these steps on both numbers at once. After the first step
-   that gives false, it still reads both numbers to their ends. When both
-   cursors are in packed mode, the numbers are equal if their rests are. */
-HOT int pos_eqb_core(struct cursor *x, struct cursor *y, value *res)
-{
-  int kx, ky, eq = 1;
-  for (;;) {
-    kx = cur_node(x);
-    ky = cur_node(y);
-    if (kx < 0 || ky < 0) return 0;
-    if (x->packed && y->packed) {
-      *res = eq && x->m == y->m ? BOOL_TRUE : BOOL_FALSE;
+    if (kx != ky) {
+      *res = BOOL_FALSE;
       return 1;
     }
-    if (kx != ky) eq = 0;
-    if (kx == POS_XH || ky == POS_XH) break;
+    if (kx == POS_XH) {
+      *res = BOOL_TRUE;
+      return 1;
+    }
     cur_next(x);
     cur_next(y);
   }
-  if (kx != POS_XH) {
-    cur_next(x);
-    if (!cur_closed(x)) return 0;
-  }
-  if (ky != POS_XH) {
-    cur_next(y);
-    if (!cur_closed(y)) return 0;
-  }
-  *res = eq ? BOOL_TRUE : BOOL_FALSE;
-  return 1;
 }
 
 /* Pos.succ x: succ (p~1) = (succ p)~0, succ (p~0) = p~1, succ 1 = 1~0.
@@ -924,13 +936,16 @@ HOT int pos_sub_core(struct cursor *x, struct cursor *y, struct binnum_part *p)
   return part_num(p, &num_r, c > 0 ? Z_POS : Z_NEG);
 }
 
-/* Z.compare x y, as the bytecode: the node of x, the node of y, and
-   Pos.compare (compare_cont Eq) of their numbers when both have the same
-   sign, through CompOpp when both are negative. */
+/* Z.compare x y. What the bytecode inspects: the node of x, then the node
+   of y (every branch on x matches y); when both have the same sign,
+   Pos.compare (compare_cont Eq) of their magnitudes, as in pos_compare_core,
+   through CompOpp when both are negative. On Z0 or on different signs it
+   inspects no magnitude, and neither does this. Z.leb and Z.ltb match the
+   result of Z.compare, which inspects no more. */
 HOT int z_compare_core(const value *a, value *res)
 {
   struct cursor cx, cy;
-  int kx, ky;
+  int kx, ky, passed;
   value c;
   cur_init(&cx, a[0], 0, 0);
   kx = cur_node(&cx);
@@ -948,22 +963,29 @@ HOT int z_compare_core(const value *a, value *res)
   }
   cur_next(&cx);
   cur_next(&cy);
-  if (!pos_compare_core(CMP_EQ, &cx, &cy, &c)) return 0;
+  if (!pos_compare_core(CMP_EQ, &cx, &cy, &c, &passed)) return 0;
   *res = kx == Z_POS ? c : c == CMP_LT ? CMP_GT : c == CMP_GT ? CMP_LT : CMP_EQ;
   return 1;
 }
 
 /** The routines: each reads its arguments [a] and sets the result R. */
 
+/* Pos.compare_cont r x y. The bytecode returns r unread on the equal path;
+   the routine reads it there, and refuses unless it is a comparison
+   constant, which reads more than the bytecode and can only add a
+   refusal. On every other path r is not read. */
 static int r_pos_compare_cont(const value *a)
 {
   value r = a[0], c;
   struct cursor x, y;
-  COUNT(words, 1);
-  if (r != CMP_EQ && r != CMP_LT && r != CMP_GT) return 0;
+  int passed;
   cur_init(&x, a[1], 1, 0);
   cur_init(&y, a[2], 2, 0);
-  if (!pos_compare_core(r, &x, &y, &c)) return 0;
+  if (!pos_compare_core(r, &x, &y, &c, &passed)) return 0;
+  if (passed) {
+    COUNT(words, 1);
+    if (r != CMP_EQ && r != CMP_LT && r != CMP_GT) return 0;
+  }
   part_imm(&R.part[0], c);
   return 1;
 }
@@ -1181,8 +1203,9 @@ static int r_z_ltb(const value *a)
   return 1;
 }
 
-/* Z.eqb x y: the node of x and of y, and Pos.eqb of their numbers when both
-   have the same sign. */
+/* Z.eqb x y. What the bytecode inspects: the node of x, then the node of y
+   (every branch on x matches y), and Pos.eqb of their magnitudes, as in
+   pos_eqb_core, when both are Zpos or both Zneg; nothing more otherwise. */
 static int r_z_eqb(const value *a)
 {
   struct cursor x, y;

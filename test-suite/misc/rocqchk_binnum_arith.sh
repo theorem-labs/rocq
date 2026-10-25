@@ -1044,13 +1044,12 @@ ecount Partial.log Z.add 3 0 14 0 0 0
 # refuses, at the call site and at the entry; the bytecode answers at the
 # step (xI p, 1).
 ecount Q1.log Z.pos_sub 0 1 2 0 1 2
-# Z.compare (Zpos (xI p)) (Zpos 1) = Gt: the two Z nodes, then the comparison
-# reads xI against xH (2) and the rest p of x (1): refused after 5 words, at
-# the call site and at the entry; the bytecode calls Pos.compare, whose code
-# applies compare_cont Eq to x' and y' (APPLY to its entry): refused after r,
-# the step and p (4 words); the bytecode answers Gt at the step (xI p, 1).
-ecount Q2.log Z.compare 0 1 5 0 1 5
-ecount Q2.log Pos.compare_cont 0 1 4 0 0 0
+# Z.compare (Zpos (xI p)) (Zpos 1) = Gt: the two Z nodes, then one step of
+# the magnitudes, xI against xH (2), where y ends and the bytecode answers Gt
+# without inspecting p: a hit at the call site, 4 words, and the bytecode
+# never runs. Before slice 7 the routine read on to p and refused.
+ecount Q2.log Z.compare 0 0 0 1 0 4
+ecount Q2.log Pos.compare_cont 0 0 0 0 0 0
 # One probe per guard (B1 of the slice-2 review). Each is [l = l]: per side,
 # the call site reads up to the variable and refuses; the call then runs and
 # its entry refuses again after the same reads; then, for a fixpoint, the
