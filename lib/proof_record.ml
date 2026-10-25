@@ -580,14 +580,15 @@ exception Unhashable of string
    computed, so it does not depend on what the memo finds: a memo miss costs
    a walk and never changes a digest. *)
 
-(* The memo holds its keys WEAKLY. It outlives every call, so a strong table
-   would keep alive every block it ever saw, and a proof's own statement is
-   dead as soon as the proof closes: a registration file measured 2 times the
-   peak RSS of its flag-off compile (R1M1, 2026-10-25). An ephemeron releases
-   the entry of a block nobody else holds, and keeps the entry of the global
-   state, which is alive anyway and is what the memo is for. Losing an entry
-   costs a walk, never a wrong digest. *)
-module H = Ephemeron.K1.Make (struct
+(* The memo holds its keys STRONGLY, and is emptied above [max_memo_entries].
+   Weak keys were tried and measured worse on both counts: an
+   [Ephemeron.K1] table cost +45% CPU and 2.4 times the peak RSS of this
+   table on a registration file, because its entries are released by the
+   major collection's ephemeron pass, which a fast-allocating compile
+   outruns, and every lookup pays the weak-key indirection (R1M1, speed-r1
+   pinned, 2026-10-25: 62.17 s and 6,235 MB against 42.75 s and 2,628 MB).
+   A bound on the table is what keeps its memory, not the GC. *)
+module H = Hashtbl.Make (struct
     type t = Obj.t
     let equal = ( == )
     (* The block's address. A structural hash reads only a bounded prefix of a
@@ -622,7 +623,11 @@ let min_memo_size = 32
    value, not of the memo. *)
 let global_memo : memo H.t = H.create 4096
 
-let max_memo_entries = 1 lsl 21
+(* Measured on a registration file whose statements carry memory images: at
+   2^21 the peak RSS with the flag was 2,628 MB against 1,336 MB without it
+   (R1M1). Each entry also holds its block alive, and a statement's blocks
+   die with the proof, so the bound is what returns that memory. *)
+let max_memo_entries = 1 lsl 18
 
 let reset_memo () = H.reset global_memo
 
