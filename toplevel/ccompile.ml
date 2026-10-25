@@ -95,6 +95,9 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
              stock's own timeout ends it: no .vo, and the exit code the
              engine's wrapper records as a per-file kill. *)
           Proof_replay.killed_summary (Proof_replay.summary_path_of_vo long_f_dot_out);
+          (* The .glob was opened before the file ran, and a killed file
+             writes none, as stock's timeout leaves none. *)
+          (try Sys.remove (Filename.remove_extension long_f_dot_out ^ ".glob") with Sys_error _ -> ());
           prerr_endline "KILLED: proof replay charged clock reached the per-file budget";
           flush stderr;
           exit 124

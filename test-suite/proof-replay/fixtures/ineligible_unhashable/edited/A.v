@@ -21,6 +21,8 @@
    22 also passes it (289 s, 7.5 GB, a 124 MB object).  Depth 21 is why this
    fixture is `slow`: its three compiles cost about 13 minutes. *)
 
+From Corelib Require Import PrimInt63.
+
 Inductive tree := L (k : int) | N (a b : tree).
 
 Fixpoint build (d : nat) (k : int) : tree :=

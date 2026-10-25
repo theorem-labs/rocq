@@ -2296,17 +2296,23 @@ let replayed_proof_object ~blob ~(proof : t) =
   | Some b ->
     (* A term read back with [Marshal.from_string] is a fresh copy: not one
        of its blocks is physically shared with this compile's own values,
-       and a [.vo] marshals the library with its sharing, so the object
-       would hold two equal copies of a universe level where a full compile
-       holds one. That is not cosmetic: a library compiled against the one
-       object refuses to load against the other ("makes inconsistent
-       assumptions over library", measured 2026-10-25), so a grade that
-       reuses an object and replays its dependency fails its build.
-       Interning the universe state joins the copy to this compile's own
-       levels. The entries themselves are left as they come: hashconsing
-       them made two proofs of one file share a block that a full compile
-       keeps apart, which is the same defect the other way round. *)
-    let output = { b.rb_output with output_ustate = UState.hcons_univs b.rb_output.output_ustate } in
+       and a [.vo] marshals the library with its sharing. So the object
+       would hold two equal copies of a universe level, or of a name such
+       as [nat], where a full compile holds one. That is not cosmetic: a
+       library compiled against the one object refuses to load against the
+       other ("makes inconsistent assumptions over library", measured
+       2026-10-25), so a grade that reuses an object and replays its
+       dependency fails its build. Hashconsing the entries and interning
+       the universe state joins the copy to this compile's own values, as
+       the kernel's own hashconsing does for a term the tactics built. *)
+    Impargs.refresh_flags ();
+    let hcons c = snd (Constr.hcons c) in
+    let hcons_entry (body, typ) = (hcons body, Option.map hcons typ) in
+    let output =
+      { b.rb_output with
+        output_entries = List.map hcons_entry b.rb_output.output_entries;
+        output_ustate = UState.hcons_univs b.rb_output.output_ustate }
+    in
     Some
       ( { Proof_object.proof_object =
             DefaultProof { proof = output; opaque = true; using = proof.using;

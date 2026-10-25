@@ -69,6 +69,12 @@ val register_precheck : (string -> bool) -> unit
     use it (the universe counters it was made from). A blob that fails it
     is a miss on key item 1. *)
 
+val remaining_budget : unit -> float option
+(** What is left of the budget once the charge for the replayed proofs is
+    taken off, or [None] with no budget. A sentence runs under this as a
+    timeout, so a proof that runs long is stopped inside it, where stock's
+    own timeout stops it, and not only at the next sentence boundary. *)
+
 val enabled : unit -> bool
 (** A record is loaded and the file is not refused. *)
 

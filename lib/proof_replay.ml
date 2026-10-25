@@ -23,6 +23,14 @@ type options = {
 
 exception Budget_exhausted
 
+(* The charged clock runs from this process's start, not from the moment
+   the record was loaded: the engine's per-file timeout counts from the
+   exec, and a later origin would let the charged kill fire after the
+   engine's own (R1P4's cross-family review, 2026-10-25). This is
+   evaluated when the unit is initialised, before any work of the
+   compile. *)
+let process_start = Unix.gettimeofday ()
+
 type evaluation =
   | Unknown
   | Value of string option
@@ -278,13 +286,24 @@ let start ~library ~toolchain =
              List.iter (fun (p : R.proof) -> Hashtbl.replace index p.R.name p) file.R.proofs;
            refusal)
     in
-    state := Some { f_index = index; f_wall0 = Unix.gettimeofday (); f_refused = refusal; f_candidate = None }
+    state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal; f_candidate = None }
 
 let check_budget () =
   match !options, !state with
   | Some { o_budget = Some budget; _ }, Some st ->
     if Unix.gettimeofday () -. st.f_wall0 +. counts.charged >= budget then raise Budget_exhausted
   | _ -> ()
+
+(* What is left of the budget once the charge for the replayed proofs is
+   taken off. A sentence runs under this as a timeout, so a proof that runs
+   long is stopped inside it, where stock's own timeout stops it, and not
+   only at the next sentence boundary. *)
+let remaining_budget () =
+  match !options, !state with
+  | Some { o_budget = Some budget; _ }, Some st ->
+    let left = budget -. (Unix.gettimeofday () -. st.f_wall0) -. counts.charged in
+    Some (if left > 0.001 then left else 0.001)
+  | _ -> None
 
 (* {6 One proof} *)
 

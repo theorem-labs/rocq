@@ -503,18 +503,32 @@ let prim_table =
 let register p c =
   prim_table := Cmap_env.add c p !prim_table
 
-let record_primitive_projection c v =
+(* BET-84 census row 14: whether a constant is a primitive projection.
+   The value is computed once, for the recorder at the lookup and for the
+   replay evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_primitive_projection v =
+  match v with
+  | None -> None
+  | Some p -> Some (Proof_recorder.digest_cached ~what:"primitive_projection" p)
+
+let lookup c = try Some (Cmap_env.find c !prim_table) with Not_found -> None
+
+let () =
+  Proof_replay.register_evaluator "primitive_projection" (fun key ->
+      match Nametab.global_of_path (Libnames.path_of_string key) with
+      | Names.GlobRef.ConstRef c when String.equal (Names.Constant.to_string c) key ->
+        (match recorded_primitive_projection (lookup c) with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown)
+      | _ -> Proof_replay.Unknown
+      | exception _ -> Proof_replay.Unknown)
+
+let find_opt c =
+  let res = lookup c in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"primitive_projection"
       ~key:(fun () -> Names.Constant.to_string c)
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some p ->
-            Some (Proof_recorder.digest_cached ~what:"primitive_projection" p))
-
-let find_opt c =
-  let res = try Some (Cmap_env.find c !prim_table) with Not_found -> None in
-  record_primitive_projection c res;
+      ~value:(fun () -> recorded_primitive_projection res);
   res
 
 let mem c = Option.has_some (find_opt c)

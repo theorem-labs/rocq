@@ -541,8 +541,11 @@ let context_set uctx = uctx.local
 let hcons_univs uctx =
   let level l = snd (Level.hcons l) in
   let set s = Level.Set.fold (fun l acc -> Level.Set.add (level l) acc) s Level.Set.empty in
-  let univs, cst = uctx.local in
-  { uctx with local = (set univs, cst) }
+  let univs, (qcst, ucst) = uctx.local in
+  (* The constraints hold levels too: a constraint between two levels of a
+     replayed proof is written into the [.vo], and its levels must be the
+     same values as the ones the set holds. *)
+  { uctx with local = (set univs, (qcst, snd (Univ.UnivConstraints.hcons ucst))) }
 
 let universe_context_set uctx =
   let us, (_, ucst) = uctx.local in
