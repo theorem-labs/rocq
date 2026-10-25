@@ -6,16 +6,18 @@
 # has not started, and deals them at once (CheckWorkers.request_release).
 #
 # Every check must still run exactly once, and the output and the verdict
-# must not depend on the schedule. The library below has 20 opaque proofs,
-# two of them long: l1 and l7, at queue positions 0 and 6. At -j 4, once
-# the libraries are walked, the first batch is positions 0, 6 and 12, that
-# is [l1, l7, l13], so it holds both long proofs, and l7 runs in parallel
+# must not depend on the schedule. The library below has 140 opaque proofs:
+# l1 to l20, two of them long, l1 and l2, the first two the walk defers,
+# then 120 short ones, p1 to p120. A batch is a stripe of whole pieces of
+# libraries, and a library's piece keeps its jobs in order, so the batch
+# that holds l1 holds l2 after it (a model of the dealing gives this for
+# any number of dependencies from 8 to 30 at -j 4): l2 runs in parallel
 # with l1 only if the worker gives it back while it checks l1.
-#  (a) -j 4: the worker of [l1, l7, l13] gives back l7 and l13 after l1;
-#      the batch headed by l7 is dealt before that worker has finished l1;
-#      no worker stops early, and each is asked at most once. How much
-#      faster -j 4 is depends on the machine, so the speed lane measures
-#      that on a box it controls, not this test;
+#  (a) -j 4: the worker that holds l1 gives back what is left of its batch
+#      once it has started l1; the batch headed by l2 is dealt before that
+#      worker has finished; no worker stops early, and each is asked at
+#      most once. How much faster -j 4 is depends on the machine, so the
+#      speed lane measures that on a box it controls, not this test;
 #  (b) -j 1, 2, 4 and 16: the same output and exit code, and every check
 #      run once;
 #  (c) each race window, opened on purpose by ROCQCHK_WORKER_RELEASE_AT (a
@@ -71,7 +73,7 @@ SHORT = 1 << 13
 def gen(bad):
     out = [HEADER]
     for i in range(1, 21):
-        p = LONG if i in (1, 7) else SHORT
+        p = LONG if i in (1, 2) else SHORT
         if bad and i == 13:
             # Ill-typed once the opaque table of this file is spliced into
             # the good one: there the proof of l13 has type U -> U.
@@ -81,6 +83,11 @@ def gen(bad):
             out.append("Lemma l%d : burn %s xH = xH.\n"
                        "Proof. vm_cast_no_check (@eq_refl positive xH). Qed.\n" % (i, pos(p)))
         out.append("Definition d%d := l%d.\n" % (i, i))
+    # Short proofs after them, in the same library: they keep the batches
+    # that finish deals long enough that the piece of this library that
+    # holds l1 also holds l2.
+    for i in range(1, 121):
+        out.append("Lemma p%d : True. Proof. exact I. Qed.\n" % i)
     return "".join(out)
 
 open(d + "/good/Lib.v", "w").write(gen(False))
@@ -151,7 +158,7 @@ import re, sys
 def events(path):
     text = re.sub(r"\s+", " ", open(path, errors="replace").read())
     pats = [
-        ("fork", r"worker (\d+): (\d+) opaque proofs? \(the first is ([\w.]+), the last ([\w.]+)\)"),
+        ("fork", r"worker (\d+): a batch of (\d+) \(the first is (.+?), the last (.+?)\)"),
         ("ask", r"asking worker (\d+) to release what is left of its (\d+) checks"),
         ("release", r"worker (\d+) releases (\d+) of (\d+) after (\d+), queued again"),
         ("kept", r"worker (\d+) completed the (\d+) checks it kept"),
@@ -180,28 +187,25 @@ if cmd == "done":
     print(d[-1][names.index(sys.argv[3])] if d else "")
 
 elif cmd == "a":
-    # The worker of the batch headed by l1 gives back the tail after 1
-    # check, and the batch headed by l7 is forked before that worker's
-    # final report is read.
-    w1 = [g[0] for k, g in ev if k == "fork" and g[2] == "Lib.l1"]
-    if len(w1) != 1:
-        fail("expected one batch headed by Lib.l1", ev)
-    w1 = w1[0]
-    idx = {}
-    for i, (k, g) in enumerate(ev):
-        if k == "release" and g[0] == w1 and int(g[1]) >= 1 and g[3] == "1":
-            idx.setdefault("release", i)
-        if k == "kept" and g[0] == w1:
-            idx.setdefault("kept", i)
-        if k == "fork" and g[2] == "Lib.l7":
-            idx.setdefault("l7", i)
-    if "release" not in idx:
-        fail("the worker of Lib.l1 gave nothing back after 1 check", ev)
-    if "l7" not in idx:
-        fail("no batch is headed by Lib.l7", ev)
-    if not idx["release"] < idx["l7"] < idx.get("kept", len(ev)):
-        fail("the batch headed by Lib.l7 was not dealt while the worker of "
-             "Lib.l1 still ran", ev)
+    # The batch dealt with l2 at its head is the tail that a worker gave
+    # back: that worker released at least one check, after it had started
+    # at least two jobs (the jobs before l1, then l1), and the batch headed
+    # by l2 is forked after the release and before that worker's final
+    # report is read, so while it still checks l1.
+    l2 = [i for i, (k, g) in enumerate(ev) if k == "fork" and g[2] == "Lib.l2"]
+    if len(l2) != 1:
+        fail("expected one batch headed by Lib.l2", ev)
+    l2 = l2[0]
+    rel = [(i, g[0]) for i, (k, g) in enumerate(ev[:l2])
+           if k == "release" and int(g[1]) >= 1 and int(g[3]) >= 2]
+    if not rel:
+        fail("no worker gave back checks after it had started two jobs, "
+             "before the batch headed by Lib.l2", ev)
+    i, w = rel[-1]
+    kept = [j for j, (k, g) in enumerate(ev) if k == "kept" and g[0] == w]
+    if kept and not l2 < kept[0]:
+        fail("the batch headed by Lib.l2 was not dealt while the worker that "
+             "gave it back still ran", ev)
 
 elif cmd == "asks":
     # Each worker is asked at most once, and never for a batch of one.
@@ -290,14 +294,14 @@ for j in 1 2 4 16; do
   dbg "j$j.log" -j $j "${GOOD[@]}"
   expect "(b) -j $j exit code with -d" "$R" -eq 0
   if [ "$j" != 1 ]; then
-    expect "(b) -j $j checks run" "$(sched done "$d/j$j.log" run)" -eq 20
-    expect "(b) -j $j checks deferred" "$(sched done "$d/j$j.log" deferred)" -eq 20
+    expect "(b) -j $j checks run" "$(sched done "$d/j$j.log" run)" -eq 140
+    expect "(b) -j $j checks deferred" "$(sched done "$d/j$j.log" deferred)" -eq 140
   fi
 done
 [ -s "$d/o-j1.out" ] || fail "(b) the output of -j 1 is empty"
 
-# (a) The tail of [l1, l7, l13] is given back while l1 runs, so l7 runs in
-# parallel with it.
+# (a) What is left of the batch [the table of Lib, l1, l2, ...] is given
+# back while l1 runs, so l2 runs in parallel with it.
 sched a "$d/j4.log"
 expect "(a) releases at -j 4" "$(sched done "$d/j4.log" released)" -ge 1
 expect "(a) workers stopped early at -j 4" "$(sched done "$d/j4.log" stopped)" -eq 0
@@ -325,14 +329,14 @@ for case in fork:first entry:first started:1:second check:1:second between:1:sec
   log="w-${w%%:*}.log"
   ROCQCHK_WORKER_RELEASE_AT=$w dbg "$log" -j 4 "${GOOD[@]}"
   expect "(c) $w exit code" "$R" -eq 0
-  expect "(c) $w checks run" "$(sched done "$d/$log" run)" -eq 20
+  expect "(c) $w checks run" "$(sched done "$d/$log" run)" -eq 140
   sched window "$d/$log" "$kind"
   ROCQCHK_WORKER_RELEASE_AT=$w out "o-w-${w%%:*}" -j 4 "${GOOD[@]}"
   expect "(c) $w exit code without -d" "$R" -eq 0
   same "o-w-${w%%:*}" "(c) window $w"
 done
 
-# (d) A batch of one check is never asked: at -j 16 the 20 checks are dealt
+# (d) A batch of one check is never asked: at -j 16 the checks are dealt
 # in batches of one once the queue is short.
 sched asks "$d/j16.log"
 
@@ -367,7 +371,7 @@ stray() {
 stray stray.log sh -c 'exec rocqchk -silent -d checker-workers "$@" > "$0" 2>&1' \
   "$d/stray.log" -j 4 "${GOOD[@]}"
 expect "(f) exit code after a stray request" "$R" -eq 0
-expect "(f) checks run after a stray request" "$(sched done "$d/stray.log" run)" -eq 20
+expect "(f) checks run after a stray request" "$(sched done "$d/stray.log" run)" -eq 140
 stray o-stray.raw sh -c 'exec rocqchk -o "$@" > "$0" 2>&1' "$d/o-stray.raw" -j 4 "${GOOD[@]}"
 expect "(f) exit code after a stray request, without -d" "$R" -eq 0
 sed -e 's/Worker process [0-9]*/Worker process PID/' "$d/o-stray.raw" > "$d/o-stray.out"
@@ -376,15 +380,16 @@ same o-stray "(f) a stray request"
 #    not inherit the request.
 ROCQCHK_WORKER_RELEASE_AT=main dbg main.log -j 4 "${GOOD[@]}"
 expect "(f) exit code with a request in the main process" "$R" -eq 0
-expect "(f) checks run with a request in the main process" "$(sched done "$d/main.log" run)" -eq 20
+expect "(f) checks run with a request in the main process" "$(sched done "$d/main.log" run)" -eq 140
 sched unasked "$d/main.log"
 ROCQCHK_WORKER_RELEASE_AT=main out o-main -j 4 "${GOOD[@]}"
 expect "(f) exit code with a request in the main process, without -d" "$R" -eq 0
 same o-main "(f) a request in the main process"
 
 # (e) An ill-typed proof in a released tail. With the request at the entry
-# of each worker, every batch is released after its first check, so l13,
-# the third check of [l1, l7, l13], is always checked from a released tail.
+# of each worker, every batch is released after its first job, so l13,
+# which is deep in the batch that starts at the library, is checked only
+# from checks that were given back.
 #
 # The first error printed is the one of the proof: at -j 1 the type error;
 # with workers, the same text and a line naming the proof. It must be the
@@ -420,7 +425,7 @@ for case in 2: 4: 16: 4:entry; do
 done
 ROCQCHK_WORKER_RELEASE_AT=entry dbg bad4.log -j 4 "${BAD[@]}"
 expect "(e) -j 4 exit code with -d" "$R" -ne 0
-grep -q "releases [1-9][0-9]* of 3 after 1" "$d/bad4.log" \
-  || { cat "$d/bad4.log" >&2; fail "(e) the batch of Lib.l13 released no tail"; }
+grep -q "releases [1-9][0-9]* of [0-9]* after 1" "$d/bad4.log" \
+  || { cat "$d/bad4.log" >&2; fail "(e) no batch released a tail after its first job"; }
 
 exit 0

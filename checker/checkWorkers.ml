@@ -13,7 +13,21 @@ open Names
 
 let debug = CDebug.create ~name:"checker-workers" ()
 
-type task = Constant.t * (unit -> unit)
+(* What a process is given to do: check the body of one opaque constant,
+   or read one library's table of opaque proofs. *)
+type job =
+| Proof of Constant.t
+| Table of DirPath.t
+
+(* A task, and the library whose walk deferred it. The jobs of one library
+   are next to each other in the queue -- its table first, then the checks
+   of its opaque bodies -- and [group] numbers those runs, so that a batch
+   can take them whole and parse each table once. *)
+type task = {
+  job : job;
+  group : int;
+  run : unit -> unit;
+}
 
 (* What the main process keeps about a running worker. The batch is for
    error messages. The tasks are kept to re-queue what the worker did not
@@ -23,11 +37,17 @@ type task = Constant.t * (unit -> unit)
    many it completed. [buf] holds the bytes read from that pipe that are
    not a whole message yet. [asked] says that a release has been
    requested, which happens at most once per worker, and [released] the
-   number of checks the worker answered that it will complete. *)
+   number of checks the worker answered that it will complete. [output]
+   is the pair of files, standard output and standard error, that the
+   worker writes to instead of the terminal (see [run_worker]), until the
+   main process prints or drops them. *)
 type batch = {
   size : int;
-  first : Constant.t;
-  last : Constant.t;
+  first : job;
+  last : job;
+  proofs : int;
+  first_proof : Constant.t option;
+  last_proof : Constant.t option;
 }
 
 type worker = {
@@ -35,12 +55,13 @@ type worker = {
   batch : batch;
   tasks : task array;
   report : Unix.file_descr;
+  mutable output : (Unix.file_descr * Unix.file_descr) option;
   mutable asked : bool;
   mutable released : int option;
   mutable buf : string;
 }
 
-exception CheckError of Constant.t * exn
+exception CheckError of job * exn
 exception WorkerFailed of int * Unix.process_status * batch
 
 (* Maximal number of workers alive at the same time. 0 means that
@@ -57,6 +78,8 @@ let set_jobs ~profiling n =
       Feedback.msg_warning
         (str "Option -j is ignored when profiling; checking sequentially.")
     else max_workers := n - 1
+
+let parallel () = !max_workers > 0
 
 let error_printer = ref (fun _ -> ())
 let set_error_printer f = error_printer := f
@@ -82,13 +105,17 @@ let set_budget t =
 
    The cost of a proof is not known in advance, it varies wildly, and
    costly proofs tend to be in the same library, hence deferred in a
-   row. So a batch is not a run of the queue but a stride of it: when
-   the queue holds [s] batches of the size wanted, a batch takes one
-   check in [s], from the front. Checks next to each other in the queue
-   go to different batches. A worker that stops early puts the checks
-   it did not do back at the front, so the first of them head the next
-   batches: a long check given back does not wait behind the checks
-   that followed it in its batch.
+   row; and every process that checks a library's opaque proofs parses
+   that library's whole table first. So a batch is a stripe of the
+   queue over whole libraries: a library's jobs, with the task that reads
+   its table, are cut into pieces of the size wanted, which a library of
+   ordinary size fits in one piece, and when the queue holds [s] batches,
+   a batch takes one piece in [s] (see [deal]). Libraries next to each
+   other in the queue go to different batches, and a batch parses about
+   one table per library it holds, where a stride of jobs had each table
+   parsed by as many workers as its library has checks (about 28 on the
+   whole r160 tree). A worker that stops early puts the jobs it did not
+   do back at the front, in order, so they are dealt again first.
 
    While the libraries are being checked, the main process checks them,
    so there are at most [N-1] workers, where [N] is the number of
@@ -106,18 +133,25 @@ let window = 1.0
 
 (* Below this, a batch is not worth a fork while the libraries are being
    checked. A fork copies the page tables of the main process, whose heap
-   holds every library and opaque table read so far: on the whole r160
-   tree, 0.23 s a fork at the end of the walk, and 1,797 forks with this
-   at 50. Larger batches mean fewer forks but a longer tail, since release
-   on request fires only in [finish]. Measured on that tree (speed-r3,
-   2026-10-25, -j 16 -worker-budget 20, one timed run each): 200 took
-   385.6 s (579 forks, tail 116 s), 400 took 404.4 s (430 forks, tail
-   145 s), 800 took 399.5 s (452 forks, tail 164 s). *)
+   holds every library read so far, and the opaque tables it read itself
+   (it used to read all of them): on the whole r160 tree, 0.23 s a fork
+   at the end of the walk, and 1,797 forks with this at 50. Larger
+   batches mean fewer forks but a longer tail, since release on request
+   fires only in [finish]. Measured on that tree, with the opaque tables
+   in the main process's heap (speed-r3, 2026-10-25, -j 16 -worker-budget
+   20, one timed run each): 200 took 385.6 s (579 forks, tail 116 s), 400
+   took 404.4 s (430 forks, tail 145 s), 800 took 399.5 s (452 forks,
+   tail 164 s). Forks of a heap without the tables cost less, so this is
+   to be measured again. *)
 let min_batch = 200
 
-(* Deferred checks not yet given to a worker, oldest first. *)
+(* Deferred jobs not yet given to a worker, oldest first. *)
 let queue : task Queue.t = Queue.create ()
 let last_dispatch = ref 0.
+
+(* The library whose jobs are being deferred: [defer_table], which every
+   library's walk calls before its own checks, opens the next group. *)
+let current_group = ref 0
 
 (* Running workers. *)
 let running : worker list ref = ref []
@@ -125,17 +159,41 @@ let running : worker list ref = ref []
 (* Statistics, for the debug output. [checks_done] counts the checks that
    a process ended successfully after running, and [deferred] the checks
    handed to [defer]: with [-j] they are equal at the end, because every
-   check runs exactly once. [main_cooks] counts the opaque bodies that the
-   main process cooked itself, wherever in the code that happened
-   ([note_cook], called from the cook): with [-j] they are the bodies of
-   sealed modules, whose cooked form the main process needs, and those of
-   checks it ran itself because it could not fork. *)
+   check runs exactly once. [tables_done] and [tables_deferred] are the
+   same for the tasks that read a library's table, and [table_reads] and
+   [table_bytes] count what this process read and parsed itself.
+   [main_cooks] counts the opaque bodies that the main process cooked
+   itself, wherever in the code that happened ([note_cook], called from
+   the cook): with [-j] they are the bodies of sealed modules, whose
+   cooked form the main process needs, and those of checks it ran itself
+   because it could not fork. *)
 let forks = ref 0
 let early_stops = ref 0
 let releases = ref 0
 let checks_done = ref 0
 let deferred = ref 0
+let tables_done = ref 0
+let tables_deferred = ref 0
+let table_reads = ref 0
+let table_bytes = ref 0
 let main_cooks = ref 0
+let note_table_read ~bytes =
+  incr table_reads;
+  table_bytes := !table_bytes + bytes
+
+(* The tables that a process which ended successfully read: a worker,
+   once its report says it completed that task, or the main process. *)
+let tables_read = ref DirPath.Set.empty
+let table_checked dp = DirPath.Set.mem dp !tables_read
+
+(* What a process ran, by kind of job. *)
+let note_one = function
+  | Proof _ -> incr checks_done
+  | Table dp -> incr tables_done; tables_read := DirPath.Set.add dp !tables_read
+
+(* The first [k] tasks of a batch, which its worker ran. *)
+let note_done tasks k =
+  for i = 0 to k - 1 do note_one tasks.(i).job done
 
 (* Wall time since the first worker was forked, for the debug output. *)
 let start_time = ref 0.
@@ -306,10 +364,21 @@ let release_test_at point i =
    completed, and exits; the main process re-queues the rest. A release
    request stops it the same way, at the number of checks its release
    message named. At least one check is completed first, in both cases, so
-   that the checking always progresses. *)
-let run_worker parent report (tasks : task array) =
+   that the checking always progresses.
+
+   What a worker prints goes to [output], a pair of files for its
+   standard output and its standard error, and not to the terminal: the
+   main process prints what a worker that ended successfully printed,
+   and holds a failed worker's, which it prints only where stock reports
+   that worker's error and not an earlier one (see
+   [CheckLibrary.recheck_library]). The validation of a marshalled value
+   prints to standard output before it raises, so the redirection is
+   made before the first check, not when the error is caught. Without
+   those files, which only a temporary directory that cannot be written
+   to prevents, the worker prints where it always did. *)
+let run_worker parent report output (tasks : task array) =
   let size = Array.length tasks in
-  let current = ref (fst tasks.(0)) in
+  let current = ref tasks.(0).job in
   release_fd := report;
   started := 0;
   completed := 0;
@@ -323,6 +392,14 @@ let run_worker parent report (tasks : task array) =
   in_worker := true;
   if !pending_request then write_release ();
   release_test_at "entry" 0;
+  (match output with
+   | Some (out, err) ->
+     (try
+        flush_output ();
+        Unix.dup2 ~cloexec:false out Unix.stdout;
+        Unix.dup2 ~cloexec:false err Unix.stderr
+      with Unix.Unix_error _ -> ())
+   | None -> ());
   (* Only reaching the end of the batch, or a stop that is reported, may
      count as success. *)
   at_exit (fun () -> Unix._exit 2);
@@ -341,12 +418,12 @@ let run_worker parent report (tasks : task array) =
           started := i;
           stop := true
         end else begin
-          let kn, check = tasks.(i) in
+          let t = tasks.(i) in
           (* Nobody is waiting for the result any more. *)
           if Unix.getppid () <> parent then Unix._exit 1;
-          current := kn;
+          current := t.job;
           release_test_at "check" i;
-          check ();
+          t.run ();
           incr completed;
           release_test_at "between" i
         end
@@ -367,26 +444,85 @@ let run_worker parent report (tasks : task array) =
     else if !release_failed then 4
     else (try !report_writer report !completed; 0 with _ -> 3)
   in
+  (try
+     debug (fun () ->
+         str "worker " ++ int (Unix.getpid ()) ++ str " parsed " ++
+         int !table_reads ++ str " opaque " ++
+         str (CString.plural !table_reads "table") ++ str ", " ++
+         int !table_bytes ++ str " bytes read")
+   with _ -> ());
   (try flush_output () with _ -> ());
   (* Not [exit]: the at_exit functions of the main process must not run
      here. So the worker prints its own VM counters, if they are on. *)
   (try Vmbinnum.print_stats () with _ -> ());
   Unix._exit code
 
-let check_here (kn, check) =
-  try check ()
+let check_here t =
+  try t.run ()
   with e ->
     let e, info = Exninfo.capture e in
-    Exninfo.iraise (CheckError (kn, e), info)
+    Exninfo.iraise (CheckError (t.job, e), info)
 
 let batch_of_tasks tasks =
   let size = Array.length tasks in
-  { size; first = fst tasks.(0); last = fst tasks.(size - 1) }
+  let proofs = Array.fold_right (fun t l ->
+      match t.job with Proof c -> c :: l | Table _ -> l) tasks []
+  in
+  { size; first = tasks.(0).job; last = tasks.(size - 1).job;
+    proofs = List.length proofs;
+    first_proof = List.nth_opt proofs 0;
+    last_proof = List.nth_opt (List.rev proofs) 0 }
 
+let pr_job = function
+  | Proof c -> Constant.print c
+  | Table dp -> str "the opaque proofs of " ++ DirPath.print dp
+
+let pr_doing = function
+  | Proof c -> str "checking the opaque proof of" ++ spc () ++ Constant.print c
+  | Table dp -> str "reading the opaque proofs of" ++ spc () ++ DirPath.print dp
+
+(* Every job of a batch, for the debug output. *)
+let pr_tasks b =
+  str "a batch of " ++ int b.size ++ spc () ++
+  str "(the first is " ++ pr_job b.first ++ str "," ++ spc () ++
+  str "the last " ++ pr_job b.last ++ str ")"
+
+(* Stock's words: the opaque proofs of the batch, the reads of tables left
+   out. A batch has none only if it holds reads alone, and such a batch
+   fails visibly only where reading the table again in the main process
+   succeeds. *)
 let pr_batch b =
-  int b.size ++ str " " ++ str (CString.plural b.size "opaque proof") ++ spc () ++
-  str "(the first is " ++ Constant.print b.first ++ str "," ++ spc () ++
-  str "the last " ++ Constant.print b.last ++ str ")"
+  match b.first_proof, b.last_proof with
+  | Some first, Some last ->
+    int b.proofs ++ str " " ++ str (CString.plural b.proofs "opaque proof") ++ spc () ++
+    str "(the first is " ++ Constant.print first ++ str "," ++ spc () ++
+    str "the last " ++ Constant.print last ++ str ")"
+  | _ -> pr_tasks b
+
+(* An unnamed file for what a worker prints: created, opened, then
+   removed. *)
+let open_capture () =
+  match Filename.temp_file "rocqchk" ".out" with
+  | exception Sys_error _ -> None
+  | name ->
+    let fd =
+      try Some (Unix.openfile name [Unix.O_RDWR; Unix.O_CLOEXEC] 0o600)
+      with Unix.Unix_error _ -> None
+    in
+    (try Sys.remove name with Sys_error _ -> ());
+    fd
+
+let close_fd fd = try Unix.close fd with Unix.Unix_error _ -> ()
+
+(* The two files a worker prints to, or neither of them. *)
+let open_output () =
+  match open_capture (), open_capture () with
+  | Some out, Some err -> Some (out, err)
+  | out, err -> Option.iter close_fd out; Option.iter close_fd err; None
+
+let close_output w =
+  Option.iter (fun (out, err) -> close_fd out; close_fd err) w.output;
+  w.output <- None
 
 let spawn tasks =
   let batch = batch_of_tasks tasks in
@@ -401,8 +537,8 @@ let spawn tasks =
   let check_here_instead err =
     debug (fun () ->
         str "cannot fork (" ++ str err ++
-        str "), checking here " ++ pr_batch batch);
-    Array.iter (fun t -> check_here t; incr checks_done) tasks
+        str "), checking here " ++ pr_tasks batch);
+    Array.iter (fun t -> check_here t; note_one t.job) tasks
   in
   match Unix.pipe ~cloexec:true () with
   | exception Unix.Unix_error (err, _, _) -> check_here_instead (Unix.error_message err)
@@ -415,22 +551,30 @@ let spawn tasks =
        at entry, which is harmless, since the main process accepts any
        release whose count the final report matches. *)
     pending_request := false;
+    let output = open_output () in
     match Unix.fork () with
     | 0 ->
       Unix.close report;
-      List.iter (fun w -> try Unix.close w.report with Unix.Unix_error _ -> ()) !running;
-      (* The worker counts only what it runs itself. *)
+      List.iter (fun w ->
+          close_fd w.report;
+          Option.iter (fun (out, err) -> close_fd out; close_fd err) w.output)
+        !running;
+      (* The worker counts only what it runs and reads itself. *)
       Vmbinnum.reset_stats ();
-      run_worker parent report_out tasks
+      table_reads := 0;
+      table_bytes := 0;
+      run_worker parent report_out output tasks
     | pid ->
       Unix.close report_out;
       incr forks;
-      debug (fun () -> str "worker " ++ int pid ++ str ": " ++ pr_batch batch);
-      running := { pid; batch; tasks; report; asked = false; released = None; buf = "" } :: !running;
+      debug (fun () -> str "worker " ++ int pid ++ str ": " ++ pr_tasks batch);
+      running := { pid; batch; tasks; report; output;
+                   asked = false; released = None; buf = "" } :: !running;
       if !forks = 1 then release_test_at "main" 0
     | exception Unix.Unix_error (err, _, _) ->
       Unix.close report;
       Unix.close report_out;
+      Option.iter (fun (out, e) -> close_fd out; close_fd e) output;
       check_here_instead (Unix.error_message err)
 
 let signal_name s =
@@ -445,7 +589,7 @@ let signal_name s =
   | Some name -> name
   | None -> "signal " ^ string_of_int s
 
-let close_report fd = try Unix.close fd with Unix.Unix_error _ -> ()
+let close_report fd = close_fd fd
 
 let abort () =
   let workers = !running in
@@ -456,8 +600,52 @@ let abort () =
     workers;
   List.iter (fun w ->
       (try ignore (waitpid_non_intr [] w.pid) with Unix.Unix_error _ -> ());
-      close_report w.report)
+      close_report w.report;
+      close_output w)
     workers
+
+(* What the worker whose failure is being raised printed, standard output
+   and standard error, until [print_held_output] or [drop_held_output]. *)
+let held_output = ref ("", "")
+
+let read_fd fd =
+  let b = Buffer.create 1024 in
+  let chunk = Bytes.create 65536 in
+  let rec go () =
+    match Unix.read fd chunk 0 (Bytes.length chunk) with
+    | 0 -> ()
+    | n -> Buffer.add_subbytes b chunk 0 n; go ()
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> go ()
+  in
+  (try ignore (Unix.lseek fd 0 Unix.SEEK_SET); go () with Unix.Unix_error _ -> ());
+  Buffer.contents b
+
+let read_output w =
+  match w.output with
+  | None -> ("", "")
+  | Some (out, err) -> (read_fd out, read_fd err)
+
+let print_output (out, err) =
+  if out <> "" || err <> "" then begin
+    flush_output ();
+    if out <> "" then (print_string out; flush stdout);
+    if err <> "" then (output_string stderr err; flush stderr)
+  end
+
+(* The worker [w] failed: every worker is stopped, and what it printed
+   kept. *)
+let fail w status =
+  held_output := read_output w;
+  close_output w;
+  abort ();
+  raise (WorkerFailed (w.pid, status, w.batch))
+
+let print_held_output () =
+  let s = !held_output in
+  held_output := ("", "");
+  print_output s
+
+let drop_held_output () = held_output := ("", "")
 
 (* The messages a worker writes: at most one release message, then its
    final report. Each is one [write] of [report_size] bytes, far below
@@ -508,10 +696,8 @@ let push_front tasks =
    count outside 1 to [size], is not something a worker writes: the check
    is aborted, as for any other malformed report. *)
 let release_received w k =
-  if w.released <> None || k < 1 || k > w.batch.size then begin
-    abort ();
-    raise (WorkerFailed (w.pid, Unix.WEXITED 0, w.batch))
-  end;
+  if w.released <> None || k < 1 || k > w.batch.size then
+    fail w (Unix.WEXITED 0);
   w.released <- Some k;
   (* A worker past its last check releases nothing; that is not counted. *)
   if k < w.batch.size then incr releases;
@@ -548,17 +734,17 @@ let reaped pid status =
     close_report w.report;
     take_releases w;
     match completed_count ~size:w.batch.size status w.buf with
-    | None ->
-      abort ();
-      raise (WorkerFailed (pid, status, w.batch))
+    | None -> fail w status
     | Some k ->
-      checks_done := !checks_done + k;
+      (match w.released with
+       | Some r when not (Int.equal r k) -> fail w status
+       | Some _ | None -> ());
+      (* It ended successfully, so what it printed is printed now. *)
+      print_output (read_output w);
+      close_output w;
+      note_done w.tasks k;
       match w.released with
-      | Some r ->
-        if not (Int.equal r k) then begin
-          abort ();
-          raise (WorkerFailed (pid, status, w.batch))
-        end;
+      | Some _ ->
         debug (fun () ->
             str "worker " ++ int pid ++ str " completed the " ++ int k ++
             str " checks it kept")
@@ -634,49 +820,132 @@ let rec wait_for_messages timeout =
          [finish] from spinning until the workers exit. *)
       (try Unix.sleepf timeout with Unix.Unix_error _ -> ())
 
-(* Deal [k] batches of at most [size] checks from the front of the
-   queue. When it holds [s >= k] batches of [size], batch [j] takes the
-   checks at positions [j], [j + s], [j + 2s]... of the first [s * size].
-   The checks not taken stay at the front, in order. *)
-let deal ?(newest_first = false) k size =
-  let n = Queue.length queue in
-  let lanes = max k (n / size) in
+(* The runs of [l], in order: its maximal sequences of jobs that one
+   library's walk deferred. A library's jobs make one run, unless jobs
+   given back were put in front of the queue. *)
+let runs l =
+  let close acc cur = if CList.is_empty cur then acc else List.rev cur :: acc in
+  let rec go acc cur = function
+    | [] -> List.rev (close acc cur)
+    | t :: l ->
+      match cur with
+      | t' :: _ when not (Int.equal t'.group t.group) -> go (close acc cur) [t] l
+      | _ -> go acc (t :: cur) l
+  in
+  go [] [] l
+
+let rec split_at n acc l =
+  if Int.equal n 0 then List.rev acc, l
+  else match l with
+    | [] -> List.rev acc, []
+    | t :: l -> split_at (n - 1) (t :: acc) l
+
+(* A run cut into pieces of [size] jobs, the last one shorter, each with
+   whether it may be dealt now. While the libraries are walked, [open_group]
+   is the library whose walk is still deferring jobs: of its run only the
+   whole pieces may be dealt, and the rest waits for the jobs still to come,
+   so that a batch takes them together and one process parses its table. *)
+let pieces ?open_group size r =
+  let rec cut acc r =
+    if CList.is_empty r then List.rev acc
+    else let p, r = split_at size [] r in cut (p :: acc) r
+  in
+  let still_open = match open_group, r with
+    | Some g, t :: _ -> Int.equal t.group g
+    | _ -> false
+  in
+  List.map (fun p -> (not still_open || List.length p >= size), p) (cut [] r)
+
+(* Deal up to [k] batches of about [size] jobs from the queue.
+
+   The pieces that may be dealt are striped over [s] lanes, [s] being the
+   number of batches of [size] they make: batch [j] takes pieces [j], [j +
+   s], [j + 2s]... until it holds [size] jobs. So a batch holds whole
+   libraries, and libraries next to each other in the queue go to different
+   batches. A batch holds at most [2 * size - 1] jobs.
+
+   While the libraries are walked ([walk]), the open library's last piece
+   waits (see [pieces]), a batch is run newest first, and a batch whose lane
+   ran short of [size / 2] jobs is not dealt: a fork is not worth it, and its
+   jobs wait for the next deal. In [finish] every batch is dealt, oldest
+   first, down to a single job. What is not dealt stays in the queue, in
+   order. *)
+let deal ?(walk = false) k size =
+  let all = List.rev (Queue.fold (fun acc t -> t :: acc) [] queue) in
+  let open_group = if walk then Some !current_group else None in
+  let ps = Array.of_list (List.concat_map (pieces ?open_group size) (runs all)) in
+  let n = Array.fold_left (fun n (ok, p) -> if ok then n + List.length p else n) 0 ps in
+  let s = max k (n / size) in
+  let filled = Array.make k 0 in
+  let lane = Array.make (Array.length ps) (-1) in
+  let next = ref 0 in
+  Array.iteri (fun i (ok, p) ->
+      if ok then begin
+        let j = !next mod s in
+        incr next;
+        if j < k && filled.(j) < size then begin
+          lane.(i) <- j;
+          filled.(j) <- filled.(j) + List.length p
+        end
+      end)
+    ps;
+  let dealt j = filled.(j) > 0 && (not walk || 2 * filled.(j) >= size) in
   let batches = Array.make k [] in
-  let rest = Queue.create () in
-  for i = 0 to min n ((size - 1) * lanes + k) - 1 do
-    let task = Queue.pop queue in
-    let j = i mod lanes in
-    if j < k then batches.(j) <- task :: batches.(j) else Queue.push task rest
-  done;
-  Queue.transfer queue rest;
-  Queue.transfer rest queue;
-  Array.iter (fun l ->
-      if not (CList.is_empty l) then spawn (Array.of_list (if newest_first then l else List.rev l)))
+  let left = ref [] in
+  Array.iteri (fun i (_, p) ->
+      let j = lane.(i) in
+      if j >= 0 && dealt j then batches.(j) <- List.rev_append p batches.(j)
+      else left := List.rev_append p !left)
+    ps;
+  Queue.clear queue;
+  List.iter (fun t -> Queue.push t queue) (List.rev !left);
+  (* Only once the queue holds what was not dealt: a worker inherits it by
+     fork, and a batch whose fork fails is checked here. A batch is built
+     newest first. *)
+  Array.iter (fun b ->
+      if not (CList.is_empty b) then
+        spawn (Array.of_list (if walk then b else List.rev b)))
     batches
+
+(* Hands out the batches a new job makes possible, at most once every
+   [window] seconds. *)
+let dispatch () =
+  let now = Unix.gettimeofday () in
+  if now -. !last_dispatch >= window then begin
+    last_dispatch := now;
+    reap_finished ();
+    let n = Queue.length queue in
+    let size = max min_batch ((n + !max_workers) / (!max_workers + 1)) in
+    let k = min (free_slots !max_workers) (n / size) in
+    (* While the libraries are checked, a worker runs its batch newest
+       first: costly proofs come late in a library, so one deferred last no
+       longer waits for the rest of its batch and is not the one given back
+       when the worker's budget runs out. The task that reads a library's
+       table is the oldest job of its group, so it runs after the checks
+       that already parsed the table. *)
+    if k > 0 then deal ~walk:true k size
+    (* No release is requested here: a request needs an empty queue,
+       which the walk rarely leaves, and the walk reads a release message
+       only when it reaps its worker, and deals only batches of at least
+       [min_batch / 2] jobs; so a released tail would wait here anyway.
+       [finish] asks, reads and deals at once. *)
+  end
 
 let defer kn check =
   incr deferred;
   if !max_workers = 0 then begin check (); incr checks_done end
   else begin
-    Queue.push (kn, check) queue;
-    let now = Unix.gettimeofday () in
-    if now -. !last_dispatch >= window then begin
-      last_dispatch := now;
-      reap_finished ();
-      let n = Queue.length queue in
-      let size = max min_batch ((n + !max_workers) / (!max_workers + 1)) in
-      let k = min (free_slots !max_workers) (n / size) in
-      (* While the libraries are checked, a worker checks its batch
-         newest first: costly proofs come late in a library, so one
-         deferred last no longer waits for the rest of its batch and is
-         not the one given back when the worker's budget runs out. *)
-      if k > 0 then deal ~newest_first:true k size
-      (* No release is requested here: a request needs an empty queue,
-         which the walk rarely leaves, and the walk reads a release message
-         only when it reaps its worker, and deals only batches of at least
-         [min_batch]; so a released tail would wait here anyway. [finish]
-         asks, reads and deals at once. *)
-    end
+    Queue.push { job = Proof kn; group = !current_group; run = check } queue;
+    dispatch ()
+  end
+
+let defer_table dp read =
+  incr tables_deferred;
+  incr current_group;
+  if !max_workers = 0 then begin read (); incr tables_done end
+  else begin
+    Queue.push { job = Table dp; group = !current_group; run = read } queue;
+    dispatch ()
   end
 
 let finish () =
@@ -703,5 +972,10 @@ let finish () =
         int !early_stops ++ str " stopped early, " ++
         int !releases ++ str " released a tail, " ++
         int !checks_done ++ str " checks run of " ++ int !deferred ++ str " deferred, " ++
-        int !main_cooks ++ str " cooked in the main process")
+        int !main_cooks ++ str " cooked in the main process");
+    debug (fun () ->
+        str "tables: " ++ int !tables_done ++ str " read of " ++
+        int !tables_deferred ++ str " deferred, " ++
+        int !table_reads ++ str " parsed in the main process, " ++
+        int !table_bytes ++ str " bytes read there")
   end

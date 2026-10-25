@@ -132,10 +132,11 @@ let check_constant_declaration env opac kn cb opacify =
      ([subst_mps_list]), with the environment extended by its private
      universes. A pure function of the stored proof and its cooking
      information (kernel/discharge.ml), and of nothing that the checking
-     changes: every library's opaque table is read before the first
-     constant is checked (CheckLibrary.recheck_library). [note_cook]
-     counts this where it runs, so that a test can tell the main process
-     from a worker. *)
+     changes: the table is the library's file as the main process hashed
+     it when it interned the library, which the process that reads it
+     checks (CheckLibrary.read_opaque_table). [note_cook] counts this
+     where it runs, so that a test can tell the main process from a
+     worker. *)
   let cook o =
     CheckWorkers.note_cook ();
     let c, u = !indirect_accessor o in
@@ -165,8 +166,9 @@ let check_constant_declaration env opac kn cb opacify =
     (* Nothing else that is checked looks into an opaque body, so its check
        can be postponed, and possibly run in another process, and so can
        its cooking: the main process keeps no cooked body while the check
-       waits. A worker inherits the tables by fork, and a check handed back
-       cooks again in the process that runs it. With -j 1, [defer] runs the
+       waits. The process that runs the check reads the table it needs
+       ([CheckLibrary.indirect_accessor]), and a check handed back cooks
+       again in the process that runs it. With -j 1, [defer] runs the
        closure at once, so the order of effects is as before. *)
     CheckWorkers.defer kn (fun () -> let c, env = cook o in check env c ());
     opac
