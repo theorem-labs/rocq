@@ -22,6 +22,81 @@ let print_memory_stat () =
     Format.print_flush()
   end
 
+type unsafe_flags = {
+  type_in_type : string list;
+  unguarded : string list;
+  nonpositive : string list;
+  indices_matter : string list;
+}
+
+let empty_unsafe_flags = {
+  type_in_type = [];
+  unguarded = [];
+  nonpositive = [];
+  indices_matter = [];
+}
+
+let unsafe_flags = ref None
+
+let start_summary enabled =
+  unsafe_flags := if enabled then Some empty_unsafe_flags else None
+
+let add_name name names =
+  if List.mem name names then names else name :: names
+
+let record_constant c cb =
+  match !unsafe_flags with
+  | None -> ()
+  | Some flags ->
+    let name = Constant.to_string c in
+    unsafe_flags := Some {
+      flags with
+      type_in_type =
+        if cb.const_typing_flags.check_universes then flags.type_in_type
+        else add_name name flags.type_in_type;
+      unguarded =
+        if cb.const_typing_flags.check_guarded then flags.unguarded
+        else add_name name flags.unguarded;
+    }
+
+let record_inductive c mib =
+  match !unsafe_flags with
+  | None -> ()
+  | Some flags ->
+    let name = MutInd.to_string c in
+    unsafe_flags := Some {
+      type_in_type =
+        if mib.mind_typing_flags.check_universes then flags.type_in_type
+        else add_name name flags.type_in_type;
+      unguarded =
+        if mib.mind_typing_flags.check_guarded then flags.unguarded
+        else add_name name flags.unguarded;
+      nonpositive =
+        if mib.mind_typing_flags.check_positive then flags.nonpositive
+        else add_name name flags.nonpositive;
+      indices_matter =
+        if mib.mind_typing_flags.indices_matter ||
+           not (Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) mib.mind_packets)
+        then flags.indices_matter
+        else add_name name flags.indices_matter;
+    }
+
+let add_missing names extras =
+  let rec collect extras = function
+    | [] -> extras
+    | name :: rest ->
+      if List.mem name names || List.mem name extras then collect extras rest
+      else collect (name :: extras) rest
+  in
+  match List.rev (collect [] (List.rev extras)) with
+  | [] -> names
+  | extras -> names @ extras
+
+let current_unsafe_flags () =
+  match !unsafe_flags with
+  | None -> empty_unsafe_flags
+  | Some flags -> flags
+
 let pr_impredicative_set env =
   if is_impredicative_set env then str "Theory: Set is impredicative"
   else str "Theory: Set is predicative"
@@ -40,31 +115,32 @@ let pr_axioms env opac =
   let csts = List.map Constant.to_string opac in
   pr_assumptions "Axioms" csts
 
-let pr_type_in_type env =
+let pr_type_in_type env flags =
   let csts = fold_constants (fun c cb acc -> if not cb.const_typing_flags.check_universes then Constant.to_string c :: acc else acc) env [] in
   let csts = fold_inductives (fun c cb acc -> if not cb.mind_typing_flags.check_universes then MutInd.to_string c :: acc else acc) env csts in
-  pr_assumptions "Constants/Inductives relying on type-in-type" csts
+  pr_assumptions "Constants/Inductives relying on type-in-type" (add_missing csts flags.type_in_type)
 
-let pr_unguarded env =
+let pr_unguarded env flags =
   let csts = fold_constants (fun c cb acc -> if not cb.const_typing_flags.check_guarded then Constant.to_string c :: acc else acc) env [] in
   let csts = fold_inductives (fun c cb acc -> if not cb.mind_typing_flags.check_guarded then MutInd.to_string c :: acc else acc) env csts in
-  pr_assumptions "Constants/Inductives relying on unsafe (co)fixpoints" csts
+  pr_assumptions "Constants/Inductives relying on unsafe (co)fixpoints" (add_missing csts flags.unguarded)
 
-let pr_nonpositive env =
+let pr_nonpositive env flags =
   let inds = fold_inductives (fun c cb acc -> if not cb.mind_typing_flags.check_positive then MutInd.to_string c :: acc else acc) env [] in
-  pr_assumptions "Inductives whose positivity is assumed" inds
+  pr_assumptions "Inductives whose positivity is assumed" (add_missing inds flags.nonpositive)
 
-let pr_indices_matter env =
+let pr_indices_matter env flags =
   let inds = fold_inductives (fun c cb acc ->
     if cb.mind_typing_flags.indices_matter then acc
     else if Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) cb.mind_packets
     then MutInd.to_string c :: acc
     else acc) env [] in
-  pr_assumptions "Inductives relying on indices not mattering" inds
+  pr_assumptions "Inductives relying on indices not mattering" (add_missing inds flags.indices_matter)
 
 let print_context env opac = match opac with
 | None -> ()
 | Some opac ->
+  let flags = current_unsafe_flags () in
   Feedback.msg_notice
     (hov 0
     (fnl() ++ str"CONTEXT SUMMARY" ++ fnl() ++
@@ -72,10 +148,10 @@ let print_context env opac = match opac with
     str "* " ++ hov 0 (pr_impredicative_set env ++ fnl()) ++ fnl() ++
     str "* " ++ hov 0 (pr_rewrite_rules env ++ fnl()) ++ fnl() ++
     str "* " ++ hov 0 (pr_axioms env opac ++ fnl()) ++ fnl() ++
-    str "* " ++ hov 0 (pr_type_in_type env ++ fnl()) ++ fnl() ++
-    str "* " ++ hov 0 (pr_unguarded env ++ fnl()) ++ fnl() ++
-    str "* " ++ hov 0 (pr_nonpositive env ++ fnl()) ++ fnl() ++
-    str "* " ++ hov 0 (pr_indices_matter env ++ fnl()))
+    str "* " ++ hov 0 (pr_type_in_type env flags ++ fnl()) ++ fnl() ++
+    str "* " ++ hov 0 (pr_unguarded env flags ++ fnl()) ++ fnl() ++
+    str "* " ++ hov 0 (pr_nonpositive env flags ++ fnl()) ++ fnl() ++
+    str "* " ++ hov 0 (pr_indices_matter env flags ++ fnl()))
     )
 
 let stats env opac =

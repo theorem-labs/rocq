@@ -495,6 +495,7 @@ let run senv =
 
 let main () =
   let senv = init() in
+  Check_stat.start_summary !output_context;
   let senv, opac = run senv in
   let opac =
     if !output_context then

@@ -327,10 +327,12 @@ and check_structure_field env opac mp lab res opacify = function
   | SFBconst cb ->
       let kn = KerName.make mp lab in
       let kn = Mod_subst.constant_of_delta_kn res kn in
+      let () = Check_stat.record_constant kn cb in
       check_constant_declaration env opac kn cb (KerName.Set.mem (Constant.canonical kn) opacify.cset)
   | SFBmind mib ->
       let kn = KerName.make mp lab in
       let kn = Mod_subst.mind_of_delta_kn res kn in
+      let () = Check_stat.record_inductive kn mib in
       let retro = Mindmap_env.find_opt kn (fst opac.st_retro) in
       let opac = match retro with
       | None -> opac
