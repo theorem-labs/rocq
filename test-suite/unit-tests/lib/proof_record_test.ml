@@ -214,8 +214,34 @@ let memo_moves =
      let t1 = Sys.time () in
      before = after && before = fresh && t1 -. t0 < 5.0)
 
+(* The memo's keys are weak and hashed by address, so a key can die and the
+   allocator can put a NEW block at that address. The entry must never answer
+   for the new block. It cannot: the key of an ephemeron is the block itself,
+   and a dead key makes its binding absent, so a lookup can only miss
+   ([Ephemeron.K1.Make] over [let equal = ( == )] in lib/proof_record.ml).
+   This test is the guard on that property, which must never regress: it
+   churns the heap so that addresses are reused, and requires every digest
+   taken with the live memo to equal the one taken with an empty memo. *)
+let memo_reused_address =
+  mk_bool_test "proof-record-digest-memo-reused-address"
+    "a digest never comes from a collected block at the same address"
+    (let block i = Array.to_list (Array.init 60 (fun j -> (i, j, string_of_int (i * j)))) in
+     let ok = ref true in
+     for i = 0 to 299 do
+       (* The block is dropped at the end of each round, so its memo entries
+          die and its addresses are reused by the next rounds. *)
+       let b = block i in
+       let with_memo = R.digest_value b in
+       R.reset_memo ();
+       let without_memo = R.digest_value b in
+       if with_memo <> without_memo then ok := false;
+       if i land 7 = 0 then Gc.compact ()
+     done;
+     (* And two different values still differ after all that churn. *)
+     !ok && R.digest_value (block 0) <> R.digest_value (block 1))
+
 let tests =
   [ roundtrip; bad_input; toolchain_key_fields; sharing; kinds; deep; locations; unhashable; memo;
-    memo_moves; vo_path ]
+    memo_moves; memo_reused_address; vo_path ]
 
 let _ = run_tests __FILE__ log_out_ch tests

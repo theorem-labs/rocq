@@ -251,10 +251,26 @@ type hook = Environ.env -> Evd.evar_map -> ((Names.Constant.t * EConstr.EInstanc
 
 let all_hooks = ref (CString.Map.empty : hook CString.Map.t)
 
+(* BET-84: a name does not name a closure. [register_hook ~override:true]
+   replaces the function behind an unchanged name, from a plugin whose files
+   are unchanged, so neither the active-name list nor the toolchain key moves
+   while behaviour does (cross-model delta-2 review, P1). Each name carries
+   the number of times it was registered, and that number is recorded with
+   it. A closure cannot be digested, and its address is not its identity. *)
+let hook_generation = ref (CString.Map.empty : int CString.Map.t)
+
+let bump_generation name =
+  let n = match CString.Map.find_opt name !hook_generation with None -> 0 | Some n -> n in
+  hook_generation := CString.Map.add name (n + 1) !hook_generation
+
+let generation_of name =
+  match CString.Map.find_opt name !hook_generation with None -> 0 | Some n -> n
+
 let register_hook ~name ?(override=false) h =
   if not override && CString.Map.mem name !all_hooks then
     CErrors.anomaly ~label:"CanonicalSolution.register_hook"
       Pp.(str "Hook already registered: \"" ++ str name ++ str "\".");
+  bump_generation name;
   all_hooks := CString.Map.add name h !all_hooks
 
 let active_hooks = Summary.ref ~name:"canonical_solution_hooks_hacked" ([] : string list)
@@ -267,16 +283,20 @@ let activate_hook ~name =
   deactivate_hook ~name;
   active_hooks := name :: !active_hooks
 
-(* BET-84 census row 14: the ordered list of active canonical-solution hooks.
-   A plugin enables or disables one with no other recorded change, and a
-   unification problem only that hook solves then changes acceptance
-   (cross-model delta review D5). The names, not the hook functions, which
-   are closures. *)
+(* BET-84 census row 14: the ordered list of active canonical-solution hooks,
+   each with the number of times its name was registered. A plugin enables or
+   disables a hook with no other recorded change, and a unification problem
+   only that hook solves then changes acceptance (delta review D5); and
+   [register_hook ~override:true] replaces the closure behind an unchanged
+   name with unchanged plugin files (delta-2 review P1). The names and their
+   generations, never the hook functions, which are closures. *)
 let apply_hooks env sigma proj pat =
   let active = !active_hooks in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"canonical_hooks" ~key:(fun () -> "")
-      ~value:(fun () -> Some (Proof_recorder.digest ~what:"canonical_hooks" active));
+      ~value:(fun () ->
+          Some (Proof_recorder.digest ~what:"canonical_hooks"
+                  (List.map (fun n -> (n, generation_of n)) active)));
   List.find_map (fun name ->
     try CString.Map.get name !all_hooks env sigma proj pat
     with e when CErrors.noncritical e -> anomaly Pp.(str "CS hook " ++ str name ++ str " exploded")) active
