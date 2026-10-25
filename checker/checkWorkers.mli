@@ -167,3 +167,11 @@ val min_batch : int
 (** The size below which no batch is dealt while the libraries are
     checked, but for one whose lane ran short, of at least [min_batch / 2]:
     the expected batches of a test depend on it. *)
+
+val set_window : float -> unit
+(** [set_window w]: while the libraries are checked, [defer] deals at
+    most once every [w] seconds (1 by default). A test sets it to
+    [infinity], so that only [end_window] makes [defer] deal. *)
+
+val end_window : unit -> unit
+(** The next [defer] or [defer_table] deals, as once a window has passed. *)

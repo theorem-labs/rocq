@@ -129,7 +129,11 @@ let set_budget t =
    whenever a worker slot is free, it is given [1/(2N)] of what remains,
    and at least one check, so that all workers end at about the same
    time. *)
-let window = 1.0
+let window = ref 1.0
+
+(* Test only: the unit tests open each window themselves ([end_window]),
+   so that what is dealt does not depend on how fast the test runs. *)
+let set_window w = window := w
 
 (* Below this, a batch is not worth a fork while the libraries are being
    checked. A fork copies the page tables of the main process, whose heap
@@ -148,6 +152,9 @@ let min_batch = 200
 (* Deferred jobs not yet given to a worker, oldest first. *)
 let queue : task Queue.t = Queue.create ()
 let last_dispatch = ref 0.
+
+(* Test only: the next [defer] deals, as once a window has passed. *)
+let end_window () = last_dispatch := neg_infinity
 
 (* The library whose jobs are being deferred: [defer_table], which every
    library's walk calls before its own checks, opens the next group. *)
@@ -911,7 +918,7 @@ let deal ?(walk = false) k size =
    [window] seconds. *)
 let dispatch () =
   let now = Unix.gettimeofday () in
-  if now -. !last_dispatch >= window then begin
+  if now -. !last_dispatch >= !window then begin
     last_dispatch := now;
     reap_finished ();
     let n = Queue.length queue in

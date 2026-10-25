@@ -822,29 +822,45 @@ for sel in dep admitted; do
 done
 
 # (v) A table whose declared length covers a 2 GiB tail of zeros (sparse),
-# its payload and digests intact, read under a 4 GiB address-space limit
-# (the second review's D5). Stock never reads the tail and accepts the
-# file; a reader that held the declared range in memory ran out of it.
-# The main process and the worker only hash that range, in a fixed
-# buffer, so the output and the exit code must be stock's at every -j.
+# its payload and digests intact, read under an address-space limit (the
+# second review's D5). Stock never reads the tail and accepts the file; a
+# reader that held the declared range in memory ran out of it. The main
+# process and the worker only hash that range, in a fixed buffer, so the
+# output and the exit code must be stock's at every -j.
+# The limit is what this build needs for the intact files at that -j, in
+# whole GiB, plus 1 GiB: a reader that held the 2 GiB range would need
+# more than that. It is measured, not fixed, because the runtime decides
+# how much address space a process reserves: OCaml 5 reserves more for a
+# worker than OCaml 4.14 does, and a fixed 4 GiB failed there at -j 2.
 # `vo length` runs before `vo pad`. `length` rewrites the whole file, so it
 # must run while the file is still small, and it needs no valid segment
 # hashes; `pad` only extends the file, so the 2 GiB tail stays sparse. In
 # the other order `length` holds the padded file twice in memory (4 GiB)
 # and writes it out dense (2.1 GiB on disk).
+GiB=1048576  # in KiB, the unit of ulimit -v
+fits() {  # fits KIB J: this build checks the intact files at -j J under KIB
+  ( ulimit -v "$1"; exec coqchk -silent -o -j "$2" -R "$d/good" "" -norec Use ) \
+    > /dev/null 2>&1
+}
 t=$d/v; rm -rf "$t"; cp -a "$d/good" "$t"
 vo length "$t/Dep.vo" opaques 2147483648
 vo pad "$t/Dep.vo" 2147483648
 for j in 1 2 4 16; do
+  k=1
+  while ! fits $((k * GiB)) "$j"; do
+    k=$((k + 1))
+    [ "$k" -le 64 ] || fail "(v) -j $j: the intact files need more than 64 GiB of address space"
+  done
+  lim=$(((k + 1) * GiB))
   R=0
-  ( ulimit -v 4194304; exec coqchk -silent -o -j "$j" -R "$t" "" -norec Use ) \
+  ( ulimit -v "$lim"; exec coqchk -silent -o -j "$j" -R "$t" "" -norec Use ) \
     > "$d/v-j$j.out" 2>&1 || R=$?
   rc=$R
   R=0
-  ( ulimit -v 4194304; exec "$REF" -silent -o -j "$j" -R "$t" "" -norec Use ) \
+  ( ulimit -v "$lim"; exec "$REF" -silent -o -j "$j" -R "$t" "" -norec Use ) \
     > "$d/v-j$j-ref.out" 2>&1 || R=$?
-  expect "(v) -j $j: exit code (the reference's is $R)" "$rc" -eq "$R"
-  expect "(v) -j $j: exit code" "$rc" -eq 0
+  expect "(v) -j $j, limit $((k + 1)) GiB: exit code (the reference's is $R)" "$rc" -eq "$R"
+  expect "(v) -j $j, limit $((k + 1)) GiB: exit code" "$rc" -eq 0
   same "v-j$j-ref" "v-j$j" "(v) -j $j"
 done
 rm -rf "$t"
