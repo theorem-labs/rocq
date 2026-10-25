@@ -132,6 +132,19 @@ type proof = {
       check records no reads: they are suspended while it runs. *)
   wall_s : float;  (** Wall seconds from the statement to the closer. *)
   cpu_s : float;  (** Process CPU seconds over the same span. *)
+  span : (int * int) option;
+  (** The byte offsets in the compiled [.v] of the statement sentence's
+      first byte and of the closer's last byte + 1, or [None] when the
+      proof has no single source span (a closer the STM delayed, a
+      statement with no location). A consumer that cuts a proof out of a
+      shipped record keeps an entry only when these bytes still appear in
+      the source it ships (BET-84 P4). *)
+  replay : string option;
+  (** The stored proof term and what replay needs to declare it, base64 of
+      a Marshal blob that only this Rocq reads (see {!Proof_replay}), or
+      [None] when the proof stores none: it is ineligible, its closer is
+      not [Qed] or [Save], or the term could not be marshalled. A reader
+      other than Rocq treats it as an opaque string. *)
 }
 
 (** {6 Trailer} *)

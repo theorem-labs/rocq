@@ -34,6 +34,13 @@ rocq compile specific options:\
 \n  -proof-record          write a per-proof record of reads and writes beside each .vo\
 \n  -proof-record-tables   with -proof-record, also record a digest of every hint\
 \n                         database and typeclass table at each proof's start\
+\n  -proof-replay FILE     replay a proof's stored term from that record file\
+\n  -proof-replay-dir DIR  the same, from the record of this library in DIR\
+\n  -proof-replay-ratio R  the grade-to-registration ratio of per-file wall time,\
+\n                         at the top of its spread (required with -proof-replay)\
+\n  -proof-replay-budget S the per-file wall budget the charged clock runs against\
+\n  -proof-replay-peak-limit-kb K\
+\n                         no replay in a file whose registered peak was above K\
 \n"
 }
 

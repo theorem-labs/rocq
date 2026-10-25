@@ -61,6 +61,11 @@ val register_tables : (unit -> Proof_record.read list) -> unit
     with [tables_at_start]. A no-op otherwise, so its argument is never
     called. *)
 
+val table_reads : unit -> Proof_record.read list
+(** The same digests as values, whatever the compile's options: the side
+    that checks a record evaluates this list at the proof it is about to
+    replay. *)
+
 val write : string -> unit
 (** Writes the record to that path and turns the recorder off. Call it
     after the [.vo], so that a compile that fails leaves no record. A no-op
@@ -81,18 +86,22 @@ val open_proof :
     it marks the open proof ineligible with reason ["nested_proof"], and
     its reads are kept as the open proof's own. *)
 
-val sentence : (unit -> string) -> (unit -> 'a) -> 'a
-(** [sentence digest run] runs one parsed sentence. When a proof is open at
-    the end of [run], or was opened by it, [digest ()] is kept as one of
-    the proof's sentences (key item 1, the statement's sentence included).
-    [digest] is called only then. *)
+val sentence : ?span:int * int -> (unit -> string) -> (unit -> 'a) -> 'a
+(** [sentence ?span digest run] runs one parsed sentence. When a proof is
+    open at the end of [run], or was opened by it, [digest ()] is kept as
+    one of the proof's sentences (key item 1, the statement's sentence
+    included). [digest] is called only then. [span] is the sentence's byte
+    range in the compiled file: the statement's start and the closer's end
+    make the proof's {!Proof_record.proof.span}. A caller that gives no
+    span records no span. *)
 
-val close_proof : closer:string -> kernel_check:bool -> unit
+val close_proof : closer:string -> kernel_check:bool -> replay:string option -> unit
 (** Ends the entry of the innermost open proof and, at the outermost one,
     appends it to the record, with the sentences and the writes collected
     since {!open_proof}. [kernel_check] says whether the kernel typed the
-    proof at this closer. Call it after the declaration, inside
-    {!without_recording}. *)
+    proof at this closer. [replay] is the stored term
+    ({!Proof_record.proof.replay}), [None] for a proof that stores none.
+    Call it after the declaration, inside {!without_recording}. *)
 
 (** {6 Writes} *)
 

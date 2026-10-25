@@ -1,0 +1,10 @@
+{
+  "doc": "an unused entry changes in a searched hint database: the whole-database digest misses",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {"proofs": 2, "hits": 1,
+              "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.main_hint", "hit"], ["PR.A.reads_db", "read"]]}
+  }
+}

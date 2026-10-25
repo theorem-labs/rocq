@@ -26,3 +26,9 @@ val read_at_start : unit -> unit
     and variable opacity (row 3), the typing flags (row 4), every option
     and the warning flags (row 13), the generalizable identifiers (M3) and
     the template default levels (M7). A no-op when no proof is open. *)
+
+val start_reads : unit -> Proof_record.read list
+(** The same reads as values, for the side that checks them again:
+    {!Proof_replay_env} evaluates this list at the proof it is about to
+    replay, so the recorded value and the value now are made the same
+    way. *)

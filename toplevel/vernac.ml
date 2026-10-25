@@ -105,41 +105,27 @@ let load_vernac_core ~echo ~check ~state ?source file =
       (Gramlib.Stream.of_channel in_chan) in
   let open State in
 
-  (* ids = For beautify, list of parsed sids *)
-  let rec loop state ids =
-    let tstart = System.get_time () in
-    match
-      NewProfile.profile "parse_command" (fun () ->
-          Stm.parse_sentence
-            ~doc:state.doc ~entry:Pvernac.main_entry state.sid in_pa)
-        ()
-    with
-    | None ->
-      input_cleanup ();
-      state, ids, Procq.Parsable.comments in_pa
-    | Some ast ->
-      (* Printing of AST for -compile-verbose *)
-      Option.iter (vernac_echo ?loc:ast.CAst.loc) in_echo;
-
-      checknav ast;
-
-      let state =
-        try_finally
-          (fun () ->
-             NewProfile.profile "command"
-               ~args:(fun () ->
-                   let lnum = match ast.loc with
-                     | None -> "unknown"
-                     | Some loc -> string_of_int loc.line_nb
-                   in
-                   [("cmd", `String (Pp.string_of_ppcmds (Topfmt.pr_cmd_header ast)));
-                    ("line", `String lnum)])
-               (fun () ->
+  (* One parsed sentence, run: everything the loop does once it has an
+     AST. The replay path below runs buffered sentences through it too, so
+     a proof that is not replayed is interpreted exactly as stock. *)
+  let interp_one ~tstart state ast =
+    try_finally
+      (fun () ->
+         NewProfile.profile "command"
+           ~args:(fun () ->
+               let lnum = match ast.CAst.loc with
+                 | None -> "unknown"
+                 | Some loc -> string_of_int loc.Loc.line_nb
+               in
+               [("cmd", `String (Pp.string_of_ppcmds (Topfmt.pr_cmd_header ast)));
+                ("line", `String lnum)])
+           (fun () ->
              (* BET-84: key item 1 is the parsed sentences of a proof, with
                 the locations of this file removed. A sentence that is not
                 a proof step is a command inside the proof (census row 21),
                 which replay cannot make again. *)
              Proof_recorder.sentence
+               ?span:(Option.map (fun loc -> (loc.Loc.bp, loc.Loc.ep)) ast.CAst.loc)
                (fun () -> Proof_recorder.digest ~locs:source ~what:"sentence" ast)
                (fun () ->
                   if Proof_recorder.active () then begin
@@ -151,16 +137,132 @@ let load_vernac_core ~echo ~check ~state ?source file =
                     | exception e when CErrors.noncritical e -> ()
                   end;
                   Flags.silently (interp_vernac ~check ~state) ast)) ())
-          ()
-          (fun () ->
-             let tend = System.get_time () in
-             (* The -time option is only supported from console-based clients
-                due to the way it prints. *)
-             emit_time state ast tstart tend)
-          ()
-      in
+      ()
+      (fun () ->
+         let tend = System.get_time () in
+         (* The -time option is only supported from console-based clients
+            due to the way it prints. *)
+         emit_time state ast tstart tend)
+      ()
+  in
 
-      (loop [@ocaml.tailcall]) state (state.sid :: ids)
+  let parse_next state =
+    let tstart = System.get_time () in
+    match
+      NewProfile.profile "parse_command" (fun () ->
+          Stm.parse_sentence
+            ~doc:state.doc ~entry:Pvernac.main_entry state.sid in_pa)
+        ()
+    with
+    | None -> None
+    | Some ast ->
+      (* Printing of AST for -compile-verbose *)
+      Option.iter (vernac_echo ?loc:ast.CAst.loc) in_echo;
+      checknav ast;
+      Some (tstart, ast)
+  in
+  (* The same digest the recorder keeps for a sentence. A value it cannot
+     digest gives a string no digest equals, so the proof misses. *)
+  let sentence_digest ast =
+    match Proof_record.digest_value ~locs:source ast with
+    | d -> d
+    | exception Proof_record.Unhashable _ -> "unhashable"
+  in
+
+  (* BET-84 P3. The record's key item 1 holds every sentence from the
+     statement to the closer, so the decision cannot be taken before the
+     closer is parsed, and it must be taken before a tactic runs. So, at a
+     proof the record has an entry for, the sentences are parsed and kept
+     until the closer, and interpreted only then: on a hit, the closer
+     alone runs and declares the stored term; otherwise every kept
+     sentence runs in order, exactly as stock.
+
+     Parsing ahead is sound because nothing that changes the grammar is a
+     proof step: a command inside a proof ends the buffering and is
+     interpreted where stock interprets it. *)
+  let closer_of ast =
+    let open Vernacexpr in
+    if ast.CAst.v.control <> [] then None
+    else
+      match ast.CAst.v.expr with
+      | VernacSynPure (VernacEndProof Admitted) -> Some "Admitted"
+      | VernacSynPure (VernacEndProof (Proved (Opaque, _))) -> Some "Qed"
+      | VernacSynPure (VernacEndProof (Proved (Transparent, _))) -> Some "Defined"
+      | _ -> None
+  in
+  let proof_step ast =
+    ast.CAst.v.Vernacexpr.control = []
+    && (match Vernac_classifier.classify_vernac ast with
+        | VtProofStep _ | VtProofMode _ -> true
+        | VtStartProof _ | VtQed _ | VtSideff _ | VtQuery | VtMeta -> false
+        | exception e when CErrors.noncritical e -> false)
+  in
+  let run_kept state ids kept =
+    List.fold_left
+      (fun (state, ids) (tstart, ast) ->
+         let state = interp_one ~tstart state ast in
+         (state, state.sid :: ids))
+      (state, ids) (List.rev kept)
+  in
+  (* Returns the state after the proof closed, and whether the file ended
+     inside it. [kept] and [sentences] are newest first. *)
+  let rec gather state ids kept sentences =
+    match parse_next state with
+    | None ->
+      (* The file ends inside the proof. Stock fails on it; run what was
+         kept so that it fails in the same place. *)
+      Proof_replay.abandon ();
+      let state, ids = run_kept state ids kept in
+      (state, ids, true)
+    | Some (tstart, ast) ->
+      let digest = sentence_digest ast in
+      (match closer_of ast with
+       | Some closer ->
+         let sentences = List.rev (digest :: sentences) in
+         (match Proof_replay.decide ~sentences ~closer with
+          | Some blob ->
+            Proof_replay.set_pending (Some blob);
+            let state =
+              Fun.protect ~finally:(fun () -> Proof_replay.set_pending None)
+                (fun () -> interp_one ~tstart state ast)
+            in
+            (state, state.sid :: ids, false)
+          | None ->
+            let state, ids = run_kept state ids kept in
+            let state = interp_one ~tstart state ast in
+            (state, state.sid :: ids, false))
+       | None ->
+         if proof_step ast then gather state ids ((tstart, ast) :: kept) (digest :: sentences)
+         else begin
+           (* A command inside the proof: no replay, and it runs where
+              stock runs it. *)
+           Proof_replay.abandon ();
+           let state, ids = run_kept state ids kept in
+           let state = interp_one ~tstart state ast in
+           (state, state.sid :: ids, false)
+         end)
+  in
+
+  (* ids = For beautify, list of parsed sids *)
+  let rec loop state ids =
+    Proof_replay.check_budget ();
+    match parse_next state with
+    | None ->
+      input_cleanup ();
+      state, ids, Procq.Parsable.comments in_pa
+    | Some (tstart, ast) ->
+      let state = interp_one ~tstart state ast in
+      let ids = state.sid :: ids in
+      if not (Proof_replay.candidate_open ()) then (loop [@ocaml.tailcall]) state ids
+      else
+        (* The statement's own sentence is the first of its proof's. *)
+        let sentences = [ sentence_digest ast ] in
+        let state, ids, eof = gather state ids [] sentences in
+        if eof then begin
+          input_cleanup ();
+          state, ids, Procq.Parsable.comments in_pa
+        end
+        else (loop [@ocaml.tailcall]) state ids
   in
   try loop state []
   with any ->   (* whatever the exception *)
