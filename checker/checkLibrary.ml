@@ -124,6 +124,7 @@ let check_one_lib admit senv (dir,m) =
     if LibrarySet.mem dir admit then
       (Flags.if_verbose Feedback.msg_notice
          (str "Admitting library: " ++ pr_dirpath dir);
+       Check_stat.record_admitted (DirPath.to_string dir);
        Safe_checking.unsafe_import (fst senv) md dig),
       (snd senv)
     else
