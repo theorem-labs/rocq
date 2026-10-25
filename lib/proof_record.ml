@@ -577,8 +577,17 @@ let max_blocks = 1 lsl 25
 let min_memo_size = 32
 
 (* The memo of every value digested without [~locs]. A [~locs] call uses its
-   own: it encodes the locations of one source as a leaf. *)
+   own: it encodes the locations of one source as a leaf.
+
+   It holds a block of a value it has walked for as long as the compile, so it
+   keeps that block alive. Most of what the recorder digests is global state,
+   which is alive anyway; a proof's own statement is not. Above
+   [max_memo_entries] the memo is emptied, which costs the next digest its
+   incrementality and costs no correctness: a digest is a function of the
+   value, not of the memo. *)
 let global_memo : memo H.t = H.create 4096
+
+let max_memo_entries = 1 lsl 21
 
 let reset_memo () = H.reset global_memo
 
@@ -611,7 +620,12 @@ let loc_matcher = function
 
 let digest_value ?locs v =
   let is_loc = loc_matcher locs in
-  let memo = match locs with None -> global_memo | Some _ -> H.create 1024 in
+  let memo = match locs with
+    | Some _ -> H.create 1024
+    | None ->
+      if H.length global_memo > max_memo_entries then H.reset global_memo;
+      global_memo
+  in
   let blocks = ref 0 in
   (* A [`Node] is walked and may get a digest of its own. Everything else is
      encoded where it stands. *)
