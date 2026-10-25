@@ -769,6 +769,51 @@ let push_fix_renv renv (_,v,_ as recdef) =
     rel_min = renv.rel_min+n;
     genv = iterate (fun ge -> lazy Not_subterm::ge) n renv.genv }
 
+(* The guard analysis measures a fixpoint body after [split_struct_arg] has
+   reduced its binder prefix away, but the kernel stores the body as
+   WRITTEN, so an occurrence of a recursive function that the reduction
+   ERASES is checked by nothing and is still evaluated. Walk the chain of
+   abstractions the stripping consumes and report whether [mentions k c]
+   holds in a position the reduction erases and that carries a value:
+
+   - the value of a [let] whose binder the body does not use (when it does
+     use it, the reduction substitutes the value into the body the analysis
+     measures, so the analysis sees the occurrence);
+   - the argument of a beta redex whose binder the body does not use (same
+     reason for the ones it does use);
+   - everything that is left when the abstractions are not written out at
+     all, such as a match in the prefix or an application whose head is not
+     an abstraction: those the reduction may erase in ways this walk does
+     not model, and they are refused as a whole.
+
+   The TYPES of that chain are not reported — a let's annotation and a
+   cast's type — because they are erased as types, which no evaluation of
+   the function turns into a recursive call. A lambda's domain IS reported:
+   [split_struct_arg] keeps it in the context it returns, and leaving it to
+   [check_nested_fix_body] reaches a kernel anomaly on breaka/D5.v. *)
+let raw_prefix_escapes mentions recindx body =
+  let rec walk k needed c =
+    if Int.equal needed 0 then false
+    else match kind c with
+      | Lambda (_, ty, bd) -> mentions k ty || walk (k+1) (needed-1) bd
+      | LetIn (_, v, _, bd) ->
+        (noccurn 1 bd && mentions k v) || walk (k+1) needed bd
+      | Cast (c, _, _) -> walk k needed c
+      | App (f, args) when isLambda f -> beta k needed f (Array.to_list args)
+      | _ -> mentions k c
+  and beta k needed f args =
+    match args with
+    | [] -> walk k needed f
+    | a :: rest ->
+      match kind f with
+      | Lambda (_, ty, bd) ->
+        mentions k ty
+        || (noccurn 1 bd && mentions k a)
+        || beta k needed (subst1 a bd) rest
+      | _ -> mentions k (Term.applist (f, args))
+  in
+  walk 1 (recindx + 1) body
+
 type fix_check_result =
   | NeedReduce of env * fix_guard_error
   | NoNeedReduce
@@ -1538,53 +1583,61 @@ let check_one_fix cache ?evars renv recpos trees def =
                is then not justified for that occurrence, and [List.skipn]
                raises inside the kernel. Measuring one term removes the
                disagreement rather than reporting it. *)
-            (* The analysis measures the body after its binder prefix is
-               reduced away, but the kernel stores the body as written, so an
-               occurrence of one of the block's functions that the reduction
-               erases is checked by nothing and evaluated later. A fully
-               applied call hidden there makes the kernel accept a definition
-               whose evaluation does not terminate; upstream Rocq accepts
-               those too (9.3.0 and master), and stock 9.2.0, which lacks
-               rocq-prover/rocq#22384, does not. Refuse any body whose RAW
-               prefix mentions the block at all, before any reduction runs:
-               nothing erased can then survive into the stored term. *)
-            (* The number of block-variables an occurrence may hit: this
-               block's own [nbodies] and the enclosing fixpoint blocks
-               [renv.genv] still records. A call to any of them in the raw
-               prefix is erased by the reduction and reaches no check: this
-               block's own because the analysis never sees it, an enclosing
-               block's because the enclosing guard check only sees calls
-               through this stripped body. [push_fix_renv] has pushed this
-               block's [nbodies] on top of [renv.genv], so the whole range
-               above the body's own locals is covered by one count. *)
-            let nblockvars = nbodies + List.length renv.genv in
-            let raw_prefix_mentions_block body recindx =
-              (* Walk only the chain of abstractions the stripping consumes.
-                 Everything that is NOT the body under those abstractions —
-                 a domain, a let value or type, a cast type, and anything
-                 left when the abstractions are not written out at all —
-                 can be erased by the reduction, so a mention of any block
-                 variable there refuses the definition. *)
-              let rec walk k needed c =
-                if Int.equal needed 0 then false
-                else match kind c with
-                  | Lambda (_, ty, bd) ->
-                    not (noccur_with_meta k nblockvars ty)
-                    || walk (k+1) (needed-1) bd
-                  | LetIn (_, v, ty, bd) ->
-                    not (noccur_with_meta k nblockvars v)
-                    || not (noccur_with_meta k nblockvars ty)
-                    || walk (k+1) needed bd
-                  | Cast (c, _, ty) ->
-                    not (noccur_with_meta k nblockvars ty) || walk k needed c
-                  | _ ->
-                    not (noccur_with_meta k nblockvars c)
-              in
-              walk 1 (recindx + 1) body
+            (* The analysis measures each body after [split_struct_arg] has
+               reduced its binder prefix away, but the kernel stores the body
+               as WRITTEN, so an occurrence of a recursive function that the
+               reduction ERASES is checked by nothing and is still evaluated.
+               A fully applied call hidden there makes the kernel accept a
+               definition whose evaluation does not terminate; upstream Rocq
+               accepts those too (9.3.0 and master), and stock 9.2.0, which
+               lacks rocq-prover/rocq#22384, does not.
+
+               Submit every erased position to the ordinary analysis, in the
+               environment where it occurs, so that a body is refused exactly
+               when the erased material would have been refused had the
+               reduction kept it: a legitimate call in a dead [let] stays
+               legitimate, a call on a bigger argument is a guard error
+               wherever it sits. The erased positions are the value of a
+               [let] whose binder the body does not use, the argument of a
+               beta redex whose binder the body does not use, and, for any
+               other head, the whole term — the reduction can erase inside it
+               in ways this walk does not model. A [let]'s annotation and a
+               cast's type are not positions: they are erased as TYPES, which
+               no evaluation turns into a recursive call.
+
+               What this reaches that nothing else does is a call to a
+               function of an ENCLOSING block: the functions of this block
+               are covered by [check_fix] on the block itself, which applies
+               the same rule to its own prefix. *)
+            let rec check_erased_prefix renv needed c rs =
+              if Int.equal needed 0 then rs
+              else match kind c with
+                | Lambda (x, ty, bd) ->
+                  let rs = check_inert_subterm_rec_call renv rs ty in
+                  check_erased_prefix
+                    (push_var_renv renv (redex_level rs) (x,ty)) (needed-1) bd rs
+                | LetIn (x, v, ty, bd) ->
+                  let rs = if noccurn 1 bd then check_inert_subterm_rec_call renv rs v else rs in
+                  let spec = lazy_subterm_specif cache ?evars renv [] v in
+                  check_erased_prefix (push_let renv (x,v,ty,spec)) needed bd rs
+                | Cast (c, _, _) -> check_erased_prefix renv needed c rs
+                | App (f, args) when isLambda f ->
+                  check_erased_beta renv needed f (Array.to_list args) rs
+                | _ -> check_inert_subterm_rec_call renv rs c
+            and check_erased_beta renv needed f args rs =
+              match args with
+              | [] -> check_erased_prefix renv needed f rs
+              | a :: rest ->
+                match kind f with
+                | Lambda (_, ty, bd) ->
+                  let rs = check_inert_subterm_rec_call renv rs ty in
+                  let rs = if noccurn 1 bd then check_inert_subterm_rec_call renv rs a else rs in
+                  check_erased_beta renv needed (subst1 a bd) rest rs
+                | _ -> check_inert_subterm_rec_call renv rs (Term.applist (f, args))
             in
-            let () = Array.iteri (fun k body ->
-                if raw_prefix_mentions_block body recindxs.(k) then illformed k)
-                bodies in
+            let rs' = Array.fold_left2_i (fun _k rs' recindx body ->
+                check_erased_prefix renv' (recindx+1) body rs')
+                rs' recindxs bodies in
             let split = Array.map2_i (fun k recindx body ->
                 try split_struct_arg ?evars renv'.env recindx body
                 with Invalid_argument _ -> illformed k)
@@ -1834,8 +1887,35 @@ let inductive_of_mutfix ?evars ?elim_to env ((nvect,bodynum),(names,types,bodies
 
 let check_fix ?evars ?elim_to env ((nvect,_),(names,_,bodies as recdef) as fix) =
   let cache = Cache.create () in
-  let (minds, rdef) = inductive_of_mutfix ?evars ?elim_to env fix in
   let flags = Environ.typing_flags env in
+  let nbfix = Array.length bodies in
+  (* The same raw-prefix rule for the block the kernel is checking here, not
+     only for the blocks nested inside its bodies: [check_occur] in
+     [inductive_of_mutfix] reduces this prefix away too, so a call to one of
+     these functions hidden in it reaches no check either, and a dead one is
+     accepted by every 9.2 we have (test-suite/failure/
+     guard_prefix_toplevel_let.v). Only this block's own functions are in
+     question: anything enclosing it is covered by the enclosing block's own
+     check, where this fix is a nested one. The rule runs BEFORE
+     [inductive_of_mutfix], because that function raises the kernel anomaly
+     "Bad occurrence of recursive call" on a prefix binder whose TYPE
+     mentions the block (breaka/D5.v), and a guard refusal is the honest
+     answer there. *)
+  let () =
+    if flags.check_guarded
+       && Int.equal (Array.length nvect) nbfix
+       && Int.equal (Array.length names) nbfix
+    then
+      let fixenv = push_rec_types recdef env in
+      Array.iteri (fun i body ->
+          if raw_prefix_escapes
+               (fun k c -> not (noccur_with_meta k nbfix c)) nvect.(i) body
+          then
+            error_ill_formed_rec_body fixenv
+              (Type_errors.FixGuardError (NotEnoughAbstractionInFixBody nvect.(i)))
+              names i fixenv (judgment_of_fixpoint recdef))
+        bodies in
+  let (minds, rdef) = inductive_of_mutfix ?evars ?elim_to env fix in
   if flags.check_guarded then
     let get_tree (kn,i) =
       let mib = Environ.lookup_mind kn env in
