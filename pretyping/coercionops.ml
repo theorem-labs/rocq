@@ -92,17 +92,41 @@ let class_tab =
 let coercion_tab =
   Summary.ref ~name:"coercion_tab" (CoeTypMap.empty : coe_info_typ CoeTypMap.t)
 
+(* BET-84: ONE value for the class_tab channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_class_tab () =
+  Some (Proof_recorder.digest_cached ~what:"class_tab" !class_tab)
+
+let () =
+  Proof_replay.register_evaluator "class_tab" (fun _key ->
+      match recorded_class_tab () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let record_class_tab () =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"class_tab" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest_cached ~what:"class_tab" !class_tab))
+      ~value:recorded_class_tab
+
+(* BET-84: ONE value for the coercion_tab channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_coercion_tab () =
+  Some (Proof_recorder.digest_cached ~what:"coercion_tab" !coercion_tab)
+
+let () =
+  Proof_replay.register_evaluator "coercion_tab" (fun _key ->
+      match recorded_coercion_tab () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
 
 let record_coercion_tab () =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"coercion_tab" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest_cached ~what:"coercion_tab" !coercion_tab))
+      ~value:recorded_coercion_tab
 
 let reachable_from cl =
   record_class_tab ();
@@ -143,11 +167,23 @@ end
 let inheritance_graph =
   Summary.ref ~name:"inheritance_graph" ClGraph.empty
 
+(* BET-84: ONE value for the coercion_graph channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_coercion_graph () =
+  Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph)
+
+let () =
+  Proof_replay.register_evaluator "coercion_graph" (fun _key ->
+      match recorded_coercion_graph () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let record_inheritance_graph () =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"coercion_graph" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph))
+      ~value:recorded_coercion_graph
 
 (* ajout de nouveaux "objets" *)
 

@@ -82,13 +82,26 @@ let record_ref s res =
     Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
       ~value:(fun () -> ignore res; recorded_lib_ref s)
 
+(* BET-84: ONE value for the lib_ref_domain channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_lib_ref_domain () =
+  Some (Proof_recorder.digest_cached ~what:"rocqlib_table" !table)
+
+let () =
+  Proof_replay.register_evaluator "lib_ref_domain" (fun _key ->
+      match recorded_lib_ref_domain () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let get_lib_refs () =
   let current = !table in
   let refs = CString.Map.bindings current in
   if Proof_recorder.tracking () then List.iter (fun (s, r) -> observe s (Some r)) refs;
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"15" ~channel:"lib_ref_domain" ~key:(fun () -> "")
-      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"rocqlib_table" current));
+      ~value:recorded_lib_ref_domain;
   refs
 
 let has_ref s =
