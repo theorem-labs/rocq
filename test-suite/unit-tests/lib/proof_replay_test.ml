@@ -162,6 +162,25 @@ let ineligible_misses =
      let no_term = decide () in
      marked = None && no_term = None)
 
+(* A term another Rocq stored is never replayed by this one. The binary is
+   key item 2, so a record from another build misses on the key, and so
+   does one from another plugin set, another [-w], another safe-dependency
+   set or another stack limit. An object built before a kernel fix can
+   fail coqchk after it, so this refusal is the one that keeps a replay
+   from carrying a term across a Rocq that changed. *)
+let other_toolchain_misses =
+  let key = R.toolchain_key toolchain in
+  let case k = (setup ~proof:R.{ proof with toolchain_key = k } (); decide ()) in
+  mk_bool_test "proof-replay-other-toolchain"
+    "a record another Rocq, plugin set, warning set, safe-dependency set or stack limit made is refused"
+    (case R.{ key with binary = String.make 32 '0' } = None
+     && case R.{ key with plugins = String.make 32 '1' } = None
+     && case R.{ key with load_order = String.make 32 '2' } = None
+     && case R.{ key with warnings = "+all" } = None
+     && case R.{ key with safe_deps = String.make 32 '3' } = None
+     && case R.{ key with stack_limit = "8388608" } = None
+     && (setup (); decide () <> None))
+
 (* The charged clock. A replayed proof costs no time, so the compile
    charges r times the seconds the registration spent, and stops the file
    at the budget as stock's own timeout stops it. *)
@@ -197,6 +216,6 @@ let summary_counts =
 
 let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
-    key_items_miss; ineligible_misses; charged_clock; summary_counts ]
+    key_items_miss; ineligible_misses; other_toolchain_misses; charged_clock; summary_counts ]
 
 let _ = run_tests __FILE__ log_out_ch tests
