@@ -238,14 +238,27 @@ let digest_json add v =
   add b v;
   Digest.to_hex (Digest.string (Buffer.contents b))
 
-let toolchain_key (t : toolchain) : toolchain_key = {
-  binary = t.binary;
-  plugins = digest_json add_string_pairs t.plugins;
-  load_order = digest_json add_string_pairs t.load_order;
-  warnings = t.warnings;
-  safe_deps = digest_json (add_list add_string) t.safe_deps;
-  stack_limit = t.stack_limit;
-}
+(* The key of one toolchain record, kept for as long as the caller hands back
+   the same record. Every proof asks for it, and the three digests walk three
+   lists, so a compile of many proofs would otherwise pay that walk for each
+   of them. The caller ({!Proof_record_env.toolchain}) returns one physical
+   record while no library, no plugin and no warning flag has moved. *)
+let toolchain_key_memo : (toolchain * toolchain_key) option ref = ref None
+
+let toolchain_key (t : toolchain) : toolchain_key =
+  match !toolchain_key_memo with
+  | Some (t0, k) when t0 == t -> k
+  | Some _ | None ->
+    let k = {
+      binary = t.binary;
+      plugins = digest_json add_string_pairs t.plugins;
+      load_order = digest_json add_string_pairs t.load_order;
+      warnings = t.warnings;
+      safe_deps = digest_json (add_list add_string) t.safe_deps;
+      stack_limit = t.stack_limit;
+    } in
+    toolchain_key_memo := Some (t, k);
+    k
 
 let path_of_vo vo =
   let base = match Filename.chop_suffix_opt ~suffix:".vo" vo with Some b -> b | None -> vo in
@@ -553,24 +566,38 @@ exception Unhashable of string
    least [min_memo_size] blocks is digested once and then named by that md5,
    so the cost is linear in the number of distinct blocks and the result does
    not depend on sharing. A smaller block is encoded in place at each of its
-   occurrences, which costs at most [min_memo_size] blocks: the memo hashes
-   structurally, so the many unshared copies of one small block ([Rel 1], a
-   name) would otherwise all share one bucket and make every lookup walk it.
+   occurrences, which costs at most [min_memo_size] blocks and keeps the memo
+   small.
 
    The memo lives for the whole compile, not for one call. The global state is
    persistent: the universe graph after a proof shares all but one path with
    the graph before it, so a proof's digest of it costs that path and not the
    whole graph. The price is the same assumption {!Proof_recorder.digest_cached}
    already makes, one level deeper: a value that is digested must not be
-   mutated in place afterwards. {!reset_memo} empties it with the recorder. *)
+   mutated in place afterwards. {!reset_memo} empties it with the recorder.
+
+   The encoding is built bottom-up in one buffer, from what the walk itself
+   computed, so it does not depend on what the memo finds: a memo miss costs
+   a walk and never changes a digest. *)
 
 module H = Hashtbl.Make (struct
     type t = Obj.t
     let equal = ( == )
-    let hash = Hashtbl.hash
+    (* The block's address. A structural hash reads only a bounded prefix of a
+       block, so the many distinct blocks of a long run of equal values (a
+       memory image in a statement) all share one bucket, every lookup walks
+       it, and a digest costs the square of its size: a registration file of
+       477 proofs took 581 times its stock CPU (R1M1's profile, 95.6% self in
+       the bucket walk). An address separates them. A block the GC moves after
+       it was added is looked for in another bucket until the table grows: the
+       lookup misses and the block is walked again, which costs time only. *)
+    let hash (o : Obj.t) = (Obj.magic o : int) lsr 3
   end)
 
-type memo = Pending | Done of Digest.t * int
+(* [Pending alive]: the block's walk started, and [!alive] while it is still
+   on the walk's stack. A stale entry, left behind by a block that moved, has
+   [alive] false and means nothing. *)
+type memo = Pending of bool ref | Done of Digest.t * int
 
 let max_blocks = 1 lsl 25
 
@@ -646,7 +673,8 @@ let digest_value ?locs v =
   let add_header b o =
     Buffer.add_char b 'b'; Buffer.add_char b (Char.chr (Obj.tag o)); add_len b (Obj.size o)
   in
-  let rec add_entry b o =
+  (* The entry of a [`Leaf]. *)
+  let add_leaf b o =
     if Obj.is_int o then (Buffer.add_char b 'i'; Buffer.add_int64_le b (Int64.of_int (Obj.obj o : int)))
     else
       let t = Obj.tag o in
@@ -669,67 +697,71 @@ let digest_value ?locs v =
         let name : string = Obj.obj (Obj.field o 0) in
         Buffer.add_char b 'e'; add_len b (String.length name); Buffer.add_string b name
       end
-      else if is_loc o then Buffer.add_char b 'l'
-      else
-        match H.find_opt memo o with
-        | Some (Done (d, _)) -> Buffer.add_char b 'd'; Buffer.add_string b d
-        | Some Pending -> assert false
-        | None ->
-          (* A block of fewer than [min_memo_size] blocks. *)
-          add_header b o;
-          for i = 0 to Obj.size o - 1 do add_entry b (unforward (Obj.field o i)) done
+      else (* a Loc.t of the [~locs] source *) Buffer.add_char b 'l'
   in
-  let node = Buffer.create 256 in
-  let finish o size =
+  (* One buffer for the whole walk. Each block on the stack owns the tail of
+     it from its [start]: its header, then the entry of each field visited so
+     far. When the block ends, its tail becomes its own entry. *)
+  let buf = Buffer.create 256 in
+  let stack = Stack.create () in
+  (* Adds the entry of [o], a [`Node], when the memo knows it, and returns the
+     size of its subtree; otherwise starts its walk and returns 0, and the walk
+     adds the size when the block ends. *)
+  let enter o =
+    match H.find_opt memo o with
+    | Some (Done (d, n)) -> Buffer.add_char buf 'd'; Buffer.add_string buf d; n
+    | Some (Pending alive) when !alive -> raise (Unhashable "a cycle")
+    | Some (Pending _) | None ->
+      incr blocks;
+      if !blocks > max_blocks then raise (Unhashable "more than 2^25 distinct blocks");
+      let alive = ref true in
+      H.replace memo o (Pending alive);
+      let start = Buffer.length buf in
+      add_header buf o;
+      Stack.push (o, ref 0, ref 0, start, alive) stack;
+      0
+  in
+  let finish o start size =
     if size < min_memo_size then H.remove memo o
     else begin
-      Buffer.clear node;
-      add_header node o;
-      for i = 0 to Obj.size o - 1 do add_entry node (unforward (Obj.field o i)) done;
-      H.replace memo o (Done (Digest.string (Buffer.contents node), size))
+      let d = Digest.string (Buffer.sub buf start (Buffer.length buf - start)) in
+      Buffer.truncate buf start;
+      Buffer.add_char buf 'd'; Buffer.add_string buf d;
+      H.replace memo o (Done (d, size))
     end
   in
   (* Post-order walk with an explicit stack: deep values do not overflow. Each
      frame counts the blocks of its own subtree, so that [finish] knows whether
      the block is worth a digest of its own. *)
-  let stack = Stack.create () in
-  let enter o =
-    match H.find_opt memo o with
-    | Some (Done (_, n)) -> n
-    | Some Pending -> raise (Unhashable "a cycle")
-    | None ->
-      incr blocks;
-      if !blocks > max_blocks then raise (Unhashable "more than 2^25 distinct blocks");
-      H.add memo o Pending;
-      Stack.push (o, ref 0, ref 0) stack;
-      0
-  in
   let root = unforward (Obj.repr v) in
   let run () =
-    if classify root = `Node then ignore (enter root);
+    (match classify root with
+     | `Leaf -> add_leaf buf root
+     | `Node -> ignore (enter root));
     while not (Stack.is_empty stack) do
-      let o, i, acc = Stack.top stack in
+      let o, i, acc, start, alive = Stack.top stack in
       if !i < Obj.size o then begin
         let c = unforward (Obj.field o !i) in
         incr i;
-        if classify c = `Node then acc := !acc + enter c
+        match classify c with
+        | `Leaf -> add_leaf buf c
+        | `Node -> acc := !acc + enter c
       end else begin
         ignore (Stack.pop stack);
+        alive := false;
         let size = 1 + !acc in
-        finish o size;
+        finish o start size;
         if not (Stack.is_empty stack) then
-          let _, _, pacc = Stack.top stack in pacc := !pacc + size
+          let _, _, pacc, _, _ = Stack.top stack in pacc := !pacc + size
       end
     done;
-    let top = Buffer.create 64 in
-    add_entry top root;
-    Digest.to_hex (Digest.string (Buffer.contents top))
+    Digest.to_hex (Digest.string (Buffer.contents buf))
   in
   match run () with
   | d -> d
   | exception e ->
     (* The memo outlives the call, so an abandoned walk must leave none of its
-       [Pending] marks behind. *)
+       marks alive. *)
     let bt = Printexc.get_raw_backtrace () in
-    Stack.iter (fun (o, _, _) -> H.remove memo o) stack;
+    Stack.iter (fun (o, _, _, _, alive) -> alive := false; H.remove memo o) stack;
     Printexc.raise_with_backtrace e bt

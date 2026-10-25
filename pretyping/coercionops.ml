@@ -322,8 +322,9 @@ let get_coercion_constructor env coe =
   | _ -> raise Not_found
 
 let lookup_pattern_path_between env (s,t) =
+  record_inheritance_graph ();
   List.map (get_coercion_constructor env)
-    (lookup_path_between_class (CL_IND s, CL_IND t))
+    (ClGraph.find (CL_IND s) (CL_IND t) !inheritance_graph)
 
 let path_is_reversible p =
   List.for_all (fun c -> c.coe_reversible) p

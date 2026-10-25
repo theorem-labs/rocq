@@ -105,32 +105,40 @@ let record_projection cst v =
             Some (Proof_recorder.digest_cached ~what:"structure_projection" s))
 
 let mem env ind =
-  let res = Environ.QInd.Map.find_opt env ind !structure_table in
-  record_structure ind res;
-  res <> None
+  if Proof_recorder.active () then begin
+    let res = Environ.QInd.Map.find_opt env ind !structure_table in
+    record_structure ind res;
+    match res with None -> false | Some _ -> true
+  end else Environ.QInd.Map.mem env ind !structure_table
 
 let find env indsp =
-  let res = Environ.QInd.Map.find_opt env indsp !structure_table in
-  record_structure indsp res;
-  (match res with Some s -> s | None -> raise Not_found)
+  if Proof_recorder.active () then begin
+    let res = Environ.QInd.Map.find_opt env indsp !structure_table in
+    record_structure indsp res;
+    (match res with Some s -> s | None -> raise Not_found)
+  end else Environ.QInd.Map.find env indsp !structure_table
 
 let find_projections env indsp =
   (find env indsp).projections |>
   List.map (fun { proj_body } -> proj_body)
 
 let find_from_projection env cst =
-  let res = Environ.QConstant.Map.find_opt env cst !projection_table in
-  record_projection cst res;
-  match res with Some s -> s | None -> raise Not_found
+  if Proof_recorder.active () then begin
+    let res = Environ.QConstant.Map.find_opt env cst !projection_table in
+    record_projection cst res;
+    match res with Some s -> s | None -> raise Not_found
+  end else Environ.QConstant.Map.find env cst !projection_table
 
 let projection_nparams env cst =
   (find_from_projection env cst).nparams
 
 let is_projection cst =
   let env = Global.env () in
-  let res = Environ.QConstant.Map.find_opt env cst !projection_table in
-  record_projection cst res;
-  res <> None
+  if Proof_recorder.active () then begin
+    let res = Environ.QConstant.Map.find_opt env cst !projection_table in
+    record_projection cst res;
+    match res with None -> false | Some _ -> true
+  end else Environ.QConstant.Map.mem env cst !projection_table
 
 let projection_number env cst =
   let s = find_from_projection env cst in

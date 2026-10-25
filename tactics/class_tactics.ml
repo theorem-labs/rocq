@@ -1212,21 +1212,28 @@ let activate_solver ~name =
   deactivate_solver ~name;
   active_solvers := name :: !active_solvers
 
-(* BET-84 census row 8: the selected typeclass solver changes resolution. *)
+(* BET-84 census row 8: the ordered list of active typeclass solvers. It is
+   the selection's stable input: which solver a component gets is a function
+   of that list, of the solvers' code (in the plugin digests) and of the
+   component, which the proof's other reads fix. Recording the solver a call
+   chose would keep only the first component's choice, and the name
+   "default" would not tell the built-in fallback from a registered solver of
+   that name (cross-model delta review D6). *)
 let find_solver env evd (s : Intpart.set) =
+  let active = !active_solvers in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"8" ~channel:"typeclass_solver"
+      ~key:(fun () -> "active")
+      ~value:(fun () -> Some (Proof_recorder.digest ~what:"typeclass_solver" active));
   let rec find_solver = function
-    | [] -> "default", Search.typeclasses_resolve
+    | [] -> Search.typeclasses_resolve
     | hd :: tl ->
       try
         let (solver,cond) = CString.Map.find hd !class_solvers in
-        if cond env evd s then hd, solver else find_solver tl
+        if cond env evd s then solver else find_solver tl
       with Not_found -> find_solver tl
   in
-  let name, solver = find_solver !active_solvers in
-  if Proof_recorder.active () then
-    Proof_recorder.read ~row:"8" ~channel:"typeclass_solver"
-      ~key:(fun () -> "solver") ~value:(fun () -> Some name);
-  solver
+  find_solver active
 
 (** If [do_split] is [true], we try to separate the problem in
     several components and then solve them separately *)

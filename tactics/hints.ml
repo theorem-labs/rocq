@@ -634,10 +634,33 @@ val digest : t -> string
 end =
 struct
 
+  (* BET-84 census row 7. The fingerprint of a database is its ORDERED
+     CONTENTS, not the identifiers of its hints: a uid names an allocation (a
+     module path and a counter), so an earlier [Hint Extern] edited at the same
+     command position keeps its uid, its head and every counter, and a later
+     unchanged [auto] can still fail (cross-model delta review D1). Each
+     stored hint keeps its insertion id too: equal-priority hints are tried
+     newest first by that id, so two [Import]s exchanged re-add the same hints
+     with exchanged ids and change which hint is tried first (D2).
+
+     A hint's clausenv is left out: it is derived from the hint's term and
+     type, and holds an evar map. The discrimination net is left out: it is a
+     cache a lookup fills in place (the earlier finding F10). *)
+  type hint_print = {
+    hp_id : int;
+    hp_uid : KerName.t;
+    hp_pri : int;
+    hp_pat : hint_pattern option;
+    hp_name : GlobRef.t option;
+    hp_db : hint_db_name option;
+    hp_secvars : Id.Pred.t;
+    hp_code : (constr * types * UnivGen.sort_context_set option * int) hint_ast;
+  }
+
   type entry_summary = {
     entry_key : GlobRef.t;
-    entry_nopat : KerName.Set.t;
-    entry_pat : KerName.Set.t;
+    entry_nopat : hint_print list;
+    entry_pat : hint_print list;
     entry_modes : hint_mode list list;
   }
 
@@ -648,7 +671,7 @@ struct
     summary_max_id : int;
     summary_use_dn : bool;
     summary_map : entry_summary list;
-    summary_nopat : KerName.Set.t;
+    summary_nopat : hint_print list;
     summary_name : string option;
   }
 
@@ -662,36 +685,54 @@ struct
     (* A list of unindexed entries with no associated pattern. *)
     hintdb_nopat : stored_data list;
     hintdb_name : string option;
-    hintdb_summary : summary;
+    mutable hintdb_summary : summary option;
+    (* Built the first time a digest is asked for, and kept with this value.
+       Not a [lazy]: a closure would make the database unmarshallable. *)
   }
 
-  let summary_map hintdb_map =
-    GlobRef.Map.fold (fun entry_key se summaries ->
-        { entry_key;
-          entry_nopat = StoredData.uids se.sentry_nopat;
-          entry_pat = StoredData.uids se.sentry_pat;
-          entry_modes = List.map Array.to_list se.sentry_mode; } :: summaries)
-      hintdb_map []
+  let print_code = function
+    | Res_pf h -> Res_pf (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | ERes_pf h -> ERes_pf (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Give_exact h -> Give_exact (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Res_pf_THEN_trivial_fail h ->
+      Res_pf_THEN_trivial_fail (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Unfold_nth e -> Unfold_nth e
+    | Extern (p, tac) -> Extern (p, tac)
 
-  let summary_nopat hintdb_nopat =
-    List.fold_left (fun uids (_, hint) ->
-        KerName.Set.add hint.code.uid uids)
-      KerName.Set.empty hintdb_nopat
+  let print_stored ((id, h) : stored_data) = {
+    hp_id = id;
+    hp_uid = h.code.uid;
+    hp_pri = h.pri;
+    hp_pat = h.pat;
+    hp_name = h.name;
+    hp_db = h.db;
+    hp_secvars = h.secvars;
+    hp_code = print_code h.code.obj;
+  }
+
+  (* In search order: a [StoredSet] is ordered by [pri_order_int]. *)
+  let print_data sd = List.map print_stored (StoredSet.elements (StoredData.elements sd))
+
+  let summary_of db =
+    { summary_state = db.hintdb_state;
+      summary_cut = db.hintdb_cut;
+      summary_unfolds = db.hintdb_unfolds;
+      summary_max_id = db.hintdb_max_id;
+      summary_use_dn = db.use_dn;
+      summary_map =
+        GlobRef.Map.fold (fun entry_key se summaries ->
+            { entry_key;
+              entry_nopat = print_data se.sentry_nopat;
+              entry_pat = print_data se.sentry_pat;
+              entry_modes = List.map Array.to_list se.sentry_mode; } :: summaries)
+          db.hintdb_map [];
+      summary_nopat = List.map print_stored (List.sort pri_order_int db.hintdb_nopat);
+      summary_name = db.hintdb_name; }
 
   let make hintdb_state hintdb_cut hintdb_unfolds hintdb_max_id use_dn
       hintdb_map hintdb_nopat hintdb_name =
-    let hintdb_summary =
-      { summary_state = hintdb_state;
-        summary_cut = hintdb_cut;
-        summary_unfolds = hintdb_unfolds;
-        summary_max_id = hintdb_max_id;
-        summary_use_dn = use_dn;
-        summary_map = summary_map hintdb_map;
-        summary_nopat = summary_nopat hintdb_nopat;
-        summary_name = hintdb_name; }
-    in
     { hintdb_state; hintdb_cut; hintdb_unfolds; hintdb_max_id; use_dn;
-      hintdb_map; hintdb_nopat; hintdb_name; hintdb_summary }
+      hintdb_map; hintdb_nopat; hintdb_name; hintdb_summary = None }
 
   let copy db ?hintdb_state ?hintdb_cut ?hintdb_unfolds ?hintdb_max_id
       ?use_dn ?hintdb_map ?hintdb_nopat ?hintdb_name () =
@@ -900,7 +941,11 @@ struct
   let use_dn db = db.use_dn
 
   let digest db =
-    Proof_recorder.digest_cached ~what:"hint_db" db.hintdb_summary
+    let s = match db.hintdb_summary with
+      | Some s -> s
+      | None -> let s = summary_of db in db.hintdb_summary <- Some s; s
+    in
+    Proof_recorder.digest_cached ~what:"hint_db" s
 
 end
 

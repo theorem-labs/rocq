@@ -30,6 +30,31 @@ val active : unit -> bool
 (** Whether a proof is open and its reads are being recorded. False when
     the recorder is off, between proofs, and inside {!without_recording}. *)
 
+val tracking : unit -> bool
+(** True from {!start} until {!write} or {!stop}, between proofs too. A cache
+    outside the Summary state (the Rocqlib lazy fence) keeps its history while
+    this is true, because a command between two proofs can force a lazy and
+    {!active} is false there. *)
+
+val start_tracking : unit -> unit
+(** Makes {!tracking} true for the rest of the process without recording
+    anything: the replay compile calls it, so that a cache fence runs there as
+    it ran in the registration. It costs what the fences cost, nothing else. *)
+
+val trip_fence : reason:string -> detail:string -> unit
+(** A process-wide cache this process holds no longer matches the state it
+    caches. Marks the open proof ineligible, and every proof opened after it
+    in this process, with that reason. Only the first trip is kept. *)
+
+val fence_tripped : unit -> (string * string) option
+(** The reason and detail of the first fence tripped in this process, if any.
+    A replay refuses every proof while this is [Some]. *)
+
+val register_fence_check : (unit -> unit) -> unit
+(** Adds a check of a process-wide cache fence. It runs at each proof's start
+    and in {!fence_tripped}, while {!tracking} is true, and calls
+    {!trip_fence} when the state its cache holds has changed. *)
+
 val current_name : unit -> string option
 (** The name of the open proof, if any. *)
 

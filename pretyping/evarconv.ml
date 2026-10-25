@@ -267,10 +267,19 @@ let activate_hook ~name =
   deactivate_hook ~name;
   active_hooks := name :: !active_hooks
 
+(* BET-84 census row 14: the ordered list of active canonical-solution hooks.
+   A plugin enables or disables one with no other recorded change, and a
+   unification problem only that hook solves then changes acceptance
+   (cross-model delta review D5). The names, not the hook functions, which
+   are closures. *)
 let apply_hooks env sigma proj pat =
+  let active = !active_hooks in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"canonical_hooks" ~key:(fun () -> "")
+      ~value:(fun () -> Some (Proof_recorder.digest ~what:"canonical_hooks" active));
   List.find_map (fun name ->
     try CString.Map.get name !all_hooks env sigma proj pat
-    with e when CErrors.noncritical e -> anomaly Pp.(str "CS hook " ++ str name ++ str " exploded")) !active_hooks
+    with e when CErrors.noncritical e -> anomaly Pp.(str "CS hook " ++ str name ++ str " exploded")) active
 
 let decompose_proj ?metas env sigma (t1, sk1) =
    (* I only recognize ConstRef projections since these are the only ones for which

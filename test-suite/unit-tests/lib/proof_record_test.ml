@@ -193,8 +193,29 @@ let memo =
      && R.digest_value (a, a) = R.digest_value (a, big ())
      && R.digest_value (a, a) <> R.digest_value (a, List.tl (big ())))
 
+(* The memo is hashed by the block's address. A block that the GC moves
+   after it was memoized is then looked for in another bucket: the lookup
+   misses and the block is walked again. That must cost time only. And a long
+   run of look-alike blocks, which a bounded structural hash puts in one
+   bucket, must cost time linear in its length (R1M1's profile of a
+   registration file: 581 times its stock CPU, 95.6% in the bucket walk). *)
+let memo_moves =
+  mk_bool_test "proof-record-digest-memo-moves"
+    "a block moved by the GC keeps its digest, and look-alike blocks are linear"
+    (let image n = List.init n (fun _ -> (0, "\000")) in
+     let a = image 50_000 in
+     let before = R.digest_value a in
+     Gc.compact ();
+     let after = R.digest_value a in
+     R.reset_memo ();
+     let fresh = R.digest_value (image 50_000) in
+     let t0 = Sys.time () in
+     let _ = R.digest_value (image 400_000) in
+     let t1 = Sys.time () in
+     before = after && before = fresh && t1 -. t0 < 5.0)
+
 let tests =
   [ roundtrip; bad_input; toolchain_key_fields; sharing; kinds; deep; locations; unhashable; memo;
-    vo_path ]
+    memo_moves; vo_path ]
 
 let _ = run_tests __FILE__ log_out_ch tests

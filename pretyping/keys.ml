@@ -81,12 +81,12 @@ let add_keys k v =
 (* BET-84 census row 15: the Keys table, as one digest, when a proof
    compares two keys. *)
 let equiv_keys k k' =
-  Proof_recorder.read ~row:"15" ~channel:"keys" ~key:(fun () -> "")
-    ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"keys" !keys));
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"keys" ~key:(fun () -> "")
+      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"keys" !keys));
   k == k' || KeyOrdered.equal k k' ||
-    (match Keymap.find_opt k !keys with
-     | Some s -> Keyset.mem k' s
-     | None -> false)
+    try Keyset.mem k' (Keymap.find k !keys)
+    with Not_found -> false
 
 let mkKGlob env gr = KGlob (Environ.QGlobRef.canonize env gr)
 
