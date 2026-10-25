@@ -189,6 +189,25 @@ For each conjunct :math:`C_i`, the tactic calls an oracle which searches for
    This tactic solves linear goals over :g:`Z` by searching for *linear* refutations and cutting planes.
    :tacn:`lia` provides support for :g:`Z`, :g:`nat`, :g:`positive` and :g:`N` by pre-processing via the :tacn:`zify` tactic.
 
+   Beside its refutation search, :tacn:`lia` (and :tacn:`nia`) searches integer models of the clauses
+   of the goal, in the same order, ahead of the refutation search, within a budget: before it searches
+   the refutation of the :math:`(k+1)`-th clause, it may have searched models of the first
+   :math:`32 + 32k` clauses, and the call's processor time outside the refutation search stays below
+   15% of the refutation search's time in the call (it predicts each step's time from the last
+   search and starts none that would not fit, so a call with few clauses searches none). For each
+   clause it solves one rational linear program, tries its point and roundings of it, and branches a
+   little. The search checks a candidate model exactly. It gives up on a clause with an exponent above
+   :math:`2^{16}` or whose expansion would have more than :math:`2^{20}` terms, and on a clause where
+   the check would compute an integer of more than :math:`2^{16}` bits. If the search finds an integer
+   model of a clause, no refutation exists for it, and the tactic fails at once. Otherwise the
+   refutations are searched as described below, so the search changes neither the proofs nor the
+   goals the tactics solve; the time budget decides only how early a
+   failing call fails. :cmd:`Show Lia Profile` counts only the refutation searches, and
+   :opt:`Dump Arith` records only them; when the search fails a call early, they show only the
+   refutation searches done until then. With :flag:`Lia Cache` or :flag:`Nia Cache`, the search reads
+   a failure that the cache holds for a clause as it reads a model, it skips a clause whose proof the
+   cache holds, and the cache records a clause with a found model as a failure.
+
 High level view of `lia`
 ~~~~~~~~~~~~~~~~~~~~~~~~
 

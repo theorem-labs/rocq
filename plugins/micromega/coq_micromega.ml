@@ -1559,6 +1559,16 @@ let micromega_order_change spec cert cert_typ env ff (*: unit Proofview.tactic*)
 
 open Certificate
 
+(** The early-failure check of lia and nia ([witness_list]). *)
+type ('option, 'a) early =
+  { fails : (float -> bool) -> 'option * 'a list -> bool option
+        (** [fails affordable k]: [Some true] when the clause [k] is known to fail: the persistent
+            cache holds a failure for it, or it holds nothing for it and the model search finds an
+            integer model of it; [Some false] when neither is known; [None] when the search did not
+            start, its first step not fitting [affordable] (a step's predicted seconds). *)
+  ; size : 'a -> int
+        (** the size of an atom of a clause, for the check's predictions: [ModelSearch.pol_size] *) }
+
 type ('option, 'a, 'prf, 'model) prover =
   { name : string
   ; (* name of the prover *)
@@ -1566,6 +1576,8 @@ type ('option, 'a, 'prf, 'model) prover =
   ; (* find the options of the prover *)
     prover : 'option * 'a list -> ('prf, 'model) Certificate.res
   ; (* the prover itself *)
+    early : ('option, 'a) early option
+  ; (* lia and nia: the early-failure check *)
     hyps : 'prf -> ISet.t
   ; (* extract the indexes of the hypotheses really used in the proof *)
     compact : 'prf -> (int -> int) -> 'prf
@@ -1590,7 +1602,7 @@ let find_witness p polys1 =
   * Return the proofs as a list.
   *)
 
-let witness_list prover l =
+let prover_witness_list prover l =
   let rec xwitness_list stack l =
     match stack with
     | [] -> Prf l
@@ -1601,6 +1613,164 @@ let witness_list prover l =
       | Prf w -> xwitness_list stack (w :: l)
   in
   xwitness_list (List.rev l) []
+
+(** The budget of the early-failure check of [witness_list] has two bounds.
+    By clauses: once the prover has proved [k] clauses, the check may have looked at the first
+    [early_budget k = 32 + 32 k] clauses.
+    By time: the check's work in a call (the cache lookups and keys, the sizing of clauses and the
+    model searches) starts only while the call's processor seconds outside the prover are below
+    [early_share] times the prover's own seconds in the call (process time, [Sys.time]), so it exceeds
+    that share by at most the misprediction of the one step that crosses the line, plus the call's own
+    bookkeeping (a constant per clause: the clock, the list of clauses). No step is
+    preemptible, so the budget can only refuse to start a step whose predicted seconds do not fit. The
+    check sizes a clause the prover proved only while the budget has room and a later clause remains.
+    Before a clause, it needs room for a prover clause of the call's average seconds (so in a call of
+    alike clauses it starts once the prover has proved about [1 / early_share] of them, and before the
+    prover's first clause it does nothing); then it predicts the first step of a search on the clause
+    (develop it, solve its LP, check the LP's point) from the prover's seconds on the largest clause
+    it has proved and sized ([early.size]: monomials and degrees), scaled by the size of this clause,
+    and looks at no clause larger than that one. Inside the search, the first step is also predicted
+    from the last search's seconds per unit of cube size, and a later LP from the search's own last
+    one ([ModelSearch.find_model]). These are estimates, not bounds: a clause denser than the prover's
+    largest at the same size, or a largest clause that the persistent cache answered in no time, is
+    underestimated. So the check's seconds in a call reach [early_share] times the prover's, plus the
+    misprediction of the one step that crosses that line and the bookkeeping; on top of them comes the
+    work that the check makes the prover itself do (its data out of the processor's caches). The share is
+    0.15, not 0.2, for those last two: with 0.2, calls of the differential fuzz corpus measured up to
+    1.22 times stock's; with 0.15, at most 1.17.
+    A model search solves up to 16 LPs on a clause that a cheap proof refutes with one, so the bound by
+    clauses alone let the check cost several times the prover's time (P21: 4,096 parity cubes, 3.5 s
+    against stock's 0.51 s), and a bound by allocated words did not bound time (round 7: a call at 1.28
+    times stock's).
+
+    The clock decides only how early a call that fails fails, never whether a call succeeds or which
+    proof it builds: see [witness_list]. *)
+let early_budget k = 32 + (32 * k)
+
+let early_share = 0.15
+
+(**
+  * With an early-failure check ([early]: lia and nia), the call fails as
+  * [Unknown] as soon as a clause is known to fail: the persistent cache
+  * holds a failure for it, or the model search finds an integer model of
+  * it, which it checks exactly over Z. No certificate refutes such a
+  * clause, so [prover_witness_list] fails too: at that clause, or at an
+  * earlier one. Otherwise the prover decides the clauses in the order of
+  * [prover_witness_list], as without the check, and fails or proves the
+  * call as it does there, with the same certificates: the state that a
+  * model search changes and the prover reads (the monomial table, the depth
+  * bound, the simplex's counters) is reset by every prover entry point. So
+  * the verdict is always [prover_witness_list]'s, and a proof is always the
+  * prover's, whatever the check looked at. That is why its budget may be a
+  * clock: timing changes which clauses the check looks at, and so only how
+  * early a failing call fails, and, with a persistent cache, which model
+  * clauses it records as failures (the value the prover would give them).
+  * Two limits of that: a clock decides how long a call takes, as without
+  * the check, so a call that crosses an enclosing [Timeout] fails there;
+  * and when the check fails a call at a clause after one on which the
+  * prover would raise an exception, the call fails where stock raises,
+  * while a critical exception (a stack overflow, say) of a search on a
+  * clause the prover never reaches is raised where stock fails.
+  * The check runs ahead of the prover, in the same order, within its
+  * budget: before the prover decides clause [k + 1] (with [k] clauses
+  * proved), the check looks at the clauses from [k + 1] on that it has not
+  * looked at, up to the [early_budget k]th, while its time fits; a clause
+  * whose search did not fit waits for the next turn. The
+  * clauses stay in lists, as in [prover_witness_list]: an array of them, in
+  * the major heap, would make the next minor collection promote the whole
+  * CNF.
+  *)
+let witness_list prover l =
+  match prover.early with
+  | None -> prover_witness_list prover l
+  | Some early ->
+    let o = prover.get_option () in
+    let key e = (o, List.map fst e) in
+    let size_cap = 1 lsl 21 in
+    (* [size e]: the size of clause [e] (the sum of its atoms' [early.size]), at most [size_cap]; it
+       stops at [size_cap] *)
+    let size e =
+      let rec go acc = function
+        | (a, _) :: e when acc < size_cap -> go (acc + early.size a) e
+        | _ -> min size_cap acc
+      in
+      go 0 e
+    in
+    (* [start]: the process clock at the start of the call; [prover_time], [proved]: the seconds and
+       the clauses of the prover in the call, every other second of the call being the check's;
+       [big_size], [big_time]: the size and the seconds of the largest clause the prover has proved
+       in the call and the check sized *)
+    let start = Sys.time () and prover_time = ref 0. and proved = ref 0 in
+    let big_size = ref 0 and big_time = ref 0. in
+    let fits step = Sys.time () -. start -. !prover_time +. step < early_share *. !prover_time in
+    (* [prove more e]: the prover on [e]; [more]: a clause remains after [e]. A proved clause is sized,
+       for the check's predictions, only while one remains and the budget has room: the sizing is the
+       check's time. *)
+    let prove more e =
+      let t = Sys.time () in
+      let r = find_witness prover e in
+      let dt = Sys.time () -. t in
+      prover_time := !prover_time +. dt;
+      incr proved;
+      (match r with
+       | Prf _ when more && fits 0. ->
+         let s = size e in
+         if s > !big_size || (s = !big_size && dt > !big_time) then begin
+           big_size := s;
+           big_time := dt
+         end
+       | Prf _ | Unknown | Model _ -> ());
+      r
+    in
+    (* [sized]: the last clause the check sized, and its size: a clause that waits is not sized again
+       at each turn *)
+    let sized = ref ([], 0) in
+    let size_of e =
+      match !sized with
+      | e', s when e' == e -> s
+      | _ ->
+        let s = size e in
+        sized := (e, s);
+        s
+    in
+    (* [affordable e]: there is room for a prover clause of the call's average seconds, [e] is no
+       larger than the prover's largest clause, and the first step of a search on [e], predicted from
+       the prover's seconds on that clause, fits the budget *)
+    let affordable e =
+      fits (!prover_time /. float_of_int (max 1 !proved))
+      &&
+      let s = size_of e in
+      s <= !big_size && fits (!big_time *. float_of_int s /. float_of_int (max 1 !big_size))
+    in
+    (* [check checked upto rest]: [rest] is the clauses after the first [checked]. [None] if a clause
+       before position [upto] fails early; otherwise [Some (checked', rest')], [rest'] the clauses after
+       the first [checked'], where the check stopped: at [upto], or earlier at the bound by time. *)
+    let rec check checked upto rest =
+      match rest with
+      | e :: rest' when checked < upto && affordable e -> (
+        match early.fails fits (key e) with
+        | Some true -> None
+        | Some false -> check (checked + 1) upto rest'
+        | None -> Some (checked, rest) )
+      | _ -> Some (checked, rest)
+    in
+    (* [stack]: the clauses after the first [k], which the prover proved ([prfs]); [rest]: the
+       clauses after the first [checked], which the check looked at or the prover decided *)
+    let rec decide k stack checked rest prfs =
+      match stack with
+      | [] -> Prf prfs
+      | e :: stack' -> (
+        let checked, rest = if checked < k then (k, stack) else (checked, rest) in
+        match check checked (early_budget k) rest with
+        | None -> Unknown
+        | Some (checked, rest) -> (
+          match prove (stack' <> []) e with
+          | Model m -> Model (m, e)
+          | Unknown -> Unknown
+          | Prf w -> decide (k + 1) stack' checked rest (w :: prfs) ) )
+    in
+    let stack = List.rev l in
+    decide 0 stack 0 stack []
 
 (*  let t1 = System.get_time () in
   let res = witness_list p g in
@@ -1652,18 +1822,28 @@ let compact_proofs prover (eq_cst : 'cst -> 'cst -> bool) (cnf_ff : 'cst cnf) re
     end;
     res
   in
-  let is_proof_compatible (hyps, (old_cl : 'cst clause), prf) (new_cl : 'cst clause) =
-    let eq (f1, (t1, e1)) (f2, (t2, e2)) =
-      Int.equal (Tag.compare t1 t2) 0
-      && eq_formula f1 f2
-      (* We do not have to compare [e1] with [e2] because [t1 = t2] ensures
-         by uid generation that they must be the same *)
-    in
-    is_sublist eq (Lazy.force hyps) new_cl
+  let eq (f1, (t1, e1)) (f2, (t2, e2)) =
+    Int.equal (Tag.compare t1 t2) 0
+    && eq_formula f1 f2
+    (* We do not have to compare [e1] with [e2] because [t1 = t2] ensures
+       by uid generation that they must be the same *)
   in
+  let is_proof_compatible (hyps, (old_cl : 'cst clause), prf) (new_cl : 'cst clause) =
+    is_sublist eq hyps new_cl
+  in
+  (* Whether a proof is compatible with a clause depends only on the literals
+     that the proof uses: of the proofs that use the same literals, only the
+     first one can be the first compatible proof, which is the one used. *)
+  let seen = Hashtbl.create 1024 in
   let map acc cl prf =
-    let hyps = lazy (selecti (prover.hyps prf) cl) in
-    (hyps, cl, prf) :: acc
+    let hyps = selecti (prover.hyps prf) cl in
+    let key = List.map (fun (_, (t, _)) -> t) hyps in
+    let same = Option.default [] (Hashtbl.find_opt seen key) in
+    if List.exists (fun h -> CList.equal eq h hyps) same then acc
+    else begin
+      Hashtbl.replace seen key (hyps :: same);
+      (hyps, cl, prf) :: acc
+    end
   in
   let cnf_res = List.rev (List.fold_left2 map [] cnf_ff res) in
   (* we get pairs clause * proof *)
@@ -1672,7 +1852,7 @@ let compact_proofs prover (eq_cst : 'cst -> 'cst -> bool) (cnf_ff : 'cst cnf) re
     flush stdout;
     Printf.printf "CNFOLD %a\n" pp_cnf_tag cnf_ff;
     List.iter
-      (fun (lazy hyps, cl, prf) ->
+      (fun (hyps, cl, prf) ->
         Printf.printf "\nProver %a -> %a\n" pp_clause_tag cl pp_clause_tag hyps;
         flush stdout)
       cnf_res;
@@ -2151,6 +2331,16 @@ end) : sig
   type key = T.prover_option * (T.coeff Mc.pol * Mc.op1) list
 
   val memo_opt : (unit -> bool) -> string -> (key -> 'a) -> key -> 'a
+
+  (** [memo_opt_cached use_cache cache_file f] is [(memo_opt use_cache cache_file f, find, record)]
+      over one table: while the cache is in use, [find k] is the result that the cache holds for [k]
+      (and that [memo_opt] reads instead of calling [f k]), and [record k v] adds [v] as [k]'s
+      result. *)
+  val memo_opt_cached :
+       (unit -> bool)
+    -> string
+    -> (key -> 'a)
+    -> (key -> 'a) * (key -> 'a option) * (key -> 'a -> unit)
 end = struct
   module E = struct
     type t = T.prover_option * (T.coeff Mc.pol * Mc.op1) list
@@ -2170,6 +2360,32 @@ end = struct
   let memo_opt use_cache cache_file f =
     let memof = memo cache_file f in
     fun x -> if use_cache () then memof x else f x
+
+  let memo_opt_cached use_cache cache_file f =
+    let tbl =
+      lazy (try Some (open_in cache_file) with e when CErrors.noncritical e -> None)
+    in
+    let memof x =
+      match Lazy.force tbl with
+      | None -> f x
+      | Some tbl -> (
+        try find tbl x
+        with Not_found ->
+          let res = f x in
+          add tbl x res; res )
+    in
+    let find_opt x =
+      if not (use_cache ()) then None
+      else
+        match Lazy.force tbl with
+        | None -> None
+        | Some tbl -> ( try Some (find tbl x) with Not_found -> None )
+    in
+    let record x v =
+      if use_cache () then
+        match Lazy.force tbl with None -> () | Some tbl -> add tbl x v
+    in
+    ((fun x -> if use_cache () then memof x else f x), find_opt, record)
 end
 
 module CacheCsdp = MakeCache (struct
@@ -2338,12 +2554,12 @@ module CacheQ = MakeCache (struct
   let hash_coeff = Hash.hash_q
 end)
 
-let memo_lia =
-  CacheZ.memo_opt use_lia_cache ".lia.cache" (fun (b, s) ->
+let memo_lia, cache_find_lia, cache_record_lia =
+  CacheZ.memo_opt_cached use_lia_cache ".lia.cache" (fun (b, s) ->
       lift_pexpr_prover (Certificate.lia b) s)
 
-let memo_nlia =
-  CacheZ.memo_opt use_nia_cache ".nia.cache" (fun (b, s) ->
+let memo_nlia, cache_find_nlia, cache_record_nlia =
+  CacheZ.memo_opt_cached use_nia_cache ".nia.cache" (fun (b, s) ->
       lift_pexpr_prover (Certificate.nlia b) s)
 
 let memo_nra =
@@ -2356,6 +2572,7 @@ let linear_prover_Q =
   ; prover =
       (fun (o, l) ->
         lift_pexpr_prover (Certificate.linear_prover_with_cert o) l)
+  ; early = None
   ; hyps = hyps_of_cone
   ; compact = compact_cone
   ; pp_prf = pp_psatz pp_q
@@ -2367,6 +2584,7 @@ let linear_prover_R =
   ; prover =
       (fun (o, l) ->
         lift_pexpr_prover (Certificate.linear_prover_with_cert o) l)
+  ; early = None
   ; hyps = hyps_of_cone
   ; compact = compact_cone
   ; pp_prf = pp_psatz pp_q
@@ -2376,6 +2594,7 @@ let nlinear_prover_R =
   { name = "nra"
   ; get_option = lra_proof_depth
   ; prover = memo_nra
+  ; early = None
   ; hyps = hyps_of_cone
   ; compact = compact_cone
   ; pp_prf = pp_psatz pp_q
@@ -2385,6 +2604,7 @@ let non_linear_prover_Q str o =
   { name = "real nonlinear prover"
   ; get_option = (fun () -> (str, o))
   ; prover = (fun (o, l) -> call_csdpcert_q o l)
+  ; early = None
   ; hyps = hyps_of_cone
   ; compact = compact_cone
   ; pp_prf = pp_psatz pp_q
@@ -2394,6 +2614,7 @@ let non_linear_prover_R str o =
   { name = "real nonlinear prover"
   ; get_option = (fun () -> (str, o))
   ; prover = (fun (o, l) -> call_csdpcert_q o l)
+  ; early = None
   ; hyps = hyps_of_cone
   ; compact = compact_cone
   ; pp_prf = pp_psatz pp_q
@@ -2403,15 +2624,40 @@ let non_linear_prover_Z str o =
   { name = "real nonlinear prover"
   ; get_option = (fun () -> (str, o))
   ; prover = (fun (o, l) -> lift_ratproof (call_csdpcert_z o) l)
+  ; early = None
   ; hyps = hyps_of_pt
   ; compact = compact_pt
   ; pp_prf = pp_proof_term
   ; pp_f = (fun o x -> pp_pol pp_z o (fst x)) }
 
+(** [int_early (find, record)]: the early-failure check of lia and nia, over their persistent cache
+    ([find] and [record], which do nothing while the cache is off). A clause is known to fail when the
+    cache holds a failure for it: the prover would read that failure, as it reads a proof. Or when the
+    cache holds nothing for it and the model search finds an integer model of it; [record] then adds
+    [Unknown] as its result: what the prover gives on a clause that has no certificate. A clause whose
+    proof the cache holds is not searched: the prover reads it. A noncritical exception in the check
+    (of the cache, say) counts as nothing known: the check may look at a clause that the prover never
+    reaches, so it must not raise where the prover does not. *)
+let int_early (find, record) =
+  { fails =
+      (fun affordable ((o, l) as k) ->
+        try
+          match find k with
+          | Some (Unknown | Model _) -> Some true
+          | Some (Prf _) -> Some false
+          | None -> (
+            match lift_pexpr_prover (ModelSearch.find_model ~affordable o) l with
+            | ModelSearch.Found _ -> record k Unknown; Some true
+            | ModelSearch.Missed -> Some false
+            | ModelSearch.Deferred -> None )
+        with e when CErrors.noncritical e -> Some false )
+  ; size = (fun (p, _) -> ModelSearch.pol_size p) }
+
 let linear_Z =
   { name = "lia"
   ; get_option = get_lia_option
   ; prover = memo_lia
+  ; early = Some (int_early (cache_find_lia, cache_record_lia))
   ; hyps = hyps_of_pt
   ; compact = compact_pt
   ; pp_prf = pp_proof_term
@@ -2421,6 +2667,7 @@ let nlinear_Z =
   { name = "nlia"
   ; get_option = get_lia_option
   ; prover = memo_nlia
+  ; early = Some (int_early (cache_find_nlia, cache_record_nlia))
   ; hyps = hyps_of_pt
   ; compact = compact_pt
   ; pp_prf = pp_proof_term
