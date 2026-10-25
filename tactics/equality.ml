@@ -463,7 +463,12 @@ let lookup_eq_eliminator_with_error ?(het_eq=false) env sigma eq ~dep ~inccl ~l2
 
 let lookup_eq_eliminator_opt env sigma eq ~dep het_eq ~inccl l2r ~c_sort ~e_sort ~p_sort =
   try Some (lookup_eq_eliminator_with_error ~het_eq env sigma eq ~dep ~inccl ~l2r ~e_sort ~c_sort ~p_sort)
-  with _ -> None
+  with e ->
+    (* BET-84: a critical exception here takes the fallback path, so the
+       term can differ; the proof is never replayed. *)
+    if not (CErrors.noncritical e) then
+      Proof_recorder.ineligible ~reason:"catchall" ~detail:"tactics/equality.ml:466";
+    None
 
 type eq_scheme_kind = Minimality of UnivGen.QualityOrSet.t | Rewriting | Equality
 

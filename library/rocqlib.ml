@@ -43,11 +43,22 @@ let () = CErrors.register_handler (function
     | NotFoundRef s -> Some Pp.(str "not found in table: " ++ str s)
     | _ -> None)
 
+(* BET-84 census row 15: each registered reference the proof reads. *)
 let lib_ref s =
-  try CString.Map.find s !table
-  with Not_found -> raise (NotFoundRef s)
+  let res = CString.Map.find_opt s !table in
+  Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
+    ~value:(fun () -> match res with
+        | None -> None
+        | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r));
+  (match res with Some r -> r | None -> raise (NotFoundRef s))
 
-let lib_ref_opt s = CString.Map.find_opt s !table
+let lib_ref_opt s =
+  let res = CString.Map.find_opt s !table in
+  Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
+    ~value:(fun () -> match res with
+        | None -> None
+        | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r));
+  res
 
 let add_ref s c =
   table := CString.Map.add s c !table

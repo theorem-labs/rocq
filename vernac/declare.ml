@@ -1841,6 +1841,13 @@ let record_open_proof name ~statement =
     ~position:(Proof_record_env.position ());
   Proof_record_env.read_at_start ()
 
+(* BET-84 census row 19: the section variables [Proof using] declares. *)
+let record_using using =
+  Proof_recorder.read ~row:"19" ~channel:"proof_using" ~key:(fun () -> "")
+    ~value:(fun () -> match using with
+        | None -> None
+        | Some s -> Some (Proof_recorder.digest ~what:"proof_using" (Names.Id.Set.elements s)))
+
 let start_proof_core ~name ~pinfo ?using sigma goals =
   (* In ?sign, we remove the bodies of variables in the named context
      marked "opaque", this is a hack tho, see #10446, and
@@ -1851,6 +1858,7 @@ let start_proof_core ~name ~pinfo ?using sigma goals =
       let sign = match sign with None -> initialize_named_context_for_proof () | Some sign -> sign in
       (Global.env_of_context sign, typ)) goals in
   let () = record_open_proof name ~statement:(fun () -> List.map snd goals) in
+  let () = record_using using in
   let proof = Proof.start ~name ~poly ?typing_flags sigma goals in
   let initial_euctx = Evd.ustate Proof.((data proof).sigma) in
   { proof
