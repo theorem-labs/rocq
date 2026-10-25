@@ -684,6 +684,18 @@ let declare_constant ~loc ?(local = Locality.ImportDefaultBehavior) ~name ~kind 
       | Error _ -> true
     in
     let ctx = on_snd (Univ.UnivConstraints.filter is_new_constraint) ctx in
+    (* BET-84: the levels and the constraints this declaration adds, and the
+       constraint-source record it writes (census rows 2, 18 and M5). *)
+    Proof_recorder.write_universes
+      ~levels:(List.map Univ.Level.to_string (Univ.Level.Set.elements (fst ctx)))
+      ~constraints:(List.map
+                      (fun (u, k, v) ->
+                         String.concat " " [ Univ.Level.to_string u;
+                                             Pp.string_of_ppcmds (Univ.UnivConstraint.pr_kind k);
+                                             Univ.Level.to_string v ])
+                      (Univ.UnivConstraints.elements (snd ctx)));
+    if not (Univ.UnivConstraints.is_empty (snd ctx)) then
+      Proof_recorder.write_constraint_source (Constant.to_string kn);
     DeclareUniv.add_constraint_source (ConstRef kn) ctx
   in
   let () = DeclareUniv.declare_univ_binders (GlobRef.ConstRef kn) ubinders in
@@ -1820,6 +1832,15 @@ let initialize_named_context_for_proof () =
       let d = if Decls.variable_opacity id then NamedDecl.drop_body d else d in
       Environ.push_named_context_val d signv) sign Environ.empty_named_context_val
 
+(* BET-84: the record's entry for a proof opens where the proof does and
+   closes where it is saved, aborted or admitted. *)
+let record_open_proof name ~statement =
+  Proof_recorder.open_proof
+    ~name:(Libnames.string_of_path (Lib.make_path name))
+    ~statement:(fun () -> Proof_recorder.digest ~what:"statement" (statement ()))
+    ~position:(Proof_record_env.position ());
+  Proof_record_env.read_at_start ()
+
 let start_proof_core ~name ~pinfo ?using sigma goals =
   (* In ?sign, we remove the bodies of variables in the named context
      marked "opaque", this is a hack tho, see #10446, and
@@ -1829,6 +1850,7 @@ let start_proof_core ~name ~pinfo ?using sigma goals =
   let goals = List.map (fun (sign, typ) ->
       let sign = match sign with None -> initialize_named_context_for_proof () | Some sign -> sign in
       (Global.env_of_context sign, typ)) goals in
+  let () = record_open_proof name ~statement:(fun () -> List.map snd goals) in
   let proof = Proof.start ~name ~poly ?typing_flags sigma goals in
   let initial_euctx = Evd.ustate Proof.((data proof).sigma) in
   { proof
@@ -1853,6 +1875,13 @@ let start = start_core ?proof_ending:None
 
 let start_dependent ~info ~cinfo ~name ~proof_ending goals =
   let { Info.poly; typing_flags; _ } = info in
+  (* Derive and Equations start from a telescope, not from elaborated
+     statements, so no statement digest is recorded and the proof is never
+     replayed. *)
+  let () =
+    record_open_proof name ~statement:(fun () -> Names.Id.to_string name);
+    Proof_recorder.ineligible ~reason:"dependent_start" ~detail:(Names.Id.to_string name)
+  in
   let proof = Proof.dependent_start ~name ~poly ?typing_flags goals in
   let initial_euctx = Evd.ustate Proof.((data proof).sigma) in
   let pinfo = Proof_info.make ~info ~cinfo ~proof_ending () in
@@ -2237,6 +2266,15 @@ let finish_admitted ~pm ~pinfo ~sec_vars typs =
     let (_ : 'a list) = declare_possibly_mutual_parameters ~info ~cinfo ~sec_vars typs in
     pm
 
+(* BET-84: close the record entry around the declaration, so that the reads
+   of the kernel check and of the declaration itself are not recorded: a
+   registration compile types the proof and a grade compile does not
+   (-skip-qed-typecheck), and the two read sets must be equal. *)
+let record_close ~closer ~kernel_check declare =
+  let res = Proof_recorder.without_recording declare in
+  Proof_recorder.close_proof ~closer ~kernel_check;
+  res
+
 let save_admitted ~pm ~proof =
   let iproof = get proof in
   let Proof.{ entry } = Proof.data iproof in
@@ -2247,7 +2285,8 @@ let save_admitted ~pm ~proof =
   let sigma = Evd.minimize_universes sigma in
   let uctx = Evd.ustate sigma in
   let typs = List.map (fun typ -> (EConstr.to_constr sigma typ, uctx)) typs in
-  finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs
+  record_close ~closer:"Admitted" ~kernel_check:false (fun () ->
+      finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs)
 
 (************************************************************************)
 (* Saving a lemma-like constant                                         *)
@@ -2327,7 +2366,13 @@ let save ~pm ~proof ~opaque ~idopt =
   (* Env and sigma are just used for error printing in save_remaining_recthms *)
   let proof_obj = close_proof ~opaque ~keep_body_ucst_separate:false proof in
   let proof_info = process_idopt_for_save ~idopt proof.pinfo in
-  finish_proof ~pm proof_obj.proof_object proof_info
+  let closer = match opaque with Vernacexpr.Opaque -> "Qed" | Vernacexpr.Transparent -> "Defined" in
+  let kernel_check = match opaque with
+    | Vernacexpr.Opaque -> not !Opaques.skip_qed_typecheck
+    | Vernacexpr.Transparent -> true
+  in
+  record_close ~closer ~kernel_check (fun () ->
+      finish_proof ~pm proof_obj.proof_object proof_info)
 
 let save_regular ~(proof : t) ~opaque ~idopt =
   let open Proof_ending in
@@ -2340,6 +2385,11 @@ let save_regular ~(proof : t) ~opaque ~idopt =
 (***********************************************************************)
 (* Special case to close a lemma without forcing a proof               *)
 (***********************************************************************)
+(* The STM closes an interactive Qed through these, not through [save]. *)
+let delayed_closer = function
+  | DefaultProof { opaque = true; _ } | DeferredOpaqueProof _ -> ("Qed", not !Opaques.skip_qed_typecheck)
+  | DefaultProof { opaque = false; _ } -> ("Defined", true)
+
 let save_lemma_admitted_delayed ~pm ~proof =
   let { Proof_object.proof_object; pinfo } = proof in
   (* Drop side-effects, they will not be used anyway *)
@@ -2351,13 +2401,16 @@ let save_lemma_admitted_delayed ~pm ~proof =
   (* If the proof is partial, do we want to take the (restriction on
      visible uvars of) uctx so far or (as done below) the initial ones
      that refers to only the types *)
-  finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs
+  record_close ~closer:"Admitted" ~kernel_check:false (fun () ->
+      finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs)
 
 let save_lemma_proved_delayed ~pm ~proof ~idopt =
   (* vio2vo used to call this with invalid [pinfo], now it should work fine. *)
   let pinfo = process_idopt_for_save ~idopt proof.Proof_object.pinfo in
-  let pm, _ = finish_proof ~pm proof.proof_object pinfo in
-  pm
+  let closer, kernel_check = delayed_closer proof.Proof_object.proof_object in
+  record_close ~closer ~kernel_check (fun () ->
+      let pm, _ = finish_proof ~pm proof.proof_object pinfo in
+      pm)
 
 end (* Proof module *)
 

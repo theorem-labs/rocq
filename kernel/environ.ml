@@ -215,21 +215,81 @@ let fold_inductives f env acc =
 
 (* Global constants *)
 
+(* BET-84 census row 1. These lookups are on the reduction path, so when a
+   proof is open each key is recorded once: [seen] holds the keys of the
+   open proof, and is emptied when the recorder opens the next one. A
+   compile without -proof-record pays one boolean test per lookup. *)
+module Recorded = struct
+  let gen = ref (-1)
+
+  (* One memo per channel: a constant read both as a body and as rewrite
+     rules is two reads. Each is a map from the key to unit. *)
+  let cst_body = ref Cmap_env.empty
+  let cst_exists = ref Cmap_env.empty
+  let cst_rules = ref Cmap_env.empty
+  let minds = ref Mindmap_env.empty
+  let minds_exists = ref Mindmap_env.empty
+  let modules = ref MPmap.empty
+  let modtypes = ref MPmap.empty
+
+  let fresh () =
+    let g = Proof_recorder.generation () in
+    if g <> !gen then begin
+      gen := g;
+      cst_body := Cmap_env.empty;
+      cst_exists := Cmap_env.empty;
+      cst_rules := Cmap_env.empty;
+      minds := Mindmap_env.empty;
+      minds_exists := Mindmap_env.empty;
+      modules := MPmap.empty;
+      modtypes := MPmap.empty
+    end
+
+  let once tbl mem add print key ~channel value =
+    if Proof_recorder.active () then begin
+      fresh ();
+      if not (mem key !tbl) then begin
+        tbl := add key () !tbl;
+        Proof_recorder.read ~row:"1" ~channel ~key:(fun () -> print key) ~value
+      end
+    end
+
+  let constant tbl = once tbl Cmap_env.mem Cmap_env.add Constant.to_string
+  let mind tbl = once tbl Mindmap_env.mem Mindmap_env.add MutInd.to_string
+  let mpath tbl = once tbl MPmap.mem MPmap.add ModPath.to_string
+
+  let of_value what = function
+    | None -> None
+    | Some v -> Some (Proof_recorder.digest_cached ~what v)
+end
+
 let lookup_constant_opt kn env =
-  match Cmap_env.find_opt kn env.env_constants with
-  | None -> None
-  | Some (cb, _, _) -> Some cb
+  let res = match Cmap_env.find_opt kn env.env_constants with
+    | None -> None
+    | Some (cb, _, _) -> Some cb
+  in
+  Recorded.constant Recorded.cst_body kn ~channel:"constant"
+    (fun () -> Recorded.of_value "constant" res);
+  res
 
 let lookup_constant_key kn env =
   match Cmap_env.find_opt kn env.env_constants with
-  | Some v -> v
+  | Some ((cb, _, _) as v) ->
+    Recorded.constant Recorded.cst_body kn ~channel:"constant"
+      (fun () -> Recorded.of_value "constant" (Some cb));
+    v
   | None ->
+    Recorded.constant Recorded.cst_body kn ~channel:"constant" (fun () -> None);
     anomaly Pp.(str "Constant " ++ Constant.print kn ++ str" does not appear in the environment.")
 
 let lookup_constant kn env =
   pi1 (lookup_constant_key kn env)
 
-let mem_constant kn env = Cmap_env.mem kn env.env_constants
+let mem_constant kn env =
+  let res = Cmap_env.mem kn env.env_constants in
+  Recorded.constant Recorded.cst_exists kn ~channel:"constant_exists"
+    (fun () -> Some (string_of_bool res));
+  res
 
 let add_rewrite_rules l env =
   if not env.rewrite_rules_allowed then raise (RewriteRulesNotAllowed Rule);
@@ -242,13 +302,20 @@ let add_rewrite_rules l env =
   }
 
 let lookup_rewrite_rules cst env =
-  Cmap_env.find cst env.symb_pats
+  let res = Cmap_env.find_opt cst env.symb_pats in
+  Recorded.constant Recorded.cst_rules cst ~channel:"rewrite_rules"
+    (fun () -> Recorded.of_value "rewrite_rules" res);
+  (match res with Some rs -> rs | None -> raise Not_found)
 
 (* Mutual Inductives *)
 let lookup_mind_key kn env =
   match Mindmap_env.find_opt kn env.env_inductives with
-  | Some v -> v
+  | Some ((mb, _, _) as v) ->
+    Recorded.mind Recorded.minds kn ~channel:"inductive"
+      (fun () -> Recorded.of_value "inductive" (Some mb));
+    v
   | None ->
+    Recorded.mind Recorded.minds kn ~channel:"inductive" (fun () -> None);
     anomaly Pp.(str "Inductive " ++ MutInd.print kn ++ str" does not appear in the environment.")
 
 let lookup_mind kn env =
@@ -315,7 +382,11 @@ let expand_branch_contexts (mib, mip) u params br =
   Array.map2_i build_one_branch br mip.mind_nf_lc
 
 
-let mem_mind kn env = Mindmap_env.mem kn env.env_inductives
+let mem_mind kn env =
+  let res = Mindmap_env.mem kn env.env_inductives in
+  Recorded.mind Recorded.minds_exists kn ~channel:"inductive_exists"
+    (fun () -> Some (string_of_bool res));
+  res
 
 let mind_context env mind =
   let mib = lookup_mind mind env in
@@ -880,11 +951,16 @@ let shallow_add_module mp mb env =
   { env with env_modules = new_mods }
 
 let lookup_module mp env =
-    ModPath.Map.find mp env.env_modules
-
+  let res = ModPath.Map.find_opt mp env.env_modules in
+  Recorded.mpath Recorded.modules mp ~channel:"module"
+    (fun () -> Recorded.of_value "module" res);
+  (match res with Some m -> m | None -> raise Not_found)
 
 let lookup_modtype mp env =
-  ModPath.Map.find mp env.env_modtypes
+  let res = ModPath.Map.find_opt mp env.env_modtypes in
+  Recorded.mpath Recorded.modtypes mp ~channel:"modtype"
+    (fun () -> Recorded.of_value "modtype" res);
+  (match res with Some m -> m | None -> raise Not_found)
 
 (*s Judgments. *)
 

@@ -56,6 +56,19 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       Dumpglob.push_output dump;
       Dumpglob.dump_string ("F" ^ Names.DirPath.to_string ldir ^ "\n");
 
+      (* The record covers the proofs of this file only, so it starts after
+         the prelude and the init vernaculars are loaded. *)
+      let () = if copts.proof_record then
+          Proof_recorder.start
+            ~library:(Names.DirPath.to_string ldir)
+            ~source:long_f_dot_in
+            ~source_digest:(match Digest.file long_f_dot_in with
+                | d -> Digest.to_hex d
+                | exception Sys_error _ -> "unknown")
+            ~toolchain:Proof_record_env.toolchain
+            ~skip_qed_typecheck:!Opaques.skip_qed_typecheck
+            ~tables_at_start:copts.proof_record_tables
+      in
       let wall_clock1 = Unix.gettimeofday () in
       let check = Stm.AsyncOpts.(stm_options.async_proofs_mode = APoff) in
       let source = source ldir long_f_dot_in in
@@ -67,6 +80,10 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       (* In .vo production, dump a complete .vo file. *)
       let () = if mode = BuildVo then
           Library.save_library_to ~output_native_objects Library.ProofsTodoNone ldir long_f_dot_out
+      in
+      (* After the .vo: a compile that fails or is killed leaves no record. *)
+      let () = if copts.proof_record then
+          Proof_recorder.write (Proof_record.path_of_vo long_f_dot_out)
       in
       let () = Aux_file.record_in_aux_at "vo_compile_time"
           (Printf.sprintf "%.3f" (wall_clock2 -. wall_clock1))

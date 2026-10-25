@@ -604,13 +604,27 @@ let () = CErrors.register_handler @@ function
   | UnknownInterp (ntn,scopes) -> Some (explain_unknown_interp ntn scopes)
   | _ -> None
 
+(* BET-84 census row 11: each notation the proof reads, with the scopes it
+   was read in, because the same notation means different things in
+   different scopes. *)
+let record_notation ntn scopes v =
+  Proof_recorder.read ~row:"11" ~channel:"notation"
+    ~key:(fun () -> String.concat "|"
+             (snd ntn :: List.filter_map
+                (function OpenScopeItem s -> Some s | LonelyNotationItem _ -> None) scopes))
+    ~value:(fun () -> match v with
+        | None -> None
+        | Some v -> Some (Proof_recorder.digest ~what:"notation" v))
+
 let interp_notation ?loc ntn local_scopes =
   let scopes = make_current_scopes local_scopes in
-  try
-    let (n,sc) = find_interpretation ntn (find_notation ntn) scopes in
+  match find_interpretation ntn (find_notation ntn) scopes with
+  | (n, sc) ->
+    record_notation ntn scopes (Some (n.not_interp, sc));
     Option.iter (fun d -> warn_notation ?loc ntn d) n.not_user_warns;
     n.not_interp, (n.not_location, sc)
-  with Not_found as exn ->
+  | exception (Not_found as exn) ->
+    record_notation ntn scopes None;
     let _, info = Exninfo.capture exn in
     let info = Option.cata (Loc.add_loc info) info loc in
     Exninfo.iraise (UnknownInterp (ntn,scopes), info)

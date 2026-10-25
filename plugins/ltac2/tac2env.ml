@@ -81,9 +81,19 @@ let define_global kn e =
   let state = !ltac_state in
   ltac_state := { state with ltac_tactics = KerName.Map.add kn e state.ltac_tactics }
 
-let interp_global kn =
-  let data = KerName.Map.find kn ltac_state.contents.ltac_tactics in
-  data
+(* BET-84 census row 10: each Ltac2 definition the proof reads. *)
+let record channel k v =
+  Proof_recorder.read ~row:"10" ~channel ~key:(fun () -> KerName.to_string k)
+    ~value:(fun () -> match v with
+        | None -> None
+        | Some v -> Some (Proof_recorder.digest ~what:channel v))
+
+let find channel tbl kn =
+  let res = KerName.Map.find_opt kn tbl in
+  record channel kn res;
+  match res with Some v -> v | None -> raise Not_found
+
+let interp_global kn = find "ltac2_global" ltac_state.contents.ltac_tactics kn
 
 let set_compiled_global kn info v =
   assert (not (interp_global kn).gdata_mutable);
@@ -100,7 +110,7 @@ let define_constructor kn t =
     ltac_constructors = KerName.Map.add kn t state.ltac_constructors;
   }
 
-let interp_constructor kn = KerName.Map.find kn ltac_state.contents.ltac_constructors
+let interp_constructor kn = find "ltac2_constructor" ltac_state.contents.ltac_constructors kn
 
 let find_all_constructors_in_type kn =
   KerName.Map.filter (fun _ data -> KerName.equal kn data.cdata_type) (!ltac_state).ltac_constructors
@@ -109,25 +119,25 @@ let define_projection kn t =
   let state = !ltac_state in
   ltac_state := { state with ltac_projections = KerName.Map.add kn t state.ltac_projections }
 
-let interp_projection kn = KerName.Map.find kn ltac_state.contents.ltac_projections
+let interp_projection kn = find "ltac2_projection" ltac_state.contents.ltac_projections kn
 
 let define_type kn e =
   let state = !ltac_state in
   ltac_state := { state with ltac_types = KerName.Map.add kn e state.ltac_types }
 
-let interp_type kn = KerName.Map.find kn ltac_state.contents.ltac_types
+let interp_type kn = find "ltac2_type" ltac_state.contents.ltac_types kn
 
 let define_alias ?deprecation kn tac =
   let state = !ltac_state in
   let data = { alias_body = tac; alias_depr = deprecation } in
   ltac_state := { state with ltac_aliases = KerName.Map.add kn data state.ltac_aliases }
 
-let interp_alias kn = KerName.Map.find kn ltac_state.contents.ltac_aliases
+let interp_alias kn = find "ltac2_alias" ltac_state.contents.ltac_aliases kn
 
 let define_notation kn tac =
   ltac_notations := KerName.Map.add kn tac !ltac_notations
 
-let interp_notation kn = KerName.Map.find kn !ltac_notations
+let interp_notation kn = find "ltac2_notation" !ltac_notations kn
 
 module ML =
 struct

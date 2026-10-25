@@ -80,7 +80,23 @@ let hint_priority is = is.is_info.hint_priority
 let classes : typeclasses ref = Summary.ref GlobRefMap.empty ~name:"classes"
 let instances : instances ref = Summary.ref GlobRefMap.empty ~name:"instances"
 
-let class_info env c = GlobRefMap.find_opt env c !classes
+(* BET-84 census row 8: the typeclass tables a proof reads, by name. A
+   whole-table digest; M1 measures its miss rate. *)
+let record_table name tbl =
+  Proof_recorder.read ~row:"8" ~channel:"typeclass_table" ~key:(fun () -> name)
+    ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"typeclass_table" tbl))
+
+let read_classes () = record_table "classes" !classes; !classes
+let read_instances () = record_table "instances" !instances; !instances
+
+let () =
+  Proof_recorder.register_tables (fun () ->
+      [ Proof_record.{ row = "8"; channel = "typeclass_table"; key = "classes";
+                       value = Some (Proof_recorder.digest_cached ~what:"typeclass_table" !classes) };
+        Proof_record.{ row = "8"; channel = "typeclass_table"; key = "instances";
+                       value = Some (Proof_recorder.digest_cached ~what:"typeclass_table" !instances) } ])
+
+let class_info env c = GlobRefMap.find_opt env c (read_classes ())
 
 let class_info_exn env sigma r =
   match class_info env r with
@@ -91,7 +107,7 @@ let class_info_exn env sigma r =
 
 let global_class_of_constr env sigma c =
   try let gr, u = EConstr.destRef sigma c in
-    GlobRefMap.find env gr !classes, u
+    GlobRefMap.find env gr (read_classes ()), u
   with DestKO | Not_found -> not_a_class env sigma c
 
 let decompose_class_app env sigma c =
@@ -117,7 +133,7 @@ let class_of_constr env sigma c =
 
 let is_class_constr env sigma c =
   try let gr, u = EConstr.destRef sigma c in
-    GlobRefMap.mem env gr !classes
+    GlobRefMap.mem env gr (read_classes ())
   with DestKO | Not_found -> false
 
 let rec is_class_type env evd c =
@@ -125,7 +141,7 @@ let rec is_class_type env evd c =
     match EConstr.kind evd c with
     | Prod (_, _, t) -> is_class_type env evd t
     | Cast (t, _, _) -> is_class_type env evd t
-    | Proj (p, _, c) -> GlobRefMap.mem env (GlobRef.ConstRef (Projection.constant p)) !classes
+    | Proj (p, _, c) -> GlobRefMap.mem env (GlobRef.ConstRef (Projection.constant p)) (read_classes ())
     | _ -> is_class_constr env evd c
 
 let is_class_evar env evd evi =
@@ -137,7 +153,7 @@ let rec is_maybe_class_type env evd c =
     | Prod (_, _, t) -> is_maybe_class_type env evd t
     | Cast (t, _, _) -> is_maybe_class_type env evd t
     | Evar _ -> true
-    | Proj (p, _, c) -> GlobRefMap.mem env (GlobRef.ConstRef (Projection.constant p)) !classes
+    | Proj (p, _, c) -> GlobRefMap.mem env (GlobRef.ConstRef (Projection.constant p)) (read_classes ())
     | _ -> is_class_constr env evd c
 
 let load_class env cl =
@@ -163,17 +179,17 @@ let remove_instance env inst =
   let insts = GlobRefMap.remove env inst.is_impl insts in
   instances := GlobRefMap.add env inst.is_class insts !instances
 
-let typeclasses () = GlobRefMap.fold (fun _ l c -> l :: c) !classes []
+let typeclasses () = GlobRefMap.fold (fun _ l c -> l :: c) (read_classes ()) []
 
 let cmap_elements c = GlobRefMap.fold (fun k v acc -> v :: acc) c []
 
 let instances_of env c =
-  try cmap_elements (GlobRefMap.find env c.cl_impl !instances) with Not_found -> []
+  try cmap_elements (GlobRefMap.find env c.cl_impl (read_instances ())) with Not_found -> []
 
 let all_instances () =
   GlobRefMap.fold (fun k v acc ->
     GlobRefMap.fold (fun k v acc -> v :: acc) v acc)
-    !instances []
+    (read_instances ()) []
 
 let instances env r =
   Option.map (fun m -> instances_of env m) (class_info env r)
@@ -186,7 +202,7 @@ let instances_exn env sigma r =
     not_a_class env sigma c
 
 let is_class env gr =
-  GlobRefMap.mem env gr !classes
+  GlobRefMap.mem env gr (read_classes ())
 
 open Evar_kinds
 type evar_filter = Evar.t -> Evar_kinds.t Lazy.t -> bool
