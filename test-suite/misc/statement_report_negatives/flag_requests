@@ -3,8 +3,4 @@ tit StmtNeg.Flags.tt_T -
 pos StmtNeg.Flags.uses_bad -
 uip StmtNeg.Flags.useq -
 hidden_flag StmtNeg.Flags.uses_hidden -
-declared_flag StmtNeg.Flags.uses_fd -
-outer_flag StmtNeg.Flags.uses_of -
-interface_body StmtNeg.Flags.uses_pb -
-interface_ind StmtNeg.Flags.uses_oi -
 opaque_hidden StmtNeg.Flags.opaque_hidden -
