@@ -154,7 +154,7 @@ let () = Proof_recorder.register_tables (fun () ->
                      value = Some (string_of_int !meta_ctr) } ])
 
 (* BET-84 P3: see the evar counter in [Evd]. *)
-let () = Proof_replay.register_counter "meta" ~get:(fun () -> !meta_ctr) ~set:(fun n -> meta_ctr := n)
+let () = Proof_replay.register_summary_counter "meta"
 
 let new_meta () =
   incr meta_ctr;

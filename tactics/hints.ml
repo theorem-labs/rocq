@@ -205,11 +205,9 @@ let () =
       [Proof_record.{ row = "18"; channel = "counter_start"; key = "HINT-COUNTER";
                       value = Some (string_of_int !hint_counter) }])
 
-(* BET-84 P3: a hint's fresh key holds this counter, so a replayed proof
-   must leave it where its tactics would have. *)
-let () =
-  Proof_replay.register_counter "hint_counter"
-    ~get:(fun () -> !hint_counter) ~set:(fun n -> hint_counter := n)
+(* BET-84 P3: a Summary counter, which the STM rolls back when a proof
+   closes; replay leaves it alone ([Proof_replay.register_summary_counter]). *)
+let () = Proof_replay.register_summary_counter "hint_counter"
 
 let fresh_key () =
   let cur = incr hint_counter; !hint_counter in

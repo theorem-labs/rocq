@@ -266,7 +266,11 @@ let close_proof ~closer ~kernel_check ~replay =
           wall_s = Unix.gettimeofday () -. p.p_wall0;
           cpu_s = cpu_time () -. p.p_cpu0;
           span;
-          replay;
+          (* An ineligible proof stores no term (BET-84 spec, gate step 2:
+             "each ineligible class: the registration stores no term").
+             The ineligibility is final only here: a reason can be added
+             after the closer computed the term, by the declaration. *)
+          replay = (if Queue.is_empty p.p_ineligible then replay else None);
         }
       in
       R.output_proof st.f_buf proof;
