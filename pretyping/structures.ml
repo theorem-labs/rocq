@@ -86,23 +86,67 @@ let rebuild env s =
   let nparams = mib.Declarations.mind_nparams in
   { s with nparams }
 
-(* BET-84 census row 14: the record structures a proof reads. *)
-let record_structure ind v =
+(* BET-84 census row 14: the record structures a proof reads. ONE value
+   function per channel, called by the record sites here and by the replay
+   evaluators registered beside them
+   (dev/tools/census/replay_channels.py). *)
+let recorded_structure env ind =
+  match Environ.QInd.Map.find_opt env ind !structure_table with
+  | None -> None
+  | Some s -> Some (Proof_recorder.digest_cached ~what:"structure" s)
+
+let recorded_structure_projection env cst =
+  match Environ.QConstant.Map.find_opt env cst !projection_table with
+  | None -> None
+  | Some s -> Some (Proof_recorder.digest_cached ~what:"structure_projection" s)
+
+(* The record holds the inductive as ["<path>,<index>"] and the projection
+   as the constant's path. A key that does not read back to the same name is
+   not taken for another: the proof misses. *)
+let mind_of_string s =
+  match Nametab.global_of_path (Libnames.path_of_string s) with
+  | Names.GlobRef.IndRef (m, _) | Names.GlobRef.ConstructRef ((m, _), _)
+    when String.equal (Names.MutInd.to_string m) s -> Some m
+  | _ -> None
+  | exception _ -> None
+
+let ind_of_key key =
+  match String.rindex_opt key ',' with
+  | None -> None
+  | Some i ->
+    (match mind_of_string (String.sub key 0 i),
+           int_of_string_opt (String.sub key (i + 1) (String.length key - i - 1)) with
+     | Some m, Some n -> Some (m, n)
+     | _ -> None)
+
+let () =
+  Proof_replay.register_evaluator "structure" (fun key ->
+      match ind_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some ind ->
+        (match recorded_structure (Global.env ()) ind with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown));
+  Proof_replay.register_evaluator "structure_projection" (fun key ->
+      match Nametab.global_of_path (Libnames.path_of_string key) with
+      | Names.GlobRef.ConstRef c when String.equal (Names.Constant.to_string c) key ->
+        (match recorded_structure_projection (Global.env ()) c with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown)
+      | _ -> Proof_replay.Unknown
+      | exception _ -> Proof_replay.Unknown)
+
+let record_structure ind (_v : 'a option) =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"structure"
       ~key:(fun () -> Names.MutInd.to_string (fst ind) ^ "," ^ string_of_int (snd ind))
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some s -> Some (Proof_recorder.digest_cached ~what:"structure" s))
+      ~value:(fun () -> recorded_structure (Global.env ()) ind)
 
-let record_projection cst v =
+let record_projection cst (_v : 'a option) =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"structure_projection"
       ~key:(fun () -> Names.Constant.to_string cst)
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some s ->
-            Some (Proof_recorder.digest_cached ~what:"structure_projection" s))
+      ~value:(fun () -> recorded_structure_projection (Global.env ()) cst)
 
 let mem env ind =
   if Proof_recorder.active () then begin

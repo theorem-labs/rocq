@@ -185,12 +185,24 @@ let scope_item_eq s1 s2 = match s1, s2 with
 
 let scope_stack = ref []
 
+(* BET-84 census row 11: the open scopes, as one value under a fixed key.
+   ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_scope_stack () =
+  Some (Proof_recorder.digest ~what:"scope_stack" !scope_stack)
+
+let () =
+  Proof_replay.register_evaluator "scope_stack" (fun _key ->
+      match recorded_scope_stack () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let current_scopes () =
   let scopes = !scope_stack in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"11" ~channel:"scope_stack"
       ~key:(fun () -> "scopes")
-      ~value:(fun () -> Some (Proof_recorder.digest ~what:"scope_stack" scopes));
+      ~value:recorded_scope_stack;
   scopes
 
 let scope_is_open_in_scopes sc l =
