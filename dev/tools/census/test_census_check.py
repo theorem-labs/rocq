@@ -198,6 +198,109 @@ class RegistrationSiteTest(unittest.TestCase):
         self.assertEqual(sites_of("let ref ?stage ~name x = x\n", path="library/summary.ml"), [])
 
 
+def channel_sites_of(src, path="a/x.ml"):
+    return cc.scan_channels(path, src)
+
+
+READ = 'Proof_recorder.read ~row:"%s" ~channel:"%s" ~key:(fun () -> k) ~value:(fun () -> None)'
+
+
+class ChannelSiteTest(unittest.TestCase):
+    def test_read_and_read_by_keyed_by_row_and_channel(self):
+        src = (
+            "let f k = if Proof_recorder.active () then " + READ % ("7", "hint_db") + "\n"
+            'let g k = Proof_recorder.read_by ~row:"7" ~channel:"hint_db" ~id:k ~key:(fun () -> k) ~value:(fun () -> None)\n'
+            "let h k = " + READ % ("8", "classes") + "\n"
+        )
+        sites = channel_sites_of(src)
+        self.assertEqual([s.key for s in sites], ["read:a/x.ml:7/hint_db", "read:a/x.ml:8/classes"])
+        self.assertEqual([s.line for s in sites], [1, 3])
+        self.assertEqual(sites[0].want, ("row", "7"))
+
+    def test_ineligible_keyed_by_reason(self):
+        src = 'let timeout n f =\n  Proof_recorder.ineligible ~reason:"timeout" ~detail:(string_of_float n); f ()\n'
+        sites = channel_sites_of(src)
+        self.assertEqual([s.key for s in sites], ["ineligible:a/x.ml:timeout"])
+        self.assertEqual(sites[0].want, ("ineligible", "timeout"))
+
+    def test_register_tables_record_is_a_read(self):
+        src = (
+            "let () = Proof_recorder.register_tables (fun () ->\n"
+            '    [ Proof_record.{ row = "18"; channel = "counter_start"; key = "evar"; value = None } ])\n'
+        )
+        self.assertEqual([s.key for s in channel_sites_of(src)], ["read:a/x.ml:18/counter_start"])
+
+    def test_record_update_that_sets_a_channel_is_a_read(self):
+        src = (
+            'let relabel r = { r with channel = "renamed" }\n'
+            'let rewhy i = { i with reason = "other" }\n'
+            "let bump p = { p with p_depth = p.p_depth + 1 }\n"
+        )
+        self.assertEqual(
+            [s.key for s in channel_sites_of(src)],
+            ['read:a/x.ml:relabel/<r>/"renamed"', "ineligible:a/x.ml:other"],
+        )
+
+    def test_wrapper_parameter_followed_to_each_call(self):
+        src = (
+            "let record channel k v =\n"
+            "  if Proof_recorder.active () then\n"
+            '    Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> k) ~value:(fun () -> v)\n'
+            'let interp_alias k = record "tactic_alias" k None\n'
+            'let interp_ltac k = record "tactic_definition" k None\n'
+        )
+        sites = channel_sites_of(src)
+        self.assertEqual([s.key for s in sites], ["read:a/x.ml:9/tactic_alias", "read:a/x.ml:9/tactic_definition"])
+        self.assertEqual([s.line for s in sites], [4, 5])
+
+    def test_partial_application_and_qualified_call_followed(self):
+        src = (
+            "module Recorded = struct\n"
+            "  let once tbl key ~channel value =\n"
+            '    Proof_recorder.read ~row:"1" ~channel ~key:(fun () -> key) ~value\n'
+            "  let constant tbl = once tbl\n"
+            "end\n"
+            'let lookup kn = Recorded.constant tbl kn ~channel:"constant" (fun () -> None)\n'
+        )
+        self.assertEqual([s.key for s in channel_sites_of(src)], ["read:a/x.ml:1/constant"])
+
+    def test_value_that_is_not_a_literal_is_named_by_binding(self):
+        src = (
+            "let read_named r c = Proof_recorder.read ~row:r ~channel:c ~key:(fun () -> \"\") ~value:(fun () -> None)\n"
+            "let read = Proof_recorder.read\n"
+        )
+        sites = channel_sites_of(src)
+        self.assertEqual(
+            [s.key for s in sites], ["read:a/x.ml:read_named/r/c", "read:a/x.ml:read/<no row>/<no channel>"]
+        )
+        self.assertEqual([s.want for s in sites], [None, None])
+
+    def test_recorder_open_and_alias_are_listed(self):
+        src = (
+            "open Proof_recorder\n"
+            'let f k = read ~row:"1" ~channel:"x" ~key:(fun () -> k) ~value:(fun () -> None)\n'
+            "module R = Proof_recorder\n"
+            'let g () = Proof_recorder.(ineligible ~reason:"r" ~detail:"")\n'
+        )
+        self.assertEqual(kinds(channel_sites_of(src)), ["recorder-open", "recorder-open", "recorder-open"])
+
+    def test_record_format_and_recorder_plumbing_are_not_sites(self):
+        fmt = 'let to_read r c = { row = to_str "row" r; channel = to_str "channel" c }\n'
+        self.assertEqual(channel_sites_of(fmt, path="lib/proof_record.ml"), [])
+        src = (
+            "let read ~row ~channel ~key ~value = Queue.add R.{ row; channel; key = key (); value = value () } q\n"
+            "let add p ~reason ~detail = Queue.add R.{ reason; detail } p\n"
+            "let ineligible ~reason ~detail = add p ~reason ~detail\n"
+            'let digest v = ineligible ~reason:"unhashable" ~detail:"x"; "unhashable"\n'
+        )
+        sites = channel_sites_of(src, path="lib/proof_recorder.ml")
+        self.assertEqual([s.key for s in sites], ["ineligible:lib/proof_recorder.ml:unhashable"])
+
+    def test_comments_and_strings_hide_reads(self):
+        src = '(* ' + READ % ("1", "x") + ' *)\nlet s = "Proof_recorder.read ~row:\\"1\\" ~channel:\\"x\\""\n'
+        self.assertEqual(channel_sites_of(src), [])
+
+
 class CheckTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -285,6 +388,115 @@ class CheckTest(unittest.TestCase):
         code, _ = self.run_main("--root", self.root, "--rulings", os.path.join(self.root, "missing.json"))
         self.assertEqual(code, 2)
         code, _ = self.run_main("--root", os.path.join(self.root, "nope"), "--rulings", self.write_rulings({}))
+        self.assertEqual(code, 2)
+
+
+class ChannelCheckTest(unittest.TestCase):
+    SRC = (
+        'let t = Summary.ref ~name:"tab" 0\n'
+        "let f k = " + READ % ("7", "hint_db") + "\n"
+        "let g k = " + READ % ("8", "classes") + "\n"
+        'let h () = Proof_recorder.ineligible ~reason:"timeout" ~detail:"1"\n'
+    )
+    RULED = {
+        "read:lib/x.ml:7/hint_db": {"row": "7"},
+        "read:lib/x.ml:8/classes": {"row": "8"},
+        "ineligible:lib/x.ml:timeout": {"ineligible": "@timeout"},
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        os.makedirs(os.path.join(self.root, "lib"))
+        self.src = os.path.join(self.root, "lib", "x.ml")
+        with open(self.src, "w") as f:
+            f.write(self.SRC)
+        self.rulings = os.path.join(self.root, "rulings.json")
+        with open(self.rulings, "w") as f:
+            json.dump(
+                {"source": "test", "commit": "0" * 40, "scope": {"include": ["lib"]},
+                 "sites": {'summary:lib/x.ml:"tab"': {"row": "7"}}},
+                f,
+            )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_channels(self, sites, name="channels.json", source="test"):
+        path = os.path.join(self.root, name)
+        with open(path, "w") as f:
+            json.dump(
+                {"source": source, "commit": "0" * 40, "scope": {"include": ["lib"]},
+                 "reasons": {"timeout": "every Control.timeout", "other": "another reason"}, "sites": sites},
+                f,
+            )
+        return path
+
+    def run_main(self, *args):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = cc.main(["--root", self.root, "--rulings", self.rulings] + list(args))
+        return code, out.getvalue()
+
+    def test_ruled_read_sites_pass_with_the_default_channels_file(self):
+        self.write_channels(self.RULED)
+        code, out = self.run_main()
+        self.assertEqual(code, 0, out)
+
+    def test_unmapped_read_site_fails(self):
+        sites = dict(self.RULED)
+        del sites["read:lib/x.ml:8/classes"]
+        self.write_channels(sites)
+        code, out = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), ["UNMAPPED read:lib/x.ml:8/classes lib/x.ml:3"])
+
+    def test_stale_channel_entry_fails(self):
+        self.write_channels(dict(self.RULED, **{"read:lib/gone.ml:1/constant": {"row": "1"}}))
+        code, out = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(out.splitlines(), ["STALE read:lib/gone.ml:1/constant"])
+
+    def test_new_read_site_without_ruling_fails(self):
+        self.write_channels(self.RULED)
+        self.assertEqual(self.run_main()[0], 0)
+        with open(self.src, "a") as f:
+            f.write("let k_read k = " + READ % ("15", "keys") + "\n")
+        code, out = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertIn("UNMAPPED read:lib/x.ml:15/keys lib/x.ml:5", out.splitlines())
+
+    def test_disposition_must_repeat_the_code(self):
+        bad = [
+            ("read:lib/x.ml:7/hint_db", {"row": "8"}),
+            ("read:lib/x.ml:7/hint_db", {"ruling": "covered elsewhere"}),
+            ("ineligible:lib/x.ml:timeout", {"ineligible": "@other"}),
+            ("ineligible:lib/x.ml:timeout", {"ineligible": "timeout"}),
+        ]
+        for key, entry in bad:
+            self.write_channels(dict(self.RULED, **{key: entry}))
+            code, out = self.run_main()
+            self.assertEqual(code, 1, entry)
+            self.assertIn("INVALID " + key + " the code passes", out)
+
+    def test_channels_option_and_source_match(self):
+        other = self.write_channels(self.RULED, name="elsewhere.json")
+        self.assertEqual(self.run_main("--channels", other)[0], 0)
+        # A channels.json beside the rulings file that names another source is not used.
+        self.write_channels(self.RULED, source="another tree")
+        code, out = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertIn("UNMAPPED read:lib/x.ml:7/hint_db lib/x.ml:2", out.splitlines())
+
+    def test_list_names_channel_sites(self):
+        self.write_channels(self.RULED)
+        code, out = self.run_main("--list")
+        self.assertEqual(code, 0, out)
+        self.assertIn("lib/x.ml:2\tread:lib/x.ml:7/hint_db\trow: 7", out.splitlines())
+        self.assertIn("lib/x.ml:4\tineligible:lib/x.ml:timeout\tineligible: @timeout", out.splitlines())
+
+    def test_unreadable_channels_file_exits_2(self):
+        code, _ = self.run_main("--channels", os.path.join(self.root, "missing.json"))
         self.assertEqual(code, 2)
 
 

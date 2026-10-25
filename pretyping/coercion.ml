@@ -546,10 +546,22 @@ type hook = env -> evar_map -> flags:Evarconv.unify_flags -> constr ->
 
 let all_hooks = ref (CString.Map.empty : hook CString.Map.t)
 
+(* BET-84: a name does not name a closure. [register_hook ~override:true]
+   replaces the function behind an unchanged name, from a plugin whose files
+   are unchanged, so neither the active-name list nor the toolchain key moves
+   while behaviour does (cross-model delta-2 review, P1). Each name carries
+   the number of times it was registered, and that number is recorded with
+   it. A closure cannot be digested, and its address is not its identity. *)
+let hook_generation = ref (CString.Map.empty : int CString.Map.t)
+
+let generation_of name =
+  match CString.Map.find_opt name !hook_generation with None -> 0 | Some n -> n
+
 let register_hook ~name ?(override=false) h =
   if not override && CString.Map.mem name !all_hooks then
     CErrors.anomaly ~label:"Coercion.register_hook"
       Pp.(str "Hook already registered: \"" ++ str name ++ str "\".");
+  hook_generation := CString.Map.add name (generation_of name + 1) !hook_generation;
   all_hooks := CString.Map.add name h !all_hooks
 
 let active_hooks = Summary.ref ~name:"coercion_hooks" ([] : string list)
@@ -562,13 +574,16 @@ let activate_hook ~name =
   deactivate_hook ~name;
   active_hooks := name :: !active_hooks
 
-(* BET-84 census row 14: coercion hooks are selected by Summary state. *)
+(* BET-84 census row 14: the active coercion hooks, each with the number of
+   times its name was registered (delta review D5, delta-2 review P1). *)
 let apply_hooks env sigma ~flags body ~inferred ~expected =
+  let active = !active_hooks in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"coercion_hooks" ~key:(fun () -> "")
       ~value:(fun () ->
-          Some (Proof_recorder.digest_cached ~what:"coercion_hooks" !active_hooks));
-  List.find_map (fun name -> CString.Map.get name !all_hooks env sigma ~flags body ~inferred ~expected) !active_hooks
+          Some (Proof_recorder.digest ~what:"coercion_hooks"
+                  (List.map (fun n -> (n, generation_of n)) active)));
+  List.find_map (fun name -> CString.Map.get name !all_hooks env sigma ~flags body ~inferred ~expected) active
 
 let default_flags_of env =
   default_flags_of TransparentState.full

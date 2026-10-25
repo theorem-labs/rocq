@@ -11,8 +11,8 @@ This directory holds gate part 1 ("every channel is covered"):
 - `census_check.py`: lists every site in a source tree that can hold state a proof reads, and every
   exception handler that can turn a critical exception into a different term. It fails when a site has
   no census row or written ruling, or when a ruling names a site that no longer exists.
-- `rulings/*.json`: one rulings file per audited source tree. Each file names the commit it was audited
-  at.
+- `rulings/*.json`: one rulings file per audited source tree, and `rulings/channels.json` for the
+  recorder's read sites in the Rocq tree. Each file names the commit it was audited at.
 - `output/*.txt`: the `--list` output of each run at the audited commits.
 - The table below maps each census row to the code that records it, or to the check that makes a
   proof ineligible.
@@ -26,6 +26,15 @@ python3 dev/tools/census/census_check.py --root <smpl checkout> --rulings dev/to
 python3 dev/tools/census/census_check.py --root <rocq-read-file checkout> --rulings dev/tools/census/rulings/rocq-read-file.json
 python3 -m unittest discover -s dev/tools/census     # the script's own tests
 ```
+
+The same command also checks the recorder's own read sites. It lists every `Proof_recorder.read`,
+`read_by` and `ineligible` call and every `register_tables` record, keyed
+`read:<path>:<row>/<channel>` or `ineligible:<path>:<reason>`, and checks them against
+`rulings/channels.json` (`--channels` names another file; by default it is the `channels.json` beside
+the rulings file, when that file names the same `source`). A new channel, or an existing channel read
+in a new file, must add `{"row": "<row the code passes>"}` there, and a new reason must add
+`{"ineligible": "@<reason>"}` with its text in `reasons`; else the check reports `UNMAPPED`, and an
+entry whose site is gone reports `STALE`.
 
 Exit status: 0 when every site is ruled, 1 when a site is `UNMAPPED` or a ruling is `STALE` or
 `INVALID` (one line each on stdout), 2 on a usage or read error. `--list` prints every site with its
@@ -43,11 +52,17 @@ three plugin checks against the pins in `harness/toolchains/9.2/rocq-verify-harn
 | `nosummary-option` | `declare_option ~no_summary:true` (an option outside the Summary) |
 | `summary-open` | `open Summary`, `include Summary` or `module X = Summary`, which could hide registrations from the scan |
 | `catchall` | `with _ ->`, `\| _ ->` in a `try`, `\| exception _ ->`, or a named handler that does not test `CErrors.noncritical` and does not end by re-raising the caught exception unchanged |
+| `read` | `Proof_recorder.read`, `Proof_recorder.read_by`, and a record with `row` and `channel` fields or an update that sets one (the `register_tables` entries); checked against `rulings/channels.json` |
+| `ineligible` | `Proof_recorder.ineligible`, and a record with `reason` and `detail` fields; checked against `rulings/channels.json` |
+| `recorder-open` | `open Proof_recorder`, `include`, `module X = Proof_recorder` or `Proof_recorder.( ... )`, which could hide reads from the scan |
 
 A site key has no line number: `<kind>:<path>:<name>`. The name is the registered string for Summary,
 object and option sites. For a catch-all it is the enclosing top-level binding plus the handler's
 pattern and the start of its body. A repeated key gets a suffix `#2`, `#3`. So a key survives edits that
-move lines, and changes when the handler itself changes.
+move lines, and changes when the handler itself changes. A `read` site's name is `<row>/<channel>` and an
+`ineligible` site's name is the reason, one key per file. When a wrapper of the same file takes the row,
+channel or reason as a parameter, the scan follows each call of the wrapper to the literal it passes. A
+value that is still not a literal is named by its enclosing binding and the expression as written.
 
 The scan follows OCaml lexing: nested comments, strings, quoted strings and character literals. It does
 not parse OCaml. It lists each of the six handlers the plan names (`pretyping/evarsolve.ml:1786`,
@@ -65,6 +80,7 @@ site stores no term). `@name` refers to an entry in the file's `reasons` object.
 | Tree | Commit | Scope | Sites | Result |
 |---|---|---|---|---|
 | theorem-labs/rocq | 03d5bb248e (9.2/qed-skip-typecheck) | every directory linked into `rocq compile` or a plugin it loads | 269: summary 104, object 78, nosummary-option 3, catchall 84 | 0 problems |
+| theorem-labs/rocq, recorder read sites (`rulings/channels.json`) | 75d4082772 (9.2/proof-replay, with the P2 fix round's working copy) | the same | 91: read 74, ineligible 17 | 0 problems |
 | coqhammer (coq-hammer-tactics 1.3.2+9.2) | 1d581299c2 | `src/lib`, `src/tactics` (the installed package; `src/plugin` is not installed) | 7 catchall | 0 problems |
 | smpl (rocq-smpl.dev) | 1c3578c1f6 | `src` | summary 1, object 1 | 0 problems |
 | rocq-read-file 0.0.2 | 68887ad0c3 | `src` | 2 catchall | 0 problems |
