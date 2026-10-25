@@ -3,7 +3,7 @@
   "files": ["A.v"],
   "summaries": {
     "A.v": {
-      "proofs": 1,
+      "proofs": 2,
       "hits": 1,
       "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 1},
       "refused": null,
