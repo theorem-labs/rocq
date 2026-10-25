@@ -55,8 +55,7 @@ it then cannot decide a `vmlibrary`-only difference and reports
 |---|---|
 | `doc` | one line, printed by `--list` |
 | `files` | the `.v` files, in compile order; both trees use this list |
-| `root` | the logical root of `-Q . <root>` (default `PR`) |
-| `mode` | `replay` (default), `usage`, or `budget` |
+| `mode` | `replay` (default), `usage`, `budget`, or `mixed` |
 | `slow` | run only with `--slow` |
 | `requires` | prerequisites to probe first (`native`, `csdp`); a missing one skips |
 | `native_compiler` | the `-native-compiler` value (default `no`) |
@@ -65,7 +64,7 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `grade_flags` | flags for both grade compiles (for example `-skip-qed-typecheck`) |
 | `replay_extra_flags` | flags for the replay compile only |
 | `ratio` | the `-proof-replay-ratio` value (default `1`) |
-| `stack_kb` | run every compile of this fixture under that stack limit |
+| `stack_kb` | the stack limit every compile of this fixture runs under (default 8192, the limit a grade runs under; lane R1 measured that this changes `.vo` bytes, so stock and replay must share it). `prlimit` is required |
 | `record_layout` | `dotted`, `slashed` or `both`: which name the record is published under |
 | `records` | per file, per proof: `ineligible` reasons it must carry, `eligible`, `writes_nonempty`, `stores_no_term` |
 | `summaries` | per file: `proofs`, `hits`, `misses`, `refused`, `killed`, `outcomes` |
@@ -76,6 +75,7 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `coqchk` | run `rocqchk` over the replay objects (default true) |
 | `budget`, `replay_wall_max` | the budget mode's seconds |
 | `usage` | the usage mode's expected exit code and message substrings |
+| `mixed` | the mixed mode's `replay_file`, `carry_files` and `check_files` |
 
 `outcomes` is a list of `[name, outcome]`, or `[name, outcome, channel]` for a
 `read` miss.  It is checked only when the summary carries the field.
@@ -120,11 +120,16 @@ call sites of `Proof_recorder.ineligible`): `ineligible_timeout`,
 no fixture: it was removed from the recorder in commit `d97df04b` ("a repeat now
 computes nothing ... The read_changed reason is gone with it").
 
-`ineligible_catchall` and `ineligible_unhashable` carry `trigger_optional`.  No
-source-level trigger for those two reasons is known on this Rocq; each
-`expect.json` lists what was measured and found not to fire.  When the reason is
-absent from the record, the runner prints SKIP with that text, so an untested
-class is named on every run instead of passing silently.
+`ineligible_catchall` reaches the handler at `tactics/equality.ml:466`: a
+`rewrite` on a user equality resolves the `Has_J` class over the hint database
+`rewrite_instances` inside that handler, so a `Hint Extern` there that
+overflows the stack is caught and marks the proof, and `rewrite` still closes
+through its fallback.  `ineligible_unhashable` (`--slow`) is the one class
+`digest_value` refuses that source can reach: a constant whose body has more
+than 2^25 distinct blocks.  Both fixtures' `.v` files carry the measurement
+and the control behind them, and `expect.json` still supports
+`trigger_optional` for a class whose trigger is lost to a later change: the
+runner then prints SKIP with that text instead of passing silently.
 
 **The closer.**  `closer_admitted`: a registered `tac. Qed.` against an edited
 `tac. Admitted.` must miss.
@@ -136,4 +141,16 @@ class is named on every run instead of passing silently.
 `-proof-replay-budget 240 -proof-replay-ratio 1`.  Stock is killed by its own
 240-second `timeout`.  Replay charges two replayed proofs, runs the third, and
 its charged clock reaches the budget, so it exits 124 with no `.vo` well before
-240 seconds of real time.
+240 seconds of real time.  The three times have to separate — the charge of
+the two replayed proofs, which carries the recorder's overhead, below the
+budget, and the stock compile well above it — so the proof's work is
+calibrated, and `replay_wall_max` is tight enough (70 s against a ~92 s proof)
+that a kill which lands only between top-level sentences, instead of inside
+the third proof's tactic, fails the fixture.
+
+**The carry-over.**  `carry_replayed_dep` (`mixed` mode): a grade that reuses
+one registered object and replays the object it was compiled against.  `B.vo`
+is compiled against the STOCK `A.vo`, then placed beside the REPLAYED `A.vo`,
+and `C.v` is compiled on top.  It must behave as the all-stock control does,
+and `rocqchk` must accept the reused object.  The control runs first, so a
+broken setup fails there instead of looking like a pass.

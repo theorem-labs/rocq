@@ -72,6 +72,11 @@ DEFAULTS = {
     "grade_flags": [],
     "replay_extra_flags": [],
     "ratio": "1",
+    # Lane R1 measured that the stack limit changes the bytes of a `.vo`, so a
+    # fixture's compiles must all run under the limit a grade runs under, and
+    # not under whatever the caller's shell happens to have.  8192 kB is the
+    # limit the grading engine sets (BET-84 spec, "Resource limits").
+    "stack_kb": 8192,
     "record_layout": "both",
     "compile_fails": [],
     "summaries": {},
@@ -85,6 +90,7 @@ DEFAULTS = {
     "budget": None,
     "replay_wall_max": None,
     "usage": None,
+    "mixed": None,
     "trigger_optional": None,
 }
 
@@ -117,6 +123,11 @@ class Rocq:
         for name in ("rocq", "rocqchk"):
             if not (self.bin / name).exists():
                 raise SystemExit("no %s in %s" % (name, self.bin))
+        # Every compile runs under the fixture's stack limit, so a missing
+        # prlimit is a broken environment, not a reason to compare objects
+        # made under two different limits.
+        if not shutil.which("prlimit"):
+            raise SystemExit("no prlimit in PATH: the compiles cannot be given their stack limit")
 
     def run(self, argv, cwd, timeout_s=None):
         if timeout_s is not None:
@@ -381,13 +392,17 @@ class Fixture:
                     elif proof["replay"] is not None:
                         self.fail("%s: the registration stored a term for an ineligible proof" % name)
 
-    def grade(self, tree_name, flags, timeout_s=None):
-        """Compile the edited tree in `tree_name`; stop at the first failure."""
+    def grade(self, tree_name, flags, timeout_s=None, files=None):
+        """Compile the edited tree in `tree_name`; stop at the first failure.
+
+        `files` compiles a subset, in the given order: the mixed mode builds
+        one object with replay and takes the rest from the stock tree.
+        """
         spec = self.spec
         tree = self.out / tree_name
         copy_tree(FIXTURES / spec["name"] / "edited", tree)
         results = []
-        for src in spec["files"]:
+        for src in (spec["files"] if files is None else files):
             res = self.rocq.compile(spec, tree, flags, src, timeout_s=timeout_s)
             self.log("%s-%s" % (tree_name, src), res)
             results.append((src, res))
@@ -609,6 +624,64 @@ class Fixture:
             else:
                 self.compare_summary(src, want, json.loads(path.read_text()))
 
+    def run_mixed_mode(self, records):
+        """The carry-over case: one object is REUSED, its dependency REPLAYED.
+
+        A `.vo` records a digest of each library it was compiled against, so a
+        reused object only loads beside a replayed dependency if the replayed
+        object is the same bytes stock would have written.  The fixture
+        therefore builds three trees: `b` holds a stock object for every file
+        and is the control, `a` holds the replayed object of one file, and `m`
+        holds the replayed object beside the stock objects of the files that
+        were compiled against the stock one.  The files named in
+        `mixed.check_files` are then compiled in `m`, and must do what they do
+        in the control.  Without the control a broken setup would look like a
+        pass, so the control's own failure ends the fixture.
+        """
+        spec = self.spec
+        cfg = spec["mixed"]
+        replay_file = cfg["replay_file"]
+        carry = cfg["carry_files"]
+        check = cfg["check_files"]
+        b, stock = self.grade("b", spec["grade_flags"])
+        for src, res in stock:
+            if res["rc"] != 0:
+                self.fail("the stock control failed to compile %s (exit %d), so the mixed tree proves nothing: %s"
+                          % (src, res["rc"], last_line(res)))
+                return
+        for src, needles in spec["stdout_contains"].items():
+            got = dict(stock).get(src)
+            for needle in needles:
+                if got is not None and needle not in got["out"]:
+                    self.fail("the stock control of %s did not print %r, so the mixed tree proves nothing"
+                              % (src, needle))
+                    return
+        replay_flags = (spec["grade_flags"] + spec["replay_extra_flags"]
+                        + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
+        a, replay = self.grade("a", replay_flags, files=[replay_file])
+        if replay[0][1]["rc"] != 0:
+            self.fail("the replay compile of %s exited %d: %s"
+                      % (replay_file, replay[0][1]["rc"], last_line(replay[0][1])))
+            return
+        self.check_summaries(a, replay)
+        m = self.out / "m"
+        copy_tree(FIXTURES / spec["name"] / "edited", m)
+        shutil.copyfile(vo_src(a, replay_file), vo_src(m, replay_file))
+        for src in carry:
+            shutil.copyfile(vo_src(b, src), vo_src(m, src))
+        self.notes.append("mixed tree: %s replayed, %s reused from the stock build"
+                          % (replay_file, ", ".join(carry)))
+        mixed = []
+        for src in check:
+            res = self.rocq.compile(spec, m, spec["grade_flags"], src)
+            self.log("m-" + src, res)
+            mixed.append((src, res))
+            if res["rc"] != 0:
+                self.fail("the mixed tree failed to compile %s (exit %d): %s"
+                          % (src, res["rc"], last_line(res)))
+        self.check_output(mixed, stock)
+        self.check_coqchk(m, carry)
+
     def run(self, register_only=False, stock_control=False):
         records = self.register()
         if records is None:
@@ -627,6 +700,8 @@ class Fixture:
             self.run_usage_mode(records)
         elif self.spec["mode"] == "budget":
             self.run_budget_mode(records)
+        elif self.spec["mode"] == "mixed":
+            self.run_mixed_mode(records)
         else:
             self.run_replay_mode(records)
 
