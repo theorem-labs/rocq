@@ -279,10 +279,19 @@ let decompose_proj ?metas env sigma (t1, sk1) =
     match Termops.global_app_of_constr sigma t1 with
     | (Names.GlobRef.ConstRef proji, u), arg -> (proji, u), arg
     | _ -> raise Not_found
-    | exception _ -> raise Not_found in
+    | exception e ->
+      (* BET-84: a critical exception here takes the fallback path, so the
+         term can differ; the proof is never replayed. *)
+      if not (CErrors.noncritical e) then
+        Proof_recorder.ineligible ~reason:"catchall" ~detail:"pretyping/evarconv.ml:282";
+      raise Not_found in
   (* Given a ConstRef projection, I obtain the structure it is a projection from. *)
-  let structure = try Structures.Structure.find_from_projection env proji
-    with _ -> raise Not_found in
+  let structure =
+    try Structures.Structure.find_from_projection env proji
+    with e ->
+      if not (CErrors.noncritical e) then
+        Proof_recorder.ineligible ~reason:"catchall" ~detail:"pretyping/evarconv.ml:285";
+      raise Not_found in
   (* Knowing the structure and hence its number of arguments, I can cut sk1 into pieces. *)
   let params1, c1, extra_args1 =
     match arg with
@@ -1019,7 +1028,10 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
       (* The projection constant will not change, so there is no point in keeping the keys anymore. *)
       let () = Cs_keys_cache.clear (not l2r) keys in
       match x with | Success _ -> Inl x | _ -> Inr false
-    with _ -> Inr false in
+    with e ->
+      if not (CErrors.noncritical e) then
+        Proof_recorder.ineligible ~reason:"catchall" ~detail:"pretyping/evarconv.ml:1022";
+      Inr false in
   let () = debug_unification (fun () -> Pp.(v 0 (pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
   match (flex_kind_of_term flags env evd term1 sk1,
          flex_kind_of_term flags env evd term2 sk2) with

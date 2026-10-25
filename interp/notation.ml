@@ -533,8 +533,15 @@ let find_prim_token check_allowed ?loc p sc =
 let interp_prim_token_gen ?loc g p local_scopes =
   let scopes = make_current_scopes local_scopes in
   let p_as_ntn = try notation_of_prim_token p with Not_found -> InConstrEntry,"" in
+  (* BET-84 census row 11: each number or string notation the proof reads,
+     with the scopes it was read in. *)
+  let key () =
+    String.concat "|" (snd p_as_ntn :: List.filter_map
+                         (function OpenScopeItem s -> Some s | LonelyNotationItem _ -> None) scopes) in
   try
     let pat, sc = find_interpretation p_as_ntn (find_prim_token ?loc g p) scopes in
+    Proof_recorder.read ~row:"11" ~channel:"prim_token" ~key
+      ~value:(fun () -> Some (Proof_recorder.digest ~what:"prim_token" (pat, sc)));
     pat, sc
   with Not_found as exn ->
     let _, info = Exninfo.capture exn in

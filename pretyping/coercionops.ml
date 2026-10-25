@@ -271,7 +271,11 @@ let apply_on_class_of env sigma t cont =
     if not (Int.equal (List.length args) n1) then raise Not_found;
     cont cl
 
+(* BET-84 census row 14: the coercion graph, as one digest, when a proof
+   looks for a coercion path. *)
 let lookup_path_between env sigma ~src:s ~tgt:t =
+  Proof_recorder.read ~row:"14" ~channel:"coercion_graph" ~key:(fun () -> "")
+    ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph));
   apply_on_class_of env sigma s (fun i ->
       apply_on_class_of env sigma t (fun j ->
           lookup_path_between_class (i,j)))

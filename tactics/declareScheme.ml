@@ -38,7 +38,20 @@ let inScheme : Libobject.locality * (string * (inductive * GlobRef.t)) -> Libobj
 let declare_scheme local kind indcl =
   Lib.add_leaf (inScheme (local,(kind,indcl)))
 
-let lookup_scheme kind ind = CString.Map.find kind (Indmap_env.find ind !scheme_map)
+(* BET-84 census row 15: each scheme the proof looks up, by kind and
+   inductive, absent when it is not yet declared. *)
+let lookup_scheme kind ind =
+  let res =
+    match Indmap_env.find_opt ind !scheme_map with
+    | None -> None
+    | Some m -> CString.Map.find_opt kind m
+  in
+  Proof_recorder.read ~row:"15" ~channel:"scheme"
+    ~key:(fun () -> kind ^ ":" ^ MutInd.to_string (fst ind) ^ "," ^ string_of_int (snd ind))
+    ~value:(fun () -> match res with
+        | None -> None
+        | Some c -> Some (Pp.string_of_ppcmds (GlobRef.print c)));
+  (match res with Some c -> c | None -> raise Not_found)
 
 let lookup_scheme_opt kind ind =
   try Some (lookup_scheme kind ind) with Not_found -> None

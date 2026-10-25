@@ -84,54 +84,56 @@ The scan found tables that a tactic reads and that CHANNELS.md does not list. Th
 ## Census row table
 
 "Recorded" means the record holds a read with its key and value digest, at the code named. "Ineligible"
-means a proof that does it stores no term, with the reason in its record entry. Where a row says
-"proposed", the code is a later commit on this branch. Its status is in the last column.
-
-| Row | Channel | How it is recorded or made ineligible | Census sites |
+means a proof that does it stores no term, with the reason in its record entry. Every row below is
+implemented on this branch; the recorder is `lib/proof_recorder.ml`, and `rocq compile -proof-record`
+writes the record (`lib/proof_record.mli` is the format). The `reason` column names the string the
+record entry carries.
+| Row | Channel | How it is recorded, or the check that makes a proof ineligible | Code |
 |---|---|---|---|
-| 1 | Global env: constants, inductives, constructors, projections, rewrite rules, modules, module types | Each lookup, with a digest of the value: `Environ.lookup_constant[_opt\|_key]`, `lookup_mind[_key]`, `lookup_rewrite_rules`, `lookup_module`, `lookup_modtype` (`kernel/environ.ml`). Retroknowledge: a digest in key item 2 | `library/global.ml` `global_env`; objects `CONSTANT`, `INDUCTIVE` |
-| 2 | Universes, constraints, sort qualities | One digest of the whole universe graph and quality graph at the proof's start (GRADE, 2026-10-24 05:09Z) | inside `global_env` |
-| 3 | Section context, variable opacity | Digest of the named context and `Decls.variable_opacity` at `Declare.initialize_named_context_for_proof` (`vernac/declare.ml:1815`) | `"VARIABLE"` summary and object |
-| 4 | Typing flags, conversion oracle | Digest of `Environ.typing_flags` at proof start; each `Conv_oracle.get_strategy` and `get_transp_state` query | object `STRATEGY` |
-| 5 | `simpl` behaviour | Each `ReductionBehaviour.get` (`pretyping/reductionops.ml:186`) | `"reductionbehaviour"`, `REDUCTIONBEHAVIOUR` |
-| 6 | Nametabs | Each `locate`, `locate_all`, `exists`, `shortest_qualid` in the `Nametab` tables, a failed lookup recorded as absent | nametab `the_tab`, `warntab`; objects `EXPORTNAMES`, universe and sort name states |
-| 7 | Hint databases | Each database the proof searches, by name, with a digest of that database, at `Hints.searchtable_map`, `current_db`, `current_pure_db`, `make_db_list` (`tactics/hints.ml:843-855,1592`) | `"searchtable"`, `HINT-COUNTER`, `AUTOHINT_DB`, `AUTOHINT` |
-| 8 | Typeclasses, instances, typeclass solvers | Each table the proof reads, by name, with its digest, at `Typeclasses.class_info`, `instances_of`, `all_instances` (`pretyping/typeclasses.ml:83-179`); `typeclass_instances` through row 7 | `"classes"`, `"instances"`, `autogoal_cache`, `typeclass_solvers`, objects from `vernac/classes.ml` |
-| 9 | Ltac definitions, Tactic Notation | Each lookup at `Tacenv.interp_ltac`, `interp_alias`, `check_alias`, `locate_tactic` (`plugins/ltac/tacenv.ml:29-122`); ML tactics by row 16 | `tactic-alias`, `tactic-definition`, `TACTIC-NOTATION-COUNTER`, Tactic grammar objects |
-| 10 | Ltac2 definitions | Each lookup at `Tac2env.interp_global`, `interp_constructor`, `interp_projection`, `interp_type`, `interp_notation`, `interp_primitive` (`plugins/ltac2/tac2env.ml:84-151`) | `ltac2-state`, `ltac2-notations`, `TAC2-*` objects; `ltac2-compiled-state` ruled a derived cache |
-| 11 | Notations, scopes, delimiters, argument scopes, number and string notations | Each lookup at `Notation.interp_notation`, `interp_prim_token`, `find_scope`, `current_scopes`, `find_delimiters_scope` (`interp/notation.ml`) | `"symbols"`, `LOCAL-CUSTOM-ENTRY`, notation objects |
-| 12 | Implicit arguments, argument renaming, bidirectionality hints | Each lookup at `Impargs.implicits_of_global`, `Arguments_renaming.arguments_names`, the bidirectionality-hint lookup | `implicits`, `section-implicits`, `rename-arguments`, `bidirectionalityhints` |
-| 13 | Options and option tables; `Set Warnings` | A digest of every option's value and every option table at proof start (options have no single read point) | `goptions.ml` declare and table sites; SSR option refs |
-| 14 | Canonical structures, coercions, records, hooks | Each table the proof reads, by name, with its digest: `Structures.*.find`, `CanonicalSolution.find`, `Coercionops.lookup_path_between`, `class_info`, `coercion_info` | record and coercion tables, `canonical_solution_hooks_hacked`, `coercion_hooks`, `PRIMPROJS`, `STRUCTURE` |
-| 15 | Rewrite and plugin tables | Each table the proof reads, by name, with its digest: `Autorewrite.find_rewrites`, `Ring.find_ring_structure`, zify `init_cache`, `Rocqlib.lib_ref`, `DeclareScheme.lookup_scheme`, `Keys`, funind and SSR view tables | 24 sites |
-| 16 | ML-registered tables | The binary and every loaded plugin, with load order, in key item 2 | `inited-plugins`, ML-modules summary, `ML-MODULE` |
-| 17 | Fresh names | Composite of rows 1, 3, 6 and 20; the lexer keyword state is in the parsed sentences (key item 1) | `GRAMMAR_LEXER` |
-| 18 | Evar, meta, universe and SSR counters | Writes: the advance of each counter (counter totals) | evar and meta counters, `SSR:abstractid` |
-| 19 | `Proof using` | The declared set and the named collections it uses | `proofusing-nameset` |
-| 20 | Lib state: module path, section prefix | Key item 3 | outside the Summary |
-| 21 | Opaque table, proof stack, Program obligations | Ineligible: a command inside the proof, or `abstract`, found in the parsed sentences | outside the Summary |
-| 22 | Time and timeouts | Ineligible: `Timeout`, `Time`, Ltac2 `timeout` in the parsed sentences | |
-| 23 | Files and external processes | Ineligible: `psatz` with an external prover, `native_compute`; micromega caches are already blocked in grading | `NATIVE-LIBRARY-LOAD` ruled |
-| 24 | Resource limits | Stack limit in key item 2; memory cap recorded outside the key (GRADE, 12:19Z); `RLIMIT_AS`, `RLIMIT_DATA` and `vm.overcommit_memory` recorded, and replay refused with an address-space limit | |
-| M1 | Abbreviations | Each lookup in `interp/abbreviation.ml` | `ABBREVIATIONS`, `ABBREVIATION` |
-| M2 | Reserved types | Each `Reserve.find_reserved_type` (`interp/reserve.ml:108`) | `reserved-type`, `reserved-type-rev` |
-| M3 | Generalizable variables | One digest of `"generalizable-ident"` | summary and object |
-| M4 | Schemes created (write) | The schemes the proof created | object `SCHEME` |
-| M5 | Universe constraint sources (write) | The record the declaration writes | summary and object |
-| M6 | `-skip-qed-typecheck` unchecked mark (write) | Not stored: replay writes the mark of the grade compile's flags | |
-| M7 | Template default levels | One digest of `"template default univs"` | summary and object |
-| S2.1 | Parser state, load paths, loaded libraries | Load paths and loaded libraries in key item 2; the grammar in the parsed sentences (key item 1) | 13 sites |
-| N1 | Printing state | Ineligible: Ltac2 `Message.to_string` in the parsed sentences | 4 sites |
-| N2 | `stepl`/`stepr` lemmas | Each table read, with its digest, at `step` (`plugins/ltac/extratactics.mlg:383`) | 3 sites |
-| N3 | Prop inductives with dependent elimination | Each `is_prop_but_default_dependent_elim` query (`tactics/elimschemes.ml:38`) | 2 sites |
-| N4 | Default solver tactics | A digest of each default tactic at proof start | 2 sites |
-| N5 | smpl databases | Each database the `smpl` tactic reads, by name, with its digest | 2 sites (smpl) |
+| 1 | Global env: constants, inductives, constructors, projections, rewrite rules, modules, module types | Recorded: each lookup, with a digest of the value found, or absent. Channels `constant`, `constant_exists`, `rewrite_rules`, `inductive`, `inductive_exists`, `module`, `modtype`. Each key is digested once per compile and recorded once per proof | `kernel/environ.ml` `Recorded`, `lookup_constant[_opt\|_key]`, `mem_constant`, `lookup_rewrite_rules`, `lookup_mind_key`, `mem_mind`, `lookup_module`, `lookup_modtype` |
+| 1 | Retroknowledge | In key item 2: only `Register` writes it, and the loaded libraries are part of the key | `vernac/proof_record_env.ml` `toolchain` |
+| 2 | Universes, constraints, sort qualities | Recorded: one digest of the whole universe graph and one of the quality graph, at each proof's start (GRADE, 2026-10-24 05:09Z). Writes: the levels and constraints each declaration adds | `proof_record_env.ml` `read_at_start`; `vernac/declare.ml` `declare_constant` |
+| 3 | Section context, variable opacity | Recorded: a digest of the named context and of `Decls.variable_opacity` over it, at each proof's start | `proof_record_env.ml` `read_at_start` |
+| 4 | Typing flags, conversion oracle | Recorded: one digest of `Environ.typing_flags` at each proof's start. The oracle is a field of that record (`Environ.oracle env = (typing_flags env).conv_oracle`), so the digest covers every oracle query | `proof_record_env.ml` `read_at_start`; `kernel/environ.ml:324,329` |
+| 5 | `simpl` behaviour | Recorded: each `ReductionBehaviour.get`, by constant | `pretyping/reductionops.ml` `ReductionBehaviour.get` |
+| 6 | Nametabs | Recorded: each `locate`, `locate_upto`, `locate_all`, `of_path` and `exists`, in every nametab, with the value found or absent. The channel is the table's own summary name | `library/nametab.ml` `MakeImperative` |
+| 7 | Hint databases | Recorded: each database the proof searches, by name, with a digest of that database. With `-proof-record-tables`, every database at the proof's start | `tactics/hints.ml` `searchtable_map`, `current_db`, `register_tables` |
+| 8 | Typeclasses, instances | Recorded: the `classes` and `instances` tables, by name, with a digest, on each read. With `-proof-record-tables`, both at the proof's start | `pretyping/typeclasses.ml` `read_classes`, `read_instances`, `register_tables` |
+| 9 | Ltac definitions and aliases | Recorded: each `interp_ltac`, `is_ltac_for_ml_tactic`, `interp_alias`, `check_alias`, by kernel name. The nametab lookup that finds the name is row 6; the ML tactic table is row 16 | `plugins/ltac/tacenv.ml` |
+| 10 | Ltac2 definitions | Recorded: each `interp_global`, `interp_constructor`, `interp_projection`, `interp_type`, `interp_alias`, `interp_notation`, by kernel name. The primitive map is row 16 | `plugins/ltac2/tac2env.ml` `find` |
+| 11 | Notations, scopes, number and string notations | Recorded: each `interp_notation` and each `interp_prim_token`, keyed by the notation and the open scopes, with a digest of the interpretation found. The scope stack is part of that key, so `find_scope` and `current_scopes` need no separate read | `interp/notation.ml` `record_notation`, `interp_prim_token_gen` |
+| 12 | Implicit arguments, argument renaming | Recorded: each `Impargs.implicits_of_global`, with the renaming applied, so `Arguments_renaming.arguments_names` is inside the digest | `interp/impargs.ml` `implicits_of_global` |
+| 13 | Options, option tables, `Set Warnings` | Recorded: one digest of `Goptions.get_tables ()` (every option's current value) and one of `CWarnings.get_flags ()`, at each proof's start | `proof_record_env.ml` `read_at_start` |
+| 14 | Canonical structures, coercions, records | Recorded: the record-structure table by inductive, the canonical-solution table by projection, and the coercion graph, each with a digest, on each read | `pretyping/structures.ml` `Structure.find`, `mem`, `CanonicalSolution.find`; `pretyping/coercionops.ml` `lookup_path_between` |
+| 15 | Autorewrite, Rocqlib, schemes, keys | Recorded: each rewrite base, each `lib_ref` and `lib_ref_opt`, each `DeclareScheme.lookup_scheme`, and the Keys table | `tactics/autorewrite.ml`, `library/rocqlib.ml`, `tactics/declareScheme.ml`, `pretyping/keys.ml` |
+| 16 | ML-registered tables | In key item 2: the binary's digest, and every loaded plugin with its file digests, in load order. A table an ML module fills is fixed by those | `proof_record_env.ml` `toolchain`; `vernac/mltop.ml` `get_loaded_modules` |
+| 17 | Fresh names | Composite of rows 1, 3, 6 and 20; the lexer keyword state is inside key item 1, the parsed sentences | `proof_record_env.ml`; `toplevel/vernac.ml` |
+| 18 | Counters | Writes: the universe levels each declaration creates are recorded in order. A proof that advances a counter with no accessor is not separated from one that does not, so this row is the one the record states least precisely; P3 refuses a replay whose write set it cannot make again | `vernac/declare.ml` `declare_constant` |
+| 19 | `Proof using` | Recorded: the declared set of section variables at the proof's start, absent when the proof declares none | `vernac/declare.ml` `record_using` |
+| 20 | Lib state: module path, section prefix | Key item 3, in the `position` field. `module_path` is the path the `.glob` writes (sections excluded), `section_path` adds the open sections | `proof_record_env.ml` `position` |
+| 21 | Commands inside a proof, `abstract`, Program obligations | Ineligible: a sentence that the classifier does not call a proof step (`command_in_proof`); an `abstract` or other sub-proof (`subproof`); a proof opened inside another (`nested_proof`) | `toplevel/vernac.ml`; `proofs/subproof.ml` `build_constant_by_tactic`; `lib/proof_recorder.ml` `open_proof` |
+| 22 | Time and timeouts | Ineligible: every `Control.timeout`, which is the one point `Timeout`, `timeout` and Ltac2 `timeout` pass through (`timeout`) | `lib/control.ml` `timeout` |
+| 23 | Files and external processes | Ineligible: `native_compute` (`native_compute`) and the external prover `csdpcert` that `psatz` calls (`external_prover`). Micromega's certificate caches are already blocked in grading | `kernel/nativelib.ml` `compile`; `plugins/micromega/coq_micromega.ml` `really_call_csdpcert` |
+| 24 | Resource limits | Recorded in the header: `stack_limit` (in key item 2), `memory_cap`, `rlimit_as`, `rlimit_data`, `overcommit_memory`. The cap is recorded and never compared (GRADE, 12:19Z); replay is refused when an address-space limit is set or `overcommit_memory` is 2 | `lib/proof_limits.ml` |
+| M1 | Abbreviations | Recorded: each `find_opt` and `find_interp`, by kernel name | `interp/abbreviation.ml` |
+| M2 | Reserved types | Recorded: each `find_reserved_type`, by identifier root | `interp/reserve.ml` |
+| M3 | Generalizable variables | Recorded: one digest of the table at each proof's start | `proof_record_env.ml`; `interp/implicit_quantifiers.ml` `generalizable_idents` |
+| M4 | Schemes created (write) | Write: each scheme the proof created, by name | `tactics/ind_tables.ml` `define` |
+| M5 | Universe constraint sources (write) | Write: the constant whose declaration wrote a constraint-source record | `vernac/declare.ml` `declare_constant` |
+| M6 | `-skip-qed-typecheck` unchecked mark (write) | Not stored: replay writes the mark of the grade compile's own flags. The header records which flag the recording compile ran under, and `kernel_check` records whether the kernel typed each proof | `lib/proof_record.mli` `skip_qed_typecheck`, `kernel_check` |
+| M7 | Template default levels | Recorded: one digest of the table at each proof's start | `proof_record_env.ml`; `engine/uState.ml` `template_default_univs` |
+| S2.1 | Parser state, load paths, loaded libraries | In key item 2: every loaded library in load order with its `.vo` digest, and the safe-loaded ones. The grammar is inside key item 1, the parsed sentences | `proof_record_env.ml` `toolchain`; `vernac/library.ml` `library_digest`, `safe_loaded_libraries` |
+| N1 | Printing state | Ineligible: Ltac2 `Message.to_string`, the one primitive that turns printed text into data (`message_to_string`) | `plugins/ltac2/tac2core.ml` |
+| N2 | `stepl`/`stepr` lemmas | Ineligible: the tables are filled by the commands `Declare Left Step` and `Declare Right Step`, which inside a proof are already `command_in_proof`; a `stepl` whose table a later command changed is caught by key item 1, the parsed sentences, plus row 6 on the lemma it names | `toplevel/vernac.ml` |
+| N3 | Prop inductives with dependent elimination | Recorded: each `is_prop_but_default_dependent_elim`, by inductive | `tactics/elimschemes.ml` |
+| N4 | Default solver tactics | Recorded through row 13: `Obligation Tactic` and `Set Firstorder Solver` are options, and the digest of every option's value is taken at each proof's start | `proof_record_env.ml` `read_at_start` |
+| N5 | smpl databases | Outside this tree: smpl is a pinned plugin. A `Smpl Add` inside a proof is `command_in_proof`; a database an earlier command changed is not yet recorded, so a smpl proof is left to P3's plugin check | smpl `src/smpl.mlg` |
 
-Catch-all handlers (84 in Rocq, 7 in coqhammer, 2 in rocq-read-file):
+Catch-all handlers (79 in Rocq, 7 in coqhammer, 2 in rocq-read-file):
 
 | Disposition | Sites | Reason |
 |---|---|---|
-| Ineligible when a critical exception is caught | `pretyping/evarconv.ml` `decompose_proj` (2), `evar_eqappr_x`; `pretyping/evarsolve.ml` `invert_definition`; `tactics/equality.ml` `lookup_eq_eliminator_opt` | `critical-caught` |
+| Instrumented: ineligible when a critical exception is caught | `pretyping/evarconv.ml:282,285,1022`; `pretyping/evarsolve.ml:1786`; `tactics/equality.ml:466`. Each now tests `CErrors.noncritical` and marks the running proof, so the scan no longer lists it and its ruling is gone | reason `catchall` |
 | Ineligible when the tactic appears | coqhammer `hhpartac.ml` (4): `best`, `sbest`, `hbest` | `parallel-race` |
 | Ineligible when the command appears | rocq-read-file `read_file.ml:23,40`: `ReadFileBytes`, `ReadFileInt63`, `ReadFileString` | `readfile-command` |
 | Ruled: allocation precondition | coqhammer `hammer_errors.ml` (2), `hhlib.ml` (1) | `allocation-precondition`, `string-prefix` |
@@ -141,7 +143,8 @@ Catch-all handlers (84 in Rocq, 7 in coqhammer, 2 in rocq-read-file):
 
 ## Status
 
-- This commit: the census check, its tests, the rulings and the run output.
-- Later commits on this branch: the recorder (`rocq compile` option, record format, the choke points above),
-  and the instrumentation of the five `critical-caught` handlers. When a handler is instrumented, its entry
-  turns `STALE` and is removed in the same commit.
+- The census check, its tests, the rulings and the run output: commit `0cbbab654e`.
+- The record format, its strict reader and the structural digest (`lib/proof_record.{ml,mli}`): commit
+  `cdf4e081a7`.
+- The recorder: `rocq compile -proof-record` and `-proof-record-tables`, every choke point of the table
+  above, and the five instrumented handlers.
