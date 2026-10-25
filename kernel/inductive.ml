@@ -1359,17 +1359,16 @@ let find_uniform_parameters recindx nargs stripped =
     [forall (z:C(x,y)) (n:I(x,y,z)), T(x,y,z,n)], so that
     [fun x y z => psi z] is of same type as the original term *)
 
-(* [find_uniform_parameters] bounds the prefix by the arguments of every
-   occurrence it can see, including an unapplied occurrence. The analysis
-   runs on the reduced body, while this pass rewrites the body as written, so
-   an occurrence in a binder prefix can be visible here and absent from the
-   analysis. Upstream raises Failure "List.skipn" on such an occurrence
-   (rocq-prover/rocq#21798, commit f4ba720a635c). This fork keeps the tolerant
-   form: the guard condition still checks the rewritten body, and the
-   environment correction at the call site makes the analysis measure the
-   kernel's actual term rather than a shifted lookup. *)
-let drop_uniform_parameters nuniformparams bodies =
-  let nbodies = Array.length bodies in
+(* Rewrites the SAME stripped bodies that [find_uniform_parameters] measured,
+   at the same de Bruijn depth: each one sits under its own [recindx+1]
+   abstractions. Starting at 0 instead would make the test below select the
+   innermost stripped binders rather than the block's own variables, so
+   arguments would be deleted from an unrelated application and a recursive
+   call placed in one of them would never reach the guard condition. That
+   admits a closed proof of False; the shape is
+   test-suite/failure/guard_prefix_depth.v. *)
+let drop_uniform_parameters nuniformparams recindx stripped =
+  let nbodies = Array.length stripped in
   let rec aux k c =
     let f, l = decompose_app_list c in
     match kind f with
@@ -1382,7 +1381,7 @@ let drop_uniform_parameters nuniformparams bodies =
       else Term.applist (f, l)
     | _ -> map_with_binders succ aux k c
   in
-  Array.map (aux 0) bodies
+  Array.map2 (fun recindx c -> aux (recindx + 1) c) recindx stripped
 
 let filter_fix_stack_domain cache ?evars nr decrarg stack nuniformparams =
   let rec aux i nuniformparams stack =
@@ -1545,7 +1544,7 @@ let check_one_fix cache ?evars renv recpos trees def =
                 recindxs bodies in
             let stripped = Array.map snd split in
             let nuniformparams = find_uniform_parameters recindxs (List.length stack) stripped in
-            let stripped = drop_uniform_parameters nuniformparams stripped in
+            let stripped = drop_uniform_parameters nuniformparams recindxs stripped in
             let bodies = Array.map2 (fun (sign, _) body ->
                 Term.it_mkLambda_or_LetIn body sign) split stripped in
             let fix_stack = filter_fix_stack_domain cache ?evars (redex_level rs) decrArg stack nuniformparams in
