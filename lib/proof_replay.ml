@@ -45,6 +45,46 @@ let proof_provided : (string * string, string option) Hashtbl.t = Hashtbl.create
 
 let provide ~channel ~key ~value = Hashtbl.replace proof_provided (channel, key) value
 
+(* A process-wide counter a proof's tactics move. A replayed proof's
+   tactics do not run, so the counter would stay where it was and the
+   proofs after it would make different fresh names (a hint's [_<n>], an
+   SSR abstract variable). So replay reads each counter where the proof
+   starts and, after the declaration, puts it at start plus the advance
+   the registration recorded. The declaration's own advance is overwritten
+   rather than added, which is what stock leaves behind.
+
+   The universe and sort counters are not registered here: the stored term
+   carries them ([rb_univ_end] in [Declare]). A counter nothing registers
+   is one replay cannot move, so a proof that moved it is refused. *)
+let counter_io : (string, (unit -> int) * (int -> unit)) Hashtbl.t = Hashtbl.create 8
+
+let register_counter name ~get ~set = Hashtbl.replace counter_io name (get, set)
+
+let can_advance name = Hashtbl.mem counter_io name
+
+(* The counters of the proof being replayed: where each stood when the
+   proof opened, and the advance its record holds. The start is taken at
+   the proof's start, as the registration counted its advance from there;
+   taken at the closer it would already hold what opening the proof
+   spent. *)
+let counter_starts () =
+  Hashtbl.fold (fun name (get, set) acc -> (name, get (), set) :: acc) counter_io []
+
+let pending_counters : (int * int * (int -> unit)) list ref = ref []
+
+let take_counters ~starts ~recorded =
+  pending_counters :=
+    List.filter_map
+      (fun (name, start, set) ->
+         match List.assoc_opt name recorded with
+         | Some n -> Some (start, n, set)
+         | None -> None)
+      starts
+
+let apply_counters () =
+  List.iter (fun (start, n, set) -> set (start + n)) !pending_counters;
+  pending_counters := []
+
 (* The layer that made a stored term says, at the closer, whether this
    compile can use it. It is never a reason to use one. *)
 let precheck : (string -> bool) ref = ref (fun _ -> false)
@@ -64,7 +104,14 @@ let provided () =
     providers;
   (tbl, channels)
 
-type candidate = { c_name : string; c_proof : R.proof }
+type candidate = {
+  c_name : string;
+  c_proof : R.proof;
+  c_provided : (string * string, string option) Hashtbl.t * (string, unit) Hashtbl.t;
+      (** the provided channels, read where the record read them: at the
+          proof's start, not at its closer *)
+  c_counters : (string * int * (int -> unit)) list;  (** each counter at the proof's start *)
+}
 
 type counts = {
   mutable n_proofs : int;
@@ -206,17 +253,21 @@ let abandon () =
   | Some ({ f_candidate = Some c; _ } as st) -> st.f_candidate <- None; miss_key c.c_name
   | Some _ | None -> ()
 
-(* A write the declaration of the stored term does not make by itself:
-   the counters the proof's tactics moved, and the warnings it raised,
-   which [Set Warnings "+..."] can turn into an error. The declaration
-   makes the rest — the levels and constraints, the constraint sources,
-   and the schemes, which travel with the term's side effects. A proof
-   whose other writes this compile cannot make again runs its tactics.
+(* A write the declaration of the stored term does not make by itself: a
+   warning the proof raised, which [Set Warnings "+..."] can turn into an
+   error, and a counter that no [register_counter] can move. The
+   declaration makes the rest — the levels and constraints, the constraint
+   sources, and the schemes, which travel with the term's side effects.
 
-   The universe and sort counters are not in this list: the stored term
-   carries them, and the precheck compares them. *)
+   The universe and sort counters are not here: the stored term carries
+   them, and the precheck compares them. Every other registered counter is
+   moved at the closer by [advance_counters]. *)
 let unreplayable_writes (p : R.proof) =
-  p.R.writes.R.warnings_raised <> [] || p.R.writes.R.counters <> []
+  p.R.writes.R.warnings_raised <> []
+  || List.exists
+       (fun (name, n) ->
+          n > 0 && name <> "univ_level" && name <> "sort_quality" && not (can_advance name))
+       p.R.writes.R.counters
 
 let open_proof ~name ~statement ~position ~toolchain_key =
   match !state with
@@ -235,7 +286,13 @@ let open_proof ~name ~statement ~position ~toolchain_key =
        else if p.R.statement <> statement () || p.R.position <> position ()
                || p.R.toolchain_key <> toolchain_key ()
        then miss_key name
-       else st.f_candidate <- Some { c_name = name; c_proof = p })
+       else
+         (* The provided channels are the proof's START state, as the
+            record takes them: the proof state the closer sees has moved
+            past it (opening the proof makes evars and levels of its own).
+            So they are read here, where the record read them. *)
+         st.f_candidate <-
+           Some { c_name = name; c_proof = p; c_provided = provided (); c_counters = counter_starts () })
 
 (* Every read the registration made must give the same value now.
 
@@ -245,10 +302,9 @@ let open_proof ~name ~statement ~position ~toolchain_key =
    miss: a provider that stopped answering must not look like a value that
    stayed the same. Every other channel has its evaluator, and a channel
    with none, or an evaluator that cannot answer, is a miss too. *)
-let first_read_mismatch (p : R.proof) =
-  let tbl = lazy (provided ()) in
+let first_read_mismatch (p : R.proof) ~at_start =
   let now (r : R.read) =
-    let table, channels = Lazy.force tbl in
+    let table, channels = at_start in
     match Hashtbl.find_opt proof_provided (r.R.channel, r.R.key) with
     | Some v -> Value v
     | None ->
@@ -273,7 +329,8 @@ let first_read_mismatch (p : R.proof) =
 let decide ~sentences ~closer =
   match !state with
   | None | Some { f_candidate = None; _ } | Some { f_refused = Some _; _ } -> None
-  | Some ({ f_candidate = Some { c_name = name; c_proof = p }; _ } as st) ->
+  | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_provided = at_start; c_counters = starts };
+            _ } as st) ->
     st.f_candidate <- None;
     (* The closer is part of key item 1: a registered [Qed] is never an
        [Admitted] or a [Defined] now (GRADE's review, case V5). *)
@@ -285,11 +342,12 @@ let decide ~sentences ~closer =
       | Some blob ->
         if not (!precheck blob) then (miss_key name; None)
         else
-          match first_read_mismatch p with
+          match first_read_mismatch p ~at_start with
           | Some channel -> miss_read name channel; None
           | None ->
             counts.n_hits <- counts.n_hits + 1;
             outcome name "hit" None;
+            take_counters ~starts ~recorded:p.R.writes.R.counters;
             counts.registered <- counts.registered +. p.R.wall_s;
             (match !options with
              | Some opts -> counts.charged <- counts.charged +. (opts.o_ratio *. p.R.wall_s)

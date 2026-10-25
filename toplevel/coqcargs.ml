@@ -25,7 +25,6 @@ type t =
   ; glob_out    : glob_output option
 
   ; proof_record : bool
-  ; proof_record_tables : bool
 
   (* BET-84 P3: replay a proof's stored term. A source with no ratio is a
      usage error: the charged clock has no default. *)
@@ -48,7 +47,6 @@ let default =
   ; glob_out = None
 
   ; proof_record = false
-  ; proof_record_tables = false
 
   ; proof_replay = None
   ; proof_replay_ratio = None
@@ -149,8 +147,6 @@ let parse arglist : t =
         (* Per-proof record (BET-84 P2) and replay (P3) *)
         |"-proof-record" ->
           { oval with proof_record = true }
-        |"-proof-record-tables" ->
-          { oval with proof_record = true; proof_record_tables = true }
         |"-proof-replay" ->
           { oval with proof_replay = Some (Proof_replay.Record_file (next ())) }
         |"-proof-replay-dir" ->

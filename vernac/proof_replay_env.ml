@@ -46,53 +46,24 @@ let modpath_of_string s =
   | _ -> None
   | exception _ -> None
 
-(* Census row 1: the globals the proof looked up, each with the digest of
-   what the lookup found. The digests are the ones [kernel/environ.ml]
-   records. *)
+(* Census row 1: the globals the proof looked up. The value comes from the
+   SAME function the recorder called at the lookup ([Environ.recorded_*]),
+   never from a second computation here: a channel computed two ways is
+   how a replay would accept a changed input. *)
 let row1 () =
-  let env () = Global.env () in
-  Proof_replay.register_evaluator "constant" (fun key ->
-      match constant_of_string key with
-      | None -> Proof_replay.Unknown
-      | Some c ->
-        (match Environ.lookup_constant_opt c (env ()) with
-         | None -> absent
-         | Some cb -> digest "constant" cb));
-  Proof_replay.register_evaluator "constant_exists" (fun key ->
-      match constant_of_string key with
-      | None -> Proof_replay.Unknown
-      | Some c -> digest "constant_exists" (Environ.mem_constant c (env ())));
-  Proof_replay.register_evaluator "rewrite_rules" (fun key ->
-      match constant_of_string key with
-      | None -> Proof_replay.Unknown
-      | Some c ->
-        (match Environ.lookup_rewrite_rules c (env ()) with
-         | rs -> digest "rewrite_rules" rs
-         | exception Not_found -> absent));
-  Proof_replay.register_evaluator "inductive" (fun key ->
-      match mind_of_string key with
-      | None -> Proof_replay.Unknown
-      | Some mind ->
-        if not (Environ.mem_mind mind (env ())) then absent
-        else digest "inductive" (Environ.lookup_mind mind (env ())));
-  Proof_replay.register_evaluator "inductive_exists" (fun key ->
-      match mind_of_string key with
-      | None -> Proof_replay.Unknown
-      | Some mind -> digest "inductive_exists" (Environ.mem_mind mind (env ())));
-  Proof_replay.register_evaluator "module" (fun key ->
-      match modpath_of_string key with
-      | None -> Proof_replay.Unknown
-      | Some mp ->
-        (match Environ.lookup_module mp (env ()) with
-         | m -> digest "module" m
-         | exception Not_found -> absent));
-  Proof_replay.register_evaluator "modtype" (fun key ->
-      match modpath_of_string key with
-      | None -> Proof_replay.Unknown
-      | Some mp ->
-        (match Environ.lookup_modtype mp (env ()) with
-         | m -> digest "modtype" m
-         | exception Not_found -> absent))
+  let of_key parse recorded key =
+    match parse key with
+    | None -> Proof_replay.Unknown
+    | Some k -> (match recorded k (Global.env ()) with v -> Proof_replay.Value v | exception _ -> Proof_replay.Unknown)
+  in
+  let c = of_key constant_of_string and m = of_key mind_of_string and p = of_key modpath_of_string in
+  Proof_replay.register_evaluator "constant" (c Environ.recorded_constant);
+  Proof_replay.register_evaluator "constant_exists" (c Environ.recorded_constant_exists);
+  Proof_replay.register_evaluator "rewrite_rules" (c Environ.recorded_rewrite_rules);
+  Proof_replay.register_evaluator "inductive" (m Environ.recorded_inductive);
+  Proof_replay.register_evaluator "inductive_exists" (m Environ.recorded_inductive_exists);
+  Proof_replay.register_evaluator "module" (p Environ.recorded_module);
+  Proof_replay.register_evaluator "modtype" (p Environ.recorded_modtype)
 
 (* Row 5: how [simpl] unfolds a constant. Row 7: the hint database a
    search read. Row 15: the registered library references. *)

@@ -1861,18 +1861,33 @@ let record_open_proof name ~statement =
 (* BET-84 census row 19: the section variables [Proof using] declares. The
    value is the open proof's own, so replay takes it from here too. *)
 let record_using using =
-  let value () = match using with
-    | None -> None
-    | Some s -> Some (Proof_record.digest_value (Names.Id.Set.elements s))
-  in
-  Proof_recorder.read ~row:"19" ~channel:"proof_using" ~key:(fun () -> "")
-    ~value:(fun () -> match using with
-        | None -> None
-        | Some s -> Some (Proof_recorder.digest ~what:"proof_using" (Names.Id.Set.elements s)));
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"19" ~channel:"proof_using" ~key:(fun () -> "")
+      ~value:(fun () -> match using with
+          | None -> None
+          | Some s -> Some (Proof_recorder.digest ~what:"proof_using" (Names.Id.Set.elements s)));
+  (* BET-84 P3: the value is the open proof's own, so replay takes it from
+     here too rather than from a table it cannot reach. *)
   if Proof_replay.candidate_open () then
-    match value () with
-    | v -> Proof_replay.provide ~channel:"proof_using" ~key:"" ~value:v
-    | exception Proof_record.Unhashable _ -> ()
+    match using with
+    | None -> Proof_replay.provide ~channel:"proof_using" ~key:"" ~value:None
+    | Some s ->
+      (match Proof_record.digest_value (Names.Id.Set.elements s) with
+       | d -> Proof_replay.provide ~channel:"proof_using" ~key:"" ~value:(Some d)
+       | exception Proof_record.Unhashable _ -> ())
+
+let record_set_proof_using using =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"19" ~channel:"proof_using_set" ~key:(fun () -> "")
+      ~value:(fun () ->
+          Some (Proof_recorder.digest ~what:"proof_using_set" (Names.Id.Set.elements using)))
+
+let record_mutual cinfo =
+  match cinfo with
+  | _ :: _ :: _ when Proof_recorder.active () ->
+    let detail = String.concat "," (List.map (fun cinfo -> Id.to_string cinfo.CInfo.name) cinfo) in
+    Proof_recorder.ineligible ~reason:"mutual" ~detail
+  | _ -> ()
 
 let start_proof_core ~name ~pinfo ?using sigma goals =
   (* In ?sign, we remove the bodies of variables in the named context
@@ -1970,6 +1985,7 @@ let start_mutual_definitions ~info ~cinfo ~bodies ~possible_guard ?using sigma =
     let using = Option.map (interp_proof_using_cinfo env sigma cinfo') using in
     let goals = List.map (function CInfo.{typ} -> (Some sign, typ)) thms in
     let lemma = start_proof_core ~name ~pinfo ?using sigma goals in
+    let () = record_mutual cinfo in
     let lemma = map lemma ~f:(fun p ->
         pi1 @@ Proof.run_tactic Global.(env ()) (Proofview.tclFOCUS 1 (List.length thms) (Proofview.tclDISPATCH init_tac)) p) in
     let () =
@@ -2006,6 +2022,7 @@ let start_mutual_definitions_refine ~info ~cinfo ~bodies ~possible_guard ?using 
     let using = Option.map (interp_proof_using_cinfo env sigma cinfo) using in
     let goals = List.map (function CInfo.{typ} -> (Some sign, typ)) thms in
     let lemma = start_proof_core ~name ~pinfo ?using sigma goals in
+    let () = record_mutual cinfo in
     let lemma = map lemma ~f:(fun p ->
         pi1 @@ Proof.run_tactic Global.(env ())
           (Tacticals.tclTHENLIST [
@@ -2068,7 +2085,9 @@ let interpret_proof_using pstate using =
 
 let set_proof_using pstate using =
   let using = interpret_proof_using pstate using in
-  set_used_variables pstate ~using
+  let res = set_used_variables pstate ~using in
+  record_set_proof_using using;
+  res
 
 let get_open_goals ps =
   let Proof.{ goals; stack; sigma } = Proof.data ps.proof in
@@ -2287,6 +2306,17 @@ let replayed_proof_object ~blob ~(proof : t) =
    [save_lemma_proved_delayed], not [save]; both paths meet here. *)
 let stored_for_record = ref None
 
+(* The universe and sort counters a replayed proof's tactics would have
+   left behind, from its stored term. Put there after the declaration,
+   which makes levels of its own that the record already counts. *)
+let replayed_univ_end = ref None
+
+let restore_replayed_counters () =
+  (match !replayed_univ_end with
+   | Some e -> UnivGen.set_counters e; replayed_univ_end := None
+   | None -> ());
+  Proof_replay.apply_counters ()
+
 let close_proof ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : Proof_object.t =
   NewProfile.profile "close_proof" (fun () ->
   match Proof_replay.take_pending () with
@@ -2297,7 +2327,10 @@ let close_proof ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : 
        the declaration, which then runs as stock's. *)
     (match replayed_proof_object ~blob ~proof with
      | Some (obj, univ_end) when opaque = Vernacexpr.Opaque && not keep_body_ucst_separate ->
-       UnivGen.set_counters univ_end;
+       (* The declaration has still to run, and it makes levels of its own.
+          Stock's counters after it are the ones the record holds, so they
+          are put there at the end, by [restore_replayed_counters]. *)
+       replayed_univ_end := Some univ_end;
        stored_for_record := None;
        obj
      | Some _ | None ->
@@ -2400,6 +2433,14 @@ let record_close ?(replay = None) ~closer ~kernel_check declare =
   Proof_recorder.close_proof ~closer ~kernel_check ~replay;
   res
 
+let record_close_with_info ?(replay = None) ~closer ~kernel_check ~pinfo declare =
+  let () = match pinfo.Proof_info.cinfo with
+    | { CInfo.name; _ } :: _ ->
+      Proof_recorder.set_name (Libnames.string_of_path (Lib.make_path name))
+    | [] -> ()
+  in
+  record_close ~replay ~closer ~kernel_check declare
+
 let save_admitted ~pm ~proof =
   let iproof = get proof in
   let Proof.{ entry } = Proof.data iproof in
@@ -2495,13 +2536,21 @@ let save ~pm ~proof ~opaque ~idopt =
   (* Env and sigma are just used for error printing in save_remaining_recthms *)
   let proof_obj = close_proof ~opaque ~keep_body_ucst_separate:false proof in
   let proof_info = process_idopt_for_save ~idopt proof.pinfo in
-  let closer = match opaque with Vernacexpr.Opaque -> "Qed" | Vernacexpr.Transparent -> "Defined" in
+  let closer = match opaque, idopt with
+    | Vernacexpr.Opaque, Some _ -> "Save"
+    | Vernacexpr.Opaque, None -> "Qed"
+    | Vernacexpr.Transparent, _ -> "Defined"
+  in
   let kernel_check = match opaque with
     | Vernacexpr.Opaque -> not !Opaques.skip_qed_typecheck
     | Vernacexpr.Transparent -> true
   in
-  record_close ~replay:(take_stored ()) ~closer ~kernel_check (fun () ->
-      finish_proof ~pm proof_obj.proof_object proof_info)
+  let res =
+    record_close_with_info ~replay:(take_stored ()) ~closer ~kernel_check ~pinfo:proof_info (fun () ->
+        finish_proof ~pm proof_obj.proof_object proof_info)
+  in
+  restore_replayed_counters ();
+  res
 
 let save_regular ~(proof : t) ~opaque ~idopt =
   let open Proof_ending in
@@ -2537,9 +2586,17 @@ let save_lemma_proved_delayed ~pm ~proof ~idopt =
   (* vio2vo used to call this with invalid [pinfo], now it should work fine. *)
   let pinfo = process_idopt_for_save ~idopt proof.Proof_object.pinfo in
   let closer, kernel_check = delayed_closer proof.Proof_object.proof_object in
-  record_close ~replay:(take_stored ()) ~closer ~kernel_check (fun () ->
-      let pm, _ = finish_proof ~pm proof.proof_object pinfo in
-      pm)
+  let closer = match idopt, closer with
+    | Some _, "Qed" -> "Save"
+    | _ -> closer
+  in
+  let res =
+    record_close_with_info ~replay:(take_stored ()) ~closer ~kernel_check ~pinfo (fun () ->
+        let pm, _ = finish_proof ~pm proof.proof_object pinfo in
+        pm)
+  in
+  restore_replayed_counters ();
+  res
 
 end (* Proof module *)
 

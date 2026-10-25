@@ -72,7 +72,66 @@ let rename_arguments local r names =
   let req = if local then ReqLocal else ReqGlobal in
   Lib.add_leaf (inRenameArgs (req, (r, names)))
 
-let arguments_names env r = GlobRefMap.find env r !name_table
+(* BET-84: ONE value for the arguments_names channel, called by the record
+   sites below and by the replay evaluator
+   (dev/tools/census/replay_channels.py). *)
+let recorded_arguments_names env r =
+  match GlobRefMap.find env r !name_table with
+  | names -> Some (Proof_recorder.digest ~what:"arguments_names" names)
+  | exception Not_found -> None
+
+(* The record holds the reference as [GlobRef.print] wrote it: a constant
+   or variable as its path, an inductive as ["(path, i)"], a constructor
+   as ["(path, i, j)"]. A key that does not read back to a reference is
+   not taken for another one: the proof misses. *)
+let globref_of_string s =
+  let mind_of path =
+    match Nametab.global_of_path (Libnames.path_of_string (String.trim path)) with
+    | GlobRef.IndRef (m, _) | GlobRef.ConstructRef ((m, _), _) -> Some m
+    | GlobRef.ConstRef _ | GlobRef.VarRef _ -> None
+    | exception _ -> None
+  in
+  let s = String.trim s in
+  let n = String.length s in
+  if n > 1 && s.[0] = '(' && s.[n - 1] = ')' then
+    match List.map String.trim (String.split_on_char ',' (String.sub s 1 (n - 2))) with
+    | [ path; i ] ->
+      (match mind_of path, int_of_string_opt i with
+       | Some m, Some i -> Some (GlobRef.IndRef (m, i))
+       | _ -> None)
+    | [ path; i; j ] ->
+      (match mind_of path, int_of_string_opt i, int_of_string_opt j with
+       | Some m, Some i, Some j -> Some (GlobRef.ConstructRef ((m, i), j))
+       | _ -> None)
+    | _ -> None
+  else
+    match Nametab.global_of_path (Libnames.path_of_string s) with
+    | r -> Some r
+    | exception _ -> None
+
+let () =
+  Proof_replay.register_evaluator "arguments_names" (fun key ->
+      match globref_of_string key with
+      | None -> Proof_replay.Unknown
+      | Some r ->
+        (match recorded_arguments_names (Global.env ()) r with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown))
+
+let arguments_names env r =
+  try
+    let names = GlobRefMap.find env r !name_table in
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"12" ~channel:"arguments_names"
+        ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
+        ~value:(fun () -> recorded_arguments_names env r);
+    names
+  with Not_found ->
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"12" ~channel:"arguments_names"
+        ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
+        ~value:(fun () -> recorded_arguments_names env r);
+    raise Not_found
 
 let rename_type env ty ref =
   let name_override old_name override =

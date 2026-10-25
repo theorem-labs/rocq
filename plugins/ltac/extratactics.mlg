@@ -377,17 +377,29 @@ open Libobject
 let transitivity_right_table = Summary.ref [] ~name:"transitivity-steps-r"
 let transitivity_left_table = Summary.ref [] ~name:"transitivity-steps-l"
 
+let record_transitivity_table name table =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"N2" ~channel:"transitivity_steps"
+      ~key:(fun () -> name)
+      ~value:(fun () ->
+          Some (Proof_recorder.digest_cached ~what:"transitivity_steps" table))
+
 (* [step] tries to apply a rewriting lemma; then apply [tac] intended to
    complete to proof of the last hypothesis (assumed to state an equality) *)
 
 let step left x tac =
+  let name, table =
+    if left then "transitivity-steps-l", !transitivity_left_table
+    else "transitivity-steps-r", !transitivity_right_table
+  in
+  record_transitivity_table name table;
   let l =
     List.map (fun lem ->
       let lem = EConstr.of_constr lem in
       Tacticals.tclTHENLAST
         (apply_with_bindings (lem, ImplicitBindings [x]))
         tac)
-      !(if left then transitivity_left_table else transitivity_right_table)
+      table
   in
   Tacticals.tclFIRST l
 

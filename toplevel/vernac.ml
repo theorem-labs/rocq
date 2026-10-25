@@ -136,7 +136,34 @@ let load_vernac_core ~echo ~check ~state ?source file =
                         ~detail:(Pp.string_of_ppcmds (Topfmt.pr_cmd_header ast))
                     | exception e when CErrors.noncritical e -> ()
                   end;
-                  Flags.silently (interp_vernac ~check ~state) ast)) ())
+                  let v = Flags.silently (interp_vernac ~check ~state) ast in
+                  (* The recorder is not part of [Vernacstate], so a command
+                     that drops or restores the proof stack behind its back
+                     ([Abort All], a reset, a rewind, [Fail]) would leave it
+                     holding a proof that no longer exists, and every proof
+                     after it in the file would be taken for a nested one and
+                     lose its entry. One test a sentence catches that. With no
+                     proof left there is no entry to mark, so what the recorder
+                     holds is dropped and writes nothing; with other proofs
+                     open but not the one it holds, the entry says that it
+                     cannot be trusted. *)
+                  (match Proof_recorder.current_name () with
+                   | None -> ()
+                   | Some held ->
+                     match Vernacstate.Declare.get_all_proof_names () with
+                     | [] -> Proof_recorder.drop_all_proofs (); Proof_replay.abandon ()
+                     | live ->
+                       let base = match String.rindex_opt held '.' with
+                         | None -> held
+                         | Some i -> String.sub held (i + 1) (String.length held - i - 1)
+                       in
+                       if not (List.exists (fun id -> String.equal base (Names.Id.to_string id)) live)
+                       then begin
+                         Proof_recorder.ineligible ~reason:"recorder_desync"
+                           ~detail:(held ^ " vs " ^ String.concat "," (List.map Names.Id.to_string live));
+                         Proof_replay.abandon ()
+                       end);
+                  v)) ())
       ()
       (fun () ->
          let tend = System.get_time () in
@@ -186,7 +213,8 @@ let load_vernac_core ~echo ~check ~state ?source file =
     else
       match ast.CAst.v.expr with
       | VernacSynPure (VernacEndProof Admitted) -> Some "Admitted"
-      | VernacSynPure (VernacEndProof (Proved (Opaque, _))) -> Some "Qed"
+      | VernacSynPure (VernacEndProof (Proved (Opaque, None))) -> Some "Qed"
+      | VernacSynPure (VernacEndProof (Proved (Opaque, Some _))) -> Some "Save"
       | VernacSynPure (VernacEndProof (Proved (Transparent, _))) -> Some "Defined"
       | _ -> None
   in
@@ -263,6 +291,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
           state, ids, Procq.Parsable.comments in_pa
         end
         else (loop [@ocaml.tailcall]) state ids
+
   in
   try loop state []
   with any ->   (* whatever the exception *)

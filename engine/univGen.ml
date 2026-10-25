@@ -122,13 +122,20 @@ let () = CErrors.register_handler (function
 
 (* Generator of levels. The two counters are process-wide and monotone, so
    a level's name depends on how many were made before it in this compile.
-   BET-84 P3 reads them at a proof's start and sets them after a replay,
-   so that a replayed proof leaves the counters where its tactics would
-   have, and the proofs after it name their levels as stock does. *)
-let univ_cnt = ref 0
-let sort_cnt = ref 0
+   BET-84 P3 reads them at a proof's start and sets them after a replay, so
+   that a replayed proof leaves them where its tactics would have, and the
+   proofs after it name their levels as stock does. *)
+let univ_level_counter = ref 0
 
-let new_univ_id () = incr univ_cnt; !univ_cnt
+let () = Proof_recorder.register_tables (fun () ->
+    [ Proof_record.{ row = "18"; channel = "counter_start"; key = "univ_level";
+                     value = Some (string_of_int !univ_level_counter) } ])
+
+let new_univ_id () =
+  incr univ_level_counter;
+  if Proof_recorder.writing () then
+    Proof_recorder.write_counters [("univ_level", 1)];
+  !univ_level_counter
 
 let new_univ_global () =
   let s = if Flags.async_proofs_is_worker() then !Flags.async_proofs_worker_id else "" in
@@ -137,11 +144,21 @@ let new_univ_global () =
 let fresh_level () =
   Univ.Level.make (new_univ_global ())
 
-let new_sort_id () = incr sort_cnt; !sort_cnt
+let sort_quality_counter = ref 0
 
-let counters () = (!univ_cnt, !sort_cnt)
+let () = Proof_recorder.register_tables (fun () ->
+    [ Proof_record.{ row = "18"; channel = "counter_start"; key = "sort_quality";
+                     value = Some (string_of_int !sort_quality_counter) } ])
 
-let set_counters (u, q) = univ_cnt := u; sort_cnt := q
+let new_sort_id () =
+  incr sort_quality_counter;
+  if Proof_recorder.writing () then
+    Proof_recorder.write_counters [("sort_quality", 1)];
+  !sort_quality_counter
+
+let counters () = (!univ_level_counter, !sort_quality_counter)
+
+let set_counters (u, q) = univ_level_counter := u; sort_quality_counter := q
 
 let new_sort_global id =
   Sorts.QGlobal.make (Global.current_dirpath ()) id
