@@ -14,13 +14,6 @@
 
 open Names
 
-let digest what v =
-  match Proof_record.digest_value v with
-  | d -> Proof_replay.Value (Some d)
-  | exception Proof_record.Unhashable _ -> ignore what; Proof_replay.Unknown
-
-let absent = Proof_replay.Value None
-
 (* A kernel name the recorder printed, read back. [Nametab.global_of_path]
    finds what that absolute path names now; the printed name must come out
    the same, so a path that names something else is not taken for it.
@@ -82,22 +75,10 @@ let row1 () =
   Proof_replay.register_evaluator "module" (p Environ.recorded_module);
   Proof_replay.register_evaluator "modtype" (p Environ.recorded_modtype)
 
-(* Row 5: how [simpl] unfolds a constant. Row 7: the hint database a
-   search read. Row 15: the registered library references. *)
-let tables () =
-  Proof_replay.register_evaluator "reduction_behaviour" (fun key ->
-      match constant_of_string key with
-      | Unreadable -> Proof_replay.Unknown
-      | Absent -> Proof_replay.Value None
-      | Found c -> digest "reduction_behaviour" (Reductionops.ReductionBehaviour.get c));
-  Proof_replay.register_evaluator "hint_db" (fun key ->
-      match Hints.searchtable_map key with
-      | db -> digest "hint_db" db
-      | exception Not_found -> absent);
-  Proof_replay.register_evaluator "lib_ref" (fun key ->
-      match Rocqlib.lib_ref_opt key with
-      | None -> absent
-      | Some r -> digest "lib_ref" r)
+(* Rows 5, 7 and 15 register their evaluators beside their one value
+   function ([Reductionops.ReductionBehaviour], [Hints], [Rocqlib]), so the
+   recorder and the evaluator cannot call two implementations. *)
+let tables () = ()
 
 (* The reads that have no single read point: the universe and quality
    graphs, the named context, the typing flags, the options, and, with

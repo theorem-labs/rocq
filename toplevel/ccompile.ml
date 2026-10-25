@@ -56,6 +56,10 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       Dumpglob.push_output dump;
       Dumpglob.dump_string ("F" ^ Names.DirPath.to_string ldir ^ "\n");
 
+      (* A digest that must not depend on where in this file a value was
+         written (a hint database's) leaves out this file's locations, in a
+         recording compile and a replaying one alike. *)
+      let () = Proof_recorder.set_locs_source (source ldir long_f_dot_in) in
       (* The record covers the proofs of this file only, so it starts after
          the prelude and the init vernaculars are loaded. *)
       let () = if copts.proof_record then
@@ -80,7 +84,8 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
           Proof_replay.configure ~source
             ~ratio:(Option.get copts.proof_replay_ratio)
             ~budget:copts.proof_replay_budget
-            ~peak_limit_kb:copts.proof_replay_peak_limit_kb;
+            ~peak_limit_kb:copts.proof_replay_peak_limit_kb
+            ~digest:copts.proof_replay_digest;
           Proof_replay.set_vo_path long_f_dot_out;
           Proof_replay.start ~library:(Names.DirPath.to_string ldir) ~toolchain:Proof_record_env.toolchain
       in

@@ -142,6 +142,12 @@ let digest_cache : string Addr.t = Addr.create 1024
 
 let stop () = state := None; recording := false; Addr.reset digest_cache; R.reset_memo ()
 
+(* The digest memo and the address cache hold a strong reference to every
+   value they digested. A replay-only compile never calls [stop], so it
+   empties them after each proof's decision, which bounds them by one
+   proof's reads (review P3Deep F7). *)
+let reset_caches () = Addr.reset digest_cache; R.reset_memo ()
+
 let write path =
   match !state with
   | None -> ()
@@ -398,6 +404,22 @@ let digest_cached ~what v =
   | Some d -> if d = "unhashable" then ineligible ~reason:"unhashable" ~detail:what; d
   | None ->
     let d = digest ~what v in
+    Addr.add digest_cache o d;
+    d
+
+(* The file this compile reads, so that a digest can leave out the
+   locations of that file: a value that differs only by where in the file it
+   was written (a hint written two lines lower) digests the same. *)
+let locs_source : Loc.source option ref = ref None
+
+let set_locs_source src = locs_source := Some src
+
+let digest_cached_by ~what ~key view =
+  let o = Obj.repr key in
+  match Addr.find_opt digest_cache o with
+  | Some d -> if d = "unhashable" then ineligible ~reason:"unhashable" ~detail:what; d
+  | None ->
+    let d = digest ?locs:!locs_source ~what (view ()) in
     Addr.add digest_cache o d;
     d
 

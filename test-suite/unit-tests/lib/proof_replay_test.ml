@@ -75,15 +75,21 @@ let proof : R.proof = R.{
 let trailer : R.trailer =
   R.{ file_wall_s = 3.0; file_cpu_s = 3.0; peak_rss_kb = 1024; proof_count = 1 }
 
-let write_record ?(proof = proof) () =
+let record_bytes ?(header = header) ?(proof = proof) () =
   let buf = Buffer.create 1024 in
   R.output_header buf header;
   R.output_proof buf proof;
   R.output_trailer buf { trailer with proof_count = 1 };
+  Buffer.contents buf
+
+(* The record is written read-only, as a registration's is: a record the
+   compiling user can write is refused (review P3Deep F1). *)
+let write_record ?(header = header) ?(proof = proof) ?(perm = 0o444) () =
   let path = Filename.temp_file "proof-replay" ".jsonl" in
   let oc = open_out_bin path in
-  output_string oc (Buffer.contents buf);
+  output_string oc (record_bytes ~header ~proof ());
   close_out oc;
+  Unix.chmod path perm;
   path
 
 (* What the one channel is worth now. The tests move it. *)
@@ -96,10 +102,17 @@ let () = Replay.register_evaluator "unit_test_channel" (fun _ -> !current)
    fail-closed default. *)
 let () = Replay.register_precheck (fun _ -> true)
 
-let setup ?(budget = None) ?(proof = proof) ?(now = toolchain) () =
-  let path = write_record ~proof () in
-  Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget ~peak_limit_kb:None;
-  Replay.start ~library:"Top.File" ~toolchain:(fun () -> now);
+let setup ?(budget = None) ?(proof = proof) ?(now = toolchain) ?(header = header) ?(perm = 0o444)
+    ?digest ?(library = "Top.File") () =
+  let path = write_record ~header ~proof ~perm () in
+  (* The digest is mandatory; by default the test passes the right one. *)
+  let digest = match digest with
+    | Some d -> d
+    | None -> Some (Proof_sha256.digest_hex (record_bytes ~header ~proof ()))
+  in
+  Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget ~peak_limit_kb:None ~digest;
+  Replay.start ~library ~toolchain:(fun () -> now);
+  Unix.chmod path 0o644;
   Sys.remove path
 
 let decide ?(name = "Top.File.lemma") ?(closer = "Qed") ?(sentences = sentences) () =
@@ -231,9 +244,49 @@ let summary_counts =
      let has s = Option.has_some (String.index_opt text '{') && CString.string_contains ~where:text ~what:s in
      has "\"hits\":0" && has "\"outcome\":\"read\"" && has "unit_test_channel")
 
+(* The record is trusted only when it is bound to this compile (review
+   P3Deep F1): its SHA-256 equals the digest the engine passes, the
+   compiling user cannot write it, and its header names this library. Each
+   case must refuse the whole file and name the reason; the control with
+   the right digest must hit. Without the binding checks, each case hits. *)
+let binding_refusals =
+  let case ?perm ?digest ?library ?header () =
+    setup ?perm ?digest ?library ?header (); (Replay.refused (), decide ())
+  in
+  let refused reason (r, d) = r = Some reason && d = None in
+  let right = Some (Proof_sha256.digest_hex (record_bytes ())) in
+  mk_bool_test "proof-replay-binding"
+    "a record whose digest differs, that the compiling user can write, or that names another library is refused"
+    (refused "digest" (case ~digest:(Some (String.make 64 '0')) ())
+     && refused "digest" (case ~digest:None ())
+     && refused "writable" (case ~perm:0o644 ())
+     && refused "library" (case ~library:"Top.Other" ())
+     && refused "format" (case ~header:R.{ header with tables_at_start = false } ())
+     && (let r, d = case ~digest:right () in r = None && d <> None))
+
+(* The overcommit guard is fail-closed (review P3Deep F6): a value the
+   registration could not read refuses, as "2" does. *)
+let overcommit_unknown_refuses =
+  mk_bool_test "proof-replay-overcommit-unknown"
+    "a record made where vm.overcommit_memory could not be read is refused"
+    (setup ~header:R.{ header with overcommit_memory = "unknown" } ();
+     Replay.refused () = Some "overcommit" && decide () = None)
+
+(* The SHA-256 the binding uses is the standard one: FIPS 180-4's own
+   test vectors. *)
+let sha256_vectors =
+  mk_bool_test "proof-replay-sha256"
+    "the record digest is SHA-256: the FIPS 180-4 test vectors"
+    (Proof_sha256.digest_hex "" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+     && Proof_sha256.digest_hex "abc" = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+     && Proof_sha256.digest_hex "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+        = "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+     && Proof_sha256.digest_hex (String.make 1_000_000 'a')
+        = "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+
 let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
-    charged_clock; summary_counts ]
+    binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts ]
 
 let _ = run_tests __FILE__ log_out_ch tests

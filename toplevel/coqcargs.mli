@@ -52,6 +52,11 @@ type t =
   ; proof_replay_peak_limit_kb : int option
   (** [-proof-replay-peak-limit-kb KB]: a file whose registered peak
       resident set was above this compiles without replay. *)
+  ; proof_replay_digest : string option
+  (** [-proof-replay-digest SHA256]: the record's SHA-256, which the
+      grading engine takes from the registration's root-owned manifest. A
+      record whose bytes hash to anything else is refused for the whole
+      file. *)
 
   ; output_context : bool
   }

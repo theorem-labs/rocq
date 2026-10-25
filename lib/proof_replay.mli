@@ -39,8 +39,20 @@ type source =
           [DIR/<the same with dots turned into slashes>.proof-record.jsonl]. *)
 
 val configure :
-  source:source -> ratio:float -> budget:float option -> peak_limit_kb:int option -> unit
-(** The command line's options. Call before the compile. *)
+  source:source -> ratio:float -> budget:float option -> peak_limit_kb:int option ->
+  digest:string option -> unit
+(** The command line's options. Call before the compile.
+
+    {b The record is a trusted input, at the same tier as the binary.} Its
+    stored terms are read back with [Marshal.from_string], which is not
+    memory-safe on chosen bytes, and a stored term's declared type comes
+    from it, so the record's parser is NOT a security boundary. A record is
+    used only when it is bound to this compile: its bytes hash (SHA-256) to
+    [digest] when one is given (the grading engine passes the digest from
+    the registration's root-owned manifest), the compiling user cannot
+    write it and nobody but its owner can, and its header names this
+    library. Otherwise the whole file runs as stock and the summary names
+    the reason ([digest], [writable], [library], [format]). *)
 
 val configured : unit -> bool
 
