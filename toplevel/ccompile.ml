@@ -71,6 +71,15 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       in
       let wall_clock1 = Unix.gettimeofday () in
       let check = Stm.AsyncOpts.(stm_options.async_proofs_mode = APoff) in
+      (* With async proofs the proofs run in worker processes, and the
+         recorder's counters, caches and fences count per process. A record
+         made here would describe the main process only, so every proof of
+         this file is ineligible. The fence is sticky: it marks each proof as
+         it opens. *)
+      let () = if copts.proof_record && not check then
+          Proof_recorder.trip_fence ~reason:"async_proofs"
+            ~detail:"the proofs of this file run in worker processes"
+      in
       let source = source ldir long_f_dot_in in
       let state = Vernac.load_vernac ~echo ~check ~state ~source long_f_dot_in in
       let fullstate = Stm.finish ~doc:state.doc in
