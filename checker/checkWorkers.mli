@@ -72,6 +72,13 @@ val defer : Names.Constant.t -> (unit -> unit) -> unit
     reaps the workers that have exited, so it can raise [WorkerFailed]
     as [finish] does. *)
 
+val note_cook : unit -> unit
+(** Called by the cook of an opaque body ([Mod_checking]): counts it when
+    it runs outside a worker, so in the main process. With [-j] that is a
+    sealed module's constant, whose cooked body the main process needs,
+    and a check that the main process ran itself because it could not
+    fork. The count is printed by [-d checker-workers]. *)
+
 val finish : unit -> unit
 (** Deal everything that is still queued to workers and wait for all of
     them. Raises [WorkerFailed] if a worker did not exit with code 0, did
@@ -104,3 +111,7 @@ val default_report_writer : Unix.file_descr -> int -> unit
 val set_report_writer : (Unix.file_descr -> int -> unit) -> unit
 (** [set_report_writer f] replaces what a worker does to report the number
     of checks it completed, given the descriptor to write to. *)
+
+val min_batch : int
+(** The size below which no batch is dealt while the libraries are
+    checked: the expected batches of a test depend on it. *)

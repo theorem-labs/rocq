@@ -121,39 +121,55 @@ let check_constant_declaration env opac kn cb opacify =
   let jty = Typeops.infer_type env ty in
   if not (Sorts.relevance_equal cb.const_relevance (Sorts.relevance_of_sort jty.utj_type))
   then raise Pp.(BadConstant (kn, str "incorrect const_relevance"));
-  (* The boolean tells whether the body is opaque. *)
-  let body, env = match cb.const_body with
-    | Undef _ | Primitive _ | Symbol _ -> None, env
-    | Def c -> Some (false, c), env
-    | OpaqueDef o ->
-      let c, u = !indirect_accessor o in
-      let env = match u, cb.const_universes with
-        | Opaqueproof.PrivateMonomorphic (), Monomorphic -> env
-        | Opaqueproof.PrivatePolymorphic local, Polymorphic _ ->
-          push_subgraph local env
-        | _ -> assert false
-      in
-      Some (true, c), env
+  let check env bd () =
+    let j = Typeops.infer env bd in
+    match conv_leq env j.uj_type ty with
+    | Result.Ok () -> ()
+    | Result.Error () -> Type_errors.error_actual_type env j ty
   in
-  let () =
-    match body with
-    | Some (opaque, bd) ->
-      let check () =
-        let j = Typeops.infer env bd in
-        match conv_leq env j.uj_type ty with
-        | Result.Ok () -> ()
-        | Result.Error () -> Type_errors.error_actual_type env j ty
-      in
-      (* Nothing else that is checked looks into an opaque body, so its
-         check can be postponed, and possibly run in another process. A
-         transparent body may be unfolded by later checks, which rely
-         on it being well-typed, so it is checked here. *)
-      if opaque then CheckWorkers.defer kn check else check ()
-    | None -> ()
+  (* The body of an opaque constant, cooked: fetched from its library's
+     table, discharged ([cook_opaque_proofterm]) and substituted
+     ([subst_mps_list]), with the environment extended by its private
+     universes. A pure function of the stored proof and its cooking
+     information (kernel/discharge.ml), and of nothing that the checking
+     changes: every library's opaque table is read before the first
+     constant is checked (CheckLibrary.recheck_library). [note_cook]
+     counts this where it runs, so that a test can tell the main process
+     from a worker. *)
+  let cook o =
+    CheckWorkers.note_cook ();
+    let c, u = !indirect_accessor o in
+    let env = match u, cb.const_universes with
+      | Opaqueproof.PrivateMonomorphic (), Monomorphic -> env
+      | Opaqueproof.PrivatePolymorphic local, Polymorphic _ ->
+        push_subgraph local env
+      | _ -> assert false
+    in
+    c, env
   in
-  match body with
-  | Some (_, body) when opacify -> register_opacified_constant env opac kn body
-  | Some _ | None -> opac
+  match cb.const_body with
+  | Undef _ | Primitive _ | Symbol _ -> opac
+  | Def c ->
+    (* A transparent body may be unfolded by later checks, which rely on
+       it being well-typed, so it is checked here. *)
+    check env c ();
+    if opacify then register_opacified_constant env opac kn c else opac
+  | OpaqueDef o when opacify ->
+    (* A constant of a sealed module that its signature declares without
+       a body: what it uses is recorded from its body, which is therefore
+       cooked here, in the main process. Its check is still deferred. *)
+    let c, env = cook o in
+    CheckWorkers.defer kn (check env c);
+    register_opacified_constant env opac kn c
+  | OpaqueDef o ->
+    (* Nothing else that is checked looks into an opaque body, so its check
+       can be postponed, and possibly run in another process, and so can
+       its cooking: the main process keeps no cooked body while the check
+       waits. A worker inherits the tables by fork, and a check handed back
+       cooks again in the process that runs it. With -j 1, [defer] runs the
+       closure at once, so the order of effects is as before. *)
+    CheckWorkers.defer kn (fun () -> let c, env = cook o in check env c ());
+    opac
 
 let check_constant_declaration env opac kn cb opacify =
   let opac = NewProfile.profile "check_constant" ~args:(fun () ->

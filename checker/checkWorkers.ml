@@ -104,9 +104,16 @@ let set_budget t =
    time. *)
 let window = 1.0
 
-(* Below this, a batch is not worth a fork while the libraries are
-   being checked. *)
-let min_batch = 50
+(* Below this, a batch is not worth a fork while the libraries are being
+   checked. A fork copies the page tables of the main process, whose heap
+   holds every library and opaque table read so far: on the whole r160
+   tree, 0.23 s a fork at the end of the walk, and 1,797 forks with this
+   at 50. Larger batches mean fewer forks but a longer tail, since release
+   on request fires only in [finish]. Measured on that tree (speed-r3,
+   2026-10-25, -j 16 -worker-budget 20, one timed run each): 200 took
+   385.6 s (579 forks, tail 116 s), 400 took 404.4 s (430 forks, tail
+   145 s), 800 took 399.5 s (452 forks, tail 164 s). *)
+let min_batch = 200
 
 (* Deferred checks not yet given to a worker, oldest first. *)
 let queue : task Queue.t = Queue.create ()
@@ -118,12 +125,17 @@ let running : worker list ref = ref []
 (* Statistics, for the debug output. [checks_done] counts the checks that
    a process ended successfully after running, and [deferred] the checks
    handed to [defer]: with [-j] they are equal at the end, because every
-   check runs exactly once. *)
+   check runs exactly once. [main_cooks] counts the opaque bodies that the
+   main process cooked itself, wherever in the code that happened
+   ([note_cook], called from the cook): with [-j] they are the bodies of
+   sealed modules, whose cooked form the main process needs, and those of
+   checks it ran itself because it could not fork. *)
 let forks = ref 0
 let early_stops = ref 0
 let releases = ref 0
 let checks_done = ref 0
 let deferred = ref 0
+let main_cooks = ref 0
 
 (* Wall time since the first worker was forked, for the debug output. *)
 let start_time = ref 0.
@@ -224,6 +236,11 @@ let write_release () =
 let release_handler (_ : int) =
   try if !in_worker then write_release () else pending_request := true
   with _ -> release_failed := true
+
+(* Counts an opaque body that is cooked outside a worker, so by the main
+   process. The caller is the cook itself, so the count is where the cook
+   ran, not which branch of the code called it. *)
+let note_cook () = if not !in_worker then incr main_cooks
 
 let handler_installed = ref false
 
@@ -685,5 +702,6 @@ let finish () =
         str "done: " ++ int !forks ++ str " workers forked, " ++
         int !early_stops ++ str " stopped early, " ++
         int !releases ++ str " released a tail, " ++
-        int !checks_done ++ str " checks run of " ++ int !deferred ++ str " deferred")
+        int !checks_done ++ str " checks run of " ++ int !deferred ++ str " deferred, " ++
+        int !main_cooks ++ str " cooked in the main process")
   end
