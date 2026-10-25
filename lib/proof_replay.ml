@@ -204,6 +204,21 @@ let start ~library =
   match !options with
   | None -> ()
   | Some opts ->
+    (* The counts, the charge and the outcomes belong to ONE file: a
+       process that compiles a second file must not carry the first
+       file's charge into its budget, nor its hits into its summary. *)
+    counts.n_proofs <- 0;
+    counts.n_hits <- 0;
+    counts.m_key <- 0;
+    counts.m_read <- 0;
+    counts.m_ineligible <- 0;
+    counts.m_missing <- 0;
+    counts.charged <- 0.;
+    counts.registered <- 0.;
+    counts.outcomes <- [];
+    Hashtbl.reset channel_miss;
+    Hashtbl.reset proof_provided;
+    pending_counters := [];
     let index = Hashtbl.create 256 in
     let refusal =
       match record_path ~library opts.o_source with
