@@ -1,6 +1,6 @@
 {
   "source": "theorem-labs/rocq",
-  "commit": "62cedcb9f8196d1d9595ff85f681828aa034dc11",
+  "commit": "aa11afd2f8dadd817af36aa493e46caa74011ea4",
   "scope": {
     "include": ["boot", "clib", "lib", "kernel", "library", "engine", "pretyping", "interp", "proofs", "tactics",
                 "vernac", "stm", "toplevel", "sysinit", "parsing", "printing", "gramlib", "plugins", "topbin"],
