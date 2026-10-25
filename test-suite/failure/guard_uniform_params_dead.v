@@ -15,7 +15,11 @@
    silently dropped what it could, which accepts the rewritten body on an
    assumption nothing checked. This branch refuses the definition instead, so
    there is one rule with no exceptions: we refuse where they refuse, we
-   refuse where they crash, and we never accept what they reject. *)
+   refuse where they crash, and we never accept what they reject.
+
+   This file passes before this branch as well as after: the 9.2 release
+   refuses these four too. It pins that we keep matching the release, and it
+   caught the head where we did not, which raised the anomaly on all four. *)
 
 (* the prefix binding is used by the body *)
 Definition outerX1live : nat -> nat.
