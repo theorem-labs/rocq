@@ -20,8 +20,12 @@
    decreasing. A development that needs this shape applies the inner fixpoint
    directly, [inner a k], instead of passing it through [invoke].
 
-   This only changes definitions on which the released toolchains raise that
-   anomaly; where they return an answer, this analysis returns the same one. *)
+   The released toolchains do not agree on this definition. Rocq 9.2.0, Rocq
+   9.3.0 and upstream master raise the anomaly above, because they drop the
+   arguments with a strict skip. This fork's 9.2 release accepts it, because
+   it kept the tolerant skip and never imported the strict one. The same
+   permissiveness accepts a closed proof of False, which is why the prefix is
+   bounded instead: see guard_uniform_params_letapplier.v. *)
 
 Fail Fixpoint outer (n : nat) : nat :=
   match n with

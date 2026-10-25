@@ -1364,7 +1364,13 @@ let drop_uniform_parameters nuniformparams bodies =
       let l = List.map (fun c -> aux k c) l in
       (* A recursive reference to any one of the mutual fixpoints *)
       if n > k && n <= k + nbodies then
-        let new_args = List.skipn nuniformparams l in
+        (* [find_uniform_parameters] bounds the prefix by the arguments of
+           every occurrence, including an unapplied one, so this never has to
+           drop more arguments than are there. Upstream raises instead
+           (rocq-prover/rocq#21798, commit f4ba720a635c); this fork keeps the
+           tolerant form, so that a term the analysis has not foreseen is
+           refused by the guard condition rather than killing the kernel. *)
+        let new_args = List.skipn_at_best nuniformparams l in
         Term.applist (f, new_args)
       else Term.applist (f, l)
     | _ -> map_with_binders succ aux k c
