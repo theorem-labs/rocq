@@ -96,6 +96,11 @@ val close_proof : closer:string -> kernel_check:bool -> unit
 
 (** {6 Writes} *)
 
+val writing : unit -> bool
+(** Whether a proof is open, inside {!without_recording} too. A write call
+    site tests this first, so that a compile without the option builds no
+    write argument. *)
+
 val write_universes : levels:string list -> constraints:string list -> unit
 val write_scheme : string -> unit
 val write_constraint_source : string -> unit
@@ -117,10 +122,21 @@ val read :
   unit
 (** Records one read of census row [row] on [channel]. [key] and [value]
     are called only when a proof is open, so a choke point pays only one
-    test when the recorder is off. The first value of a key is kept; a key
-    read twice with different values makes the proof ineligible with reason
-    ["read_changed"], because replay cannot reproduce a value that moved
-    while the proof ran. *)
+    test when the recorder is off. Only the first read of a key in a proof
+    is kept, and a repeat computes neither its value nor any digest: the
+    global state moves inside a proof only through the proof's own writes
+    or through a command or sub-proof that makes it ineligible. *)
+
+val read_by :
+  row:string ->
+  channel:string ->
+  id:'a ->
+  key:(unit -> string) ->
+  value:(unit -> string option) ->
+  unit
+(** {!read} for a hot choke point: a repeat is found by [id], a raw name
+    compared structurally (a kernel name, a qualid), so neither [key] nor
+    [value] is called for it. [id] must determine [key]. *)
 
 val ineligible : reason:string -> detail:string -> unit
 (** Marks the open proof ineligible. Repeating a (reason, detail) pair adds

@@ -844,10 +844,11 @@ let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
    digest of that database. The digest is of the stored value, so an
    unchanged database is digested once per compile. *)
 let record_db name db =
-  Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> name)
-    ~value:(fun () -> match db with
-        | None -> None
-        | Some db -> Some (Proof_recorder.digest_cached ~what:"hint_db" db))
+  if Proof_recorder.active () then
+    Proof_recorder.read_by ~row:"7" ~channel:"hint_db" ~id:name ~key:(fun () -> name)
+      ~value:(fun () -> match db with
+          | None -> None
+          | Some db -> Some (Proof_recorder.digest_cached ~what:"hint_db" db))
 
 let searchtable_map name =
   let db = Hintdbmap.find_opt name !searchtable in

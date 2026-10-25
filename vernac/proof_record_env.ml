@@ -16,15 +16,24 @@ let binary_digest =
       | d -> Digest.to_hex d
       | exception Sys_error _ -> "unknown")
 
+(* A plugin's files do not change during a compile, so each is hashed once,
+   not at every proof's start. *)
+let plugin_digests : (string, string) Hashtbl.t = Hashtbl.create 16
+
 let plugins () =
   List.map
     (fun p ->
        let name = Mltop.PluginSpec.to_package p in
-       let files = match Mltop.PluginSpec.digest p with
-         | ds -> List.map Digest.to_hex ds
-         | exception Sys_error _ -> [ "unknown" ]
-       in
-       (name, String.concat "," files))
+       match Hashtbl.find_opt plugin_digests name with
+       | Some d -> (name, d)
+       | None ->
+         let files = match Mltop.PluginSpec.digest p with
+           | ds -> List.map Digest.to_hex ds
+           | exception Sys_error _ -> [ "unknown" ]
+         in
+         let d = String.concat "," files in
+         Hashtbl.add plugin_digests name d;
+         (name, d))
     (Mltop.get_loaded_modules ())
 
 let load_order () =
@@ -48,25 +57,48 @@ let position () = Proof_record.{
     section_path = Libnames.string_of_path (Lib.cwd ());
   }
 
+(* A value of the global state that no proof changes in place, digested again
+   only when it is a different value: the universe graph is one value from
+   one declaration to the next, so most proofs reuse the last digest. *)
+let slot () = ref None
+
+let cached slot what v =
+  match !slot with
+  | Some (o, d) when o == Obj.repr v -> d
+  | Some _ | None ->
+    let d = Proof_recorder.digest ~what v in
+    slot := Some (Obj.repr v, d);
+    d
+
+let universes_slot = slot ()
+let qualities_slot = slot ()
+let named_slot = slot ()
+let flags_slot = slot ()
+let generalizable_slot = slot ()
+let template_slot = slot ()
+
 (* Reads taken once, at each proof's start, for the channels that have no
    single read point (BET-84, census rows 2, 3, 4, 13, M3, M7). They are
    recorded as ordinary reads, so the matcher treats them like the rest. *)
 let read_at_start () =
   if Proof_recorder.active () then begin
     let env = Global.env () in
-    let one row channel what v =
-      Proof_recorder.read ~row ~channel ~key:(fun () -> "")
-        ~value:(fun () -> Some (Proof_recorder.digest ~what v))
+    let one row channel value =
+      Proof_recorder.read ~row ~channel ~key:(fun () -> "") ~value:(fun () -> Some (value ()))
     in
-    one "2" "universe_graph" "universes" (Environ.universes env);
-    one "2" "quality_graph" "qualities" (Environ.qualities env);
-    one "3" "named_context" "named_context" (Environ.named_context env);
-    one "3" "variable_opacity" "variable_opacity"
-      (List.map (fun d -> let id = Context.Named.Declaration.get_id d in (id, Decls.variable_opacity id))
-         (Environ.named_context env));
-    one "4" "typing_flags" "typing_flags" (Environ.typing_flags env);
-    one "13" "options" "options" (Goptions.get_tables ());
-    one "13" "warnings" "warnings" (CWarnings.get_flags ());
-    one "M3" "generalizable" "generalizable" (Implicit_quantifiers.generalizable_idents ());
-    one "M7" "template_default_univs" "template_default_univs" (UState.template_default_univs ())
+    let named = Environ.named_context env in
+    one "2" "universe_graph" (fun () -> cached universes_slot "universes" (Environ.universes env));
+    one "2" "quality_graph" (fun () -> cached qualities_slot "qualities" (Environ.qualities env));
+    one "3" "named_context" (fun () -> cached named_slot "named_context" named);
+    one "3" "variable_opacity" (fun () ->
+        Proof_recorder.digest ~what:"variable_opacity"
+          (List.map (fun d -> let id = Context.Named.Declaration.get_id d in (id, Decls.variable_opacity id))
+             named));
+    one "4" "typing_flags" (fun () -> cached flags_slot "typing_flags" (Environ.typing_flags env));
+    one "13" "options" (fun () -> Proof_recorder.digest ~what:"options" (Goptions.get_tables ()));
+    one "13" "warnings" (fun () -> Proof_recorder.digest ~what:"warnings" (CWarnings.get_flags ()));
+    one "M3" "generalizable" (fun () ->
+        cached generalizable_slot "generalizable" (Implicit_quantifiers.generalizable_idents ()));
+    one "M7" "template_default_univs" (fun () ->
+        cached template_slot "template_default_univs" (UState.template_default_univs ()))
   end

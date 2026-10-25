@@ -686,16 +686,18 @@ let declare_constant ~loc ?(local = Locality.ImportDefaultBehavior) ~name ~kind 
     let ctx = on_snd (Univ.UnivConstraints.filter is_new_constraint) ctx in
     (* BET-84: the levels and the constraints this declaration adds, and the
        constraint-source record it writes (census rows 2, 18 and M5). *)
-    Proof_recorder.write_universes
-      ~levels:(List.map Univ.Level.to_string (Univ.Level.Set.elements (fst ctx)))
-      ~constraints:(List.map
-                      (fun (u, k, v) ->
-                         String.concat " " [ Univ.Level.to_string u;
-                                             Pp.string_of_ppcmds (Univ.UnivConstraint.pr_kind k);
-                                             Univ.Level.to_string v ])
-                      (Univ.UnivConstraints.elements (snd ctx)));
-    if not (Univ.UnivConstraints.is_empty (snd ctx)) then
-      Proof_recorder.write_constraint_source (Constant.to_string kn);
+    if Proof_recorder.writing () then begin
+      Proof_recorder.write_universes
+        ~levels:(List.map Univ.Level.to_string (Univ.Level.Set.elements (fst ctx)))
+        ~constraints:(List.map
+                        (fun (u, k, v) ->
+                           String.concat " " [ Univ.Level.to_string u;
+                                               Pp.string_of_ppcmds (Univ.UnivConstraint.pr_kind k);
+                                               Univ.Level.to_string v ])
+                        (Univ.UnivConstraints.elements (snd ctx)));
+      if not (Univ.UnivConstraints.is_empty (snd ctx)) then
+        Proof_recorder.write_constraint_source (Constant.to_string kn)
+    end;
     DeclareUniv.add_constraint_source (ConstRef kn) ctx
   in
   let () = DeclareUniv.declare_univ_binders (GlobRef.ConstRef kn) ubinders in

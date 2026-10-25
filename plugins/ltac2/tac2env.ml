@@ -83,10 +83,11 @@ let define_global kn e =
 
 (* BET-84 census row 10: each Ltac2 definition the proof reads. *)
 let record channel k v =
-  Proof_recorder.read ~row:"10" ~channel ~key:(fun () -> KerName.to_string k)
-    ~value:(fun () -> match v with
-        | None -> None
-        | Some v -> Some (Proof_recorder.digest ~what:channel v))
+  if Proof_recorder.active () then
+    Proof_recorder.read_by ~row:"10" ~channel ~id:k ~key:(fun () -> KerName.to_string k)
+      ~value:(fun () -> match v with
+          | None -> None
+          | Some v -> Some (Proof_recorder.digest ~what:channel v))
 
 let find channel tbl kn =
   let res = KerName.Map.find_opt kn tbl in

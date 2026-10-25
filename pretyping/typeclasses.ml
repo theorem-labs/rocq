@@ -83,11 +83,12 @@ let instances : instances ref = Summary.ref GlobRefMap.empty ~name:"instances"
 (* BET-84 census row 8: the typeclass tables a proof reads, by name. A
    whole-table digest; M1 measures its miss rate. *)
 let record_table name tbl =
-  Proof_recorder.read ~row:"8" ~channel:"typeclass_table" ~key:(fun () -> name)
-    ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"typeclass_table" tbl))
+  if Proof_recorder.active () then
+    Proof_recorder.read_by ~row:"8" ~channel:"typeclass_table" ~id:name ~key:(fun () -> name)
+      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"typeclass_table" tbl))
 
-let read_classes () = record_table "classes" !classes; !classes
-let read_instances () = record_table "instances" !instances; !instances
+let read_classes () = let t = !classes in record_table "classes" t; t
+let read_instances () = let t = !instances in record_table "instances" t; t
 
 let () =
   Proof_recorder.register_tables (fun () ->

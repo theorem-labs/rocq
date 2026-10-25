@@ -25,7 +25,7 @@ type proof_state = {
   p_toolchain_key : R.toolchain_key;
   p_start_tables : R.read list;
   p_reads : R.read Queue.t;
-  p_seen : string option ReadTbl.t;  (** the first value of each key *)
+  p_seen : unit ReadTbl.t;  (** the keys already recorded *)
   p_ineligible : R.ineligible Queue.t;
   p_ineligible_seen : (string * string, unit) Hashtbl.t;
   p_sentences : string Queue.t;
@@ -252,6 +252,11 @@ let with_proof f =
   | None | Some { f_proof = None; _ } -> ()
   | Some { f_proof = Some p; _ } -> f p
 
+let writing () =
+  match !state with
+  | Some { f_proof = Some _; _ } -> true
+  | Some { f_proof = None; _ } | None -> false
+
 let write_universes ~levels ~constraints =
   with_proof (fun p ->
       List.iter (fun l -> Queue.add l p.p_levels) levels;
@@ -285,14 +290,40 @@ let read ~row ~channel ~key ~value =
     | Some { f_proof = Some p; _ } ->
       let key = key () in
       let k = ReadKey.{ row; channel; key } in
-      let v = value () in
-      match ReadTbl.find_opt p.p_seen k with
-      | None ->
-        ReadTbl.add p.p_seen k v;
+      (* Only the first value of a key is kept, and a repeat does not compute
+         the value again: the global state a tactic reads moves inside a
+         proof only through the proof's own writes (a scheme it creates) or
+         through a command or sub-proof that already makes it ineligible, so
+         the first value is the one replay sees. *)
+      if not (ReadTbl.mem p.p_seen k) then begin
+        let v = value () in
+        ReadTbl.add p.p_seen k ();
         Queue.add R.{ row; channel; key; value = v } p.p_reads
-      | Some v0 ->
-        if v0 <> v then
-          add_ineligible p ~reason:"read_changed" ~detail:(String.concat ":" [ row; channel; key ])
+      end
+
+(* The same, for hot choke points whose printed key is costly: a repeat is
+   found by the raw name [id], compared structurally, and [key] and [value]
+   are called only for a new one. *)
+module IdKey = struct
+  type t = { irow : string; ichannel : string; id : Obj.t }
+  let equal a b = a.id = b.id && String.equal a.ichannel b.ichannel && String.equal a.irow b.irow
+  let hash a = Hashtbl.hash (a.irow, a.ichannel, a.id)
+end
+
+module IdTbl = Hashtbl.Make (IdKey)
+
+let seen_ids : unit IdTbl.t = IdTbl.create 1024
+let seen_ids_gen = ref (-1)
+
+let read_by ~row ~channel ~id ~key ~value =
+  if !recording then begin
+    if !seen_ids_gen <> !gen then (IdTbl.reset seen_ids; seen_ids_gen := !gen);
+    let k = IdKey.{ irow = row; ichannel = channel; id = Obj.repr id } in
+    if not (IdTbl.mem seen_ids k) then begin
+      IdTbl.add seen_ids k ();
+      read ~row ~channel ~key ~value
+    end
+  end
 
 let ineligible ~reason ~detail =
   match !state with

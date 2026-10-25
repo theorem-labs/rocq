@@ -158,7 +158,7 @@ let define ?loc internal role id c poly uctx sch =
   let effs = sch.sch_eff in
   let cst, effs = !declare_definition_scheme ~univs ~role ~name:id ~effs c in
   (* BET-84 M4: the schemes a proof created, which replay declares again. *)
-  Proof_recorder.write_scheme (Constant.to_string cst);
+  if Proof_recorder.writing () then Proof_recorder.write_scheme (Constant.to_string cst);
   let reg = (id, cst, loc, univs) :: sch.sch_reg in
   cst, { sch_eff = effs; sch_reg = reg }
 

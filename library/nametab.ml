@@ -587,13 +587,24 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
      found, or absent. [channel] is the table's summary name, so each
      nametab is its own channel. A failed lookup is recorded too: a proof
      can take a different path because a name is not yet in scope. *)
-  let record key value =
-    Proof_recorder.read ~row:"6" ~channel:SI.summary_name ~key
+  (* Channel names are built once per nametab, so a lookup with the recorder
+     off allocates nothing. *)
+  let ch_locate = SI.summary_name ^ "/locate"
+  let ch_locate_upto = SI.summary_name ^ "/locate_upto"
+  let ch_locate_all = SI.summary_name ^ "/locate_all"
+  let ch_of_path = SI.summary_name ^ "/of_path"
+  let ch_exists = SI.summary_name ^ "/exists"
+
+  let record ~channel ~id key value =
+    Proof_recorder.read_by ~row:"6" ~channel ~id ~key
       ~value:(fun () -> match value () with
           | v -> Some (Proof_recorder.digest ~what:SI.summary_name v)
           | exception Not_found -> None)
 
-  let record_qid qid value = record (fun () -> Libnames.string_of_qualid qid) value
+  (* The qualid's location is not part of its identity: one name read twice
+     in a proof is one read. *)
+  let record_qid ~channel qid value =
+    record ~channel ~id:(qid.CAst.v) (fun () -> Libnames.string_of_qualid qid) value
 
   let push vis sp v = the_tab := Tab.push vis sp v !the_tab
 
@@ -606,16 +617,20 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
   let pr v = Tab.pr v !the_tab
 
   let locate qid =
-    record_qid qid (fun () -> Tab.locate qid !the_tab);
+    if Proof_recorder.active () then
+      record_qid ~channel:ch_locate qid (fun () -> Tab.locate qid !the_tab);
     Tab.locate qid !the_tab
 
   let locate_upto ~limit qid =
-    record_qid qid (fun () -> Tab.locate_upto ~limit qid !the_tab);
+    if Proof_recorder.active () then
+      record ~channel:ch_locate_upto ~id:(qid.CAst.v, limit)
+        (fun () -> Libnames.string_of_qualid qid ^ "#" ^ string_of_int limit)
+        (fun () -> Tab.locate_upto ~limit qid !the_tab);
     Tab.locate_upto ~limit qid !the_tab
 
   let locate_all qid =
     let res = Tab.locate_all qid !the_tab in
-    record_qid qid (fun () -> res);
+    if Proof_recorder.active () then record_qid ~channel:ch_locate_all qid (fun () -> res);
     res
 
   let completion_candidates qid = Tab.completion_candidates qid !the_tab
@@ -623,12 +638,14 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
   let to_path v = Tab.to_path v !the_tab
 
   let of_path v =
-    record (fun () -> Libnames.string_of_path v) (fun () -> Tab.of_path v !the_tab);
+    if Proof_recorder.active () then
+      record ~channel:ch_of_path ~id:v (fun () -> Libnames.string_of_path v) (fun () -> Tab.of_path v !the_tab);
     Tab.of_path v !the_tab
 
   let exists v =
     let res = Tab.exists v !the_tab in
-    record (fun () -> Libnames.string_of_path v) (fun () -> res);
+    if Proof_recorder.active () then
+      record ~channel:ch_exists ~id:v (fun () -> Libnames.string_of_path v) (fun () -> res);
     res
 end
 
