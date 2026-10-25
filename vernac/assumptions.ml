@@ -221,10 +221,10 @@ let fold_with_full_binders g f n acc c =
       every inductive and constructor of the block.
     An object is never recorded when its walk, including every walk nested in
     it, records an empty-match context in [ax2ty] or meets an opaque body that
-    cannot be forced (an entry stores no [ax2ty], and the second reads state
-    outside the key below). A member of a mutual block is recorded only
-    together with its whole block. An object is also recorded only once each
-    of its edges has an entry, and only while no entry has its user name.
+    cannot be forced (an entry stores no [ax2ty]; excluding the second is a
+    precaution that only costs reuse). A member of a mutual block is recorded
+    only together with its whole block. An object is also recorded only once
+    each of its edges has an entry, and only while no entry has its user name.
     Entries are never replaced, so every edge of every entry keeps an entry
     until the entries are cleared, and a replay can miss only at the object it
     starts from.
@@ -238,11 +238,16 @@ let fold_with_full_binders g f n acc c =
     output of {!assumptions}, a fold over them.
 
     Entries hold for one environment, compared by physical equality of
-    [Global.env ()], plus the current module path and the opaque-proof
-    accessor. Any difference clears every entry. The entries are also
-    cleared, at the start of a query, when they weigh more than [memo_factor]
-    times the heaviest query so far in the environment (an entry weighs one
-    plus the size of its edge set; a block's set counts once). *)
+    [Global.env ()], plus the current module path, the opaque-proof accessor,
+    and the generation of the opaque tables of loaded libraries
+    ([Library.opaque_tables_generation]). Those tables are not part of the
+    environment: a Require that fails, because the file it finds holds another
+    library, replaces the opaque proofs of that library when it is loaded, and
+    leaves [Global.env ()] as it was. Any difference clears every entry. The
+    entries are also cleared, at the start of a query, when they weigh more
+    than [memo_factor] times the heaviest query so far in the environment (an
+    entry weighs one plus the size of its edge set; a block's set counts
+    once). *)
 
 (* ROCQ_DEBUG_ASSUMPTIONS_MEMO=1, read once at startup, reports each completed
    replay, and each clearing of the entries by the weight bound, on standard
@@ -256,7 +261,7 @@ type memo_entry = {
   memo_size : int;  (** the cardinal of [memo_edges] *)
 }
 
-let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref = ref None
+let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor * int) option ref = ref None
 
 let memo_factor = 2
 
@@ -289,8 +294,10 @@ let inductive_marks = ref ([] : int list)
 let sync_memo access =
   let env = Global.env () in
   let mp = Global.current_modpath () in
+  let opaques = Library.opaque_tables_generation () in
   match !memo_key with
-  | Some (env', mp', access') when env' == env && ModPath.equal mp' mp && access' == access ->
+  | Some (env', mp', access', opaques') when
+      env' == env && ModPath.equal mp' mp && access' == access && Int.equal opaques' opaques ->
     memo_heaviest := max !memo_heaviest !query_weight;
     query_weight := 0;
     if !memo.weight > memo_factor * !memo_heaviest then begin
@@ -301,7 +308,7 @@ let sync_memo access =
     memo := fresh_memo ();
     memo_heaviest := 0;
     query_weight := 0;
-    memo_key := Some (env, mp, access)
+    memo_key := Some (env, mp, access, opaques)
 
 (* [Map_env] compares user names only: the entry is [obj]'s when the
    canonical names agree too. *)

@@ -181,8 +181,21 @@ type table_status =
 let opaque_tables =
   ref (DPmap.empty : table_status DPmap.t)
 
+(* [opaque_tables] is not part of the state a rollback restores, and
+   [add_opaque_table] can replace the table of a library that stays loaded:
+   [intern_from_file] writes it under the name the file holds, before
+   [intern_library] checks that name, so a Require that finds a file holding
+   a loaded library replaces that library's table and then fails. The
+   generation counts the writes, for a cache of what the tables return. The
+   [Fetched] write of [access_table] does not count: it keeps what the table
+   returns. *)
+let opaque_generation = ref 0
+
 let add_opaque_table dp st =
+  incr opaque_generation;
   opaque_tables := DPmap.add dp st !opaque_tables
+
+let opaque_tables_generation () = !opaque_generation
 
 let access_table what tables dp i =
   let t = match DPmap.find dp !tables with
