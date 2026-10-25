@@ -113,13 +113,16 @@ let record_constant c cb =
         else add_name name flags.unguarded;
     }
 
-let record_inductive c mib =
+(* [indices_matter] is the checker's own setting. checkFlags.ml checks every
+   inductive under it and ignores the flag stored with the inductive, so the
+   stored flag must not decide what is reported either. *)
+let record_inductive ~indices_matter c mib =
   match !unsafe_flags with
   | None -> ()
   | Some flags ->
     let tf = mib.mind_typing_flags in
     let relies_on_indices =
-      not tf.indices_matter &&
+      not indices_matter &&
       Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) mib.mind_packets
     in
     if tf.check_universes && tf.check_eliminations && tf.check_guarded
@@ -139,10 +142,8 @@ let record_inductive c mib =
         if mib.mind_typing_flags.check_positive then flags.nonpositive
         else add_name name flags.nonpositive;
       indices_matter =
-        if mib.mind_typing_flags.indices_matter ||
-           not (Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) mib.mind_packets)
-        then flags.indices_matter
-        else add_name name flags.indices_matter;
+        if relies_on_indices then add_name name flags.indices_matter
+        else flags.indices_matter;
     }
 
 (* The environment walk keeps its own order, and a recorded name it already
@@ -211,8 +212,9 @@ let pr_nonpositive env flags =
   pr_assumptions "Inductives whose positivity is assumed" (add_missing inds flags.nonpositive)
 
 let pr_indices_matter env flags =
+  let indices_matter = (Environ.typing_flags env).indices_matter in
   let inds = fold_inductives (fun c cb acc ->
-    if cb.mind_typing_flags.indices_matter then acc
+    if indices_matter then acc
     else if Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) cb.mind_packets
     then MutInd.to_string c :: acc
     else acc) env [] in
