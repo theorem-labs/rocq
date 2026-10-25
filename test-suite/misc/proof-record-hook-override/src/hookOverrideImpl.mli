@@ -1,6 +1,8 @@
 
 val activate : unit -> unit
-(** Activates the probe solver, which the plugin registers when it is loaded. *)
+(** Activates the three probes, which the plugin registers when it is loaded:
+    the typeclass solver, the coercion hook and the canonical-solution hook. *)
 
 val register_override : unit -> unit
-(** Registers the probe solver again under the same name, with [~override:true]. *)
+(** Registers all three probes again under their unchanged names, each with
+    [~override:true]. *)

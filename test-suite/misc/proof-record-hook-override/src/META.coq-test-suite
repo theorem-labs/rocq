@@ -1,7 +1,7 @@
 package "hook_override" (
     directory = "."
     version = "dev"
-    description = "A test plugin that registers a typeclass solver, then registers it again with ~override:true"
+    description = "A test plugin that registers a typeclass solver, a coercion hook and a canonical-solution hook, then registers all three again with ~override:true"
     requires = "rocq-runtime.plugins.ltac"
     archive(byte) = "hook_override_plugin.cma"
     archive(native) = "hook_override_plugin.cmxa"
