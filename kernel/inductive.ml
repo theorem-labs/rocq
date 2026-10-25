@@ -1308,7 +1308,8 @@ let check_is_subterm x tree =
   | Not_subterm | Subterm (_,Large,_) -> InvalidSubterm
   | Internally_bound_subterm l -> NeedReduceSubterm l
 
-let find_uniform_parameters illformed ?evars env recindx nargs bodies =
+let find_uniform_parameters recindx nargs stripped =
+  let bodies = stripped in
   let nbodies = Array.length bodies in
   (* Ensure that the structural argument is not uniform,
      so that it stays in [non_absorbed_stack] *)
@@ -1345,15 +1346,12 @@ let find_uniform_parameters illformed ?evars env recindx nargs bodies =
         nuniformparams
     | _ -> fold_constr_with_binders succ aux k nuniformparams c
   in
-  Array.fold_left2_i (fun k nuniformparams recindx c ->
-    let _, c = try
-      split_struct_arg ?evars env recindx c
-      with Invalid_argument _ -> illformed k
-      (* Typing invariants are checked later for inner fixpoints *)
-    in
-    (* Typing invariants say no recursive call happen in prefix ctx *)
+  (* [stripped] holds the bodies with their [recindx+1] leading abstractions
+     removed and reduced, which is the form the rewriting below also sees, so
+     the two passes measure one term. *)
+  Array.fold_left2_i (fun _k nuniformparams recindx c ->
     aux (recindx + 1) nuniformparams c)
-    min_indx recindx bodies
+    min_indx recindx stripped
 
 (** Given a fixpoint [fix f x y z n {struct n} := phi(f x y u t, ..., f x y u' t')]
     with [z] not uniform we build in context [x:A, y:B(x), z:C(x,y)] a term
@@ -1361,21 +1359,16 @@ let find_uniform_parameters illformed ?evars env recindx nargs bodies =
     [forall (z:C(x,y)) (n:I(x,y,z)), T(x,y,z,n)], so that
     [fun x y z => psi z] is of same type as the original term *)
 
-(* [bail] is called when an occurrence of one of the mutual fixpoints carries
-   fewer arguments than the prefix [find_uniform_parameters] computed. That
-   means the analysis and this rewriting disagree about the term, so the
-   extrusion is not justified and the definition is refused. Upstream instead
-   raises Failure "List.skipn" from the kernel (rocq-prover/rocq#21798, commit
-   f4ba720a635c), and the 9.2 base silently truncated, which accepts the
-   rewritten body on an assumption nothing checked. Both are avoided here:
-   where the analysis has not foreseen a term, the guard condition refuses it.
-
-   The two known ways to reach this are an occurrence that is passed on
-   without being applied, which [find_uniform_parameters] now bounds directly,
-   and one that only survives in the unreduced body, which the analysis cannot
-   see because it works on the reduced one. *)
-let drop_uniform_parameters bail nuniformparams bodies =
-  let nbodies = Array.length bodies in
+(* Rewrites the SAME stripped bodies that [find_uniform_parameters] measured,
+   at the same de Bruijn depth: each one sits under its own [recindx+1]
+   abstractions. Starting at 0 instead would make the test below select the
+   innermost stripped binders rather than the block's own variables, so
+   arguments would be deleted from an unrelated application and a recursive
+   call placed in one of them would never reach the guard condition. That
+   admits a closed proof of False; the shape is
+   test-suite/failure/guard_prefix_depth.v. *)
+let drop_uniform_parameters nuniformparams recindx stripped =
+  let nbodies = Array.length stripped in
   let rec aux k c =
     let f, l = decompose_app_list c in
     match kind f with
@@ -1383,14 +1376,12 @@ let drop_uniform_parameters bail nuniformparams bodies =
       let l = List.map (fun c -> aux k c) l in
       (* A recursive reference to any one of the mutual fixpoints *)
       if n > k && n <= k + nbodies then
-        if List.length l < nuniformparams then bail ()
-        else
-          let new_args = List.skipn nuniformparams l in
-          Term.applist (f, new_args)
+        let new_args = List.skipn_at_best nuniformparams l in
+        Term.applist (f, new_args)
       else Term.applist (f, l)
     | _ -> map_with_binders succ aux k c
   in
-  Array.map (aux 0) bodies
+  Array.map2 (fun recindx c -> aux (recindx + 1) c) recindx stripped
 
 let filter_fix_stack_domain cache ?evars nr decrarg stack nuniformparams =
   let rec aux i nuniformparams stack =
@@ -1530,16 +1521,79 @@ let check_one_fix cache ?evars renv recpos trees def =
                 (pi1 recdef) k (push_rec_types recdef renv.env)
                 (judgment_of_fixpoint recdef)
             in
-            (* The bodies live under the block's own declarations, so the
-               analysis reduces them in [renv'.env], the environment the
-               kernel checks them in. With [renv.env], which is short by
+            (* Split every body once, in [renv'.env], the environment that
+               holds the block's own declarations and in which the kernel
+               checks the bodies. With [renv.env], which is short by
                [nbodies] declarations and is what upstream passes, every
                lookup that [split_struct_arg]'s reduction makes is shifted,
                and a body whose head resolves to a different local definition
                is analysed in place of the real one. That admits closed proofs
-               of False: test-suite/failure/guard_envshift_x03.v. *)
-            let nuniformparams = find_uniform_parameters illformed ?evars renv'.env recindxs (List.length stack) bodies in
-            let bodies = drop_uniform_parameters (fun () -> illformed i) nuniformparams bodies in
+               of False: test-suite/failure/guard_envshift_x03.v.
+
+               The analysis and the rewriting then work on the SAME stripped
+               bodies, and the abstractions are put back afterwards. Upstream
+               analyses the stripped body and rewrites the raw one, so an
+               occurrence living in the binder prefix is invisible to the
+               analysis and visible to the rewriting: the prefix it computed
+               is then not justified for that occurrence, and [List.skipn]
+               raises inside the kernel. Measuring one term removes the
+               disagreement rather than reporting it. *)
+            (* The analysis measures the body after its binder prefix is
+               reduced away, but the kernel stores the body as written, so an
+               occurrence of one of the block's functions that the reduction
+               erases is checked by nothing and evaluated later. A fully
+               applied call hidden there makes the kernel accept a definition
+               whose evaluation does not terminate; upstream Rocq accepts
+               those too (9.3.0 and master), and stock 9.2.0, which lacks
+               rocq-prover/rocq#22384, does not. Refuse any body whose RAW
+               prefix mentions the block at all, before any reduction runs:
+               nothing erased can then survive into the stored term. *)
+            (* The number of block-variables an occurrence may hit: this
+               block's own [nbodies] and the enclosing fixpoint blocks
+               [renv.genv] still records. A call to any of them in the raw
+               prefix is erased by the reduction and reaches no check: this
+               block's own because the analysis never sees it, an enclosing
+               block's because the enclosing guard check only sees calls
+               through this stripped body. [push_fix_renv] has pushed this
+               block's [nbodies] on top of [renv.genv], so the whole range
+               above the body's own locals is covered by one count. *)
+            let nblockvars = nbodies + List.length renv.genv in
+            let raw_prefix_mentions_block body recindx =
+              (* Walk only the chain of abstractions the stripping consumes.
+                 Everything that is NOT the body under those abstractions —
+                 a domain, a let value or type, a cast type, and anything
+                 left when the abstractions are not written out at all —
+                 can be erased by the reduction, so a mention of any block
+                 variable there refuses the definition. *)
+              let rec walk k needed c =
+                if Int.equal needed 0 then false
+                else match kind c with
+                  | Lambda (_, ty, bd) ->
+                    not (noccur_with_meta k nblockvars ty)
+                    || walk (k+1) (needed-1) bd
+                  | LetIn (_, v, ty, bd) ->
+                    not (noccur_with_meta k nblockvars v)
+                    || not (noccur_with_meta k nblockvars ty)
+                    || walk (k+1) needed bd
+                  | Cast (c, _, ty) ->
+                    not (noccur_with_meta k nblockvars ty) || walk k needed c
+                  | _ ->
+                    not (noccur_with_meta k nblockvars c)
+              in
+              walk 1 (recindx + 1) body
+            in
+            let () = Array.iteri (fun k body ->
+                if raw_prefix_mentions_block body recindxs.(k) then illformed k)
+                bodies in
+            let split = Array.map2_i (fun k recindx body ->
+                try split_struct_arg ?evars renv'.env recindx body
+                with Invalid_argument _ -> illformed k)
+                recindxs bodies in
+            let stripped = Array.map snd split in
+            let nuniformparams = find_uniform_parameters recindxs (List.length stack) stripped in
+            let stripped = drop_uniform_parameters nuniformparams recindxs stripped in
+            let bodies = Array.map2 (fun (sign, _) body ->
+                Term.it_mkLambda_or_LetIn body sign) split stripped in
             let fix_stack = filter_fix_stack_domain cache ?evars (redex_level rs) decrArg stack nuniformparams in
             let fix_stack = if List.length stack > decrArg then List.firstn (decrArg+1) fix_stack else fix_stack in
             let stack_this = lift_stack nbodies fix_stack in
