@@ -10,4 +10,8 @@
 val memory_stat : bool ref
 val output_context : bool ref
 
+val start_summary : bool -> unit
+val record_constant : Names.Constant.t -> Declarations.constant_body -> unit
+val record_inductive : Names.MutInd.t -> Declarations.mutual_inductive_body -> unit
+
 val stats : Environ.env -> Names.Cset.t Names.Cmap.t -> unit
