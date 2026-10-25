@@ -15,10 +15,11 @@
    the first argument ever passed there was carried into the hidden call.
 
    Upstream dies on this one with
-   Anomaly "Uncaught exception Failure("List.skipn")" rather than accepting it,
-   because it drops the arguments with a strict skip. This fork keeps the
-   tolerant skip and bounds the prefix instead: an unapplied occurrence allows
-   no uniform prefix, so there is nothing to drop and nothing to assume. *)
+   Anomaly "Uncaught exception Failure("List.skipn")" rather than accepting
+   it. This branch bounds the prefix instead: an unapplied occurrence allows
+   no uniform prefix, so there is nothing to drop and nothing to assume, and
+   an occurrence that still carries too few arguments refuses the definition
+   rather than dropping what it can. *)
 
 Inductive T : Set := C : T -> T | L : T.
 Definition P (t : T) : Type := match t with L => unit | C _ => False end.
