@@ -546,14 +546,23 @@ exception Unhashable of string
    'c' len bytes         custom block, as marshalled
    'e' len bytes         extension constructor, by name
    'l'                   a Loc.t of the [~locs] source
-   'b' tag size entry... a small block whose fields are all encoded in place
-   'd' md5               any other structured block: md5 of 'b' tag size entry...
-   The digest of a value is the md5 of its entry. The other structured blocks
-   are digested once each (memoized by physical equality), so the cost is
-   linear in the number of distinct blocks, and the result does not depend on
-   sharing. Small flat blocks ([Rel 1], a name) are not memoized: the memo
-   hashes structurally, so many unshared copies of one small block would
-   share one bucket. *)
+   'b' tag size entry... a block encoded in place, with its fields
+   'd' md5               a block of at least [min_memo_size] blocks, named by
+                         the md5 of its 'b' encoding
+   The digest of a value is the md5 of its entry. A block whose subtree has at
+   least [min_memo_size] blocks is digested once and then named by that md5,
+   so the cost is linear in the number of distinct blocks and the result does
+   not depend on sharing. A smaller block is encoded in place at each of its
+   occurrences, which costs at most [min_memo_size] blocks: the memo hashes
+   structurally, so the many unshared copies of one small block ([Rel 1], a
+   name) would otherwise all share one bucket and make every lookup walk it.
+
+   The memo lives for the whole compile, not for one call. The global state is
+   persistent: the universe graph after a proof shares all but one path with
+   the graph before it, so a proof's digest of it costs that path and not the
+   whole graph. The price is the same assumption {!Proof_recorder.digest_cached}
+   already makes, one level deeper: a value that is digested must not be
+   mutated in place afterwards. {!reset_memo} empties it with the recorder. *)
 
 module H = Hashtbl.Make (struct
     type t = Obj.t
@@ -561,11 +570,17 @@ module H = Hashtbl.Make (struct
     let hash = Hashtbl.hash
   end)
 
-type memo = Pending | Done of Digest.t
+type memo = Pending | Done of Digest.t * int
 
 let max_blocks = 1 lsl 25
 
-let max_flat_size = 8
+let min_memo_size = 32
+
+(* The memo of every value digested without [~locs]. A [~locs] call uses its
+   own: it encodes the locations of one source as a leaf. *)
+let global_memo : memo H.t = H.create 4096
+
+let reset_memo () = H.reset global_memo
 
 let add_len b n = Buffer.add_int64_le b (Int64.of_int n)
 
@@ -596,19 +611,10 @@ let loc_matcher = function
 
 let digest_value ?locs v =
   let is_loc = loc_matcher locs in
-  let memo = H.create 1024 in
+  let memo = match locs with None -> global_memo | Some _ -> H.create 1024 in
   let blocks = ref 0 in
-  (* [`Leaf] values are encoded in place. [`Flat] blocks are encoded in place
-     with their fields, which are all [`Leaf]. [`Node] blocks need their own
-     digest first. *)
-  let is_leaf o =
-    Obj.is_int o
-    || (let t = Obj.tag o in
-        t = Obj.string_tag || t = Obj.double_tag || t = Obj.double_array_tag || t = Obj.custom_tag
-        || (t = Obj.object_tag && Obj.size o >= 1 && is_string_field o 0)
-        || (t < Obj.no_scan_tag && t <> Obj.closure_tag && t <> Obj.infix_tag && t <> Obj.lazy_tag
-            && t <> Obj.forward_tag && is_loc o))
-  in
+  (* A [`Node] is walked and may get a digest of its own. Everything else is
+     encoded where it stands. *)
   let classify o =
     if Obj.is_int o then `Leaf
     else
@@ -621,10 +627,7 @@ let digest_value ?locs v =
       else if t = Obj.abstract_tag then raise (Unhashable "an abstract block")
       else if t >= Obj.no_scan_tag then raise (Unhashable (Printf.sprintf "a block of tag %d" t))
       else if is_loc o then `Leaf
-      else
-        let size = Obj.size o in
-        let rec leaves i = i >= size || (is_leaf (unforward (Obj.field o i)) && leaves (i + 1)) in
-        if size <= max_flat_size && leaves 0 then `Flat else `Node
+      else `Node
   in
   let add_header b o =
     Buffer.add_char b 'b'; Buffer.add_char b (Char.chr (Obj.tag o)); add_len b (Obj.size o)
@@ -655,46 +658,64 @@ let digest_value ?locs v =
       else if is_loc o then Buffer.add_char b 'l'
       else
         match H.find_opt memo o with
-        | Some (Done d) -> Buffer.add_char b 'd'; Buffer.add_string b d
+        | Some (Done (d, _)) -> Buffer.add_char b 'd'; Buffer.add_string b d
         | Some Pending -> assert false
         | None ->
-          (* A flat block. *)
+          (* A block of fewer than [min_memo_size] blocks. *)
           add_header b o;
           for i = 0 to Obj.size o - 1 do add_entry b (unforward (Obj.field o i)) done
   in
   let node = Buffer.create 256 in
-  let finish o =
-    Buffer.clear node;
-    add_header node o;
-    let size = Obj.size o in
-    for i = 0 to size - 1 do add_entry node (unforward (Obj.field o i)) done;
-    H.replace memo o (Done (Digest.string (Buffer.contents node)))
+  let finish o size =
+    if size < min_memo_size then H.remove memo o
+    else begin
+      Buffer.clear node;
+      add_header node o;
+      for i = 0 to Obj.size o - 1 do add_entry node (unforward (Obj.field o i)) done;
+      H.replace memo o (Done (Digest.string (Buffer.contents node), size))
+    end
   in
-  (* Post-order walk with an explicit stack: deep values do not overflow. *)
+  (* Post-order walk with an explicit stack: deep values do not overflow. Each
+     frame counts the blocks of its own subtree, so that [finish] knows whether
+     the block is worth a digest of its own. *)
   let stack = Stack.create () in
   let enter o =
     match H.find_opt memo o with
-    | Some (Done _) -> ()
+    | Some (Done (_, n)) -> n
     | Some Pending -> raise (Unhashable "a cycle")
     | None ->
       incr blocks;
       if !blocks > max_blocks then raise (Unhashable "more than 2^25 distinct blocks");
       H.add memo o Pending;
-      Stack.push (o, ref 0) stack
+      Stack.push (o, ref 0, ref 0) stack;
+      0
   in
   let root = unforward (Obj.repr v) in
-  if classify root = `Node then enter root;
-  while not (Stack.is_empty stack) do
-    let o, i = Stack.top stack in
-    if !i < Obj.size o then begin
-      let c = unforward (Obj.field o !i) in
-      incr i;
-      if classify c = `Node then enter c
-    end else begin
-      ignore (Stack.pop stack);
-      finish o
-    end
-  done;
-  let top = Buffer.create 64 in
-  add_entry top root;
-  Digest.to_hex (Digest.string (Buffer.contents top))
+  let run () =
+    if classify root = `Node then ignore (enter root);
+    while not (Stack.is_empty stack) do
+      let o, i, acc = Stack.top stack in
+      if !i < Obj.size o then begin
+        let c = unforward (Obj.field o !i) in
+        incr i;
+        if classify c = `Node then acc := !acc + enter c
+      end else begin
+        ignore (Stack.pop stack);
+        let size = 1 + !acc in
+        finish o size;
+        if not (Stack.is_empty stack) then
+          let _, _, pacc = Stack.top stack in pacc := !pacc + size
+      end
+    done;
+    let top = Buffer.create 64 in
+    add_entry top root;
+    Digest.to_hex (Digest.string (Buffer.contents top))
+  in
+  match run () with
+  | d -> d
+  | exception e ->
+    (* The memo outlives the call, so an abandoned walk must leave none of its
+       [Pending] marks behind. *)
+    let bt = Printexc.get_raw_backtrace () in
+    Stack.iter (fun (o, _, _) -> H.remove memo o) stack;
+    Printexc.raise_with_backtrace e bt

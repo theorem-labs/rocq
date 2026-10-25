@@ -67,7 +67,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
                 | exception Sys_error _ -> "unknown")
             ~toolchain:Proof_record_env.toolchain
             ~skip_qed_typecheck:!Opaques.skip_qed_typecheck
-            ~tables_at_start:copts.proof_record_tables
+            ~tables_at_start:true
       in
       let wall_clock1 = Unix.gettimeofday () in
       let check = Stm.AsyncOpts.(stm_options.async_proofs_mode = APoff) in

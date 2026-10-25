@@ -39,6 +39,19 @@ let plugins () =
 let load_order () =
   List.map (fun dir -> (DirPath.to_string dir, Library.library_digest dir)) (Library.loaded_libraries ())
 
+(* The kernel records a constant of a required library by that library's .vo
+   digest, not by its body. It asks once for each library, so the walk of the
+   loaded ones is not a cost. The library being compiled has no digest, so its
+   own constants are digested. *)
+let () = Proof_recorder.set_library_digest (fun name ->
+    match List.find_opt (fun dir -> String.equal (DirPath.to_string dir) name)
+            (Library.loaded_libraries ()) with
+    | None -> None
+    | Some dir ->
+      match Library.library_digest dir with
+      | "unknown" -> None
+      | d -> Some d)
+
 let toolchain () : Proof_record.toolchain = Proof_record.{
     binary = Lazy.force binary_digest;
     plugins = plugins ();

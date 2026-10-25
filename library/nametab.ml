@@ -617,9 +617,20 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
   let pr v = Tab.pr v !the_tab
 
   let locate qid =
-    if Proof_recorder.active () then
-      record_qid ~channel:ch_locate qid (fun () -> Tab.locate qid !the_tab);
-    Tab.locate qid !the_tab
+    if Proof_recorder.active () then begin
+      let res =
+        try Some (Tab.locate qid !the_tab)
+        with Not_found -> None
+      in
+      record_qid ~channel:ch_locate qid (fun () ->
+          match res with
+          | Some res -> res
+          | None -> raise Not_found);
+      match res with
+      | Some res -> res
+      | None -> raise Not_found
+    end else
+      Tab.locate qid !the_tab
 
   let locate_upto ~limit qid =
     if Proof_recorder.active () then
@@ -668,6 +679,10 @@ module MakeWarned (M:NAMETAB)
   include M
 
   let warntab = Summary.ref ~stage:W.stage ~name:W.summary_name W.Map.empty
+
+  let () = Proof_recorder.register_tables (fun () ->
+      [ Proof_record.{ row = "6"; channel = W.summary_name; key = "";
+                       value = Some (Proof_recorder.digest_cached ~what:W.summary_name !warntab) } ])
 
   let push ?wdata vis sp elt =
     M.push vis sp elt;

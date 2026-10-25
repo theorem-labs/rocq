@@ -189,6 +189,9 @@ let nested =
 (* The registry is global: the hint and typeclass modules linked into this
    test register their own tables when they load, so the test looks for its
    own entry among them, and counts the calls of its own source. *)
+(* The registered tables are read at every proof's start, with or without the
+   header's [tables_at_start]: a matcher compares [start_tables] like [reads],
+   so a proof that misses them is not safe to replay. *)
 let start_tables =
   let calls = ref 0 in
   Rec.register_tables (fun () ->
@@ -198,15 +201,57 @@ let start_tables =
   open_proof ();
   close_proof ();
   let p = List.hd (the_file ()).R.proofs in
-  let with_tables = !calls in
+  let after_one = !calls in
   start ~tables:false ();
   open_proof ();
   close_proof ();
   let q = List.hd (the_file ()).R.proofs in
+  let key r = r.R.key in
   mk_bool_test "recorder-start-tables"
-    "with tables_at_start, every table is listed at the proof's start; without it, none is read"
-    (List.mem "test-db" (List.map (fun r -> r.R.key) p.R.start_tables)
-     && with_tables = 1 && !calls = 1 && q.R.start_tables = [])
+    "every registered table is listed at each proof's start"
+    (List.mem "test-db" (List.map key p.R.start_tables)
+     && List.mem "test-db" (List.map key q.R.start_tables)
+     && after_one = 1 && !calls = 2)
+
+(* An Abort writes no entry and leaves the recorder free for the next proof.
+   Without that, the aborted proof stays open and every proof after it in the
+   file is taken for a nested one and loses its entry. *)
+let dropped =
+  start ();
+  open_proof ~name:"Top.File.aborted" ();
+  Rec.read ~row:"1" ~channel:"constant" ~key:(fun () -> "x") ~value:(fun () -> Some "d");
+  Rec.drop_proof ();
+  let free = Rec.current_name () in
+  open_proof ~name:"Top.File.later" ();
+  close_proof ();
+  open_proof ~name:"Top.File.nested_outer" ();
+  open_proof ~name:"Top.File.inner" ();
+  Rec.drop_proof ();
+  let still_open = Rec.current_name () in
+  close_proof ();
+  open_proof ~name:"Top.File.all" ();
+  Rec.drop_all_proofs ();
+  let f = the_file () in
+  mk_bool_test "recorder-dropped"
+    "a dropped proof writes no entry, and the proofs after it keep theirs"
+    (free = None && still_open = Some "Top.File.nested_outer"
+     && List.map (fun p -> p.R.name) f.R.proofs = [ "Top.File.later"; "Top.File.nested_outer" ]
+     && f.R.trailer.R.proof_count = 2)
+
+(* [Save id] declares [id], not the name the proof was opened with, and the
+   record's name is what a matcher joins to the opaque term. *)
+let renamed =
+  start ();
+  open_proof ~name:"Top.File.opening" ();
+  open_proof ~name:"Top.File.inner" ();
+  Rec.set_name "Top.File.not_this_one";
+  close_proof ();
+  Rec.set_name "Top.File.saved";
+  close_proof ~closer:"Save" ();
+  let p = List.hd (the_file ()).R.proofs in
+  mk_bool_test "recorder-renamed"
+    "the closer's name replaces the opening name, and a nested close does not"
+    (p.R.name = "Top.File.saved" && p.R.closer = "Save")
 
 (* The sentence that opens a proof is the proof's first sentence, and the
    one that closes it is its last. A sentence outside a proof is dropped,
@@ -249,6 +294,6 @@ let writes =
 
 let tests =
   [ inert; one_proof; outside; dedup; first_value; read_by; ineligible_reasons; admitted; nested;
-    start_tables; sentences; writes ]
+    start_tables; dropped; renamed; sentences; writes ]
 
 let _ = run_tests __FILE__ log_out_ch tests

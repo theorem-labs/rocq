@@ -183,6 +183,13 @@ module ReductionBehaviour = struct
     let all_never_unfold table = fst table
   end
 
+(* BET-84 census row 5: [simpl] reads the whole reduction behaviour table. *)
+let () =
+  Proof_recorder.register_tables (fun () ->
+      [Proof_record.{ row = "5"; channel = "reduction_behaviour"; key = "";
+                      value = Some (Proof_recorder.digest_cached
+                                      ~what:"reduction_behaviour" (Db.get ())) }])
+
   (* BET-84 census row 5: each [simpl] behaviour the proof reads. *)
   let get r =
     let res = get_from_db (Db.get ()) r in

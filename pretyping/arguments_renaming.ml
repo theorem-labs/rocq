@@ -72,7 +72,20 @@ let rename_arguments local r names =
   let req = if local then ReqLocal else ReqGlobal in
   Lib.add_leaf (inRenameArgs (req, (r, names)))
 
-let arguments_names env r = GlobRefMap.find env r !name_table
+let arguments_names env r =
+  try
+    let names = GlobRefMap.find env r !name_table in
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"12" ~channel:"arguments_names"
+        ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
+        ~value:(fun () -> Some (Proof_recorder.digest ~what:"arguments_names" names));
+    names
+  with Not_found ->
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"12" ~channel:"arguments_names"
+        ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
+        ~value:(fun () -> None);
+    raise Not_found
 
 let rename_type env ty ref =
   let name_override old_name override =

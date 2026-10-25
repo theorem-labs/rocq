@@ -149,7 +149,15 @@ let meta_counter_summary_name = "meta counter"
 let meta_ctr, meta_counter_summary_tag =
   Summary.ref_tag 0 ~name:meta_counter_summary_name
 
-let new_meta () = incr meta_ctr; !meta_ctr
+let () = Proof_recorder.register_tables (fun () ->
+    [ Proof_record.{ row = "18"; channel = "counter_start"; key = meta_counter_summary_name;
+                     value = Some (string_of_int !meta_ctr) } ])
+
+let new_meta () =
+  incr meta_ctr;
+  if Proof_recorder.writing () then
+    Proof_recorder.write_counters [("meta", 1)];
+  !meta_ctr
 
 (* The list of non-instantiated existential declarations (order is important) *)
 

@@ -32,8 +32,6 @@ rocq compile specific options:\
 \n  -vok                   process the file by loading .vos instead of .vo files for\
 \n                         dependencies, and produce an empty .vok file on success\
 \n  -proof-record          write a per-proof record of reads and writes beside each .vo\
-\n  -proof-record-tables   with -proof-record, also record a digest of every hint\
-\n                         database and typeclass table at each proof's start\
 \n"
 }
 

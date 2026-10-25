@@ -258,9 +258,42 @@ module Recorded = struct
   let mind tbl = once tbl Mindmap_env.mem Mindmap_env.add MutInd.to_string
   let mpath tbl = once tbl MPmap.mem MPmap.add ModPath.to_string
 
-  let of_value what = function
+  (* The library of a kernel name, and that library's .vo digest. A constant
+     of a REQUIRED library is recorded by the digest and not by its body: the
+     digest pins every object the library holds, and one body can be a
+     megabyte of term (a memory image a registration file requires). Only the
+     objects of the library being compiled are digested. *)
+  let lib_digests = ref DirPath.Map.empty
+
+  let rec root_lib = function
+    | MPfile dp -> Some dp
+    | MPbound _ -> None
+    | MPdot (mp, _) -> root_lib mp
+
+  let library_of mp =
+    match root_lib mp with
     | None -> None
-    | Some v -> Some (Proof_recorder.digest_cached ~what v)
+    | Some dp ->
+      match DirPath.Map.find_opt dp !lib_digests with
+      | Some d -> d
+      | None ->
+        let d = Proof_recorder.library_digest (DirPath.to_string dp) in
+        lib_digests := DirPath.Map.add dp d !lib_digests;
+        d
+
+  let of_value what mp = function
+    | None -> None
+    | Some v ->
+      match library_of mp with
+      | Some d -> Some ("library " ^ d)
+      | None -> Some (Proof_recorder.digest_cached ~what v)
+
+  (* The rewrite rules of a constant are not part of the library that
+     declares it: the file being compiled can add a rule to a symbol of a
+     required library. They are digested. *)
+  let of_rules = function
+    | None -> None
+    | Some v -> Some (Proof_recorder.digest_cached ~what:"rewrite_rules" v)
 end
 
 let lookup_constant_opt kn env =
@@ -270,7 +303,7 @@ let lookup_constant_opt kn env =
   in
   if Proof_recorder.active () then
     Recorded.constant Recorded.cst_body kn ~channel:"constant"
-      (fun () -> Recorded.of_value "constant" res);
+      (fun () -> Recorded.of_value "constant" (Constant.modpath kn) res);
   res
 
 let lookup_constant_key kn env =
@@ -278,7 +311,7 @@ let lookup_constant_key kn env =
   | Some ((cb, _, _) as v) ->
     if Proof_recorder.active () then
       Recorded.constant Recorded.cst_body kn ~channel:"constant"
-        (fun () -> Recorded.of_value "constant" (Some cb));
+        (fun () -> Recorded.of_value "constant" (Constant.modpath kn) (Some cb));
     v
   | None ->
     if Proof_recorder.active () then
@@ -308,7 +341,7 @@ let add_rewrite_rules l env =
 let lookup_rewrite_rules cst env =
   let res = Cmap_env.find_opt cst env.symb_pats in
   Recorded.constant Recorded.cst_rules cst ~channel:"rewrite_rules"
-    (fun () -> Recorded.of_value "rewrite_rules" res);
+    (fun () -> Recorded.of_rules res);
   (match res with Some rs -> rs | None -> raise Not_found)
 
 (* Mutual Inductives *)
@@ -316,7 +349,7 @@ let lookup_mind_key kn env =
   match Mindmap_env.find_opt kn env.env_inductives with
   | Some ((mb, _, _) as v) ->
     Recorded.mind Recorded.minds kn ~channel:"inductive"
-      (fun () -> Recorded.of_value "inductive" (Some mb));
+      (fun () -> Recorded.of_value "inductive" (MutInd.modpath kn) (Some mb));
     v
   | None ->
     Recorded.mind Recorded.minds kn ~channel:"inductive" (fun () -> None);
@@ -957,13 +990,13 @@ let shallow_add_module mp mb env =
 let lookup_module mp env =
   let res = ModPath.Map.find_opt mp env.env_modules in
   Recorded.mpath Recorded.modules mp ~channel:"module"
-    (fun () -> Recorded.of_value "module" res);
+    (fun () -> Recorded.of_value "module" mp res);
   (match res with Some m -> m | None -> raise Not_found)
 
 let lookup_modtype mp env =
   let res = ModPath.Map.find_opt mp env.env_modtypes in
   Recorded.mpath Recorded.modtypes mp ~channel:"modtype"
-    (fun () -> Recorded.of_value "modtype" res);
+    (fun () -> Recorded.of_value "modtype" mp res);
   (match res with Some m -> m | None -> raise Not_found)
 
 (*s Judgments. *)

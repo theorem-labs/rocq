@@ -185,7 +185,13 @@ let scope_item_eq s1 s2 = match s1, s2 with
 
 let scope_stack = ref []
 
-let current_scopes () = !scope_stack
+let current_scopes () =
+  let scopes = !scope_stack in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"scope_stack"
+      ~key:(fun () -> "scopes")
+      ~value:(fun () -> Some (Proof_recorder.digest ~what:"scope_stack" scopes));
+  scopes
 
 let scope_is_open_in_scopes sc l =
   List.exists (function OpenScopeItem sc' -> String.equal sc sc' | _ -> false) l
@@ -204,7 +210,7 @@ let push_scope sc scopes = OpenScopeItem sc :: scopes
 let push_scopes = List.fold_right push_scope
 
 let make_current_scopes (tmp_scopes,scopes) =
-  push_scopes tmp_scopes (push_scopes scopes !scope_stack)
+  push_scopes tmp_scopes (push_scopes scopes (current_scopes ()))
 
 (**********************************************************************)
 (* Delimiters *)
@@ -253,8 +259,18 @@ let remove_delimiters scope =
          CErrors.anomaly ~info (str "A delimiter for scope [scope] should exist")
 
 let find_delimiters_scope ?loc key =
-  try String.Map.find key !delimiters_map
+  try
+    let scope = String.Map.find key !delimiters_map in
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
+        ~key:(fun () -> key)
+        ~value:(fun () -> Some (Proof_recorder.digest ~what:"delimiters_scope" scope));
+    scope
   with Not_found ->
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
+        ~key:(fun () -> key)
+        ~value:(fun () -> None);
     user_err ?loc
       (str "Unknown scope delimiting key " ++ str key ++ str ".")
 
@@ -530,20 +546,39 @@ let find_prim_token check_allowed ?loc p sc =
   check_allowed pat;
   pat
 
+let notation_query_key (entry, text) scopes =
+  let encode_string s = string_of_int (String.length s) ^ ":" ^ s in
+  let encode_entry = function
+    | InConstrEntry -> "C"
+    | InCustomEntry name -> "U" ^ encode_string (CustomName.to_string name)
+  in
+  let encode_notation (entry, text) =
+    encode_entry entry ^ encode_string text
+  in
+  let encode_scope_item = function
+    | OpenScopeItem scope -> "O" ^ encode_string scope
+    | LonelyNotationItem notation -> "L" ^ encode_notation notation
+  in
+  "N" ^ encode_notation (entry, text)
+  ^ String.concat "" (List.map encode_scope_item scopes)
+
 let interp_prim_token_gen ?loc g p local_scopes =
   let scopes = make_current_scopes local_scopes in
   let p_as_ntn = try notation_of_prim_token p with Not_found -> InConstrEntry,"" in
   (* BET-84 census row 11: each number or string notation the proof reads,
      with the scopes it was read in. *)
-  let key () =
-    String.concat "|" (snd p_as_ntn :: List.filter_map
-                         (function OpenScopeItem s -> Some s | LonelyNotationItem _ -> None) scopes) in
   try
     let pat, sc = find_interpretation p_as_ntn (find_prim_token ?loc g p) scopes in
-    Proof_recorder.read ~row:"11" ~channel:"prim_token" ~key
-      ~value:(fun () -> Some (Proof_recorder.digest ~what:"prim_token" (pat, sc)));
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"prim_token"
+        ~key:(fun () -> notation_query_key p_as_ntn scopes)
+        ~value:(fun () -> Some (Proof_recorder.digest ~what:"prim_token" (pat, sc)));
     pat, sc
   with Not_found as exn ->
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"prim_token"
+        ~key:(fun () -> notation_query_key p_as_ntn scopes)
+        ~value:(fun () -> None);
     let _, info = Exninfo.capture exn in
     user_err ?loc ~info
     ((match p with
@@ -616,9 +651,7 @@ let () = CErrors.register_handler @@ function
    different scopes. *)
 let record_notation ntn scopes v =
   Proof_recorder.read ~row:"11" ~channel:"notation"
-    ~key:(fun () -> String.concat "|"
-             (snd ntn :: List.filter_map
-                (function OpenScopeItem s -> Some s | LonelyNotationItem _ -> None) scopes))
+    ~key:(fun () -> notation_query_key ntn scopes)
     ~value:(fun () -> match v with
         | None -> None
         | Some v -> Some (Proof_recorder.digest ~what:"notation" v))
@@ -627,11 +660,12 @@ let interp_notation ?loc ntn local_scopes =
   let scopes = make_current_scopes local_scopes in
   match find_interpretation ntn (find_notation ntn) scopes with
   | (n, sc) ->
-    record_notation ntn scopes (Some (n.not_interp, sc));
+    if Proof_recorder.active () then
+      record_notation ntn scopes (Some (n.not_interp, n.not_user_warns, sc));
     Option.iter (fun d -> warn_notation ?loc ntn d) n.not_user_warns;
     n.not_interp, (n.not_location, sc)
   | exception (Not_found as exn) ->
-    record_notation ntn scopes None;
+    if Proof_recorder.active () then record_notation ntn scopes None;
     let _, info = Exninfo.capture exn in
     let info = Option.cata (Loc.add_loc info) info loc in
     Exninfo.iraise (UnknownInterp (ntn,scopes), info)
@@ -1156,13 +1190,25 @@ let find_arguments_scope env r =
   try
     let (scl,cls,stamp) = GlobRefMap.find env r !arguments_scope in
     let cur_stamp = !scope_class_map in
-    if stamp == cur_stamp then scl
-    else
-      (* Recent changes in the Bind Scope base, we re-compute the scopes *)
-      let scl' = update_scopes cls scl in
-      arguments_scope := GlobRefMap.add env r (scl',cls,cur_stamp) !arguments_scope;
-      scl'
-  with Not_found -> []
+    let scopes =
+      if stamp == cur_stamp then scl
+      else
+        (* Recent changes in the Bind Scope base, we re-compute the scopes *)
+        let scl' = update_scopes cls scl in
+        arguments_scope := GlobRefMap.add env r (scl',cls,cur_stamp) !arguments_scope;
+        scl'
+    in
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"arguments_scope"
+        ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
+        ~value:(fun () -> Some (Proof_recorder.digest ~what:"arguments_scope" scopes));
+    scopes
+  with Not_found ->
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"arguments_scope"
+        ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
+        ~value:(fun () -> None);
+    []
 
 let declare_ref_arguments_scope ref =
   let env = Global.env () in (* FIXME? *)

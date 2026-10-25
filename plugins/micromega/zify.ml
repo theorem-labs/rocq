@@ -396,6 +396,11 @@ let table_cache = ref ConstrMap.empty
 let saturate_cache = ref ConstrMap.empty
 let specs_cache = ref ConstrMap.empty
 
+let record_cache name table =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"zify_table" ~key:(fun () -> name)
+      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"zify_table" table))
+
 (** Each type-class gives rise to a different table.
     They only differ on how projections are extracted.  *)
 
@@ -766,9 +771,15 @@ module UnOpSpec = MakeTable (EUnopSpec)
 module BinOpSpec = MakeTable (EBinOpSpec)
 
 let init_cache () =
-  table_cache := !table;
-  saturate_cache := !saturate;
-  specs_cache := !specs
+  let table = !table in
+  let saturate = !saturate in
+  let specs = !specs in
+  record_cache "zify_table" table;
+  record_cache "zify_saturate" saturate;
+  record_cache "zify_specs" specs;
+  table_cache := table;
+  saturate_cache := saturate;
+  specs_cache := specs
 
 open EInjT
 
