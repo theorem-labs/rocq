@@ -23,28 +23,41 @@ let absent = Proof_replay.Value None
 
 (* A kernel name the recorder printed, read back. [Nametab.global_of_path]
    finds what that absolute path names now; the printed name must come out
-   the same, so a path that names something else is not taken for it. *)
+   the same, so a path that names something else is not taken for it.
+
+   [Absent] is a name nothing is bound to now. A lookup of it finds
+   nothing, which is a value the record can hold ([null]), so a proof that
+   read a constant that this compile deleted still replays, where
+   [Unknown] would have refused it. *)
+type 'a parsed = Found of 'a | Absent | Unreadable
+
 let global_of_string s =
   match Nametab.global_of_path (Libnames.path_of_string s) with
-  | g -> Some g
-  | exception _ -> None
+  | g -> Found g
+  | exception Not_found -> Absent
+  | exception _ -> Unreadable
 
 let constant_of_string s =
   match global_of_string s with
-  | Some (GlobRef.ConstRef c) when String.equal (Constant.to_string c) s -> Some c
-  | _ -> None
+  | Found (GlobRef.ConstRef c) when String.equal (Constant.to_string c) s -> Found c
+  | Found _ -> Unreadable
+  | Absent -> Absent
+  | Unreadable -> Unreadable
 
 let mind_of_string s =
   match global_of_string s with
-  | Some (GlobRef.IndRef (mind, _)) when String.equal (MutInd.to_string mind) s -> Some mind
-  | Some (GlobRef.ConstructRef ((mind, _), _)) when String.equal (MutInd.to_string mind) s -> Some mind
-  | _ -> None
+  | Found (GlobRef.IndRef (mind, _)) when String.equal (MutInd.to_string mind) s -> Found mind
+  | Found (GlobRef.ConstructRef ((mind, _), _)) when String.equal (MutInd.to_string mind) s -> Found mind
+  | Found _ -> Unreadable
+  | Absent -> Absent
+  | Unreadable -> Unreadable
 
 let modpath_of_string s =
   match Nametab.locate_module (Libnames.qualid_of_string s) with
-  | mp when String.equal (ModPath.to_string mp) s -> Some mp
-  | _ -> None
-  | exception _ -> None
+  | mp when String.equal (ModPath.to_string mp) s -> Found mp
+  | _ -> Unreadable
+  | exception Not_found -> Absent
+  | exception _ -> Unreadable
 
 (* Census row 1: the globals the proof looked up. The value comes from the
    SAME function the recorder called at the lookup ([Environ.recorded_*]),
@@ -53,8 +66,12 @@ let modpath_of_string s =
 let row1 () =
   let of_key parse recorded key =
     match parse key with
-    | None -> Proof_replay.Unknown
-    | Some k -> (match recorded k (Global.env ()) with v -> Proof_replay.Value v | exception _ -> Proof_replay.Unknown)
+    | Unreadable -> Proof_replay.Unknown
+    | Absent -> Proof_replay.Value None
+    | Found k ->
+      (match recorded k (Global.env ()) with
+       | v -> Proof_replay.Value v
+       | exception _ -> Proof_replay.Unknown)
   in
   let c = of_key constant_of_string and m = of_key mind_of_string and p = of_key modpath_of_string in
   Proof_replay.register_evaluator "constant" (c Environ.recorded_constant);
@@ -70,8 +87,9 @@ let row1 () =
 let tables () =
   Proof_replay.register_evaluator "reduction_behaviour" (fun key ->
       match constant_of_string key with
-      | None -> Proof_replay.Unknown
-      | Some c -> digest "reduction_behaviour" (Reductionops.ReductionBehaviour.get c));
+      | Unreadable -> Proof_replay.Unknown
+      | Absent -> Proof_replay.Value None
+      | Found c -> digest "reduction_behaviour" (Reductionops.ReductionBehaviour.get c));
   Proof_replay.register_evaluator "hint_db" (fun key ->
       match Hints.searchtable_map key with
       | db -> digest "hint_db" db

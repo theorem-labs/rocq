@@ -109,6 +109,11 @@ let load_vernac_core ~echo ~check ~state ?source file =
      AST. The replay path below runs buffered sentences through it too, so
      a proof that is not replayed is interpreted exactly as stock. *)
   let interp_one ~tstart state ast =
+    (* BET-84 P3: the charge for the proofs replay did not run is part of
+       the file's clock, so a sentence that would carry the clock past the
+       budget is stopped inside it, as stock's own timeout stops it, not
+       only at the next sentence boundary. *)
+    let interp_one () =
     try_finally
       (fun () ->
          NewProfile.profile "command"
@@ -171,6 +176,13 @@ let load_vernac_core ~echo ~check ~state ?source file =
             due to the way it prints. *)
          emit_time state ast tstart tend)
       ()
+    in
+    match Proof_replay.remaining_budget () with
+    | None -> interp_one ()
+    | Some left ->
+      (match Control.timeout left interp_one () with
+       | Ok v -> v
+       | Error _ -> raise Proof_replay.Budget_exhausted)
   in
 
   let parse_next state =

@@ -1,12 +1,13 @@
 {
   "doc": "an edited helper gains an axiom: Print Assumptions of its later user must agree with stock",
+  "note": "The later lemma's term is the helper's name, so replaying it is correct and the fixture's real assertions are the ones that check it: the two compiles print the same Print Assumptions (compare_stdout), which names bad, and write the same .vo. helper itself misses on the key, because its own proof changed. Rocq's constant digest does not hold an opaque constant's proof, so a user that only names it is not disturbed by a change inside it; a user that unfolds a transparent constant reads its body and misses (the const_changed fixture).",
   "files": ["A.v"],
   "compare_stdout": ["A.v"],
   "stdout_contains": {"A.v": ["bad"]},
   "summaries": {
-    "A.v": {"proofs": 2, "hits": 0,
-              "misses": {"key": 1, "read": 1, "ineligible": 0, "missing_record": 0},
+    "A.v": {"proofs": 2, "hits": 1,
+              "misses": {"key": 1, "read": 0, "ineligible": 0, "missing_record": 0},
               "refused": null, "killed": false,
-              "outcomes": [["PR.A.helper", "key"], ["PR.A.later", "read"]]}
+              "outcomes": [["PR.A.helper", "key"], ["PR.A.later", "hit"]]}
   }
 }
