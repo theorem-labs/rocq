@@ -54,6 +54,7 @@ import shutil
 import subprocess
 import sys
 import time
+import pathlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -316,6 +317,38 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 # ------------------------------------------------------------------ the checks
 
 
+#: The only fixtures whose object difference may be excused, named one by
+#: one. GRADE retired byte identity as a correctness gate on 2026-10-26, so
+#: a Marshal sharing difference is a reuse-rate item; everything else is a
+#: failure, and an unlisted fixture is never excused whatever its
+#: `expect.json` says.
+EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed")
+
+
+def exemption_allowed(fixture, differing_segments, library_values_equal):
+    """May this object difference be excused? (allowed, reason).
+
+    Every condition must hold: the fixture is on the list above, the ONLY
+    segment that differs is `library`, and that segment's decoded values are
+    equal, so the difference is Marshal sharing alone. A differing value, a
+    difference in any other segment, or an unlisted fixture fails.
+
+    This is a pure function so the conditions can be tested directly, with
+    no `.vo` to forge: see test_vo_exempt.py. The first version keyed on the
+    file name alone and would have excused a value difference in another
+    segment (XP3's P1 at 7cb123ab61).
+    """
+    if fixture not in EXEMPTIBLE_FIXTURES:
+        return False, "fixture %s is not on the exemptible list" % fixture
+    if sorted(differing_segments) != ["library"]:
+        return False, ("the differing segments are %s, and only a library-only difference may be excused"
+                       % (sorted(differing_segments) or ["none"]))
+    if not library_values_equal:
+        return False, "the library segment's VALUES differ, which is never excusable"
+    return True, "library values equal; Marshal sharing alone"
+
+
+
 class Fixture:
     def __init__(self, spec, rocq, out, segcmp):
         self.spec = spec
@@ -508,8 +541,7 @@ class Fixture:
         for src in both:
             va, vb = vo_src(a, src), vo_src(b, src)
             if va.read_bytes() != vb.read_bytes():
-                self.report_vo_diff(src, "bytes (the files are not identical; "
-                                         "the segment compare below normalises sharing)")
+                self.report_vo_diff(src, "bytes (the files are not identical)", trees=(a, b))
         if self.segcmp:
             listing = [src[:-2] + ".vo" for src in both]
             diffs, err = compare_trees_segcmp(self.segcmp, listing, a, b, self.out)
@@ -519,7 +551,7 @@ class Fixture:
                 for src in both:
                     key = src[:-2] + ".vo"
                     if key in diffs:
-                        self.report_vo_diff(src, diffs[key])
+                        self.report_vo_diff(src, diffs[key], trees=(a, b))
             self.notes.append("objects compared by bytes, then with segcmp_norm --every-segment")
         else:
             for src in both:
@@ -529,17 +561,46 @@ class Fixture:
                     self.fail("%s: %s" % (src, exc))
                     continue
                 if bad:
-                    self.report_vo_diff(src, ",".join(bad))
+                    self.report_vo_diff(src, ",".join(bad), trees=(a, b))
             self.notes.append("objects compared by bytes, then in Python (segment bytes); "
                               "a vmlibrary-only difference cannot be decided here")
         return both
 
-    def report_vo_diff(self, src, what):
-        exempt = self.spec["vo_exempt"].get(src)
-        if exempt:
-            self.notes.append("%s: .vo differs (%s), exempt: %s" % (src, what, exempt))
-        else:
+    def report_vo_diff(self, src, what, trees=None):
+        """A `.vo` difference, and the one case a fixture may be excused.
+
+        The conditions are in `exemption_allowed`; this gathers the facts it
+        judges on. A missing object and a coqchk refusal are fatal on their
+        own paths and never reach here.
+        """
+        if not self.spec["vo_exempt"].get(src) or trees is None:
             self.fail("%s: the replay .vo differs from stock in %s" % (src, what))
+            return
+        a, b = trees
+        try:
+            differing = compare_vo_python(vo_src(a, src), vo_src(b, src))
+        except ValueError as exc:
+            self.fail("%s: %s" % (src, exc))
+            return
+        allowed, why = exemption_allowed(self.spec["name"], differing, self.library_values_equal(a, b, src))
+        if allowed:
+            self.notes.append("%s: .vo differs (%s), exempt: %s [%s]"
+                              % (src, what, self.spec["vo_exempt"][src], why))
+        else:
+            self.fail("%s: the replay .vo differs from stock and is NOT excusable: %s" % (src, why))
+
+    def library_values_equal(self, a, b, src):
+        """Does the library segment hold the same VALUE on both sides?
+
+        Only `vodiff.py` can tell a value difference from a sharing one: it
+        decodes the Marshal stream and resolves its shared pointers.
+        """
+        tool = pathlib.Path(__file__).resolve().parent / "vodiff.py"
+        p = subprocess.run([sys.executable, str(tool), str(vo_src(a, src)), str(vo_src(b, src)), "library"],
+                           capture_output=True, text=True)
+        lines = [l for l in p.stdout.splitlines() if "value differences" in l]
+        return bool(lines) and lines[-1].startswith("0 value differences")
+
 
     def check_coqchk(self, tree, compiled):
         if not self.spec["coqchk"] or not compiled:
