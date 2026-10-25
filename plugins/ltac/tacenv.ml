@@ -59,17 +59,26 @@ let record channel k v =
           | None -> None
           | Some v -> Some (Proof_recorder.digest ~what:channel v))
 
+(* The lookup itself must build no option when the recorder is off: these run
+   at every call of a tactic notation. [record] is reached with an already
+   allocated [Some] only under [active]. *)
 let interp_alias key =
-  let res = KerName.Map.find_opt key !alias_map in
-  record "tactic_alias" key res;
-  match res with
-  | Some v -> v
-  | None -> CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
+  match KerName.Map.find key !alias_map with
+  | v ->
+    if Proof_recorder.active () then record "tactic_alias" key (Some v);
+    v
+  | exception Not_found ->
+    record "tactic_alias" key None;
+    CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
 
 let check_alias key =
-  let res = KerName.Map.find_opt key !alias_map in
-  record "tactic_alias" key res;
-  res <> None
+  match KerName.Map.find key !alias_map with
+  | v ->
+    if Proof_recorder.active () then record "tactic_alias" key (Some v);
+    true
+  | exception Not_found ->
+    record "tactic_alias" key None;
+    false
 
 (** ML tactic extensions (TacML) *)
 
@@ -132,14 +141,22 @@ let mactab =
 let ltac_entries () = !mactab
 
 let interp_ltac r =
-  let res = KerName.Map.find_opt r !mactab in
-  record "tactic_definition" r res;
-  (match res with Some e -> e | None -> raise Not_found).tac_body
+  match KerName.Map.find r !mactab with
+  | e ->
+    if Proof_recorder.active () then record "tactic_definition" r (Some e);
+    e.tac_body
+  | exception Not_found ->
+    record "tactic_definition" r None;
+    raise Not_found
 
 let is_ltac_for_ml_tactic r =
-  let res = KerName.Map.find_opt r !mactab in
-  record "tactic_definition" r res;
-  (match res with Some e -> e | None -> raise Not_found).tac_for_ml
+  match KerName.Map.find r !mactab with
+  | e ->
+    if Proof_recorder.active () then record "tactic_definition" r (Some e);
+    e.tac_for_ml
+  | exception Not_found ->
+    record "tactic_definition" r None;
+    raise Not_found
 
 let add ~depr kn b t =
   let entry = {

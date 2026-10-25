@@ -339,8 +339,9 @@ let find_base bas =
 (* BET-84 census row 15: each rewrite base the proof reads, with its digest. *)
 let find_rewrites bas =
   let db = find_base bas in
-  Proof_recorder.read ~row:"15" ~channel:"autorewrite" ~key:(fun () -> bas)
-    ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"autorewrite" db));
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"autorewrite" ~key:(fun () -> bas)
+      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"autorewrite" db));
   let sort r1 r2 = Int.compare (KerName.Map.find r2.rew_id db.rdb_order) (KerName.Map.find r1.rew_id db.rdb_order) in
   List.sort sort (HintDN.find_all db.rdb_hintdn)
 

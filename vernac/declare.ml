@@ -1835,7 +1835,16 @@ let initialize_named_context_for_proof () =
       Environ.push_named_context_val d signv) sign Environ.empty_named_context_val
 
 (* BET-84: the record's entry for a proof opens where the proof does and
-   closes where it is saved, aborted or admitted. *)
+   closes where it is saved, aborted or admitted.
+
+   This runs at every proof's start, with the recorder on or off, so it must
+   build as little as it can. [position] is cached on the [Lib] prefix and
+   costs nothing after the first proof of a module; [statement] is a thunk
+   that [open_proof] calls only when it keeps an entry. The name stays eager:
+   [open_proof] takes it as a string, and no exported test says the recorder
+   is enabled while no proof is open ([active] and [writing] both want one),
+   so the one path [Lib.make_path] builds per proof cannot be deferred
+   without a new predicate in [Proof_recorder]. *)
 let record_open_proof name ~statement =
   Proof_recorder.open_proof
     ~name:(Libnames.string_of_path (Lib.make_path name))
@@ -2304,10 +2313,13 @@ let record_close ~closer ~kernel_check declare =
   res
 
 let record_close_with_info ~closer ~kernel_check ~pinfo declare =
+  (* [writing] is exactly the state in which [set_name] does something (a
+     proof is open, suspended or not), so the path and the string are built
+     at a [Qed] only with the recorder on. *)
   let () = match pinfo.Proof_info.cinfo with
-    | { CInfo.name; _ } :: _ ->
+    | { CInfo.name; _ } :: _ when Proof_recorder.writing () ->
       Proof_recorder.set_name (Libnames.string_of_path (Lib.make_path name))
-    | [] -> ()
+    | _ -> ()
   in
   record_close ~closer ~kernel_check declare
 

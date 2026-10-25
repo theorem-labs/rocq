@@ -89,15 +89,25 @@ let record channel k v =
           | None -> None
           | Some v -> Some (Proof_recorder.digest ~what:channel v))
 
+(* Ltac2 interpretation resolves a name at every call, so the lookup itself
+   must build no option when the recorder is off: [record] is reached with an
+   allocated [Some] only under [active]. *)
 let find channel tbl kn =
-  let res = KerName.Map.find_opt kn tbl in
-  record channel kn res;
-  match res with Some v -> v | None -> raise Not_found
+  match KerName.Map.find kn tbl with
+  | v ->
+    if Proof_recorder.active () then record channel kn (Some v);
+    v
+  | exception Not_found ->
+    record channel kn None;
+    raise Not_found
 
 let interp_global kn = find "ltac2_global" ltac_state.contents.ltac_tactics kn
 
+(* Its one caller tests [active] first; the test is repeated here so that no
+   caller can make the lookup allocate with the recorder off. *)
 let record_global kn =
-  record "ltac2_global" kn (KerName.Map.find_opt kn ltac_state.contents.ltac_tactics)
+  if Proof_recorder.active () then
+    record "ltac2_global" kn (KerName.Map.find_opt kn ltac_state.contents.ltac_tactics)
 
 let set_compiled_global kn info v =
   assert (not (interp_global kn).gdata_mutable);
