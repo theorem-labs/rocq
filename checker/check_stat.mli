@@ -11,7 +11,8 @@ val memory_stat : bool ref
 
 val start_summary : bool -> unit
 val record_constant : Names.Constant.t -> Declarations.constant_body -> unit
-val record_inductive : Names.MutInd.t -> Declarations.mutual_inductive_body -> unit
+val record_inductive :
+  indices_matter:bool -> Names.MutInd.t -> Declarations.mutual_inductive_body -> unit
 val record_admitted : string -> unit
 
 val stats : Environ.env -> Names.Constant.t list option -> unit
