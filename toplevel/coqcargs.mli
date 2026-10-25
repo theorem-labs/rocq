@@ -43,6 +43,20 @@ type t =
       every hint database and typeclass table, not only of the ones the
       proof searches. Implies [-proof-record]. *)
 
+  ; proof_replay : Proof_replay.source option
+  (** [-proof-replay FILE] or [-proof-replay-dir DIR]: the registration's
+      record this compile replays from. *)
+  ; proof_replay_ratio : float option
+  (** [-proof-replay-ratio R]: the grade-to-registration ratio of per-file
+      wall time, at the top of its measured spread. Required with a
+      source, refused without one: there is no default charge. *)
+  ; proof_replay_budget : float option
+  (** [-proof-replay-budget SECONDS]: the per-file wall budget the charged
+      clock runs against. Without it, nothing stops the file on time. *)
+  ; proof_replay_peak_limit_kb : int option
+  (** [-proof-replay-peak-limit-kb KB]: a file whose registered peak
+      resident set was above this compiles without replay. *)
+
   ; output_context : bool
   }
 

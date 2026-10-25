@@ -1,0 +1,12 @@
+{
+  "doc": "an edited helper gains an axiom: Print Assumptions of its later user must agree with stock",
+  "files": ["A.v"],
+  "compare_stdout": ["A.v"],
+  "stdout_contains": {"A.v": ["bad"]},
+  "summaries": {
+    "A.v": {"proofs": 2, "hits": 0,
+              "misses": {"key": 1, "read": 1, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.helper", "key"], ["PR.A.later", "read"]]}
+  }
+}

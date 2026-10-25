@@ -38,6 +38,7 @@ type proof_state = {
   p_counter_order : string Queue.t;
   p_wall0 : float;
   p_cpu0 : float;
+  mutable p_span_start : int option;  (** first byte of the statement's sentence *)
   mutable p_depth : int;  (** 0 for the outermost proof; >0 inside a nested one *)
 }
 
@@ -50,7 +51,7 @@ type file_state = {
   mutable f_count : int;
   mutable f_proof : proof_state option;
   mutable f_suspended : int;  (** >0 inside [without_recording] *)
-  mutable f_pending : (unit -> string) option;  (** the sentence being run *)
+  mutable f_pending : ((unit -> string) * (int * int) option) option;  (** the sentence being run *)
 }
 
 (* The one bit every choke point tests. It is false unless a proof is open
@@ -114,6 +115,11 @@ let tables : (unit -> R.read list) Queue.t = Queue.create ()
 
 let register_tables f = Queue.add f tables
 
+(* The same digests as values. The replay side evaluates them at the proof
+   it is about to replay, so the recorded value and the value now are made
+   the same way. *)
+let table_reads () = List.rev (Queue.fold (fun acc f -> List.rev_append (f ()) acc) [] tables)
+
 module Addr = Hashtbl.Make (struct
     type t = Obj.t
     let equal = ( == )
@@ -156,10 +162,8 @@ let open_proof ~name ~statement ~position =
         Queue.add R.{ reason = "nested_proof"; detail = name } p.p_ineligible
       end
     | None ->
-      let start_tables =
-        if not st.f_header.R.tables_at_start then []
-        else Queue.fold (fun acc f -> List.rev_append (f ()) acc) [] tables |> List.rev
-      in
+      let span_start = match st.f_pending with Some (_, Some (bp, _)) -> Some bp | _ -> None in
+      let start_tables = if not st.f_header.R.tables_at_start then [] else table_reads () in
       incr gen;
       st.f_proof <- Some {
           p_name = name;
@@ -181,6 +185,7 @@ let open_proof ~name ~statement ~position =
           p_counter_order = Queue.create ();
           p_wall0 = Unix.gettimeofday ();
           p_cpu0 = cpu_time ();
+          p_span_start = span_start;
           p_depth = 0;
         };
       set_recording st
@@ -190,14 +195,17 @@ let open_proof ~name ~statement ~position =
 let take_pending st p =
   match st.f_pending with
   | None -> ()
-  | Some d -> st.f_pending <- None; Queue.add (d ()) p.p_sentences
+  | Some (d, _) -> st.f_pending <- None; Queue.add (d ()) p.p_sentences
 
-let sentence digest run =
+(* The span of the sentence being run, for the closer's end byte. *)
+let pending_span st = match st.f_pending with Some (_, span) -> span | None -> None
+
+let sentence ?span digest run =
   match !state with
   | None -> run ()
   | Some st ->
     let outer = st.f_pending in
-    st.f_pending <- Some digest;
+    st.f_pending <- Some (digest, span);
     let finish () =
       (match st.f_proof with Some p when p.p_depth = 0 -> take_pending st p | Some _ | None -> ());
       st.f_pending <- outer
@@ -207,7 +215,7 @@ let sentence digest run =
      | exception e -> let bt = Printexc.get_raw_backtrace () in
        finish (); Printexc.raise_with_backtrace e bt)
 
-let close_proof ~closer ~kernel_check =
+let close_proof ~closer ~kernel_check ~replay =
   match !state with
   | None -> ()
   | Some st ->
@@ -215,6 +223,10 @@ let close_proof ~closer ~kernel_check =
     | None -> ()
     | Some p when p.p_depth > 0 -> p.p_depth <- p.p_depth - 1
     | Some p ->
+      let span = match p.p_span_start, pending_span st with
+        | Some bp, Some (_, ep) when ep > bp -> Some (bp, ep)
+        | _ -> None
+      in
       take_pending st p;
       let list q = List.of_seq (Queue.to_seq q) in
       let proof = R.{
@@ -238,6 +250,8 @@ let close_proof ~closer ~kernel_check =
           kernel_check;
           wall_s = Unix.gettimeofday () -. p.p_wall0;
           cpu_s = cpu_time () -. p.p_cpu0;
+          span;
+          replay;
         }
       in
       R.output_proof st.f_buf proof;

@@ -54,7 +54,13 @@ let proof : R.proof = R.{
   kernel_check = false;
   wall_s = 1.5;
   cpu_s = 0.1;
+  span = Some (120, 480);
+  replay = Some "AQIDBA==";
 }
+
+(* The same proof with neither of the two v2 fields: an ineligible proof
+   stores no term, and a proof the STM closed late has no source span. *)
+let proof_without_v2 : R.proof = { proof with span = None; replay = None }
 
 let trailer : R.trailer = R.{ file_wall_s = 12.25; file_cpu_s = 11.; peak_rss_kb = 123456; proof_count = 1 }
 
@@ -115,7 +121,14 @@ let toolchain_key_fields =
      && k.warnings = toolchain.warnings
      && k.warnings <> k'.warnings
      && k.plugins = k'.plugins && k.load_order = k'.load_order && k.safe_deps = k'.safe_deps
-     && k.plugins <> k''.plugins && k.load_order = k''.load_order)
+     && k.plugins <> k''.plugins && k.load_order = k''.load_order
+     (* The load order keys the libraries' names, not their digests: an edited
+        library leaves it unchanged; another library, or another order, moves it. *)
+     && (let two = [ ("A.B", "11111111111111111111111111111111"); ("A.C", "22222222222222222222222222222222") ] in
+         let key lo = (R.toolchain_key { toolchain with load_order = lo }).load_order in
+         key two = key [ ("A.B", "33333333333333333333333333333333"); ("A.C", "22222222222222222222222222222222") ]
+         && key two <> key [ ("A.B", "11111111111111111111111111111111"); ("A.D", "22222222222222222222222222222222") ]
+         && key two <> key (List.rev two)))
 
 (* Structural digest *)
 
@@ -176,7 +189,36 @@ let vo_path =
     (R.path_of_vo "dir/Foo.vo" = "dir/Foo.proof-record.jsonl"
      && R.path_of_vo "Foo.vo" = "Foo.proof-record.jsonl")
 
+(* Both v2 fields, as values (in [proof]) and as nulls. A line without
+   them is a v1 line, and the reader refuses it. *)
+let written_with p =
+  let buf = Buffer.create 1024 in
+  R.output_header buf header;
+  R.output_proof buf p;
+  R.output_trailer buf trailer;
+  Buffer.contents buf
+
+let without_suffix suffix text =
+  let n = String.length text and k = String.length suffix in
+  let i = ref 0 and found = ref (-1) in
+  while !i + k <= n do
+    if String.sub text !i k = suffix then found := !i;
+    incr i
+  done;
+  if !found < 0 then failwith ("suffix not written: " ^ suffix);
+  String.sub text 0 !found ^ String.sub text (!found + k) (n - !found - k)
+
+let v2_fields =
+  let with_values = written_with proof and with_nulls = written_with proof_without_v2 in
+  mk_bool_test "proof-record-v2-fields"
+    "span and replay round-trip, as values and as nulls, and a v1 proof line is refused"
+    (R.parse_string with_values = R.{ header; proofs = [ proof ]; trailer }
+     && R.parse_string with_nulls = R.{ header; proofs = [ proof_without_v2 ]; trailer }
+     && refused (without_suffix ",\"span\":null,\"replay\":null" with_nulls)
+     && refused (without_suffix ",\"replay\":null" with_nulls)
+     && R.format_version = 2)
+
 let tests =
-  [ roundtrip; bad_input; toolchain_key_fields; sharing; kinds; deep; locations; unhashable; vo_path ]
+  [ roundtrip; bad_input; toolchain_key_fields; v2_fields; sharing; kinds; deep; locations; unhashable; vo_path ]
 
 let _ = run_tests __FILE__ log_out_ch tests

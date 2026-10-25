@@ -1,0 +1,9 @@
+{
+  "doc": "a critical exception caught in canonical-structure resolution makes the proof catchall-ineligible",
+  "files": ["A.v"],
+  "trigger_optional": "no source-level trigger for `catchall` is known on this Rocq: the five instrumented handlers (pretyping/evarconv.ml:282,285,1022, pretyping/evarsolve.ml:1786, tactics/equality.ml:466) mark a proof only when the exception they catch is critical. Measured 2026-10-25 on speed-r1 with the recorder at d97df04b: under a 256 kB stack a 16384-deep canonical-structure chain overflows while the definition is interned, outside every handler, so the compile errors instead of marking the proof. Replace this fixture's trigger when one is found, or keep the skip as the record that the class is untested",
+  "records": {"A.v": {"PR.A.catchall_proof": {"ineligible": ["catchall"], "stores_no_term": true}}},
+  "summaries": {"A.v": {"proofs": 1, "hits": 0,
+    "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0}, "refused": null, "killed": false,
+    "outcomes": [["PR.A.catchall_proof", "ineligible"]]}}
+}

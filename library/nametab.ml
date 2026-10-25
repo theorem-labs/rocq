@@ -647,6 +647,45 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
     if Proof_recorder.active () then
       record ~channel:ch_exists ~id:v (fun () -> Libnames.string_of_path v) (fun () -> res);
     res
+
+  (* BET-84 P3: the same lookups, evaluated again from the key the record
+     holds. A qualid and a path print and parse back to themselves, so each
+     key names the lookup the proof made. A key that does not parse back
+     answers [Unknown], and the proof runs its tactics. *)
+  let () =
+    let value f =
+      match f () with
+      | v ->
+        (match Proof_record.digest_value v with
+         | d -> Proof_replay.Value (Some d)
+         | exception Proof_record.Unhashable _ -> Proof_replay.Unknown)
+      | exception Not_found -> Proof_replay.Value None
+    in
+    let qualid key =
+      let qid = Libnames.qualid_of_string key in
+      if String.equal (Libnames.string_of_qualid qid) key then Some qid else None
+    in
+    let path key =
+      let p = Libnames.path_of_string key in
+      if String.equal (Libnames.string_of_path p) key then Some p else None
+    in
+    let on parse f key = match parse key with
+      | Some k -> value (fun () -> f k)
+      | None -> Proof_replay.Unknown
+      | exception _ -> Proof_replay.Unknown
+    in
+    Proof_replay.register_evaluator ch_locate (on qualid (fun qid -> Tab.locate qid !the_tab));
+    Proof_replay.register_evaluator ch_locate_all (on qualid (fun qid -> Tab.locate_all qid !the_tab));
+    Proof_replay.register_evaluator ch_of_path (on path (fun p -> Tab.of_path p !the_tab));
+    Proof_replay.register_evaluator ch_exists (on path (fun p -> Tab.exists p !the_tab));
+    Proof_replay.register_evaluator ch_locate_upto (fun key ->
+        match String.rindex_opt key '#' with
+        | None -> Proof_replay.Unknown
+        | Some i ->
+          (match int_of_string_opt (String.sub key (i + 1) (String.length key - i - 1)) with
+           | None -> Proof_replay.Unknown
+           | Some limit ->
+             on qualid (fun qid -> Tab.locate_upto ~limit qid !the_tab) (String.sub key 0 i)))
 end
 
 module type WarnedTab = sig

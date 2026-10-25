@@ -1,0 +1,10 @@
+{
+  "doc": "a changed definition is before one proof in the same file: the earlier proof hits and the reader misses",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {"proofs": 2, "hits": 1,
+              "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.early", "hit"], ["PR.A.reads_changed", "read"]]}
+  }
+}

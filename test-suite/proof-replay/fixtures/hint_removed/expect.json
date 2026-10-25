@@ -1,0 +1,14 @@
+{
+  "doc": "a hint database entry is removed, the proof still closes: the searching proof misses",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 2,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.A.h1", "hit"], ["PR.A.h2", "hit"], ["PR.A.uses_db", "read"]]
+    }
+  }
+}

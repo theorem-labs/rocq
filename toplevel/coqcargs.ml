@@ -27,6 +27,13 @@ type t =
   ; proof_record : bool
   ; proof_record_tables : bool
 
+  (* BET-84 P3: replay a proof's stored term. A source with no ratio is a
+     usage error: the charged clock has no default. *)
+  ; proof_replay : Proof_replay.source option
+  ; proof_replay_ratio : float option
+  ; proof_replay_budget : float option
+  ; proof_replay_peak_limit_kb : int option
+
   ; output_context : bool
   }
 
@@ -42,6 +49,11 @@ let default =
 
   ; proof_record = false
   ; proof_record_tables = false
+
+  ; proof_replay = None
+  ; proof_replay_ratio = None
+  ; proof_replay_budget = None
+  ; proof_replay_peak_limit_kb = None
 
   ; output_context = false
   }
@@ -134,11 +146,30 @@ let parse arglist : t =
           let file = next () in
           { oval with glob_out = Some (GlobFile file) }
 
-        (* Per-proof record (BET-84) *)
+        (* Per-proof record (BET-84 P2) and replay (P3) *)
         |"-proof-record" ->
           { oval with proof_record = true }
         |"-proof-record-tables" ->
           { oval with proof_record = true; proof_record_tables = true }
+        |"-proof-replay" ->
+          { oval with proof_replay = Some (Proof_replay.Record_file (next ())) }
+        |"-proof-replay-dir" ->
+          { oval with proof_replay = Some (Proof_replay.Record_dir (next ())) }
+        |"-proof-replay-ratio" ->
+          let s = next () in
+          (match float_of_string_opt s with
+           | Some r when r > 0. && Float.is_finite r -> { oval with proof_replay_ratio = Some r }
+           | _ -> arg_error Pp.(str "-proof-replay-ratio expects a positive number, not " ++ str s))
+        |"-proof-replay-budget" ->
+          let s = next () in
+          (match float_of_string_opt s with
+           | Some b when b > 0. && Float.is_finite b -> { oval with proof_replay_budget = Some b }
+           | _ -> arg_error Pp.(str "-proof-replay-budget expects a positive number of seconds, not " ++ str s))
+        |"-proof-replay-peak-limit-kb" ->
+          let s = next () in
+          (match int_of_string_opt s with
+           | Some k when k > 0 -> { oval with proof_replay_peak_limit_kb = Some k }
+           | _ -> arg_error Pp.(str "-proof-replay-peak-limit-kb expects a positive integer, not " ++ str s))
 
         (* Rest *)
         | s ->
@@ -149,6 +180,17 @@ let parse arglist : t =
   in
   try
     let opts, extra = parse default in
+    (* BET-84 P3: replay charges each replayed proof r times its registered
+       wall seconds. There is no default r, because a charge that is too
+       small lets a file pass that stock's own timeout kills. *)
+    (match opts.proof_replay, opts.proof_replay_ratio with
+     | Some _, None ->
+       arg_error
+         Pp.(str "-proof-replay needs -proof-replay-ratio: the grade-to-registration ratio of per-file "
+             ++ str "wall time, at the top of its measured spread. Replay is refused without it.")
+     | None, Some _ ->
+       arg_error Pp.(str "-proof-replay-ratio was given without -proof-replay.")
+     | Some _, Some _ | None, None -> ());
     let args = List.fold_left add_compile opts extra in
     args
   with any -> fatal_error any

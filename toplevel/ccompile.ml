@@ -69,10 +69,36 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
             ~skip_qed_typecheck:!Opaques.skip_qed_typecheck
             ~tables_at_start:copts.proof_record_tables
       in
+      (* BET-84 P3: the registration's record for this library, and the
+         charged clock. A record that is missing or was made under a limit
+         this compile cannot match leaves the file to its tactics, which
+         the summary says. *)
+      let () = match copts.proof_replay with
+        | None -> ()
+        | Some source ->
+          Proof_replay_env.init ();
+          Proof_replay.configure ~source
+            ~ratio:(Option.get copts.proof_replay_ratio)
+            ~budget:copts.proof_replay_budget
+            ~peak_limit_kb:copts.proof_replay_peak_limit_kb;
+          Proof_replay.set_vo_path long_f_dot_out;
+          Proof_replay.start ~library:(Names.DirPath.to_string ldir)
+      in
       let wall_clock1 = Unix.gettimeofday () in
       let check = Stm.AsyncOpts.(stm_options.async_proofs_mode = APoff) in
       let source = source ldir long_f_dot_in in
-      let state = Vernac.load_vernac ~echo ~check ~state ~source long_f_dot_in in
+      let state =
+        try Vernac.load_vernac ~echo ~check ~state ~source long_f_dot_in with
+        | Proof_replay.Budget_exhausted ->
+          (* BET-84 P3: the real time plus the charge for the proofs replay
+             did not run has reached the file's budget. The file ends as
+             stock's own timeout ends it: no .vo, and the exit code the
+             engine's wrapper records as a per-file kill. *)
+          Proof_replay.killed_summary (Proof_replay.summary_path_of_vo long_f_dot_out);
+          prerr_endline "KILLED: proof replay charged clock reached the per-file budget";
+          flush stderr;
+          exit 124
+      in
       let fullstate = Stm.finish ~doc:state.doc in
       ensure_no_pending_proofs ~filename:long_f_dot_in fullstate;
       let () = Stm.join ~doc:state.doc in
@@ -85,6 +111,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       let () = if copts.proof_record then
           Proof_recorder.write (Proof_record.path_of_vo long_f_dot_out)
       in
+      let () = Proof_replay.write_summary (Proof_replay.summary_path_of_vo long_f_dot_out) in
       let () = Aux_file.record_in_aux_at "vo_compile_time"
           (Printf.sprintf "%.3f" (wall_clock2 -. wall_clock1))
       in

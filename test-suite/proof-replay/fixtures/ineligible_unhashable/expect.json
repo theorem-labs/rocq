@@ -1,0 +1,9 @@
+{
+  "doc": "a value the recorder cannot hash structurally makes the proof unhashable-ineligible",
+  "files": ["A.v"],
+  "trigger_optional": "no source-level trigger for `unhashable` is known on this Rocq: `Proof_record.digest_value` refuses a closure, an unforced lazy value, an object, an abstract block or a cycle, and every value the choke points digest is plain data. Measured 2026-10-25 on speed-r1 with the recorder at d97df04b: an Ltac1 body holding an Ltac2 quotation, a `Hint Extern` holding one, an abbreviation holding one, an Ltac2 notation and a user `Number Notation` all record no ineligibility. Replace this fixture's trigger when one is found, or keep the skip as the record that the class is untested",
+  "records": {"A.v": {"PR.A.unhashable_proof": {"ineligible": ["unhashable"], "stores_no_term": true}}},
+  "summaries": {"A.v": {"proofs": 1, "hits": 0,
+    "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0}, "refused": null, "killed": false,
+    "outcomes": [["PR.A.unhashable_proof", "ineligible"]]}}
+}
