@@ -580,17 +580,25 @@ exception Unhashable of string
    computed, so it does not depend on what the memo finds: a memo miss costs
    a walk and never changes a digest. *)
 
-module H = Hashtbl.Make (struct
+(* The memo holds its keys WEAKLY. It outlives every call, so a strong table
+   would keep alive every block it ever saw, and a proof's own statement is
+   dead as soon as the proof closes: a registration file measured 2 times the
+   peak RSS of its flag-off compile (R1M1, 2026-10-25). An ephemeron releases
+   the entry of a block nobody else holds, and keeps the entry of the global
+   state, which is alive anyway and is what the memo is for. Losing an entry
+   costs a walk, never a wrong digest. *)
+module H = Ephemeron.K1.Make (struct
     type t = Obj.t
     let equal = ( == )
     (* The block's address. A structural hash reads only a bounded prefix of a
        block, so the many distinct blocks of a long run of equal values (a
        memory image in a statement) all share one bucket, every lookup walks
        it, and a digest costs the square of its size: a registration file of
-       477 proofs took 581 times its stock CPU (R1M1's profile, 95.6% self in
-       the bucket walk). An address separates them. A block the GC moves after
-       it was added is looked for in another bucket until the table grows: the
-       lookup misses and the block is walked again, which costs time only. *)
+       477 proofs took 581 times its stock CPU, with 95.6% self time in the
+       bucket walk (R1M1's profile). An address separates them. A block the GC
+       moves after it was added is looked for in another bucket until the
+       table grows: the lookup misses and the block is walked again, which
+       costs time only. *)
     let hash (o : Obj.t) = (Obj.magic o : int) lsr 3
   end)
 
