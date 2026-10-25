@@ -1421,7 +1421,17 @@ let find_uniform_parameters illformed ?evars env recindx nargs bodies =
     let f, l = decompose_app_list c in
     match kind f with
     | Rel n ->
-      let fold accu c = fold_constr_with_binders succ aux k accu c in
+      let fold accu c = match kind c with
+        | Rel m when m > k && m <= k + nbodies ->
+          (* An argument that is a bare occurrence of one of the mutual
+             fixpoints: it is applied to nothing, so no prefix of arguments can
+             be extruded from it, and [drop_uniform_parameters] must not be
+             asked to drop one. [fold_constr_with_binders] would miss it,
+             because it visits the immediate children of the argument and a
+             [Rel] has none. *)
+          0
+        | _ -> fold_constr_with_binders succ aux k accu c
+      in
       let nuniformparams = List.fold_left fold nuniformparams l in
       (* A recursive reference to any one of the mutual fixpoints *)
       if n > k && n <= k + nbodies then
@@ -1464,7 +1474,13 @@ let drop_uniform_parameters nuniformparams bodies =
       let l = List.map (fun c -> aux k c) l in
       (* A recursive reference to any one of the mutual fixpoints *)
       if n > k && n <= k + nbodies then
-        let new_args = List.skipn nuniformparams l in
+        (* [find_uniform_parameters] bounds the prefix by the arguments of
+           every occurrence, including an unapplied one, so this never has to
+           drop more arguments than are there. Upstream raises instead
+           (rocq-prover/rocq#21798, commit f4ba720a635c); this fork keeps the
+           tolerant form, so that a term the analysis has not foreseen is
+           refused by the guard condition rather than killing the kernel. *)
+        let new_args = List.skipn_at_best nuniformparams l in
         Term.applist (f, new_args)
       else Term.applist (f, l)
     | _ -> map_with_binders succ aux k c
