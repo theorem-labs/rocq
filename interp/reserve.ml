@@ -105,7 +105,15 @@ let declare_reserved_type idl t =
   let env = Global.env () in
   List.iter (fun id -> declare_reserved_type_binding env id t) (List.rev idl)
 
-let find_reserved_type id = Id.Map.find (root_of_id id) !reserve_table
+(* BET-84 row M2: each reserved type ([Implicit Types]) the proof reads. *)
+let find_reserved_type id =
+  let res = Id.Map.find_opt (root_of_id id) !reserve_table in
+  Proof_recorder.read ~row:"M2" ~channel:"reserved_type"
+    ~key:(fun () -> Id.to_string (root_of_id id))
+    ~value:(fun () -> match res with
+        | None -> None
+        | Some t -> Some (Proof_recorder.digest ~what:"reserved_type" t));
+  (match res with Some t -> t | None -> raise Not_found)
 
 let constr_key env evd c =
   try mkRefKey env (fst @@ EConstr.destRef evd (fst (EConstr.decompose_app evd c)))

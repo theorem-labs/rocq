@@ -14,6 +14,9 @@ open Constrexpr
 
 val declare_generalizable : local:bool -> lident list option -> unit
 
+(** The identifiers declared generalizable ([Generalizable Variables]). *)
+val generalizable_idents : unit -> Id.Pred.t
+
 (** Fragile, should be used only for construction a set of identifiers to avoid *)
 
 val free_vars_of_constr_expr : constr_expr -> ?bound:Id.Set.t ->

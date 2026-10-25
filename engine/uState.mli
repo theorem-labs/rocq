@@ -313,3 +313,6 @@ val reboot : Environ.env -> t -> t
 end
 
 val add_template_default_univs : Environ.env -> MutInd.t -> unit
+
+(** The default levels of template-polymorphic inductives (BET-84, M7). *)
+val template_default_univs : unit -> Univ.Level.Set.t

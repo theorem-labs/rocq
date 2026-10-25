@@ -840,8 +840,19 @@ type hint_db = Hint_db.t
 
 let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
 
+(* BET-84 census row 7: each database the proof searches, by name, with a
+   digest of that database. The digest is of the stored value, so an
+   unchanged database is digested once per compile. *)
+let record_db name db =
+  Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> name)
+    ~value:(fun () -> match db with
+        | None -> None
+        | Some db -> Some (Proof_recorder.digest_cached ~what:"hint_db" db))
+
 let searchtable_map name =
-  Hintdbmap.find name !searchtable
+  let db = Hintdbmap.find_opt name !searchtable in
+  record_db name db;
+  (match db with Some db -> db | None -> raise Not_found)
 let searchtable_add (name, db) =
   (* XXX see #21114 *)
 (*   let () = assert (Hintdbmap.mem name !searchtable) in *)
@@ -850,9 +861,21 @@ let searchtable_create (name, db) =
 (*   let () = assert (not @@ Hintdbmap.mem name !searchtable) in *)
   searchtable := Hintdbmap.add name db !searchtable
 let current_db_names () = Hintdbmap.domain !searchtable
-let current_db () = Hintdbmap.bindings !searchtable
+let current_db () =
+  let all = Hintdbmap.bindings !searchtable in
+  List.iter (fun (name, db) -> record_db name (Some db)) all;
+  all
 
 let current_pure_db () = List.map snd (current_db ())
+
+(* Every hint database at the proof's start, for -proof-record-tables. *)
+let () =
+  Proof_recorder.register_tables (fun () ->
+      List.map
+        (fun (name, db) ->
+           Proof_record.{ row = "7"; channel = "hint_db"; key = name;
+                          value = Some (Proof_recorder.digest_cached ~what:"hint_db" db) })
+        (Hintdbmap.bindings !searchtable))
 
 let error_no_such_hint_database x =
   user_err (str "No such Hint database: " ++ str x ++ str ".")

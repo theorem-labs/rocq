@@ -531,7 +531,7 @@ module GlobRefMap = Environ.QGlobRef.Map
 
 let implicits_table = Summary.ref GlobRefMap.empty ~name:"implicits"
 
-let implicits_of_global ref =
+let implicits_of_global_raw ref =
   try
     let env = Global.env () in
     let l = GlobRefMap.find env ref !implicits_table in
@@ -547,6 +547,15 @@ let implicits_of_global ref =
       List.map (fun (t, il) -> t, rename il rename_l) l
     with Not_found -> l
   with Not_found -> [DefaultImpArgs,[]]
+
+(* BET-84 census row 12: the implicit arguments of each global the proof
+   reads, with the renaming already applied. *)
+let implicits_of_global ref =
+  let res = implicits_of_global_raw ref in
+  Proof_recorder.read ~row:"12" ~channel:"implicits"
+    ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print ref))
+    ~value:(fun () -> Some (Proof_recorder.digest ~what:"implicits" res));
+  res
 
 let cache_implicits_decl (ref, imps) =
   implicits_table := GlobRefMap.add (Global.env ()) ref imps !implicits_table

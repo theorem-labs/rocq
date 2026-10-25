@@ -83,6 +83,14 @@ val library_is_loaded : DirPath.t -> bool
 (** - Tell which libraries are loaded, in the order by which they were loaded. *)
 val loaded_libraries : unit -> DirPath.t list
 
+(** - The digest of a loaded library's [.vo], as 32 hex digits, and
+      ["unknown"] for a library that is not loaded. *)
+val library_digest : DirPath.t -> string
+
+(** - Those loaded libraries that were only safe-loaded ([Require (safe)],
+      or a safe dependency of a loaded library), in load order. *)
+val safe_loaded_libraries : unit -> DirPath.t list
+
 val library_compiled : DirPath.t -> Safe_typing.compiled_library
 
 (** {6 Native compiler. } *)

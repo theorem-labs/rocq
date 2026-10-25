@@ -583,6 +583,18 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
 
   let the_tab = Summary.ref ~stage:SI.stage ~name:SI.summary_name Tab.empty
 
+  (* BET-84 census row 6: each lookup in this nametab, with the value
+     found, or absent. [channel] is the table's summary name, so each
+     nametab is its own channel. A failed lookup is recorded too: a proof
+     can take a different path because a name is not yet in scope. *)
+  let record key value =
+    Proof_recorder.read ~row:"6" ~channel:SI.summary_name ~key
+      ~value:(fun () -> match value () with
+          | v -> Some (Proof_recorder.digest ~what:SI.summary_name v)
+          | exception Not_found -> None)
+
+  let record_qid qid value = record (fun () -> Libnames.string_of_qualid qid) value
+
   let push vis sp v = the_tab := Tab.push vis sp v !the_tab
 
   let remove sp v = the_tab := Tab.remove sp v !the_tab
@@ -593,19 +605,31 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
 
   let pr v = Tab.pr v !the_tab
 
-  let locate qid = Tab.locate qid !the_tab
+  let locate qid =
+    record_qid qid (fun () -> Tab.locate qid !the_tab);
+    Tab.locate qid !the_tab
 
-  let locate_upto ~limit qid = Tab.locate_upto ~limit qid !the_tab
+  let locate_upto ~limit qid =
+    record_qid qid (fun () -> Tab.locate_upto ~limit qid !the_tab);
+    Tab.locate_upto ~limit qid !the_tab
 
-  let locate_all qid = Tab.locate_all qid !the_tab
+  let locate_all qid =
+    let res = Tab.locate_all qid !the_tab in
+    record_qid qid (fun () -> res);
+    res
 
   let completion_candidates qid = Tab.completion_candidates qid !the_tab
 
   let to_path v = Tab.to_path v !the_tab
 
-  let of_path v = Tab.of_path v !the_tab
+  let of_path v =
+    record (fun () -> Libnames.string_of_path v) (fun () -> Tab.of_path v !the_tab);
+    Tab.of_path v !the_tab
 
-  let exists v = Tab.exists v !the_tab
+  let exists v =
+    let res = Tab.exists v !the_tab in
+    record (fun () -> Libnames.string_of_path v) (fun () -> res);
+    res
 end
 
 module type WarnedTab = sig

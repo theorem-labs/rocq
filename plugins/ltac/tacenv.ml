@@ -51,11 +51,24 @@ let alias_map = Summary.ref ~name:"tactic-alias"
 let register_alias key tac =
   alias_map := KerName.Map.add key tac !alias_map
 
-let interp_alias key =
-  try KerName.Map.find key !alias_map
-  with Not_found -> CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
+(* BET-84 census row 9: each Ltac alias and definition the proof reads. *)
+let record channel k v =
+  Proof_recorder.read ~row:"9" ~channel ~key:(fun () -> KerName.to_string k)
+    ~value:(fun () -> match v with
+        | None -> None
+        | Some v -> Some (Proof_recorder.digest ~what:channel v))
 
-let check_alias key = KerName.Map.mem key !alias_map
+let interp_alias key =
+  let res = KerName.Map.find_opt key !alias_map in
+  record "tactic_alias" key res;
+  match res with
+  | Some v -> v
+  | None -> CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
+
+let check_alias key =
+  let res = KerName.Map.find_opt key !alias_map in
+  record "tactic_alias" key res;
+  res <> None
 
 (** ML tactic extensions (TacML) *)
 
@@ -117,9 +130,15 @@ let mactab =
 
 let ltac_entries () = !mactab
 
-let interp_ltac r = (KerName.Map.find r !mactab).tac_body
+let interp_ltac r =
+  let res = KerName.Map.find_opt r !mactab in
+  record "tactic_definition" r res;
+  (match res with Some e -> e | None -> raise Not_found).tac_body
 
-let is_ltac_for_ml_tactic r = (KerName.Map.find r !mactab).tac_for_ml
+let is_ltac_for_ml_tactic r =
+  let res = KerName.Map.find_opt r !mactab in
+  record "tactic_definition" r res;
+  (match res with Some e -> e | None -> raise Not_found).tac_for_ml
 
 let add ~depr kn b t =
   let entry = {

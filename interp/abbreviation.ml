@@ -41,8 +41,18 @@ let add kn fpa =
 let fold f acc =
   KerName.Map.fold f !abbrev_table acc
 
+(* BET-84 row M1: each abbreviation the proof reads. *)
+let record k v =
+  Proof_recorder.read ~row:"M1" ~channel:"abbreviation"
+    ~key:(fun () -> KerName.to_string k)
+    ~value:(fun () -> match v with
+        | None -> None
+        | Some v -> Some (Proof_recorder.digest ~what:"abbreviation" v))
+
 let find_opt k =
-  KerName.Map.find_opt k !abbrev_table
+  let res = KerName.Map.find_opt k !abbrev_table in
+  record k res;
+  res
 
 let toggle_aux ~on ~use k (sp, data) =
   if data.abbrev_activated != on then begin
@@ -134,5 +144,7 @@ let declare ~local user_warns id ~onlyparsing pat =
 
 (* Remark: do not check for activation (if not activated, it is already not supposed to be located) *)
 let find_interp kn =
-  let _,abbrev = KerName.Map.find kn !abbrev_table in
+  let res = KerName.Map.find_opt kn !abbrev_table in
+  record kn res;
+  let _, abbrev = match res with Some v -> v | None -> raise Not_found in
   abbrev.abbrev_pattern

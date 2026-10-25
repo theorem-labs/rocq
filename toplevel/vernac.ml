@@ -135,7 +135,11 @@ let load_vernac_core ~echo ~check ~state ?source file =
                    [("cmd", `String (Pp.string_of_ppcmds (Topfmt.pr_cmd_header ast)));
                     ("line", `String lnum)])
                (fun () ->
-             Flags.silently (interp_vernac ~check ~state) ast) ())
+             (* BET-84: key item 1 is the parsed sentences of a proof, with
+                the locations of this file removed. *)
+             Proof_recorder.sentence
+               (fun () -> Proof_recorder.digest ~locs:source ~what:"sentence" ast)
+               (fun () -> Flags.silently (interp_vernac ~check ~state) ast)) ())
           ()
           (fun () ->
              let tend = System.get_time () in

@@ -179,6 +179,18 @@ let register_native_library libname =
 
 let loaded_libraries () = List.map snd !libraries_loaded_list
 
+let library_digest dir =
+  match find_library dir with
+  | None -> "unknown"
+  | Some (_, m) -> let Safe_typing.Dvo_or_vi d = m.library_digests in Digest.to_hex d
+
+let safe_loaded_libraries () =
+  List.filter
+    (fun dir -> match find_library dir with
+       | Some (SafeLoaded, _) -> true
+       | Some (FullLoaded, _) | None -> false)
+    (loaded_libraries ())
+
 (** Delayed / available tables of opaque terms *)
 
 type table_status =

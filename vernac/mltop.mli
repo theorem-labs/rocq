@@ -22,6 +22,10 @@ module PluginSpec : sig
   val to_package : t -> string
 
   val pp : t -> string
+
+  (** [digest p] is the digest of each file the plugin loads, in load
+      order. *)
+  val digest : t -> Digest.t list
 end
 
 type toplevel =
@@ -104,4 +108,7 @@ val declare_ml_modules : Vernacexpr.locality_flag -> string list -> interp_fun
 (** {5 Utilities} *)
 
 val print_ml_modules : unit -> Pp.t
+
+(** The loaded plugins, in load order. *)
+val get_loaded_modules : unit -> PluginSpec.t list
 val print_gc : unit -> Pp.t
