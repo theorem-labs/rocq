@@ -199,6 +199,14 @@ def publish_records(spec, reg, records):
             slashed.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(rec, slashed)
             published.append(slashed)
+    # A record the compiling user can write is refused, and so is one with no
+    # digest to check it against (P3Deep F1, P3Bugs): a registration publishes
+    # its records read-only with their SHA-256 beside them, so the fixtures do.
+    for path in published:
+        side = Path(str(path) + ".sha256")
+        side.write_text(hashlib.sha256(path.read_bytes()).hexdigest() + "\n")
+        os.chmod(side, 0o444)
+        os.chmod(path, 0o444)
     return published, None
 
 

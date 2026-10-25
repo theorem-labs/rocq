@@ -32,6 +32,7 @@ type t =
   ; proof_replay_ratio : float option
   ; proof_replay_budget : float option
   ; proof_replay_peak_limit_kb : int option
+  ; proof_replay_digest : string option
 
   ; output_context : bool
   }
@@ -52,6 +53,7 @@ let default =
   ; proof_replay_ratio = None
   ; proof_replay_budget = None
   ; proof_replay_peak_limit_kb = None
+  ; proof_replay_digest = None
 
   ; output_context = false
   }
@@ -166,6 +168,11 @@ let parse arglist : t =
           (match int_of_string_opt s with
            | Some k when k > 0 -> { oval with proof_replay_peak_limit_kb = Some k }
            | _ -> arg_error Pp.(str "-proof-replay-peak-limit-kb expects a positive integer, not " ++ str s))
+        |"-proof-replay-digest" ->
+          let s = String.lowercase_ascii (next ()) in
+          let hex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') in
+          if String.length s = 64 && String.for_all hex s then { oval with proof_replay_digest = Some s }
+          else arg_error Pp.(str "-proof-replay-digest expects a SHA-256 as 64 hex digits, not " ++ str s)
 
         (* Rest *)
         | s ->
@@ -187,6 +194,21 @@ let parse arglist : t =
      | None, Some _ ->
        arg_error Pp.(str "-proof-replay-ratio was given without -proof-replay.")
      | Some _, Some _ | None, None -> ());
+    (* A compile that replays writes a record that names terms it never
+       built, and its evaluators would read into it (review P3Deep F9).
+       The two options are for two different compiles. *)
+    if opts.proof_replay <> None && opts.proof_record then
+      arg_error Pp.(str "-proof-record and -proof-replay cannot be used together.");
+    if opts.proof_replay_digest <> None && opts.proof_replay = None then
+      arg_error Pp.(str "-proof-replay-digest was given without -proof-replay.");
+    (* The record is a trusted input, used only when its bytes hash to a
+       digest the caller took from a trusted place (reviews P3Deep F1,
+       P3Bugs). A directory of records carries one [.sha256] beside each. *)
+    (match opts.proof_replay, opts.proof_replay_digest with
+     | Some (Proof_replay.Record_file _), None ->
+       arg_error Pp.(str "-proof-replay needs -proof-replay-digest: the SHA-256 of the record, from the "
+                     ++ str "registration's manifest. Replay is refused without it.")
+     | _ -> ());
     let args = List.fold_left add_compile opts extra in
     args
   with any -> fatal_error any

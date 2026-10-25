@@ -233,8 +233,11 @@ let load_vernac_core ~echo ~check ~state ?source file =
   let proof_step ast =
     ast.CAst.v.Vernacexpr.control = []
     && (match Vernac_classifier.classify_vernac ast with
-        | VtProofStep _ | VtProofMode _ -> true
-        | VtStartProof _ | VtQed _ | VtSideff _ | VtQuery | VtMeta -> false
+        (* A [Proof Mode] sentence changes the grammar the next sentences
+           are parsed with, so it cannot be kept and run later: it ends
+           the buffering and runs where stock runs it (review P3Deep F8). *)
+        | VtProofStep _ -> true
+        | VtProofMode _ | VtStartProof _ | VtQed _ | VtSideff _ | VtQuery | VtMeta -> false
         | exception e when CErrors.noncritical e -> false)
   in
   let run_kept state ids kept =

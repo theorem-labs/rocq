@@ -19,6 +19,7 @@ type options = {
   o_ratio : float;
   o_budget : float option;
   o_peak_limit_kb : int option;
+  o_digest : string option;  (** the record's SHA-256, from the registration's manifest *)
 }
 
 exception Budget_exhausted
@@ -166,8 +167,10 @@ let counts = {
 
 let channel_miss : (string, int) Hashtbl.t = Hashtbl.create 16
 
-let configure ~source ~ratio ~budget ~peak_limit_kb =
-  options := Some { o_source = source; o_ratio = ratio; o_budget = budget; o_peak_limit_kb = peak_limit_kb }
+let configure ~source ~ratio ~budget ~peak_limit_kb ~digest =
+  options :=
+    Some { o_source = source; o_ratio = ratio; o_budget = budget; o_peak_limit_kb = peak_limit_kb;
+           o_digest = digest }
 
 let configured () = !options <> None
 
@@ -191,7 +194,10 @@ let record_path ~library = function
     let places =
       [ library ^ ".proof-record.jsonl";
         String.concat Filename.dir_sep (String.split_on_char '.' library) ^ ".proof-record.jsonl" ]
-      @ (match !record_of_vo with Some p when not (Filename.is_relative p) -> [] | Some p -> [ p ] | None -> [])
+      @ (match !record_of_vo with
+          | Some p when Filename.is_relative p
+                        && not (List.mem Filename.parent_dir_name (String.split_on_char '/' p)) -> [ p ]
+          | Some _ | None -> [])
     in
     List.find_opt Sys.file_exists (List.map (Filename.concat dir) places)
 
@@ -203,18 +209,74 @@ let read_file path =
 (* A compile that ran under a limit which can end an allocation before the
    cgroup kill is not replayed, in either direction: under such a limit a
    proof can fail where the other run's did not, and a stored term would
-   hide it (BET-84 spec, "When a stored term is used"). *)
+   hide it (BET-84 spec, "When a stored term is used"). A value that could
+   not be read ("unknown", a sandbox that masks /proc/sys) refuses too: a
+   guard that cannot see is not a guard (review P3Deep F6). *)
+let overcommit_refuses v = v <> "0" && v <> "1"
+
 let limits_refusal (h : R.header) =
   if h.R.rlimit_as <> "unlimited" || h.R.rlimit_data <> "unlimited" then Some "rlimit"
-  else if h.R.overcommit_memory = "2" then Some "overcommit"
+  else if overcommit_refuses h.R.overcommit_memory then Some "overcommit"
   else None
 
 let own_limits_refusal () =
   if Proof_limits.rlimit "Max address space" <> "unlimited"
      || Proof_limits.rlimit "Max data size" <> "unlimited"
   then Some "rlimit"
-  else if Proof_limits.overcommit_memory () = "2" then Some "overcommit"
+  else if overcommit_refuses (Proof_limits.overcommit_memory ()) then Some "overcommit"
   else None
+
+(* The record is a TRUSTED input, at the same tier as the binary: its
+   stored terms are read back with [Marshal.from_string], which is not
+   memory-safe on chosen bytes, and a stored term's declared type comes
+   from it. So the record is used only when it is bound to this compile
+   (reviews P3Deep F1, P3Bugs):
+   - its bytes hash (SHA-256) to an expected digest, which is mandatory:
+     [-proof-replay-digest], which the grading engine takes from the
+     registration's root-owned manifest, or with [-proof-replay-dir] a
+     [<record>.sha256] file beside each record, as unwritable as it;
+   - nobody but its owner can write it, and the compiling user cannot
+     write it at all: write permission is what would let a principal that
+     runs as that user replace a record between the hash and the read. For
+     root, which [access] always lets write, the mode bits decide;
+   - its header names the library this compile builds, and it is a
+     record format this binary writes ([tables_at_start]). *)
+let writable_by_us path =
+  match Unix.stat path with
+  | exception Unix.Unix_error _ -> true
+  | st ->
+    st.Unix.st_perm land 0o022 <> 0
+    || (if Unix.getuid () = 0 then st.Unix.st_perm land 0o222 <> 0
+        else (try Unix.access path [ Unix.W_OK ]; true with Unix.Unix_error _ -> false))
+
+(* The record's expected SHA-256 is MANDATORY (reviews P3Deep F1, P3Bugs):
+   [-proof-replay FILE] requires [-proof-replay-digest]; with
+   [-proof-replay-dir], each record's digest is read from
+   [<record>.sha256] beside it, which must be as unwritable as the record.
+   A record with no digest to check it against is refused. *)
+let expected_digest path =
+  match !options with
+  | Some { o_digest = Some d; _ } -> Some d
+  | Some { o_source = Record_dir _; _ } ->
+    let side = path ^ ".sha256" in
+    if not (Sys.file_exists side) || writable_by_us side then None
+    else
+      (match read_file side with
+       | s when String.length s >= 64 -> Some (String.sub s 0 64)
+       | _ -> None
+       | exception Sys_error _ -> None)
+  | Some { o_source = Record_file _; o_digest = None; _ } | None -> None
+
+let binding_refusal ~library ~path ~bytes (h : R.header) =
+  match expected_digest path with
+  | None -> Some "digest"
+  | Some d when not (String.equal (String.lowercase_ascii d) (Proof_sha256.digest_hex bytes)) ->
+    Some "digest"
+  | Some _ ->
+    if writable_by_us path then Some "writable"
+    else if not (String.equal h.R.library library) then Some "library"
+    else if not h.R.tables_at_start then Some "format"
+    else None
 
 (* A file whose registration needed more memory than the share this grade
    can give one compile runs without replay: all the build's jobs share one
@@ -268,10 +330,14 @@ let start ~library ~toolchain =
       match record_path ~library opts.o_source with
       | None -> Some "bad_record"
       | Some path ->
-        (match R.parse_string (read_file path) with
+        let bytes = read_file path in
+        (match R.parse_string bytes with
          | exception _ -> Some "bad_record"
          | file ->
            let refusal =
+             match binding_refusal ~library ~path ~bytes file.R.header with
+             | Some r -> Some r
+             | None ->
              match toolchain_refusal ~now:(toolchain ()) file.R.header with
              | Some r -> Some r
              | None ->
@@ -369,26 +435,30 @@ let open_proof ~name ~statement ~position ~toolchain_key =
 
 (* Every read the registration made must give the same value now.
 
-   The providers answer first: they give, as one list, the channels that
-   have no single read point, from the same function the recorder takes
-   them from. A read of such a channel that the providers do not list is a
-   miss: a provider that stopped answering must not look like a value that
-   stayed the same. Every other channel has its evaluator, and a channel
-   with none, or an evaluator that cannot answer, is a miss too. *)
+   A read is answered by the provider rows taken at the proof's start when
+   one has its exact channel and key (the channels with no single read
+   point, from the same function the recorder takes them from); otherwise
+   by its channel's evaluator. A provider does not own its channel: a
+   provider row keyed "" (a whole table) and an evaluator keyed by name can
+   share a channel, and each answers its own keys. Before, a provider
+   shadowed every key of its channel, so the per-constant
+   [reduction_behaviour] reads always missed (review P3Deep F4). A read
+   neither answers is a miss, and so is an evaluator that cannot answer.
+   The one-value-per-channel check (dev/tools/census/replay_channels.py)
+   makes sure a provider row and an evaluator of one channel are not two
+   implementations of one value. *)
 let first_read_mismatch (p : R.proof) ~at_start =
   let now (r : R.read) =
-    let table, channels = at_start in
+    let table, _channels = at_start in
     match Hashtbl.find_opt proof_provided (r.R.channel, r.R.key) with
     | Some v -> Value v
     | None ->
-    if Hashtbl.mem channels r.R.channel then
       match Hashtbl.find_opt table (r.R.channel, r.R.key) with
       | Some v -> Value v
-      | None -> Unknown
-    else
-      match Hashtbl.find_opt evaluators r.R.channel with
-      | None -> Unknown
-      | Some f -> (match f r.R.key with v -> v | exception _ -> Unknown)
+      | None ->
+        match Hashtbl.find_opt evaluators r.R.channel with
+        | None -> Unknown
+        | Some f -> (match f r.R.key with v -> v | exception _ -> Unknown)
   in
   let rec loop = function
     | [] -> None
@@ -399,7 +469,15 @@ let first_read_mismatch (p : R.proof) ~at_start =
   in
   loop (p.R.start_tables @ p.R.reads)
 
-let decide ~sentences ~closer =
+let rec decide ~sentences ~closer =
+  let r = decide_once ~sentences ~closer in
+  (* A replay-only compile never stops the recorder, so its digest caches
+     would grow for the whole file (review P3Deep F7). A compile that also
+     records keeps them: they are the recorder's. *)
+  if not (Proof_recorder.active ()) then Proof_recorder.reset_caches ();
+  r
+
+and decide_once ~sentences ~closer =
   match !state with
   | None | Some { f_candidate = None; _ } | Some { f_refused = Some _; _ } -> None
   | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_provided = at_start; c_counters = starts };

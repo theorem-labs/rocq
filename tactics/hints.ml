@@ -638,24 +638,6 @@ val digest : t -> string
 end =
 struct
 
-  type entry_summary = {
-    entry_key : GlobRef.t;
-    entry_nopat : KerName.Set.t;
-    entry_pat : KerName.Set.t;
-    entry_modes : hint_mode list list;
-  }
-
-  type summary = {
-    summary_state : TransparentState.t;
-    summary_cut : hints_path;
-    summary_unfolds : Id.Set.t * Cset.t * PRset.t;
-    summary_max_id : int;
-    summary_use_dn : bool;
-    summary_map : entry_summary list;
-    summary_nopat : KerName.Set.t;
-    summary_name : string option;
-  }
-
   type t = {
     hintdb_state : TransparentState.t;
     hintdb_cut : hints_path;
@@ -666,36 +648,12 @@ struct
     (* A list of unindexed entries with no associated pattern. *)
     hintdb_nopat : stored_data list;
     hintdb_name : string option;
-    hintdb_summary : summary;
   }
-
-  let summary_map hintdb_map =
-    GlobRef.Map.fold (fun entry_key se summaries ->
-        { entry_key;
-          entry_nopat = StoredData.uids se.sentry_nopat;
-          entry_pat = StoredData.uids se.sentry_pat;
-          entry_modes = List.map Array.to_list se.sentry_mode; } :: summaries)
-      hintdb_map []
-
-  let summary_nopat hintdb_nopat =
-    List.fold_left (fun uids (_, hint) ->
-        KerName.Set.add hint.code.uid uids)
-      KerName.Set.empty hintdb_nopat
 
   let make hintdb_state hintdb_cut hintdb_unfolds hintdb_max_id use_dn
       hintdb_map hintdb_nopat hintdb_name =
-    let hintdb_summary =
-      { summary_state = hintdb_state;
-        summary_cut = hintdb_cut;
-        summary_unfolds = hintdb_unfolds;
-        summary_max_id = hintdb_max_id;
-        summary_use_dn = use_dn;
-        summary_map = summary_map hintdb_map;
-        summary_nopat = summary_nopat hintdb_nopat;
-        summary_name = hintdb_name; }
-    in
     { hintdb_state; hintdb_cut; hintdb_unfolds; hintdb_max_id; use_dn;
-      hintdb_map; hintdb_nopat; hintdb_name; hintdb_summary }
+      hintdb_map; hintdb_nopat; hintdb_name }
 
   let copy db ?hintdb_state ?hintdb_cut ?hintdb_unfolds ?hintdb_max_id
       ?use_dn ?hintdb_map ?hintdb_nopat ?hintdb_name () =
@@ -903,8 +861,47 @@ struct
 
   let use_dn db = db.use_dn
 
-  let digest db =
-    Proof_recorder.digest_cached ~what:"hint_db" db.hintdb_summary
+  (* BET-84 census row 7: the value of a hint database is what a search of
+     it DOES, so a proof that searched it replays only if every search
+     would behave the same: for each hint, its priority, pattern, name,
+     section variables and code (the term, type, universes and arity of an
+     applied lemma; the pattern and tactic of a [Hint Extern]), in the order
+     a search tries them, and the database's transparency, cut, unfold set,
+     modes and net setting.
+
+     Left out: the hint's uid and insertion index, which a command mints
+     afresh each time it runs, so the same hint written again has another
+     uid; the clause environment, which is computed from the term; and the
+     locations of the compiled file, so that a hint written two lines lower
+     is the same hint. The uids were what this digest held before (review
+     P3Bugs P0): a hint whose tactic or priority changed kept its uid set,
+     and a proof that a full compile cannot finish was replayed. *)
+  let content (_, (h : full_hint)) =
+    let v (x : hint) = (x.hint_term, x.hint_type, x.hint_uctx, x.hint_arty) in
+    let code = match h.code.obj with
+      | Res_pf x -> Res_pf (v x)
+      | ERes_pf x -> ERes_pf (v x)
+      | Give_exact x -> Give_exact (v x)
+      | Res_pf_THEN_trivial_fail x -> Res_pf_THEN_trivial_fail (v x)
+      | Unfold_nth e -> Unfold_nth e
+      | Extern (p, t) -> Extern (p, t)
+    in
+    (h.pri, h.pat, h.name, h.secvars, code)
+
+  let in_order l = List.map content (List.sort Stored.compare l)
+
+  let behaviour db =
+    let entries =
+      GlobRef.Map.fold (fun key se acc ->
+          (key, se.sentry_mode,
+           in_order (StoredSet.elements (StoredData.elements se.sentry_nopat)),
+           in_order (StoredSet.elements (StoredData.elements se.sentry_pat))) :: acc)
+        db.hintdb_map []
+    in
+    (db.hintdb_state, db.hintdb_cut, db.hintdb_unfolds, db.use_dn, db.hintdb_name, entries,
+     in_order db.hintdb_nopat)
+
+  let digest db = Proof_recorder.digest_cached_by ~what:"hint_db" ~key:db (fun () -> behaviour db)
 
 end
 
@@ -915,25 +912,41 @@ type hint_db = Hint_db.t
 let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
 
 (* BET-84 census row 7: each database the proof searches, by name, with a
-   digest of its immutable semantic summary. The summary excludes the mutable
-   discrimination net cache and is kept with the persistent database value. *)
-let record_db name db =
+   digest of its immutable semantic summary (the mutable discrimination net
+   cache is excluded), and, under the key "*domain", the set of database
+   names. ONE value function for the channel: the record sites below, the
+   start table and the replay evaluator all call [recorded_hint_db], so the
+   value is never computed two ways (dev/tools/census/replay_channels.py;
+   review P3Deep F4 found a second implementation here). *)
+let domain_key = "*domain"
+
+let recorded_hint_db key =
+  if String.equal key domain_key then
+    Some (Proof_recorder.digest ~what:"hint_db_domain" (String.Set.elements (Hintdbmap.domain !searchtable)))
+  else
+    match Hintdbmap.find_opt key !searchtable with
+    | None -> None
+    | Some db -> Some (Hint_db.digest db)
+
+let () =
+  Proof_replay.register_evaluator "hint_db" (fun key ->
+      match recorded_hint_db key with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let record_db name =
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"7" ~channel:"hint_db" ~id:name ~key:(fun () -> name)
-      ~value:(fun () -> match db with
-          | None -> None
-          | Some db -> Some (Hint_db.digest db))
+      ~value:(fun () -> recorded_hint_db name)
 
 let record_db_domain () =
   if Proof_recorder.active () then
-    Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> "*domain")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest ~what:"hint_db_domain"
-                  (String.Set.elements (Hintdbmap.domain !searchtable))))
+    Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> domain_key)
+      ~value:(fun () -> recorded_hint_db domain_key)
 
 let searchtable_map name =
   let db = Hintdbmap.find_opt name !searchtable in
-  record_db name db;
+  record_db name;
   (match db with Some db -> db | None -> raise Not_found)
 let searchtable_add (name, db) =
   (* XXX see #21114 *)
@@ -948,18 +961,17 @@ let current_db_names () =
 let current_db () =
   record_db_domain ();
   let all = Hintdbmap.bindings !searchtable in
-  List.iter (fun (name, db) -> record_db name (Some db)) all;
+  List.iter (fun (name, _) -> record_db name) all;
   all
 
 let current_pure_db () = List.map snd (current_db ())
 
-(* Every hint database at the proof's start, for -proof-record-tables. *)
+(* Every hint database at the proof's start. *)
 let () =
   Proof_recorder.register_tables (fun () ->
       List.map
-        (fun (name, db) ->
-           Proof_record.{ row = "7"; channel = "hint_db"; key = name;
-                          value = Some (Hint_db.digest db) })
+        (fun (name, _) ->
+           Proof_record.{ row = "7"; channel = "hint_db"; key = name; value = recorded_hint_db name })
         (Hintdbmap.bindings !searchtable))
 
 let error_no_such_hint_database x =

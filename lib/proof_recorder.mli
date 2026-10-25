@@ -85,6 +85,11 @@ val write : string -> unit
 val stop : unit -> unit
 (** Turns the recorder off and drops what it holds, with no file. *)
 
+val reset_caches : unit -> unit
+(** Empties the digest memo and the address cache without turning the
+    recorder off. A replay-only compile calls it after each proof's
+    decision, so the caches hold one proof's reads at most. *)
+
 (** {6 Proofs} *)
 
 val open_proof :
@@ -181,6 +186,17 @@ val digest : ?locs:Loc.source -> what:string -> 'a -> string
     to go on. A value it cannot digest is not an error: the result is
     ["unhashable"] and the open proof is marked ineligible with reason
     ["unhashable"] and detail [what], so the proof runs as today. *)
+
+val set_locs_source : Loc.source -> unit
+(** The file this compile reads. {!digest_cached_by} leaves out its
+    locations. Set by the compile driver, for a recording compile and a
+    replaying one alike. *)
+
+val digest_cached_by : what:string -> key:'k -> (unit -> 'a) -> string
+(** [digest_cached_by ~what ~key view] is the digest of [view ()], with the
+    locations of the compiled file left out, computed once per physical
+    [key] for the whole compile: for a persistent value (a hint database)
+    whose digest is a view of it rather than the value itself. *)
 
 val digest_cached : what:string -> 'a -> string
 (** {!digest} of a value of the global environment, kept for the whole

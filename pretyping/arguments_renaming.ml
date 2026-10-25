@@ -82,8 +82,9 @@ let recorded_arguments_names env r =
 
 (* The record holds the reference as [GlobRef.print] wrote it: a constant
    or variable as its path, an inductive as ["(path, i)"], a constructor
-   as ["(path, i, j)"]. A key that does not read back to a reference is
-   not taken for another one: the proof misses. *)
+   as ["(path, i, j)"]. A key that does not read back to a reference, or
+   reads back to one that prints differently, is not taken for another
+   one: the proof misses (review P3Bugs F4). *)
 let globref_of_string s =
   let mind_of path =
     match Nametab.global_of_path (Libnames.path_of_string (String.trim path)) with
@@ -93,21 +94,26 @@ let globref_of_string s =
   in
   let s = String.trim s in
   let n = String.length s in
-  if n > 1 && s.[0] = '(' && s.[n - 1] = ')' then
-    match List.map String.trim (String.split_on_char ',' (String.sub s 1 (n - 2))) with
-    | [ path; i ] ->
-      (match mind_of path, int_of_string_opt i with
-       | Some m, Some i -> Some (GlobRef.IndRef (m, i))
-       | _ -> None)
-    | [ path; i; j ] ->
-      (match mind_of path, int_of_string_opt i, int_of_string_opt j with
-       | Some m, Some i, Some j -> Some (GlobRef.ConstructRef ((m, i), j))
-       | _ -> None)
-    | _ -> None
-  else
-    match Nametab.global_of_path (Libnames.path_of_string s) with
-    | r -> Some r
-    | exception _ -> None
+  let parsed =
+    if n > 1 && s.[0] = '(' && s.[n - 1] = ')' then
+      match List.map String.trim (String.split_on_char ',' (String.sub s 1 (n - 2))) with
+      | [ path; i ] ->
+        (match mind_of path, int_of_string_opt i with
+         | Some m, Some i -> Some (GlobRef.IndRef (m, i))
+         | _ -> None)
+      | [ path; i; j ] ->
+        (match mind_of path, int_of_string_opt i, int_of_string_opt j with
+         | Some m, Some i, Some j -> Some (GlobRef.ConstructRef ((m, i), j))
+         | _ -> None)
+      | _ -> None
+    else
+      match Nametab.global_of_path (Libnames.path_of_string s) with
+      | r -> Some r
+      | exception _ -> None
+  in
+  match parsed with
+  | Some r when String.equal (Pp.string_of_ppcmds (GlobRef.print r)) s -> Some r
+  | Some _ | None -> None
 
 let () =
   Proof_replay.register_evaluator "arguments_names" (fun key ->

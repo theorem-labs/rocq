@@ -37,6 +37,12 @@ let recorded_lib_ref s =
   | None -> None
   | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r)
 
+let () =
+  Proof_replay.register_evaluator "lib_ref" (fun key ->
+      match recorded_lib_ref key with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let get_lib_refs () =
   let current = !table in
   let refs = CString.Map.bindings current in
