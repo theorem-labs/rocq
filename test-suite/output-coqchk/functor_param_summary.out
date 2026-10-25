@@ -15,7 +15,9 @@ CONTEXT SUMMARY
     functor_param_summary.FX.loop
     functor_param_summary.X.loop
     functor_param_summary.BT.loop
+    <functor_param_summary#A#0>.loop
     functor_param_summary.F.loop
+    <functor_param_summary#A#1>.loop
     functor_param_summary.G.loop
   
 * Inductives whose positivity is assumed: <none>
