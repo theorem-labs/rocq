@@ -200,7 +200,27 @@ let peak_refusal opts (t : R.trailer) =
   | Some limit when t.R.peak_rss_kb > limit -> Some "memory"
   | _ -> None
 
-let start ~library =
+(* A record another toolchain wrote is refused for the whole file, before
+   any proof of it is declared: an object built by one Rocq can fail coqchk
+   under another (the guard fix of 2026-10-25 made two let-based shapes
+   fail that passed before it). The per-proof key holds the same items, so
+   this is a second layer that names the reason once, in the summary.
+
+   The load order is compared by the libraries' names, as the key compares
+   it: a required library the agent edited has another digest, and a file
+   that requires it is exactly the file replay exists for. Its contents
+   reach a proof only through the reads, which are checked one by one. The
+   warnings are not compared here: they are a per-proof key item, and a
+   file can change them with [Set Warnings]. *)
+let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
+  let r = h.R.toolchain in
+  if r.R.binary <> now.R.binary || r.R.plugins <> now.R.plugins
+     || List.map fst r.R.load_order <> List.map fst now.R.load_order
+     || r.R.safe_deps <> now.R.safe_deps || r.R.stack_limit <> now.R.stack_limit
+  then Some "toolchain"
+  else None
+
+let start ~library ~toolchain =
   match !options with
   | None -> ()
   | Some opts ->
@@ -228,6 +248,9 @@ let start ~library =
          | exception _ -> Some "bad_record"
          | file ->
            let refusal =
+             match toolchain_refusal ~now:(toolchain ()) file.R.header with
+             | Some r -> Some r
+             | None ->
              match limits_refusal file.R.header with
              | Some r -> Some r
              | None ->

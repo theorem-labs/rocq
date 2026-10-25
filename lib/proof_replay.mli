@@ -50,10 +50,13 @@ exception Budget_exhausted
 
 (** {6 The compile} *)
 
-val start : library:string -> unit
+val start : library:string -> toolchain:(unit -> Proof_record.toolchain) -> unit
 (** Loads the record for this library and starts the clock. A no-op when no
     source is configured. After it, {!refused} says whether the whole file
-    runs without replay, and why. *)
+    runs without replay, and why. [toolchain] is this compile's: a record
+    whose header names another binary, plugin set, load order,
+    safe-dependency set or stack limit is refused for the whole file, before
+    any of its proofs is declared (reason ["toolchain"]). *)
 
 val set_vo_path : string -> unit
 (** The [.vo] this compile writes, as its command line gives it. With

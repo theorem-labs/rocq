@@ -96,10 +96,10 @@ let () = Replay.register_evaluator "unit_test_channel" (fun _ -> !current)
    fail-closed default. *)
 let () = Replay.register_precheck (fun _ -> true)
 
-let setup ?(budget = None) ?(proof = proof) () =
+let setup ?(budget = None) ?(proof = proof) ?(now = toolchain) () =
   let path = write_record ~proof () in
   Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget ~peak_limit_kb:None;
-  Replay.start ~library:"Top.File";
+  Replay.start ~library:"Top.File" ~toolchain:(fun () -> now);
   Sys.remove path
 
 let decide ?(name = "Top.File.lemma") ?(closer = "Qed") ?(sentences = sentences) () =
@@ -181,6 +181,23 @@ let other_toolchain_misses =
      && case R.{ key with stack_limit = "8388608" } = None
      && (setup (); decide () <> None))
 
+(* The same refusal for the whole file, before any proof is declared: a
+   record whose header names another binary, plugin set, library order,
+   safe-dependency set or stack limit leaves every proof of the file to its
+   tactics, and the summary says why. A required library whose CONTENTS
+   changed is not a refusal: its digest moves, its name and order do not. *)
+let other_toolchain_refuses_file =
+  let case now = (setup ~now (); (Replay.refused (), decide ())) in
+  let refused (r, d) = r = Some "toolchain" && d = None in
+  mk_bool_test "proof-replay-other-toolchain-file"
+    "a record another toolchain made is refused for the whole file, with the reason named"
+    (refused (case R.{ toolchain with binary = String.make 32 '0' })
+     && refused (case R.{ toolchain with plugins = [ ("rocq-runtime.plugins.ltac", String.make 32 '1') ] })
+     && refused (case R.{ toolchain with load_order = [ ("Other.Lib", String.make 32 '2') ] })
+     && refused (case R.{ toolchain with safe_deps = [ "Other.Lib" ] })
+     && refused (case R.{ toolchain with stack_limit = "8388608" })
+     && (let r, d = case toolchain in r = None && d <> None))
+
 (* The charged clock. A replayed proof costs no time, so the compile
    charges r times the seconds the registration spent, and stops the file
    at the budget as stock's own timeout stops it. *)
@@ -216,6 +233,7 @@ let summary_counts =
 
 let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
-    key_items_miss; ineligible_misses; other_toolchain_misses; charged_clock; summary_counts ]
+    key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
+    charged_clock; summary_counts ]
 
 let _ = run_tests __FILE__ log_out_ch tests
