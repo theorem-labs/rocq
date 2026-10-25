@@ -562,7 +562,12 @@ let activate_hook ~name =
   deactivate_hook ~name;
   active_hooks := name :: !active_hooks
 
+(* BET-84 census row 14: coercion hooks are selected by Summary state. *)
 let apply_hooks env sigma ~flags body ~inferred ~expected =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"coercion_hooks" ~key:(fun () -> "")
+      ~value:(fun () ->
+          Some (Proof_recorder.digest_cached ~what:"coercion_hooks" !active_hooks));
   List.find_map (fun name -> CString.Map.get name !all_hooks env sigma ~flags body ~inferred ~expected) !active_hooks
 
 let default_flags_of env =

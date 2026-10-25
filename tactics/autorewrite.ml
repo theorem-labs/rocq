@@ -438,20 +438,32 @@ let auto_multi_rewrite ?(conds=Naive) lems cl =
 
 (* Same hack as auto hints: we generate an essentially unique identifier for
    rewrite hints. *)
-let fresh_key =
-  let id = Summary.ref ~name:"REWHINT-COUNTER" 0 in
-  fun () ->
-    let cur = incr id; !id in
-    let lbl = Id.of_string ("_" ^ string_of_int cur) in
-    let kn = Lib.make_kn lbl in
-    let (mp, _) = KerName.repr kn in
-    (* We embed the full path of the kernel name in the label so that
-       the identifier should be unique. This ensures that including
-       two modules together won't confuse the corresponding labels. *)
-    let lbl = Id.of_string_soft (Printf.sprintf "%s#%i"
-      (ModPath.to_string mp) cur)
-    in
-    KerName.make mp lbl
+let rewrite_hint_counter = Summary.ref ~name:"REWHINT-COUNTER" 0
+
+let () =
+  Proof_recorder.register_tables (fun () ->
+      [Proof_record.{ row = "18"; channel = "counter_start"; key = "REWHINT-COUNTER";
+                      value = Some (string_of_int !rewrite_hint_counter) }])
+
+(* BET-84 P3: see the hint counter in [Hints]. *)
+let () =
+  Proof_replay.register_counter "rewrite_hint_counter"
+    ~get:(fun () -> !rewrite_hint_counter) ~set:(fun n -> rewrite_hint_counter := n)
+
+let fresh_key () =
+  let cur = incr rewrite_hint_counter; !rewrite_hint_counter in
+  if Proof_recorder.writing () then
+    Proof_recorder.write_counters [("rewrite_hint_counter", 1)];
+  let lbl = Id.of_string ("_" ^ string_of_int cur) in
+  let kn = Lib.make_kn lbl in
+  let (mp, _) = KerName.repr kn in
+  (* We embed the full path of the kernel name in the label so that
+     the identifier should be unique. This ensures that including
+     two modules together won't confuse the corresponding labels. *)
+  let lbl = Id.of_string_soft (Printf.sprintf "%s#%i"
+    (ModPath.to_string mp) cur)
+  in
+  KerName.make mp lbl
 
 let auto_multi_rewrite_with ?(conds=Naive) tac_main lbas cl =
   let onconcl = match cl.Locus.concl_occs with NoOccurrences -> false | _ -> true in

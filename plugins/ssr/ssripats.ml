@@ -371,18 +371,31 @@ let tac_intro_seed interp_ipats fix = Goal.enter begin fun gl ->
 end end
 
 (*** [=> [: id]] ************************************************************)
+let ssr_abstract_id = Summary.ref ~name:"SSR:abstractid" 0
+
+let () =
+  Proof_recorder.register_tables (fun () ->
+      [ Proof_record.{ row = "18"; channel = "counter_start"; key = "ssr_abstract_id";
+                       value = Some (Proof_recorder.digest ~what:"ssr_abstract_id" !ssr_abstract_id) } ])
+
+(* BET-84 P3: an SSR abstract variable's name holds this counter, so a
+   replayed proof must leave it where its tactics would have. *)
+let () =
+  Proof_replay.register_counter "ssr_abstract_id"
+    ~get:(fun () -> !ssr_abstract_id) ~set:(fun n -> ssr_abstract_id := n)
+
 let mk_abstract_id =
   let open Rocqlib in
-  let ssr_abstract_id = Summary.ref ~name:"SSR:abstractid" 0 in
-begin fun env sigma ->
+  fun env sigma ->
   let sigma, zero = EConstr.fresh_global env sigma (lib_ref "num.nat.O") in
   let sigma, succ = EConstr.fresh_global env sigma (lib_ref "num.nat.S") in
   let rec nat_of_n n =
     if n = 0 then zero
     else EConstr.mkApp (succ, [|nat_of_n (n-1)|]) in
   incr ssr_abstract_id;
+  if Proof_recorder.writing () then
+    Proof_recorder.write_counters [("ssr_abstract_id", 1)];
   sigma, nat_of_n !ssr_abstract_id
-end
 
 let tclMK_ABSTRACT_VAR id = Goal.enter begin fun gl ->
   let env, concl = Goal.(env gl, concl gl) in

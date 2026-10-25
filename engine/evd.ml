@@ -707,7 +707,20 @@ let evar_counter_summary_name = "evar counter"
 
 (* Generator of existential names *)
 let evar_ctr, evar_counter_summary_tag = Summary.ref_tag 0 ~name:evar_counter_summary_name
-let new_untyped_evar () = incr evar_ctr; Evar.unsafe_of_int !evar_ctr
+
+let () = Proof_recorder.register_tables (fun () ->
+    [ Proof_record.{ row = "18"; channel = "counter_start"; key = evar_counter_summary_name;
+                     value = Some (string_of_int !evar_ctr) } ])
+
+(* BET-84 P3: a replayed proof's tactics make no evar, so replay puts the
+   counter where they would have left it. *)
+let () = Proof_replay.register_counter "evar" ~get:(fun () -> !evar_ctr) ~set:(fun n -> evar_ctr := n)
+
+let new_untyped_evar () =
+  incr evar_ctr;
+  if Proof_recorder.writing () then
+    Proof_recorder.write_counters [("evar", 1)];
+  Evar.unsafe_of_int !evar_ctr
 
 let default_source = Loc.tag @@ Evar_kinds.InternalHole
 

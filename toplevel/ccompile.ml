@@ -67,7 +67,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
                 | exception Sys_error _ -> "unknown")
             ~toolchain:Proof_record_env.toolchain
             ~skip_qed_typecheck:!Opaques.skip_qed_typecheck
-            ~tables_at_start:copts.proof_record_tables
+            ~tables_at_start:true
       in
       (* BET-84 P3: the registration's record for this library, and the
          charged clock. A record that is missing or was made under a limit

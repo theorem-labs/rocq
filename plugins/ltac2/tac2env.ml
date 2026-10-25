@@ -96,6 +96,9 @@ let find channel tbl kn =
 
 let interp_global kn = find "ltac2_global" ltac_state.contents.ltac_tactics kn
 
+let record_global kn =
+  record "ltac2_global" kn (KerName.Map.find_opt kn ltac_state.contents.ltac_tactics)
+
 let set_compiled_global kn info v =
   assert (not (interp_global kn).gdata_mutable);
   compiled_tacs := KerName.Map.add kn (info,v) !compiled_tacs
@@ -151,6 +154,48 @@ end
 
 module MLMap = Map.Make(ML)
 
+(* ML tactic package suffixes built below [plugins/]. Some directories build
+   multiple packages. The compatibility names load the same audited code. An
+   ML tactic from any other package is code the census did not audit, so a
+   proof that runs it is never replayed. *)
+let audited_ml_tactic_plugin_suffixes =
+  [ "btauto";
+    "cc";
+    "cc_core";
+    "derive";
+    "extraction";
+    "firstorder";
+    "firstorder_core";
+    "funind";
+    "ltac";
+    "ltac2";
+    "ltac2_ltac1";
+    "micromega";
+    "micromega_core";
+    "nsatz";
+    "nsatz_core";
+    "number_string_notation";
+    "ring";
+    "rtauto";
+    "ssreflect";
+    "ssrmatching";
+    "tauto";
+    "zify" ]
+
+let audited_ml_tactic_plugins =
+  List.fold_left
+    (fun set suffix ->
+       String.Set.add ("coq-core.plugins." ^ suffix)
+         (String.Set.add ("rocq-runtime.plugins." ^ suffix) set))
+    String.Set.empty audited_ml_tactic_plugin_suffixes
+
+let fence_primitive { mltac_plugin; mltac_tactic } =
+  if Proof_recorder.active () &&
+     not (String.Set.mem mltac_plugin audited_ml_tactic_plugins)
+  then
+    Proof_recorder.ineligible ~reason:"ml_tactic"
+      ~detail:(mltac_plugin ^ "." ^ mltac_tactic)
+
 let primitive_map = ref MLMap.empty
 
 let define_primitive name f =
@@ -159,7 +204,9 @@ let define_primitive name f =
     | _ -> f
   in
   primitive_map := MLMap.add name f !primitive_map
-let interp_primitive name = MLMap.find name !primitive_map
+let interp_primitive name =
+  fence_primitive name;
+  MLMap.find name !primitive_map
 
 (** Name management *)
 

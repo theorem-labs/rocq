@@ -25,15 +25,43 @@ let jmeq_module_name = ["Stdlib";"Logic";"JMeq"]
 let table : GlobRef.t CString.Map.t ref =
   Summary.ref ~name:"rocqlib_registered" CString.Map.empty
 
-let get_lib_refs () =
-  CString.Map.bindings !table
+let () = Proof_recorder.register_tables (fun () ->
+    [ Proof_record.{ row = "15"; channel = "rocqlib_table"; key = "";
+                     value = Some (Proof_recorder.digest_cached ~what:"rocqlib_table" !table) } ])
 
-let has_ref s = CString.Map.mem s !table
+(* BET-84: ONE value for the lib_ref channel. The recorder's four call
+   sites below and the replay evaluator (vernac/proof_replay_env.ml) call
+   this, so the value is never computed two ways. *)
+let recorded_lib_ref s =
+  match CString.Map.find_opt s !table with
+  | None -> None
+  | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r)
+
+let get_lib_refs () =
+  let current = !table in
+  let refs = CString.Map.bindings current in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"lib_ref_domain" ~key:(fun () -> "")
+      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"rocqlib_table" current));
+  refs
+
+let has_ref s =
+  let res = CString.Map.find_opt s !table in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
+      ~value:(fun () -> recorded_lib_ref s);
+  match res with
+  | None -> false
+  | Some _ -> true
 
 let check_ref s gr =
-  match CString.Map.find s !table with
-  | r -> GlobRef.UserOrd.equal r gr
-  | exception Not_found -> false
+  let res = CString.Map.find_opt s !table in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
+      ~value:(fun () -> recorded_lib_ref s);
+  match res with
+  | Some r -> GlobRef.UserOrd.equal r gr
+  | None -> false
 
 let check_ind_ref s ind = check_ref s (GlobRef.IndRef ind)
 
@@ -47,17 +75,13 @@ let () = CErrors.register_handler (function
 let lib_ref s =
   let res = CString.Map.find_opt s !table in
   Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
-    ~value:(fun () -> match res with
-        | None -> None
-        | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r));
+    ~value:(fun () -> recorded_lib_ref s);
   (match res with Some r -> r | None -> raise (NotFoundRef s))
 
 let lib_ref_opt s =
   let res = CString.Map.find_opt s !table in
   Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
-    ~value:(fun () -> match res with
-        | None -> None
-        | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r));
+    ~value:(fun () -> recorded_lib_ref s);
   res
 
 let add_ref s c =

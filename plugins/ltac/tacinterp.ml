@@ -40,6 +40,48 @@ open Proofview.Notations
 open Context.Named.Declaration
 open Ltac_pretype
 
+(* ML tactic package suffixes built below [plugins/]. Some directories build
+   multiple packages. The compatibility names load the same audited code. An
+   ML tactic from any other package is code the census did not audit, so a
+   proof that runs it is never replayed. *)
+let audited_ml_tactic_plugin_suffixes =
+  [ "btauto";
+    "cc";
+    "cc_core";
+    "derive";
+    "extraction";
+    "firstorder";
+    "firstorder_core";
+    "funind";
+    "ltac";
+    "ltac2";
+    "ltac2_ltac1";
+    "micromega";
+    "micromega_core";
+    "nsatz";
+    "nsatz_core";
+    "number_string_notation";
+    "ring";
+    "rtauto";
+    "ssreflect";
+    "ssrmatching";
+    "tauto";
+    "zify" ]
+
+let audited_ml_tactic_plugins =
+  List.fold_left
+    (fun set suffix ->
+       String.Set.add ("coq-core.plugins." ^ suffix)
+         (String.Set.add ("rocq-runtime.plugins." ^ suffix) set))
+    String.Set.empty audited_ml_tactic_plugin_suffixes
+
+let fence_ml_tactic { mltac_plugin; mltac_tactic } =
+  if Proof_recorder.active () &&
+     not (String.Set.mem mltac_plugin audited_ml_tactic_plugins)
+  then
+    Proof_recorder.ineligible ~reason:"ml_tactic"
+      ~detail:(mltac_plugin ^ "." ^ mltac_tactic)
+
 let do_profile trace ?count_call tac =
   Profile_tactic.do_profile_gen (function
       | (_, c) :: _ -> Some (Pptactic.pp_ltac_call_kind c)
@@ -1231,6 +1273,7 @@ and eval_tactic_ist ist tac : unit Proofview.tactic =
   | TacML (opn,l) ->
       let trace = push_trace (Loc.tag ?loc @@ LtacMLCall tac) ist in
       let ist = { ist with extra = TacStore.set ist.extra f_trace trace; } in
+      let () = fence_ml_tactic opn.mltac_name in
       let tac = Tacenv.interp_ml_tactic opn in
       let args = Ftactic.List.map_right (fun a -> interp_tacarg ist a) l in
       let tac args =

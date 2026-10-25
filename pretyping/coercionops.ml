@@ -92,7 +92,20 @@ let class_tab =
 let coercion_tab =
   Summary.ref ~name:"coercion_tab" (CoeTypMap.empty : coe_info_typ CoeTypMap.t)
 
+let record_class_tab () =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"class_tab" ~key:(fun () -> "")
+      ~value:(fun () ->
+          Some (Proof_recorder.digest_cached ~what:"class_tab" !class_tab))
+
+let record_coercion_tab () =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"coercion_tab" ~key:(fun () -> "")
+      ~value:(fun () ->
+          Some (Proof_recorder.digest_cached ~what:"coercion_tab" !coercion_tab))
+
 let reachable_from cl =
+  record_class_tab ();
   try (ClTypMap.find cl !class_tab).cl_reachable_from
   with Not_found -> ClTypSet.empty
 
@@ -130,6 +143,12 @@ end
 let inheritance_graph =
   Summary.ref ~name:"inheritance_graph" ClGraph.empty
 
+let record_inheritance_graph () =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"coercion_graph" ~key:(fun () -> "")
+      ~value:(fun () ->
+          Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph))
+
 (* ajout de nouveaux "objets" *)
 
 let add_new_class cl s =
@@ -143,18 +162,26 @@ let add_path (x, y) p =
 
 (* class_info : cl_typ -> int * cl_info_typ *)
 
-let class_info cl = ClTypMap.find cl !class_tab
+let class_info cl =
+  record_class_tab ();
+  ClTypMap.find cl !class_tab
 
 let class_nparams cl = (class_info cl).cl_param
 
-let class_exists cl = ClTypMap.mem cl !class_tab
+let class_exists cl =
+  record_class_tab ();
+  ClTypMap.mem cl !class_tab
 
-let coercion_info coe = CoeTypMap.find coe !coercion_tab
+let coercion_info coe =
+  record_coercion_tab ();
+  CoeTypMap.find coe !coercion_tab
 
 let coercion_type env sigma (coe,u) =
   Retyping.get_type_of env sigma (EConstr.mkRef (coe.coe_value,u))
 
-let coercion_exists coe = CoeTypMap.mem coe !coercion_tab
+let coercion_exists coe =
+  record_coercion_tab ();
+  CoeTypMap.mem coe !coercion_tab
 
 (* find_class_type : evar_map -> constr -> cl_typ * universe_list * constr list *)
 
@@ -247,6 +274,7 @@ let pr_class x = str (string_of_class x)
 (* lookup paths *)
 
 let lookup_path_between_class (s,t) =
+  record_inheritance_graph ();
   ClGraph.find s t !inheritance_graph
 
 let lookup_path_to_fun_from_class s =
@@ -271,11 +299,8 @@ let apply_on_class_of env sigma t cont =
     if not (Int.equal (List.length args) n1) then raise Not_found;
     cont cl
 
-(* BET-84 census row 14: the coercion graph, as one digest, when a proof
-   looks for a coercion path. *)
+(* BET-84 census row 14: every coercion-path lookup reads the graph. *)
 let lookup_path_between env sigma ~src:s ~tgt:t =
-  Proof_recorder.read ~row:"14" ~channel:"coercion_graph" ~key:(fun () -> "")
-    ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph));
   apply_on_class_of env sigma s (fun i ->
       apply_on_class_of env sigma t (fun j ->
           lookup_path_between_class (i,j)))
@@ -298,7 +323,7 @@ let get_coercion_constructor env coe =
 
 let lookup_pattern_path_between env (s,t) =
   List.map (get_coercion_constructor env)
-    (ClGraph.find (CL_IND s) (CL_IND t) !inheritance_graph)
+    (lookup_path_between_class (CL_IND s, CL_IND t))
 
 let path_is_reversible p =
   List.for_all (fun c -> c.coe_reversible) p

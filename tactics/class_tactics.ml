@@ -1212,15 +1212,21 @@ let activate_solver ~name =
   deactivate_solver ~name;
   active_solvers := name :: !active_solvers
 
+(* BET-84 census row 8: the selected typeclass solver changes resolution. *)
 let find_solver env evd (s : Intpart.set) =
   let rec find_solver = function
-    | [] -> Search.typeclasses_resolve
+    | [] -> "default", Search.typeclasses_resolve
     | hd :: tl ->
       try
         let (solver,cond) = CString.Map.find hd !class_solvers in
-        if cond env evd s then solver else find_solver tl
-      with Not_found ->  find_solver tl in
-  find_solver !active_solvers
+        if cond env evd s then hd, solver else find_solver tl
+      with Not_found -> find_solver tl
+  in
+  let name, solver = find_solver !active_solvers in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"8" ~channel:"typeclass_solver"
+      ~key:(fun () -> "solver") ~value:(fun () -> Some name);
+  solver
 
 (** If [do_split] is [true], we try to separate the problem in
     several components and then solve them separately *)

@@ -183,13 +183,26 @@ module ReductionBehaviour = struct
     let all_never_unfold table = fst table
   end
 
+(* BET-84 census row 5: [simpl] reads the whole reduction behaviour table. *)
+let () =
+  Proof_recorder.register_tables (fun () ->
+      [Proof_record.{ row = "5"; channel = "reduction_behaviour"; key = "";
+                      value = Some (Proof_recorder.digest_cached
+                                      ~what:"reduction_behaviour" (Db.get ())) }])
+
+  (* BET-84: ONE value for the reduction_behaviour channel, called by the
+     recorder below and by the replay evaluator
+     (vernac/proof_replay_env.ml). *)
+  let recorded_reduction_behaviour r =
+    Some (Proof_recorder.digest ~what:"reduction_behaviour" (get_from_db (Db.get ()) r))
+
   (* BET-84 census row 5: each [simpl] behaviour the proof reads. *)
   let get r =
     let res = get_from_db (Db.get ()) r in
     if Proof_recorder.active () then
       Proof_recorder.read_by ~row:"5" ~channel:"reduction_behaviour" ~id:r
         ~key:(fun () -> Names.Constant.to_string r)
-        ~value:(fun () -> Some (Proof_recorder.digest ~what:"reduction_behaviour" res));
+        ~value:(fun () -> recorded_reduction_behaviour r);
     res
 
   let print c = print_from_db (Db.get ()) c

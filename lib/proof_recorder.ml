@@ -19,11 +19,11 @@ end
 module ReadTbl = Hashtbl.Make (ReadKey)
 
 type proof_state = {
-  p_name : string;
+  mutable p_name : string;
   p_statement : string;
   p_position : R.position;
   p_toolchain_key : R.toolchain_key;
-  p_start_tables : R.read list;
+  mutable p_start_tables : R.read list;
   p_reads : R.read Queue.t;
   p_seen : unit ReadTbl.t;  (** the keys already recorded *)
   p_ineligible : R.ineligible Queue.t;
@@ -67,6 +67,16 @@ let gen = ref 0
 let generation () = !gen
 
 let active () = !recording
+
+(* The .vo digest of a loaded library, installed by the toplevel. A constant
+   of a required library is recorded by that digest and not by its body: the
+   library's digest already pins every constant the library holds, and its
+   body can be a megabyte of term. [None] for the library being compiled. *)
+let library_digest_hook : (string -> string option) ref = ref (fun _ -> None)
+
+let set_library_digest f = library_digest_hook := f
+
+let library_digest name = !library_digest_hook name
 
 let current_name () =
   match !state with
@@ -130,7 +140,7 @@ module Addr = Hashtbl.Make (struct
    rest of the state, so a compile without the option holds nothing. *)
 let digest_cache : string Addr.t = Addr.create 1024
 
-let stop () = state := None; recording := false; Addr.reset digest_cache
+let stop () = state := None; recording := false; Addr.reset digest_cache; R.reset_memo ()
 
 let write path =
   match !state with
@@ -163,14 +173,15 @@ let open_proof ~name ~statement ~position =
       end
     | None ->
       let span_start = match st.f_pending with Some (_, Some (bp, _)) -> Some bp | _ -> None in
-      let start_tables = if not st.f_header.R.tables_at_start then [] else table_reads () in
+      (* The proof is opened first, so that a table this cannot digest marks
+         this proof ineligible and not the one before it. *)
       incr gen;
       st.f_proof <- Some {
           p_name = name;
           p_statement = statement ();
           p_position = position;
           p_toolchain_key = R.toolchain_key (st.f_toolchain ());
-          p_start_tables = start_tables;
+          p_start_tables = [];
           p_reads = Queue.create ();
           p_seen = ReadTbl.create 256;
           p_ineligible = Queue.create ();
@@ -188,7 +199,11 @@ let open_proof ~name ~statement ~position =
           p_span_start = span_start;
           p_depth = 0;
         };
-      set_recording st
+      set_recording st;
+      (match st.f_proof with
+       | None -> ()
+       | Some p ->
+         p.p_start_tables <- (Queue.fold (fun acc f -> List.rev_append (f ()) acc) [] tables |> List.rev))
 
 (* The sentence being run belongs to the proof that is open when it ends,
    so the statement's own sentence is the first of its proof's. *)
@@ -258,6 +273,28 @@ let close_proof ~closer ~kernel_check ~replay =
       st.f_count <- st.f_count + 1;
       st.f_proof <- None;
       set_recording st
+
+(* An [Abort] drops the proof and writes no entry. Without this the recorder
+   would keep the aborted proof open and swallow every proof after it. *)
+let drop_proof () =
+  match !state with
+  | None -> ()
+  | Some st ->
+    match st.f_proof with
+    | None -> ()
+    | Some p when p.p_depth > 0 -> p.p_depth <- p.p_depth - 1
+    | Some _ -> st.f_pending <- None; st.f_proof <- None; set_recording st
+
+(* [Abort All] drops every open proof, nested ones included. *)
+let drop_all_proofs () =
+  match !state with
+  | None -> ()
+  | Some st -> st.f_pending <- None; st.f_proof <- None; set_recording st
+
+let set_name name =
+  match !state with
+  | None | Some { f_proof = None; _ } -> ()
+  | Some { f_proof = Some p; _ } -> if p.p_depth = 0 then p.p_name <- name
 
 (* Writes are collected whenever a proof is open, [without_recording]
    included: a write the declaration makes at the closer is the proof's. *)
