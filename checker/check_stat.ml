@@ -68,14 +68,25 @@ let pr_admitted () = match List.rev !admitted with
                see unsafe flags inside their sealed modules:" ++ fnl() ++
           prlist_with_sep fnl str libs) ++ fnl() ++ fnl()
 
-(* A name under a functor parameter would print as if it were a real constant
-   of the library ([F(X:T)] and [G(X:T)] both give [X.c]), so the parameter's
-   own fields are left to the functor's applications, which are checked in
-   their own right. *)
+(* A field of a functor parameter has no name of its own: [Constant.to_string]
+   prints the parameter [X] as if it were a module, so [F (X : T)] and
+   [G (X : T)] would both give [X.c] and could be mistaken for a real [X.c] of
+   the library. Such a field is still checked under its own typing flags (a
+   tampered library can put an unsafe definition in a parameter's signature),
+   so it is listed, under the kernel's unambiguous name for the parameter,
+   [<library#X#n>.c]. *)
 let rec under_bound_module mp = match mp with
   | ModPath.MPbound _ -> true
   | ModPath.MPdot (mp, _) -> under_bound_module mp
   | ModPath.MPfile _ -> false
+
+let constant_name c =
+  if under_bound_module (Constant.modpath c) then KerName.debug_to_string (Constant.user c)
+  else Constant.to_string c
+
+let mind_name c =
+  if under_bound_module (MutInd.modpath c) then KerName.debug_to_string (MutInd.user c)
+  else MutInd.to_string c
 
 (* Each list is built in reverse and deduplicated at print time, so recording
    a constant costs one cons rather than a scan of everything recorded. *)
@@ -85,8 +96,10 @@ let record_constant c cb =
   match !unsafe_flags with
   | None -> ()
   | Some flags ->
-    if under_bound_module (Constant.modpath c) then () else
-    let name = Constant.to_string c in
+    let tf = cb.const_typing_flags in
+    (* Most constants carry no unsafe flag; build nothing for them. *)
+    if tf.check_universes && tf.check_eliminations && tf.check_guarded then () else
+    let name = constant_name c in
     unsafe_flags := Some {
       flags with
       type_in_type =
@@ -104,8 +117,14 @@ let record_inductive c mib =
   match !unsafe_flags with
   | None -> ()
   | Some flags ->
-    if under_bound_module (MutInd.modpath c) then () else
-    let name = MutInd.to_string c in
+    let tf = mib.mind_typing_flags in
+    let relies_on_indices =
+      not tf.indices_matter &&
+      Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) mib.mind_packets
+    in
+    if tf.check_universes && tf.check_eliminations && tf.check_guarded
+       && tf.check_positive && not relies_on_indices then () else
+    let name = mind_name c in
     unsafe_flags := Some {
       type_in_type =
         if mib.mind_typing_flags.check_universes then flags.type_in_type
