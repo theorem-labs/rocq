@@ -268,18 +268,21 @@ let lookup_constant_opt kn env =
     | None -> None
     | Some (cb, _, _) -> Some cb
   in
-  Recorded.constant Recorded.cst_body kn ~channel:"constant"
-    (fun () -> Recorded.of_value "constant" res);
+  if Proof_recorder.active () then
+    Recorded.constant Recorded.cst_body kn ~channel:"constant"
+      (fun () -> Recorded.of_value "constant" res);
   res
 
 let lookup_constant_key kn env =
   match Cmap_env.find_opt kn env.env_constants with
   | Some ((cb, _, _) as v) ->
-    Recorded.constant Recorded.cst_body kn ~channel:"constant"
-      (fun () -> Recorded.of_value "constant" (Some cb));
+    if Proof_recorder.active () then
+      Recorded.constant Recorded.cst_body kn ~channel:"constant"
+        (fun () -> Recorded.of_value "constant" (Some cb));
     v
   | None ->
-    Recorded.constant Recorded.cst_body kn ~channel:"constant" (fun () -> None);
+    if Proof_recorder.active () then
+      Recorded.constant Recorded.cst_body kn ~channel:"constant" (fun () -> None);
     anomaly Pp.(str "Constant " ++ Constant.print kn ++ str" does not appear in the environment.")
 
 let lookup_constant kn env =
@@ -287,8 +290,9 @@ let lookup_constant kn env =
 
 let mem_constant kn env =
   let res = Cmap_env.mem kn env.env_constants in
-  Recorded.constant Recorded.cst_exists kn ~channel:"constant_exists"
-    (fun () -> Some (string_of_bool res));
+  if Proof_recorder.active () then
+    Recorded.constant Recorded.cst_exists kn ~channel:"constant_exists"
+      (fun () -> Some (string_of_bool res));
   res
 
 let add_rewrite_rules l env =

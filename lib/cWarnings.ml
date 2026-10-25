@@ -132,7 +132,7 @@ let warn { Msg.tag; warning } ?loc v =
   (* BET-84: a warning a proof raised is a write, because [Set Warnings
      "+name"] can turn it into an error for a later proof. A disabled
      warning changes nothing and is not recorded. *)
-  if status <> Disabled then
+  if status <> Disabled && Proof_recorder.writing () then
     Proof_recorder.write_warning ~name:warning.wname ~message:(Pp.string_of_ppcmds (print w));
   match status with
   | Disabled -> ()

@@ -103,18 +103,46 @@ let dedup =
     "a repeated read is stored once; no key is computed outside a proof"
     (List.length p.R.reads = 2 && in_proof = 3 && !calls = 3)
 
-(* A changed value for one key makes the proof ineligible: replay cannot
-   reproduce a read whose value moved while the proof ran. *)
-let value_changed =
+(* Only the first value of a key is kept, and a repeated read does not
+   compute its value again: that is what keeps a hot choke point cheap. *)
+let first_value =
   start ();
   open_proof ();
-  Rec.read ~row:"1" ~channel:"constant" ~key:(fun () -> "Top.x") ~value:(fun () -> Some "d1");
-  Rec.read ~row:"1" ~channel:"constant" ~key:(fun () -> "Top.x") ~value:(fun () -> Some "d2");
+  let values = ref 0 in
+  let value d () = incr values; Some d in
+  Rec.read ~row:"1" ~channel:"constant" ~key:(fun () -> "Top.x") ~value:(value "d1");
+  Rec.read ~row:"1" ~channel:"constant" ~key:(fun () -> "Top.x") ~value:(value "d2");
   close_proof ();
   let p = List.hd (the_file ()).R.proofs in
-  mk_bool_test "recorder-value-changed"
-    "a key whose value changes inside the proof makes the proof ineligible"
-    (List.exists (fun i -> i.R.reason = "read_changed") p.R.ineligible)
+  mk_bool_test "recorder-first-value"
+    "a repeated key keeps its first value, and its value is computed once"
+    (!values = 1 && p.R.ineligible = []
+     && List.map (fun r -> r.R.value) p.R.reads = [ Some "d1" ])
+
+(* read_by finds a repeat by its raw id, so neither the key nor the value is
+   computed for it; a new proof starts with no id seen. *)
+let read_by =
+  start ();
+  let keys = ref 0 and values = ref 0 in
+  let read id =
+    Rec.read_by ~row:"6" ~channel:"xref" ~id
+      ~key:(fun () -> incr keys; String.concat "." id)
+      ~value:(fun () -> incr values; Some "d") in
+  open_proof ();
+  read [ "Top"; "x" ];
+  read [ "Top"; "x" ];
+  read [ "Top"; "y" ];
+  close_proof ();
+  let first = (!keys, !values) in
+  open_proof ~name:"Top.File.second" ();
+  read [ "Top"; "x" ];
+  close_proof ();
+  let f = the_file () in
+  mk_bool_test "recorder-read-by"
+    "read_by computes key and value once per id per proof"
+    (first = (2, 2) && (!keys, !values) = (3, 3)
+     && List.map (fun p -> List.map (fun r -> r.R.key) p.R.reads) f.R.proofs
+        = [ [ "Top.x"; "Top.y" ]; [ "Top.x" ] ])
 
 let ineligible_reasons =
   start ();
@@ -158,21 +186,27 @@ let nested =
      && List.exists (fun i -> i.R.reason = "nested_proof") p.R.ineligible
      && List.exists (fun r -> r.R.key = "in_inner") p.R.reads)
 
+(* The registry is global: the hint and typeclass modules linked into this
+   test register their own tables when they load, so the test looks for its
+   own entry among them, and counts the calls of its own source. *)
 let start_tables =
-  start ~tables:true ();
+  let calls = ref 0 in
   Rec.register_tables (fun () ->
-      [ R.{ row = "7"; channel = "hint_db"; key = "core"; value = Some (String.make 32 'e') } ]);
+      incr calls;
+      [ R.{ row = "7"; channel = "hint_db"; key = "test-db"; value = Some (String.make 32 'e') } ]);
+  start ~tables:true ();
   open_proof ();
   close_proof ();
   let p = List.hd (the_file ()).R.proofs in
-  let () = start ~tables:false () in
-  Rec.register_tables (fun () -> assert false);
+  let with_tables = !calls in
+  start ~tables:false ();
   open_proof ();
   close_proof ();
   let q = List.hd (the_file ()).R.proofs in
   mk_bool_test "recorder-start-tables"
     "with tables_at_start, every table is listed at the proof's start; without it, none is read"
-    (List.map (fun r -> r.R.key) p.R.start_tables = [ "core" ] && q.R.start_tables = [])
+    (List.mem "test-db" (List.map (fun r -> r.R.key) p.R.start_tables)
+     && with_tables = 1 && !calls = 1 && q.R.start_tables = [])
 
 (* The sentence that opens a proof is the proof's first sentence, and the
    one that closes it is its last. A sentence outside a proof is dropped,
@@ -214,7 +248,7 @@ let writes =
      && w.R.counters = [ ("evar", 5) ])
 
 let tests =
-  [ inert; one_proof; outside; dedup; value_changed; ineligible_reasons; admitted; nested; start_tables;
-    sentences; writes ]
+  [ inert; one_proof; outside; dedup; first_value; read_by; ineligible_reasons; admitted; nested;
+    start_tables; sentences; writes ]
 
 let _ = run_tests __FILE__ log_out_ch tests

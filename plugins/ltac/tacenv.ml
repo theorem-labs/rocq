@@ -53,10 +53,11 @@ let register_alias key tac =
 
 (* BET-84 census row 9: each Ltac alias and definition the proof reads. *)
 let record channel k v =
-  Proof_recorder.read ~row:"9" ~channel ~key:(fun () -> KerName.to_string k)
-    ~value:(fun () -> match v with
-        | None -> None
-        | Some v -> Some (Proof_recorder.digest ~what:channel v))
+  if Proof_recorder.active () then
+    Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> KerName.to_string k)
+      ~value:(fun () -> match v with
+          | None -> None
+          | Some v -> Some (Proof_recorder.digest ~what:channel v))
 
 let interp_alias key =
   let res = KerName.Map.find_opt key !alias_map in

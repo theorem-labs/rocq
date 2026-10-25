@@ -552,9 +552,10 @@ let implicits_of_global_raw ref =
    reads, with the renaming already applied. *)
 let implicits_of_global ref =
   let res = implicits_of_global_raw ref in
-  Proof_recorder.read ~row:"12" ~channel:"implicits"
-    ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print ref))
-    ~value:(fun () -> Some (Proof_recorder.digest ~what:"implicits" res));
+  if Proof_recorder.active () then
+    Proof_recorder.read_by ~row:"12" ~channel:"implicits" ~id:ref
+      ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print ref))
+      ~value:(fun () -> Some (Proof_recorder.digest ~what:"implicits" res));
   res
 
 let cache_implicits_decl (ref, imps) =
