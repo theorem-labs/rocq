@@ -38,3 +38,10 @@ section 'Constants/Inductives relying on unsafe (co)fixpoints' "$d/checked.log" 
 if grep -q 'Libraries admitted without checking' "$d/checked.log"; then
   echo "no library is admitted, yet the summary names some"; exit 1
 fi
+
+# A global -indices-matter must not clear what is stored with an admitted
+# library: -norec admits Corelib.Init.Logic without checking it again, so eq,
+# which relies on indices not mattering there, must still be listed.
+rocqchk -o -silent -indices-matter -norec Corelib.Init.Prelude > "$d/indices.log" 2>&1
+section 'Inductives relying on indices not mattering' "$d/indices.log" \
+  | grep -qx '    Corelib.Init.Logic.eq'

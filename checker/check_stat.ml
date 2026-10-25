@@ -180,10 +180,15 @@ let pr_nonpositive env flags =
   let inds = fold_inductives (fun c cb acc -> if not cb.mind_typing_flags.check_positive then MutInd.to_string c :: acc else acc) env [] in
   pr_assumptions "Inductives whose positivity is assumed" (add_missing inds flags.nonpositive)
 
+(* The fold also covers libraries that were admitted rather than checked, whose
+   stored flag is all that is known of them, so a global [-indices-matter] must
+   not clear their warning. A declaration is quiet only when both flags say
+   indices mattered. The recorder above is not in that position: every entry it
+   sees is being checked under the global flag. *)
 let pr_indices_matter env flags =
   let indices_matter = (Environ.typing_flags env).indices_matter in
   let inds = fold_inductives (fun c cb acc ->
-    if indices_matter then acc
+    if indices_matter && cb.mind_typing_flags.indices_matter then acc
     else if Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) cb.mind_packets
     then MutInd.to_string c :: acc
     else acc) env [] in
