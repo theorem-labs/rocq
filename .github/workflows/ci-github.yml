@@ -10,38 +10,34 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
+# The theorem-labs fork is built and run on Linux only, in the BET grader
+# image, whose opam switch is ocaml-variants.4.14.2+options with
+# ocaml-option-flambda. The first entry installs exactly that compiler. CI
+# builds with dune's dev profile (`make world`), so the release-only
+# -O3 -unbox-closures that the grader's `dune build -p` applies are not
+# exercised here. The OCaml 5 entry keeps the fork building on current OCaml.
+# macOS and Windows are not targets of this fork and are not in the matrix.
 jobs:
   build:
     strategy:
       matrix:
         include:
-          - name: macOS
-            os: macos-latest
-            ocaml: 4.14
+          - name: Linux (OCaml 4.14.2 flambda)
+            os: ubuntu-latest
+            ocaml: ocaml-variants.4.14.2+options,ocaml-option-flambda
             test_disabled:
-            # We exclude the coq-core package
-            packages: ./rocq*.opam
-          - name: Windows
-            os: windows-latest
-            ocaml: 4.14
-            test_disabled: misc precomputed-time-tests
-            # we don't support rocqide on Windows yet, so we filter it, see #20631
-            packages: ./rocqide-server.opam ./rocq-*.opam
+            packages: ./coqide-server.opam ./rocq*.opam
           - name: Linux (latest OCaml)
             os: ubuntu-latest
-            ocaml: 5.4
+            ocaml: 5
             test_disabled:
-            packages: ./rocq*.opam
+            packages: ./coqide-server.opam ./rocq*.opam
       fail-fast: false
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - name: 🐛 Special macOS Config
-        if: matrix.os == 'macos-latest'
-        run: brew install gnu-time
-
       - name: APT update
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update
@@ -54,20 +50,6 @@ jobs:
         with:
           ocaml-compiler: ${{ matrix.ocaml }}
           dune-cache: true
-
-      # Cygwin's pkgconf 3.0.4-1 (2026-07-26) compiles its personality search
-      # path as /usr/lib/pkgconfig/personality.d:/usr/share/pkgconfig/personality.d
-      # but still installs the mingw-w64 personality files under
-      # /etc/pkgconfig/personality.d, so `pkgconf --personality=<triplet>`
-      # silently falls back to the native personality and the
-      # conf-mingw-w64-{gmp,zlib}-* opam packages fail their probes.  pkgconf
-      # also searches $XDG_DATA_DIRS/pkgconfig/personality.d, so prepending /etc
-      # restores the lookup.  Drop this once Cygwin ships a fixed pkgconf
-      # packaging.
-      - name: 🩹 Work around Cygwin pkgconf 3.0.4-1 personality path bug
-        if: matrix.os == 'windows-latest'
-        run: |
-          "XDG_DATA_DIRS=/etc:/usr/local/share:/usr/share" >> $env:GITHUB_ENV
 
       - name: 🐫🐪🐫 Get Rocq dependencies
         run: opam install --deps-only ${{ matrix.packages }}
