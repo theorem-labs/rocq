@@ -1228,7 +1228,17 @@ let find_uniform_parameters illformed ?evars env recindx nargs bodies =
     let f, l = decompose_app_list c in
     match kind f with
     | Rel n ->
-      let fold accu c = fold_constr_with_binders succ aux k accu c in
+      let fold accu c = match kind c with
+        | Rel m when m > k && m <= k + nbodies ->
+          (* An argument that is a bare occurrence of one of the mutual
+             fixpoints: it is applied to nothing, so no prefix of arguments can
+             be extruded from it, and [drop_uniform_parameters] must not be
+             asked to drop one. [fold_constr_with_binders] would miss it,
+             because it visits the immediate children of the argument and a
+             [Rel] has none. *)
+          0
+        | _ -> fold_constr_with_binders succ aux k accu c
+      in
       let nuniformparams = List.fold_left fold nuniformparams l in
       (* A recursive reference to any one of the mutual fixpoints *)
       if n > k && n <= k + nbodies then
