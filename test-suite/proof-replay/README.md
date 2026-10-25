@@ -154,3 +154,43 @@ is compiled against the STOCK `A.vo`, then placed beside the REPLAYED `A.vo`,
 and `C.v` is compiled on top.  It must behave as the all-stock control does,
 and `rocqchk` must accept the reused object.  The control runs first, so a
 broken setup fails there instead of looking like a pass.
+
+## Comparing a replayed `.vo` against stock: the contract, and two traps
+
+The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
+words: "verdict identical; the tree loads; `coqchk` accepts every replayed
+object; and every segment's content is value-equal to stock's, EXCLUDING
+recorded dependency digests, whose differences must each be explained by a
+difference in the object they name."  A recorded dependency digest is a
+reference to another object's bytes, not content of its own.
+
+That last clause is a **standing obligation**, not a one-off: every excluded
+difference must be shown to be a 16-byte string equal to the library MD5 of
+that same `.vo` on that side.  `vodiff_all.py` is the tool that does it, and a
+sweep must cover every object, never a sample.
+
+Two traps, both of which have already produced a wrong answer here:
+
+1. **`segcmp_norm` cannot see this class at all.**  It normalises dependency
+   digests away, so an object whose digests differ looks identical to it.  In
+   the 2026-10-26 lane run it reported 41 differing objects out of 262; the
+   real count was 262, of which 239 differed only in digests.  It must never be
+   the only comparison.
+2. **`vodiff.py` lists at most 20 differences per segment but counts them
+   all.**  The cap is on the listing (`vodiff.py:252,254`); the count printed
+   at `:257` is `len(out["diff"])`, uncapped.  Classifying from the listing
+   gave two false "value differs" objects at 30 and 31 differences, both
+   wholly dependency digests.  Judge on the count, or call `compare()` and walk
+   `out["diff"]` yourself as `vodiff_all.py` does.
+
+One further caveat on `vodiff.py` for anyone extending it: `compare()`
+memoises on `(id(a), id(b))` and returns `True` on a revisited pair even when
+that pair differed on its first visit, so its BOOLEAN result is unreliable on a
+DAG.  The difference is still recorded in `out["diff"]`, so the count is
+sound — which is why everything here judges on the count.
+
+```sh
+python3 vodiff.py REPLAY.vo STOCK.vo library       # one segment, counts + first 20
+python3 vodiff_all.py REPLAY.vo STOCK.vo library   # every difference, digests resolved, JSON
+```
+
