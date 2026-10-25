@@ -43,11 +43,12 @@ let fold f acc =
 
 (* BET-84 row M1: each abbreviation the proof reads. *)
 let record k v =
-  Proof_recorder.read ~row:"M1" ~channel:"abbreviation"
-    ~key:(fun () -> KerName.to_string k)
-    ~value:(fun () -> match v with
-        | None -> None
-        | Some v -> Some (Proof_recorder.digest ~what:"abbreviation" v))
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"M1" ~channel:"abbreviation"
+      ~key:(fun () -> KerName.to_string k)
+      ~value:(fun () -> match v with
+          | None -> None
+          | Some v -> Some (Proof_recorder.digest ~what:"abbreviation" v))
 
 let find_opt k =
   let res = KerName.Map.find_opt k !abbrev_table in

@@ -104,8 +104,19 @@ type read = {
 }
 
 type writes = {
-  universe_levels : string list;  (** Levels the proof created, in order. *)
-  counters : (string * int) list;  (** Counter name, total advance. *)
+  universe_levels : string list;
+  (** The levels the proof's declaration PUBLISHED in the global context, in
+      the order of the level set. It is not the generator's event sequence: a
+      level a tactic created and then dropped by backtracking or by
+      minimization, and a level abstracted out of a polymorphic declaration,
+      are not here. Those levels are not observable by a later proof except
+      through the generator's counter, which [counters] holds as
+      ["univ_level"], so the pair (published levels, counter advance) is what
+      a replay must reproduce. *)
+  counters : (string * int) list;
+  (** Counter name, total advance: ["univ_level"], ["sort_quality"],
+      ["evar"], ["meta"], ["hint_counter"], ["rewrite_hint_counter"],
+      ["ssr_abstract_id"]. An absent name means no advance. *)
   constraints : string list;  (** New universe constraints, printed. *)
   schemes : string list;  (** Schemes the proof created. *)
   constraint_sources : string list;  (** Constraint-source entries written. *)
