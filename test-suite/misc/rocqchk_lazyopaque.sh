@@ -661,21 +661,36 @@ done
 # and (l) and (o) the reads that run past the segment and succeed.
 #
 # What the runtime does with the value it builds from those bytes is not
-# defined. Stock, which keeps that value in the main process for the rest
-# of the run, dies by SIGSEGV in two runs of three and reports
-# "input_value: unknown code" in the third (measured). This build reads
-# the table with stock's own code; at -j 1 it does so where stock does,
-# with stock's outcomes. Beyond -j 1 the value is a worker's and the
-# worker can exit before anything walks it, so the run can end 0 on a
-# file stock's run happens to die on; that is the known difference of
-# ledger L8, confined to a table nothing reads. Only what is defined is
-# asserted here: at -j 1 neither accepts the file.
+# defined, when nothing validates it. Stock never accepts the file: on the
+# release base it died by SIGSEGV or stopped on a demarshalling error
+# ("input_value: ill-formed message") in every one of 95 runs, over five
+# heap sizes and two builds of the fixture; this build reads the table with stock's own
+# call (System.marshal_in; at -j 1 where stock reads it, with workers in
+# Dep's table task), and whether the process then dies depends on the heap
+# the binary happens to have: on the release base it ended 0 there, five
+# times of five, at -j 1 and -j 2 (dispatch://INFRA-211, the port's
+# compatibility review). No verdict depends on those bytes in either
+# checker: Dep is an unchecked dependency here, so neither checks its
+# opaque bodies, and the kernel never unfolds an opaque body in
+# conversion. Stock never completes the run, so this is a call decided
+# where stock crashes, which Sami's ruling allows
+# (dispatch://INFRA-213/ask/0dfa81b0), ledger L8. Nothing is asserted
+# about -norec Use. What is asserted is the bound: where the damaged table
+# belongs to a library that is checked, Dep itself, it is validated, and
+# both refuse it, with the same exit code and output at every -j.
 rm -rf "$d/p"; cp -a "$d/good" "$d/p"
 vo truncate "$d/p/Dep.vo" opaques 8
-srun p-j1 coqchk -j 1 -R "$d/p" "" -norec Use
-expect "(p) -j 1: the file is refused" "$R" -ne 0
-srun p-ref "$REF" -j 1 -R "$d/p" "" -norec Use
-expect "(p) the reference refuses it too" "$R" -ne 0
+for j in 1 2 4 16; do
+  for sel in "-norec Dep" "-norec Use -norec Dep"; do
+    tag=$(echo "$sel" | tr -cd 'A-Za-z')
+    srun "p-$tag-j$j" coqchk -j "$j" -R "$d/p" "" $sel
+    rc=$R
+    srun "p-$tag-j$j-ref" "$REF" -j "$j" -R "$d/p" "" $sel
+    expect "(p) $sel -j $j: exit code (the reference's is $R)" "$rc" -eq "$R"
+    expect "(p) $sel -j $j: the file is refused" "$rc" -ne 0
+    same "p-$tag-j$j-ref" "p-$tag-j$j" "(p) $sel -j $j"
+  done
+done
 
 # (q) The segment starts in the last bytes of the file, so a reader finds
 # fewer there than one marshal header. Stock's demarshalling tells an
