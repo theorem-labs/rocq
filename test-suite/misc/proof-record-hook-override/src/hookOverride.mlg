@@ -1,0 +1,10 @@
+{
+open HookOverrideImpl
+}
+
+DECLARE PLUGIN "coq-test-suite.hook_override"
+
+VERNAC COMMAND EXTEND ProofRecordHookOverride CLASSIFIED AS SIDEFF
+| [ "TestSolverActivate" ] -> { activate () }
+| [ "TestSolverRegister" ] -> { register_override () }
+END
