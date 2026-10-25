@@ -82,7 +82,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
             ~budget:copts.proof_replay_budget
             ~peak_limit_kb:copts.proof_replay_peak_limit_kb;
           Proof_replay.set_vo_path long_f_dot_out;
-          Proof_replay.start ~library:(Names.DirPath.to_string ldir)
+          Proof_replay.start ~library:(Names.DirPath.to_string ldir) ~toolchain:Proof_record_env.toolchain
       in
       let wall_clock1 = Unix.gettimeofday () in
       let check = Stm.AsyncOpts.(stm_options.async_proofs_mode = APoff) in
