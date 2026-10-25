@@ -290,13 +290,25 @@ let activate_hook ~name =
    [register_hook ~override:true] replaces the closure behind an unchanged
    name with unchanged plugin files (delta-2 review P1). The names and their
    generations, never the hook functions, which are closures. *)
+(* BET-84: ONE value for the canonical_hooks channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_canonical_hooks () =
+  Some (Proof_recorder.digest ~what:"canonical_hooks"
+          (List.map (fun n -> (n, generation_of n)) !active_hooks))
+
+let () =
+  Proof_replay.register_evaluator "canonical_hooks" (fun _key ->
+      match recorded_canonical_hooks () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let apply_hooks env sigma proj pat =
   let active = !active_hooks in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"canonical_hooks" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest ~what:"canonical_hooks"
-                  (List.map (fun n -> (n, generation_of n)) active)));
+      ~value:recorded_canonical_hooks;
   List.find_map (fun name ->
     try CString.Map.get name !all_hooks env sigma proj pat
     with e when CErrors.noncritical e -> anomaly Pp.(str "CS hook " ++ str name ++ str " exploded")) active

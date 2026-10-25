@@ -576,13 +576,25 @@ let activate_hook ~name =
 
 (* BET-84 census row 14: the active coercion hooks, each with the number of
    times its name was registered (delta review D5, delta-2 review P1). *)
+(* BET-84: ONE value for the coercion_hooks channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_coercion_hooks () =
+  Some (Proof_recorder.digest ~what:"coercion_hooks"
+          (List.map (fun n -> (n, generation_of n)) !active_hooks))
+
+let () =
+  Proof_replay.register_evaluator "coercion_hooks" (fun _key ->
+      match recorded_coercion_hooks () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let apply_hooks env sigma ~flags body ~inferred ~expected =
   let active = !active_hooks in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"coercion_hooks" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest ~what:"coercion_hooks"
-                  (List.map (fun n -> (n, generation_of n)) active)));
+      ~value:recorded_coercion_hooks;
   List.find_map (fun name -> CString.Map.get name !all_hooks env sigma ~flags body ~inferred ~expected) active
 
 let default_flags_of env =
