@@ -31,9 +31,15 @@ def tree_root(p: Path) -> Path:
     """The directory to search for the object a dependency digest names.
 
     On a lane box the objects sit under a `rocq/` checkout, which is the whole
-    search space.  A fixture's objects do not, so fall back to the highest
-    ancestor that still holds `.vo` files: that is the fixture's own tree, and
-    searching wider would only slow the sweep down.
+    search space.  A fixture's objects do not, so fall back to the HIGHEST
+    ancestor that still holds `.vo` files: that is the fixture's own tree.
+
+    Known residue (measured, R1P3.P3Lane2, 2026-10-26): "highest" means a
+    fixture whose objects sit below unrelated `.vo` files would widen the scan
+    and so slow it down.  No lane sweep reaches it, because the `rocq/` branch
+    returns first.  Tightening it to the lowest ancestor holding every object
+    the digests name would need the digests first, so it would cost a second
+    pass to save time that is not being lost.
     """
     for parent in p.parents:
         if parent.name == "rocq":
