@@ -51,13 +51,41 @@ let unsafe_flags = ref None
 let start_summary enabled =
   unsafe_flags := if enabled then Some empty_unsafe_flags else None
 
-let add_name name names =
-  if List.mem name names then names else name :: names
+(* An admitted library is never walked, and the environment holds only the
+   interface of its sealed modules, so the sections below cannot see an unsafe
+   flag inside one. Saying so beats printing <none>, which a reader takes for
+   "nothing unsafe here". *)
+let admitted = ref []
+
+let record_admitted name =
+  if !unsafe_flags <> None then admitted := name :: !admitted
+
+let pr_admitted () = match List.rev !admitted with
+  | [] -> mt ()
+  | libs ->
+    str "* " ++
+    hv 2 (str "Libraries admitted without checking, so the sections above cannot \
+               see unsafe flags inside their sealed modules:" ++ fnl() ++
+          prlist_with_sep fnl str libs) ++ fnl() ++ fnl()
+
+(* A name under a functor parameter would print as if it were a real constant
+   of the library ([F(X:T)] and [G(X:T)] both give [X.c]), so the parameter's
+   own fields are left to the functor's applications, which are checked in
+   their own right. *)
+let rec under_bound_module mp = match mp with
+  | ModPath.MPbound _ -> true
+  | ModPath.MPdot (mp, _) -> under_bound_module mp
+  | ModPath.MPfile _ -> false
+
+(* Each list is built in reverse and deduplicated at print time, so recording
+   a constant costs one cons rather than a scan of everything recorded. *)
+let add_name name names = name :: names
 
 let record_constant c cb =
   match !unsafe_flags with
   | None -> ()
   | Some flags ->
+    if under_bound_module (Constant.modpath c) then () else
     let name = Constant.to_string c in
     unsafe_flags := Some {
       flags with
@@ -76,6 +104,7 @@ let record_inductive c mib =
   match !unsafe_flags with
   | None -> ()
   | Some flags ->
+    if under_bound_module (MutInd.modpath c) then () else
     let name = MutInd.to_string c in
     unsafe_flags := Some {
       type_in_type =
@@ -97,18 +126,18 @@ let record_inductive c mib =
         else add_name name flags.indices_matter;
     }
 
-(* The environment walk keeps its own order, and the recorded names it already
-   holds are dropped, so a constant is never listed twice. *)
+(* The environment walk keeps its own order, and a recorded name it already
+   holds is dropped, so a constant is never listed twice. The membership test
+   is a set, because a tree can record tens of thousands of names. *)
 let add_missing names extras =
-  let rec collect extras = function
-    | [] -> extras
-    | name :: rest ->
-      if List.mem name names || List.mem name extras then collect extras rest
-      else collect (name :: extras) rest
+  let seen = List.fold_left (fun s name -> CString.Set.add name s) CString.Set.empty names in
+  let add (seen, acc) name =
+    if CString.Set.mem name seen then (seen, acc)
+    else (CString.Set.add name seen, name :: acc)
   in
-  match List.rev (collect [] (List.rev extras)) with
+  match snd (List.fold_left add (seen, []) (List.rev extras)) with
   | [] -> names
-  | extras -> names @ extras
+  | extras -> names @ List.rev extras
 
 let current_unsafe_flags () =
   match !unsafe_flags with
@@ -184,7 +213,8 @@ let print_context env opac =
       pr_unchecked_eliminations env flags ++
       str "* " ++ hov 0 (pr_unguarded env flags ++ fnl()) ++ fnl() ++
       str "* " ++ hov 0 (pr_nonpositive env flags ++ fnl()) ++ fnl() ++
-      str "* " ++ hov 0 (pr_indices_matter env flags ++ fnl()))
+      str "* " ++ hov 0 (pr_indices_matter env flags ++ fnl()) ++ fnl() ++
+      pr_admitted ())
       )
   end
 
