@@ -52,23 +52,84 @@ let () = Proof_recorder.set_library_digest (fun name ->
       | "unknown" -> None
       | d -> Some d)
 
-let toolchain () : Proof_record.toolchain = Proof_record.{
-    binary = Lazy.force binary_digest;
-    plugins = plugins ();
-    load_order = load_order ();
-    warnings = CWarnings.get_flags ();
-    safe_deps = List.map DirPath.to_string (Library.safe_loaded_libraries ());
-    stack_limit = Proof_limits.rlimit "Max stack size";
-  }
+(* [toolchain] runs at the start of every proof, for that proof's
+   [toolchain_key]. Rebuilt at each call it walks every loaded library for
+   its .vo digest, rebuilds the plugin list and reads the stack rlimit from
+   /proc, and it hands back three brand-new lists, which no memo downstream
+   can recognise. So keep the last record and return THE SAME PHYSICAL VALUE
+   while the state it reads has not moved.
 
-let position () = Proof_record.{
-    (* [cwd] is the module path with the open sections. The matcher joins
-       against the .glob name, whose third column is
-       [Lib.current_dirpath false], so [module_path] is that path and
-       [section_path] adds the open sections. *)
-    module_path = DirPath.to_string (Lib.current_dirpath false);
-    section_path = Libnames.string_of_path (Lib.cwd ());
-  }
+   The detector is the loaded-library list, the loaded-plugin list and the
+   warning flags. It is sound for every field:
+   - [binary] and [stack_limit] are properties of the running process, fixed
+     for the whole compile;
+   - [plugins] is a function of the loaded-plugin list alone (a plugin's
+     files are hashed once, in [plugin_digests]);
+   - [load_order] is a function of the loaded-library list alone: a library
+     is interned and registered once ([Library]'s [intern_library] returns at
+     once for a library that is already loaded), so the .vo digest of a
+     listed library cannot move;
+   - [safe_deps] is a function of the same list, for the same reason: a
+     library's mode (full or safe) is fixed at that one registration, and a
+     later [Require] of a loaded library registers nothing;
+   - [warnings] is the one field that moves on its own ([Set Warnings]), and
+     it is compared directly.
+   The two lists are compared element by element and allocate nothing, so an
+   added, a dropped and a reordered entry are all caught: the detector does
+   not rest on the assumption that a compile only adds. *)
+let same_plugin p q =
+  String.equal (Mltop.PluginSpec.to_package p) (Mltop.PluginSpec.to_package q)
+
+let toolchain_cache
+  : (DirPath.t list * Mltop.PluginSpec.t list * string * Proof_record.toolchain) option ref
+  = ref None
+
+let toolchain () : Proof_record.toolchain =
+  let libs = Library.loaded_libraries () in
+  let mods = Mltop.get_loaded_modules () in
+  let warnings = CWarnings.get_flags () in
+  match !toolchain_cache with
+  | Some (libs0, mods0, warnings0, tc)
+    when String.equal warnings0 warnings
+      && List.equal DirPath.equal libs0 libs
+      && List.equal same_plugin mods0 mods -> tc
+  | Some _ | None ->
+    let tc : Proof_record.toolchain = Proof_record.{
+        binary = Lazy.force binary_digest;
+        plugins = plugins ();
+        load_order = load_order ();
+        warnings;
+        safe_deps = List.map DirPath.to_string (Library.safe_loaded_libraries ());
+        stack_limit = Proof_limits.rlimit "Max stack size";
+      } in
+    toolchain_cache := Some (libs, mods, warnings, tc);
+    tc
+
+(* [position] is built at the start of every proof, with the recorder on or
+   off, and [Lib.current_dirpath] counts the open sections by walking the
+   whole library stack, which grows with the file. Both fields are a function
+   of [Lib.cwd ()] alone: a section or a module opens by adding a suffix to
+   the path prefix and closes by restoring the prefix it saved, so the same
+   PHYSICAL path prefix carries the same open sections. Keep the last record
+   and return it while that prefix has not moved. A prefix that is rebuilt
+   equal costs a rebuild, not a wrong answer. *)
+let position_cache : (Libnames.full_path * Proof_record.position) option ref = ref None
+
+let position () =
+  let path = Lib.cwd () in
+  match !position_cache with
+  | Some (path0, p) when path0 == path -> p
+  | Some _ | None ->
+    let p = Proof_record.{
+        (* [cwd] is the module path with the open sections. The matcher joins
+           against the .glob name, whose third column is
+           [Lib.current_dirpath false], so [module_path] is that path and
+           [section_path] adds the open sections. *)
+        module_path = DirPath.to_string (Lib.current_dirpath false);
+        section_path = Libnames.string_of_path path;
+      } in
+    position_cache := Some (path, p);
+    p
 
 (* A value of the global state that no proof changes in place, digested again
    only when it is a different value: the universe graph is one value from

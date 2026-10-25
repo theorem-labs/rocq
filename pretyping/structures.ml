@@ -88,11 +88,12 @@ let rebuild env s =
 
 (* BET-84 census row 14: the record structures a proof reads. *)
 let record_structure ind v =
-  Proof_recorder.read ~row:"14" ~channel:"structure"
-    ~key:(fun () -> Names.MutInd.to_string (fst ind) ^ "," ^ string_of_int (snd ind))
-    ~value:(fun () -> match v with
-        | None -> None
-        | Some s -> Some (Proof_recorder.digest_cached ~what:"structure" s))
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"structure"
+      ~key:(fun () -> Names.MutInd.to_string (fst ind) ^ "," ^ string_of_int (snd ind))
+      ~value:(fun () -> match v with
+          | None -> None
+          | Some s -> Some (Proof_recorder.digest_cached ~what:"structure" s))
 
 let record_projection cst v =
   if Proof_recorder.active () then
@@ -104,32 +105,40 @@ let record_projection cst v =
             Some (Proof_recorder.digest_cached ~what:"structure_projection" s))
 
 let mem env ind =
-  let res = Environ.QInd.Map.find_opt env ind !structure_table in
-  record_structure ind res;
-  res <> None
+  if Proof_recorder.active () then begin
+    let res = Environ.QInd.Map.find_opt env ind !structure_table in
+    record_structure ind res;
+    match res with None -> false | Some _ -> true
+  end else Environ.QInd.Map.mem env ind !structure_table
 
 let find env indsp =
-  let res = Environ.QInd.Map.find_opt env indsp !structure_table in
-  record_structure indsp res;
-  (match res with Some s -> s | None -> raise Not_found)
+  if Proof_recorder.active () then begin
+    let res = Environ.QInd.Map.find_opt env indsp !structure_table in
+    record_structure indsp res;
+    (match res with Some s -> s | None -> raise Not_found)
+  end else Environ.QInd.Map.find env indsp !structure_table
 
 let find_projections env indsp =
   (find env indsp).projections |>
   List.map (fun { proj_body } -> proj_body)
 
 let find_from_projection env cst =
-  let res = Environ.QConstant.Map.find_opt env cst !projection_table in
-  record_projection cst res;
-  match res with Some s -> s | None -> raise Not_found
+  if Proof_recorder.active () then begin
+    let res = Environ.QConstant.Map.find_opt env cst !projection_table in
+    record_projection cst res;
+    match res with Some s -> s | None -> raise Not_found
+  end else Environ.QConstant.Map.find env cst !projection_table
 
 let projection_nparams env cst =
   (find_from_projection env cst).nparams
 
 let is_projection cst =
   let env = Global.env () in
-  let res = Environ.QConstant.Map.find_opt env cst !projection_table in
-  record_projection cst res;
-  res <> None
+  if Proof_recorder.active () then begin
+    let res = Environ.QConstant.Map.find_opt env cst !projection_table in
+    record_projection cst res;
+    match res with None -> false | Some _ -> true
+  end else Environ.QConstant.Map.mem env cst !projection_table
 
 let projection_number env cst =
   let s = find_from_projection env cst in
@@ -394,11 +403,12 @@ type t = {
 
 (* BET-84 census row 14: the canonical-structure table a proof reads. *)
 let find env sigma (proj,pat) =
-  Proof_recorder.read ~row:"14" ~channel:"canonical_structure"
-    ~key:(fun () -> Pp.string_of_ppcmds (Names.GlobRef.print proj))
-    ~value:(fun () -> match GlobRefMap.find_opt env proj !object_table with
-        | None -> None
-        | Some m -> Some (Proof_recorder.digest_cached ~what:"canonical_structure" m));
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"canonical_structure"
+      ~key:(fun () -> Pp.string_of_ppcmds (Names.GlobRef.print proj))
+      ~value:(fun () -> match GlobRefMap.find_opt env proj !object_table with
+          | None -> None
+          | Some m -> Some (Proof_recorder.digest_cached ~what:"canonical_structure" m));
   let t', { o_DEF = c; o_CTX = ctx; o_INJ=n; o_TABS = bs;
         o_TPARAMS = params; o_NPARAMS = nparams; o_TCOMPS = us } = PatMap.find env pat (GlobRefMap.find env proj !object_table) in
   let us = List.map EConstr.of_constr us in

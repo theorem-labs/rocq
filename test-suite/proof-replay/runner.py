@@ -498,6 +498,18 @@ class Fixture:
             both.append(src)
         if not both:
             return []
+        # The contract GRADE settled is BYTES: the engine's object store,
+        # carry-over and registration key all match on the .vo digest, and a
+        # sharing difference alone made a mixed tree refuse to load
+        # (2026-10-25). The segment compare below normalises sharing, so a
+        # raw cmp runs first and no fixture passes without it. The lane's own
+        # compare went value-based in binary-equivalence-taiga #1403; this
+        # suite does not follow it.
+        for src in both:
+            va, vb = vo_src(a, src), vo_src(b, src)
+            if va.read_bytes() != vb.read_bytes():
+                self.report_vo_diff(src, "bytes (the files are not identical; "
+                                         "the segment compare below normalises sharing)")
         if self.segcmp:
             listing = [src[:-2] + ".vo" for src in both]
             diffs, err = compare_trees_segcmp(self.segcmp, listing, a, b, self.out)
@@ -508,7 +520,7 @@ class Fixture:
                     key = src[:-2] + ".vo"
                     if key in diffs:
                         self.report_vo_diff(src, diffs[key])
-            self.notes.append("objects compared with segcmp_norm --every-segment")
+            self.notes.append("objects compared by bytes, then with segcmp_norm --every-segment")
         else:
             for src in both:
                 try:
@@ -518,7 +530,7 @@ class Fixture:
                     continue
                 if bad:
                     self.report_vo_diff(src, ",".join(bad))
-            self.notes.append("objects compared in Python (segment bytes); "
+            self.notes.append("objects compared by bytes, then in Python (segment bytes); "
                               "a vmlibrary-only difference cannot be decided here")
         return both
 

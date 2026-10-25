@@ -206,7 +206,8 @@ let () =
                       value = Some (string_of_int !hint_counter) }])
 
 (* BET-84 P3: a Summary counter, which the STM rolls back when a proof
-   closes; replay leaves it alone ([Proof_replay.register_summary_counter]). *)
+   closes; replay leaves it alone ([Proof_replay.register_summary_counter]).
+   Without this a proof whose tactics made a hint key is refused. *)
 let () = Proof_replay.register_summary_counter "hint_counter"
 
 let fresh_key () =
@@ -638,6 +639,47 @@ val digest : t -> string
 end =
 struct
 
+  (* BET-84 census row 7. The fingerprint of a database is its ORDERED
+     CONTENTS, not the identifiers of its hints: a uid names an allocation (a
+     module path and a counter), so an earlier [Hint Extern] edited at the same
+     command position keeps its uid, its head and every counter, and a later
+     unchanged [auto] can still fail (cross-model delta review D1). Each
+     stored hint keeps its insertion id too: equal-priority hints are tried
+     newest first by that id, so two [Import]s exchanged re-add the same hints
+     with exchanged ids and change which hint is tried first (D2).
+
+     A hint's clausenv is left out: it is derived from the hint's term and
+     type, and holds an evar map. The discrimination net is left out: it is a
+     cache a lookup fills in place (the earlier finding F10). *)
+  type hint_print = {
+    hp_id : int;
+    hp_uid : KerName.t;
+    hp_pri : int;
+    hp_pat : hint_pattern option;
+    hp_name : GlobRef.t option;
+    hp_db : hint_db_name option;
+    hp_secvars : Id.Pred.t;
+    hp_code : (constr * types * UnivGen.sort_context_set option * int) hint_ast;
+  }
+
+  type entry_summary = {
+    entry_key : GlobRef.t;
+    entry_nopat : hint_print list;
+    entry_pat : hint_print list;
+    entry_modes : hint_mode list list;
+  }
+
+  type summary = {
+    summary_state : TransparentState.t;
+    summary_cut : hints_path;
+    summary_unfolds : Id.Set.t * Cset.t * PRset.t;
+    summary_max_id : int;
+    summary_use_dn : bool;
+    summary_map : entry_summary list;
+    summary_nopat : hint_print list;
+    summary_name : string option;
+  }
+
   type t = {
     hintdb_state : TransparentState.t;
     hintdb_cut : hints_path;
@@ -648,12 +690,54 @@ struct
     (* A list of unindexed entries with no associated pattern. *)
     hintdb_nopat : stored_data list;
     hintdb_name : string option;
+    mutable hintdb_summary : summary option;
+    (* Built the first time a digest is asked for, and kept with this value.
+       Not a [lazy]: a closure would make the database unmarshallable. *)
   }
+
+  let print_code = function
+    | Res_pf h -> Res_pf (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | ERes_pf h -> ERes_pf (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Give_exact h -> Give_exact (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Res_pf_THEN_trivial_fail h ->
+      Res_pf_THEN_trivial_fail (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Unfold_nth e -> Unfold_nth e
+    | Extern (p, tac) -> Extern (p, tac)
+
+  let print_stored ((id, h) : stored_data) = {
+    hp_id = id;
+    hp_uid = h.code.uid;
+    hp_pri = h.pri;
+    hp_pat = h.pat;
+    hp_name = h.name;
+    hp_db = h.db;
+    hp_secvars = h.secvars;
+    hp_code = print_code h.code.obj;
+  }
+
+  (* In search order: a [StoredSet] is ordered by [pri_order_int]. *)
+  let print_data sd = List.map print_stored (StoredSet.elements (StoredData.elements sd))
+
+  let summary_of db =
+    { summary_state = db.hintdb_state;
+      summary_cut = db.hintdb_cut;
+      summary_unfolds = db.hintdb_unfolds;
+      summary_max_id = db.hintdb_max_id;
+      summary_use_dn = db.use_dn;
+      summary_map =
+        GlobRef.Map.fold (fun entry_key se summaries ->
+            { entry_key;
+              entry_nopat = print_data se.sentry_nopat;
+              entry_pat = print_data se.sentry_pat;
+              entry_modes = List.map Array.to_list se.sentry_mode; } :: summaries)
+          db.hintdb_map [];
+      summary_nopat = List.map print_stored (List.sort pri_order_int db.hintdb_nopat);
+      summary_name = db.hintdb_name; }
 
   let make hintdb_state hintdb_cut hintdb_unfolds hintdb_max_id use_dn
       hintdb_map hintdb_nopat hintdb_name =
     { hintdb_state; hintdb_cut; hintdb_unfolds; hintdb_max_id; use_dn;
-      hintdb_map; hintdb_nopat; hintdb_name }
+      hintdb_map; hintdb_nopat; hintdb_name; hintdb_summary = None }
 
   let copy db ?hintdb_state ?hintdb_cut ?hintdb_unfolds ?hintdb_max_id
       ?use_dn ?hintdb_map ?hintdb_nopat ?hintdb_name () =
@@ -861,47 +945,12 @@ struct
 
   let use_dn db = db.use_dn
 
-  (* BET-84 census row 7: the value of a hint database is what a search of
-     it DOES, so a proof that searched it replays only if every search
-     would behave the same: for each hint, its priority, pattern, name,
-     section variables and code (the term, type, universes and arity of an
-     applied lemma; the pattern and tactic of a [Hint Extern]), in the order
-     a search tries them, and the database's transparency, cut, unfold set,
-     modes and net setting.
-
-     Left out: the hint's uid and insertion index, which a command mints
-     afresh each time it runs, so the same hint written again has another
-     uid; the clause environment, which is computed from the term; and the
-     locations of the compiled file, so that a hint written two lines lower
-     is the same hint. The uids were what this digest held before (review
-     P3Bugs P0): a hint whose tactic or priority changed kept its uid set,
-     and a proof that a full compile cannot finish was replayed. *)
-  let content (_, (h : full_hint)) =
-    let v (x : hint) = (x.hint_term, x.hint_type, x.hint_uctx, x.hint_arty) in
-    let code = match h.code.obj with
-      | Res_pf x -> Res_pf (v x)
-      | ERes_pf x -> ERes_pf (v x)
-      | Give_exact x -> Give_exact (v x)
-      | Res_pf_THEN_trivial_fail x -> Res_pf_THEN_trivial_fail (v x)
-      | Unfold_nth e -> Unfold_nth e
-      | Extern (p, t) -> Extern (p, t)
+  let digest db =
+    let s = match db.hintdb_summary with
+      | Some s -> s
+      | None -> let s = summary_of db in db.hintdb_summary <- Some s; s
     in
-    (h.pri, h.pat, h.name, h.secvars, code)
-
-  let in_order l = List.map content (List.sort Stored.compare l)
-
-  let behaviour db =
-    let entries =
-      GlobRef.Map.fold (fun key se acc ->
-          (key, se.sentry_mode,
-           in_order (StoredSet.elements (StoredData.elements se.sentry_nopat)),
-           in_order (StoredSet.elements (StoredData.elements se.sentry_pat))) :: acc)
-        db.hintdb_map []
-    in
-    (db.hintdb_state, db.hintdb_cut, db.hintdb_unfolds, db.use_dn, db.hintdb_name, entries,
-     in_order db.hintdb_nopat)
-
-  let digest db = Proof_recorder.digest_cached_by ~what:"hint_db" ~key:db (fun () -> behaviour db)
+    Proof_recorder.digest_cached ~what:"hint_db" s
 
 end
 
@@ -912,41 +961,25 @@ type hint_db = Hint_db.t
 let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
 
 (* BET-84 census row 7: each database the proof searches, by name, with a
-   digest of its immutable semantic summary (the mutable discrimination net
-   cache is excluded), and, under the key "*domain", the set of database
-   names. ONE value function for the channel: the record sites below, the
-   start table and the replay evaluator all call [recorded_hint_db], so the
-   value is never computed two ways (dev/tools/census/replay_channels.py;
-   review P3Deep F4 found a second implementation here). *)
-let domain_key = "*domain"
-
-let recorded_hint_db key =
-  if String.equal key domain_key then
-    Some (Proof_recorder.digest ~what:"hint_db_domain" (String.Set.elements (Hintdbmap.domain !searchtable)))
-  else
-    match Hintdbmap.find_opt key !searchtable with
-    | None -> None
-    | Some db -> Some (Hint_db.digest db)
-
-let () =
-  Proof_replay.register_evaluator "hint_db" (fun key ->
-      match recorded_hint_db key with
-      | v -> Proof_replay.Value v
-      | exception _ -> Proof_replay.Unknown)
-
-let record_db name =
+   digest of its immutable semantic summary. The summary excludes the mutable
+   discrimination net cache and is kept with the persistent database value. *)
+let record_db name db =
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"7" ~channel:"hint_db" ~id:name ~key:(fun () -> name)
-      ~value:(fun () -> recorded_hint_db name)
+      ~value:(fun () -> match db with
+          | None -> None
+          | Some db -> Some (Hint_db.digest db))
 
 let record_db_domain () =
   if Proof_recorder.active () then
-    Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> domain_key)
-      ~value:(fun () -> recorded_hint_db domain_key)
+    Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> "*domain")
+      ~value:(fun () ->
+          Some (Proof_recorder.digest ~what:"hint_db_domain"
+                  (String.Set.elements (Hintdbmap.domain !searchtable))))
 
 let searchtable_map name =
   let db = Hintdbmap.find_opt name !searchtable in
-  record_db name;
+  record_db name db;
   (match db with Some db -> db | None -> raise Not_found)
 let searchtable_add (name, db) =
   (* XXX see #21114 *)
@@ -961,17 +994,18 @@ let current_db_names () =
 let current_db () =
   record_db_domain ();
   let all = Hintdbmap.bindings !searchtable in
-  List.iter (fun (name, _) -> record_db name) all;
+  List.iter (fun (name, db) -> record_db name (Some db)) all;
   all
 
 let current_pure_db () = List.map snd (current_db ())
 
-(* Every hint database at the proof's start. *)
+(* Every hint database at the proof's start, for -proof-record-tables. *)
 let () =
   Proof_recorder.register_tables (fun () ->
       List.map
-        (fun (name, _) ->
-           Proof_record.{ row = "7"; channel = "hint_db"; key = name; value = recorded_hint_db name })
+        (fun (name, db) ->
+           Proof_record.{ row = "7"; channel = "hint_db"; key = name;
+                          value = Some (Hint_db.digest db) })
         (Hintdbmap.bindings !searchtable))
 
 let error_no_such_hint_database x =

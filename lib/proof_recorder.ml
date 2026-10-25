@@ -68,6 +68,35 @@ let generation () = !gen
 
 let active () = !recording
 
+(* Set by a compile that replays and does not record: a process-wide cache
+   fence must run there too, or a clean registration history would match a
+   dirty replay history. *)
+let tracking_only = ref false
+
+let start_tracking () = tracking_only := true
+
+let tracking () =
+  !tracking_only || (match !state with Some _ -> true | None -> false)
+
+(* The first fence this process tripped. A process-wide cache that a command
+   made stale stays stale for the rest of the process, so the fence is never
+   cleared: every proof from here on is ineligible for the same reason. *)
+let fence_state : (string * string) option ref = ref None
+
+(* The checks of the process-wide cache fences, registered at module load by
+   the module that owns each cache. A check compares what a cache may hold
+   with the state it caches, and calls [trip_fence] on a difference. They run
+   at each proof's start and when a replay asks [fence_tripped], so a state
+   that changed behind the cache (a re-registration, a section end that
+   restores a table) is seen before the next proof is recorded or replayed. *)
+let fence_checks : (unit -> unit) Queue.t = Queue.create ()
+
+let register_fence_check f = Queue.add f fence_checks
+
+let run_fence_checks () = if tracking () then Queue.iter (fun f -> f ()) fence_checks
+
+let fence_tripped () = run_fence_checks (); !fence_state
+
 (* The .vo digest of a loaded library, installed by the toplevel. A constant
    of a required library is recorded by that digest and not by its body: the
    library's digest already pins every constant the library holds, and its
@@ -133,7 +162,11 @@ let table_reads () = List.rev (Queue.fold (fun acc f -> List.rev_append (f ()) a
 module Addr = Hashtbl.Make (struct
     type t = Obj.t
     let equal = ( == )
-    let hash = Hashtbl.hash
+    (* The address, for the reason {!Proof_record} gives for its memo: a
+       structural hash reads a bounded prefix, so look-alike values share a
+       bucket. A value the GC moved misses and is digested again; its digest
+       is the same. *)
+    let hash (o : Obj.t) = (Obj.magic o : int) lsr 3
   end)
 
 (* One digest per global-environment value per compile. Emptied with the
@@ -162,6 +195,13 @@ let write path =
     Buffer.output_buffer oc st.f_buf;
     close_out oc;
     stop ()
+
+let add_ineligible p ~reason ~detail =
+  let key = (reason, detail) in
+  if not (Hashtbl.mem p.p_ineligible_seen key) then begin
+    Hashtbl.add p.p_ineligible_seen key ();
+    Queue.add R.{ reason; detail } p.p_ineligible
+  end
 
 let open_proof ~name ~statement ~position =
   match !state with
@@ -209,7 +249,11 @@ let open_proof ~name ~statement ~position =
       (match st.f_proof with
        | None -> ()
        | Some p ->
-         p.p_start_tables <- (Queue.fold (fun acc f -> List.rev_append (f ()) acc) [] tables |> List.rev))
+         p.p_start_tables <- (Queue.fold (fun acc f -> List.rev_append (f ()) acc) [] tables |> List.rev);
+         run_fence_checks ();
+         (match !fence_state with
+          | None -> ()
+          | Some (reason, detail) -> add_ineligible p ~reason ~detail))
 
 (* The sentence being run belongs to the proof that is open when it ends,
    so the statement's own sentence is the first of its proof's. *)
@@ -337,13 +381,6 @@ let write_counters l =
              | Some m -> Hashtbl.replace p.p_counters name (m + n))
         l)
 
-let add_ineligible p ~reason ~detail =
-  let key = (reason, detail) in
-  if not (Hashtbl.mem p.p_ineligible_seen key) then begin
-    Hashtbl.add p.p_ineligible_seen key ();
-    Queue.add R.{ reason; detail } p.p_ineligible
-  end
-
 let read ~row ~channel ~key ~value =
   if !recording then
     match !state with
@@ -390,6 +427,10 @@ let ineligible ~reason ~detail =
   match !state with
   | None | Some { f_proof = None; _ } -> ()
   | Some { f_proof = Some p; _ } -> add_ineligible p ~reason ~detail
+
+let trip_fence ~reason ~detail =
+  (match !fence_state with None -> fence_state := Some (reason, detail) | Some _ -> ());
+  ineligible ~reason ~detail
 
 let digest ?locs ~what v =
   match R.digest_value ?locs v with

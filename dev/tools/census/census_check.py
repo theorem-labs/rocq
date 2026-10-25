@@ -28,12 +28,37 @@ line number.  The rulings file maps every key to exactly one disposition:
 file's "scope" object lists the directories that are scanned ("include") and
 the paths under them that are not ("exclude").
 
+The channel check lists the other side, the recorder's own read sites, against
+a second rulings file of the same shape (`--channels`; by default the
+`channels.json` beside the rulings file, when it names the same "source"):
+
+  * a `Proof_recorder.read` or `Proof_recorder.read_by` call, or a record
+    expression with `row` and `channel` fields (the `register_tables`
+    entries), kind `read`, key `read:<path>:<row>/<channel>`;
+  * a `Proof_recorder.ineligible` call, or a record expression with `reason`
+    and `detail` fields, kind `ineligible`, key `ineligible:<path>:<reason>`;
+  * an `open`, `include`, alias or local open of `Proof_recorder`, which
+    could hide calls from the scan, kind `recorder-open`.
+
+One key covers every read of that row and channel in the file.  When the row,
+channel or reason is a parameter of a function of the same file, the scan
+follows each call of that function (partial applications included) to the
+value it passes.  A value that is still not a string literal gives the key
+`<kind>:<path>:<binding>/<part>/...`: the enclosing top-level binding, then
+each part, a literal quoted and anything else as written.  A site whose row
+is a literal must carry `{"row": "<that row>"}`, and a site whose reason is a
+literal must carry `{"ineligible": "@<that reason>"}`.  `lib/proof_record.ml`
+(the record format and its reader) is not scanned, and in
+`lib/proof_recorder.ml` only literal reasons are: its own records carry the
+row, channel and reason of its caller.
+
 Exit status: 0 when every site is ruled and every ruling names a site, 1 when
 a site is unmapped or a ruling is stale or invalid (one per line on stdout),
 2 on a usage or read error.  Python 3.8+, standard library only.
 """
 
 import argparse
+import bisect
 import collections
 import json
 import os
@@ -408,7 +433,7 @@ class Unit:
 # --------------------------------------------------------------------------
 # Site detection
 
-Site = collections.namedtuple("Site", "kind path line key")
+Site = collections.namedtuple("Site", "kind path line key want", defaults=(None,))
 
 SUMMARY_FUNS = {
     "ref", "ref_tag", "declare_summary", "declare_summary_tag", "declare_ml_modules_summary", "MakeObservable",
@@ -428,9 +453,9 @@ RAISE_HEADS = [
 ]
 
 
-def scan_source(path, src):
+def scan_source(path, src, cache=None):
     """All census sites of one file, with stable keys."""
-    unit = Unit(path, src)
+    unit = _unit_of(path, src, cache)
     raw = []  # (kind, line, name)
     raw += _summary_sites(unit)
     raw += _object_sites(unit)
@@ -445,6 +470,15 @@ def scan_source(path, src):
         key = base if seen[base] == 1 else "%s#%d" % (base, seen[base])
         sites.append(Site(kind, path, line, key))
     return sites
+
+
+def _unit_of(path, src, cache):
+    """The file's Unit, tokenized once for every scanner that shares `cache`."""
+    if cache is None:
+        return Unit(path, src)
+    if "unit" not in cache:
+        cache["unit"] = Unit(path, src)
+    return cache["unit"]
 
 
 def _summary_sites(unit):
@@ -855,6 +889,543 @@ def _catchall_sites(unit):
 
 
 # --------------------------------------------------------------------------
+# Recorder read sites (the channel check)
+
+RECORDER = "Proof_recorder"
+RECORDER_CALLS = {"read": ("row", "channel"), "read_by": ("row", "channel"), "ineligible": ("reason",),
+                  "trip_fence": ("reason",)}
+# The record format and its reader build records from parsed JSON, not from a read.
+RECORD_FORMAT_FILE = "lib/proof_record.ml"
+# The recorder's own plumbing passes its caller's row, channel and reason on: only its literal reasons are sites.
+RECORDER_FILE = "lib/proof_recorder.ml"
+CHANNEL_HINT_RE = re.compile(r"Proof_recorder|\b(?:row|reason)\s*[=;}]")
+MAX_FOLLOW = 8
+NOT_A_CALL = {"let", "and", "rec", "nonrec", "val", "external", "method", "~", "?"}
+ANDS = ("and", "and*", "and+")
+
+# A `let`/`and` binding: its name, whether it is a structure item, the index of its `=`, its parameters
+# ((kind, label, variable) with kind "pos" or "label"), and the index where its body ends.
+Def = collections.namedtuple("Def", "name toplevel eq params end")
+
+
+def _slot(kind, text, pos, d=None, spec=None):
+    """One argument value: kind "lit" (a string literal), "expr" (other code, rendered), "var" (a variable to
+    follow) or "param" (parameter `spec` of the definition at d, to follow through its calls)."""
+    return (kind, text, pos, d, spec)
+
+
+def scan_channels(path, src, cache=None):
+    """All recorder read sites of one file, with stable keys: one key per row and channel, or per reason."""
+    if path.endswith(RECORD_FORMAT_FILE) or not CHANNEL_HINT_RE.search(src):
+        return []
+    unit = _unit_of(path, src, cache)
+    own = path.endswith(RECORDER_FILE)
+    raw = []  # (kind, line, name, want)
+    for kind, where, slots in _recorder_calls(unit, own) + _record_literals(unit):
+        if own and kind != "ineligible":
+            continue
+        for done, at in _resolve(unit, slots, where):
+            if own and done[0][0] != "lit":
+                continue
+            raw.append(_channel_site(unit, kind, done, at))
+    raw.sort(key=lambda r: (r[1], r[0], r[2]))
+    seen = set()
+    sites = []
+    for kind, line, name, want in raw:
+        key = "%s:%s:%s" % (kind, path, name)
+        if key not in seen:
+            seen.add(key)
+            sites.append(Site(kind, path, line, key, want))
+    return sites
+
+
+def _channel_site(unit, kind, slots, where):
+    line = unit.toks[where].line
+    if kind == "recorder-open":
+        return kind, line, unit.binding[where], None
+    want = None
+    if slots[0][0] == "lit":
+        want = ("row" if kind == "read" else "ineligible", slots[0][1])
+    if all(s[0] == "lit" for s in slots):
+        return kind, line, "/".join(s[1] for s in slots), want
+    loose = next(s for s in slots if s[0] != "lit")
+    parts = ['"%s"' % s[1] if s[0] == "lit" else s[1] for s in slots]
+    return kind, line, unit.binding[loose[2]] + "/" + "/".join(parts), want
+
+
+def _recorder_calls(unit, own):
+    """(kind, where, slots) for each recorder call, and for each open or alias of the recorder module."""
+    toks = unit.toks
+    out = []
+    for k, t in enumerate(toks):
+        if t.kind != "id":
+            continue
+        head = None
+        if t.text == RECORDER:
+            nxt = word(toks[k + 1]) if k + 1 < len(toks) else None
+            if nxt != ".":
+                prev = unit.prev_word(k)
+                if prev in ("open", "include", "=") or (prev == "!" and k > 1 and word(toks[k - 2]) == "open"):
+                    out.append(("recorder-open", k, []))
+                continue
+            if k + 2 < len(toks) and word(toks[k + 2]) in OPENERS:
+                out.append(("recorder-open", k, []))
+            elif k + 2 < len(toks) and toks[k + 2].kind == "id" and toks[k + 2].text in RECORDER_CALLS:
+                head = k + 2
+        elif own and t.text == "ineligible" and unit.prev_word(k) not in NOT_A_CALL | {"."}:
+            head = k
+        if head is None:
+            continue
+        labels = _call_args(unit, head)[1]
+        name = toks[head].text
+        slots = []
+        for label in RECORDER_CALLS[name]:
+            span = labels.get(label)
+            slots.append(_arg_value(unit, *span) if span else _slot("expr", "<no %s>" % label, head))
+        out.append(("ineligible" if name in ("ineligible", "trip_fence") else "read", head, slots))
+    return out
+
+
+def _record_literals(unit):
+    """(kind, where, slots) for each record with `row` and `channel` fields, or `reason` and `detail` fields,
+    and for each update `{ r with ... }` that sets one of `row`, `channel` or `reason`."""
+    toks = unit.toks
+    out = []
+    for k, t in enumerate(toks):
+        if word(t) != "{":
+            continue
+        close = unit.match_close(k)
+        start = k + 1
+        base = None
+        j = _depth0_find(unit, k + 1, close, ("with",))
+        if j < close:
+            start = j + 1
+            base = "<" + (render(toks[k + 1:j][:8]) or "?") + ">"
+        fields = {}
+        j = start
+        while j < close:
+            e = _depth0_find(unit, j, close, (";",))
+            f = j
+            while f + 2 < e and toks[f].kind == "id" and toks[f].text[:1].isupper() and word(toks[f + 1]) == ".":
+                f += 2
+            if f < e and is_lower_ident(toks[f]):
+                if f + 1 == e:
+                    fields[toks[f].text] = (f, _slot("var", toks[f].text, f))
+                elif word(toks[f + 1]) == "=":
+                    fields[toks[f].text] = (f, _arg_value(unit, f + 2, e))
+            j = e + 1
+        if base is not None:
+            # An update keeps the fields it does not set: they come from the record it copies.
+            if "row" in fields or "channel" in fields:
+                for name in ("row", "channel", "detail"):
+                    fields.setdefault(name, (k, _slot("expr", base, k)))
+            elif "reason" in fields:
+                fields.setdefault("detail", (k, _slot("expr", base, k)))
+        if "row" in fields and "channel" in fields:
+            out.append(("read", min(fields["row"][0], fields["channel"][0]), [fields["row"][1], fields["channel"][1]]))
+        if "reason" in fields and "detail" in fields:
+            out.append(("ineligible", fields["reason"][0], [fields["reason"][1]]))
+    return out
+
+
+def _depth0_find(unit, j, end, words):
+    """Index of the first token in [j, end) at bracket depth 0 that is one of `words`, else end."""
+    depth = 0
+    toks = unit.toks
+    while j < end:
+        w = word(toks[j])
+        if w in OPENERS:
+            depth += 1
+        elif w in CLOSERS:
+            depth -= 1
+        elif depth == 0 and w in words:
+            return j
+        j += 1
+    return end
+
+
+def _call_args(unit, h):
+    """Positional argument spans, labelled argument spans and end of the application headed at h.  A punned
+    label `~x` spans the label itself, which names the variable passed."""
+    toks = unit.toks
+    end = unit.app_extent(h)
+    positional, labels = [], {}
+    k = h + 1
+    while k < end:
+        t = toks[k]
+        w = word(t)
+        if w in ("~", "?") and k + 1 < end and toks[k + 1].kind == "id":
+            if k + 2 < end and word(toks[k + 2]) == ":":
+                e = min(unit.simple_expr(k + 3), end)
+                labels[toks[k + 1].text] = (k + 3, e)
+                k = e
+            else:
+                labels[toks[k + 1].text] = (k + 1, k + 2)
+                k += 2
+            continue
+        if (t.kind == "op" and w not in ("!", "-")) or w == "," or (w in KEYWORDS and w not in ("true", "false", "begin")):
+            break
+        e = min(unit.simple_expr(k), end)
+        if e <= k:
+            break
+        positional.append((k, e))
+        k = e
+    return positional, labels, end
+
+
+def _arg_value(unit, s, e):
+    """The slot of the expression toks[s:e]: a string literal, a bare variable, or other code."""
+    part = _strip_parens(unit.toks[s:e])
+    if len(part) == 1 and part[0].kind == "str":
+        return _slot("lit", part[0].value, s)
+    if len(part) == 1 and is_lower_ident(part[0]) and part[0].text != "_":
+        return _slot("var", part[0].text, s)
+    return _slot("expr", render(part[:12]) or "<none>", s)
+
+
+# ---- following a variable to the values the code passes
+
+
+def _resolve(unit, slots, where, depth=0):
+    """Replace each variable slot by the values the code gives it.  Returns [(slots, where)], where `where` is
+    the call that supplied the last value.  Slots bound by one function follow the same call together."""
+    pending = [i for i, s in enumerate(slots) if s[0] in ("var", "param")]
+    if not pending:
+        return [(slots, where)]
+    if depth >= MAX_FOLLOW:
+        return [([_settle(unit, s) for s in slots], where)]
+    _index(unit)
+    binders = {i: _slot_binder(unit, slots[i]) for i in pending}
+    first = binders[pending[0]]
+    if first is None or first[0] == "value":
+        new = list(slots)
+        i = pending[0]
+        new[i] = _settle(unit, slots[i]) if first is None else _value_slot(unit, first[1], slots[i])
+        return _resolve(unit, new, where, depth + 1)
+    d = first[1]
+    group = [(i, b[2]) for i, b in binders.items() if b is not None and b[0] == "param" and b[1] == d]
+    calls = _supplying_calls(unit, d, [spec for _, spec in group])
+    if not calls:
+        new = list(slots)
+        for i, _ in group:
+            new[i] = _settle(unit, slots[i])
+        return _resolve(unit, new, where, depth + 1)
+    out = []
+    for c, vals in calls:
+        new = list(slots)
+        for (i, _), v in zip(group, vals):
+            new[i] = v
+        out.extend(_resolve(unit, new, c, depth + 1))
+    return out
+
+
+def _settle(unit, s):
+    """A slot that cannot be followed further, as code: the variable's or parameter's name."""
+    if s[0] == "var":
+        return _slot("expr", s[1], s[2])
+    if s[0] == "param":
+        return _slot("expr", _param_name(unit.defs[s[3]], s[4]), s[2])
+    return s
+
+
+def _slot_binder(unit, s):
+    if s[0] == "param":
+        return ("param", s[3], s[4])
+    return _binder(unit, s[1], s[2])
+
+
+def _value_slot(unit, d, s):
+    """The value of the variable slot s, bound by the definition d without parameters."""
+    df = unit.defs[d]
+    v = _arg_value(unit, df.eq + 1, df.end)
+    if v[0] == "lit":
+        return _slot("lit", v[1], s[2])
+    if v[0] == "var":
+        return v
+    return _slot("expr", s[1], s[2])
+
+
+def _param_spec(df, name):
+    npos = 0
+    for kind, label, var in df.params:
+        if var == name:
+            return ("label", label) if kind == "label" else ("pos", npos)
+        if kind == "pos":
+            npos += 1
+    return None
+
+
+def _param_name(df, spec):
+    if spec[0] == "label":
+        return spec[1]
+    positional = [var for kind, _, var in df.params if kind == "pos"]
+    if spec[1] < len(positional) and positional[spec[1]]:
+        return positional[spec[1]]
+    return "<arg %d>" % (spec[1] + 1)
+
+
+def _binder(unit, name, pos):
+    """How the variable `name` at token pos is bound: ("param", def, spec), ("value", def), or None."""
+    _index(unit)
+    order = unit.def_order
+    i = bisect.bisect_left(order, pos)
+    while i > 0:
+        i -= 1
+        d = order[i]
+        df = unit.defs[d]
+        if df.eq < pos < df.end:
+            spec = _param_spec(df, name)
+            if spec is not None:
+                return None if _rebound(unit, name, df.eq, pos) else ("param", d, spec)
+        elif pos >= df.end and df.name == name and _visible(unit, df, pos):
+            if df.params or _rebound(unit, name, df.end, pos):
+                return None
+            return ("value", d)
+    return None
+
+
+def _visible(unit, df, pos):
+    if df.toplevel:
+        return True
+    if df.end >= len(unit.toks) or word(unit.toks[df.end]) != "in":
+        return False
+    depth = 0
+    for k in range(df.end + 1, pos):
+        w = word(unit.toks[k])
+        if w in OPENERS:
+            depth += 1
+        elif w in CLOSERS:
+            depth -= 1
+            if depth < 0:
+                return False
+        elif k in unit.toplevel_lets:
+            return False
+    return True
+
+
+def _rebound(unit, name, start, pos):
+    """True when a `fun` between start and pos binds `name` again."""
+    toks = unit.toks
+    for k in range(start, pos):
+        if word(toks[k]) != "fun":
+            continue
+        for j in range(k + 1, min(pos, k + 40)):
+            if word(toks[j]) == "->":
+                break
+            if toks[j].kind == "id" and toks[j].text == name:
+                return True
+    return False
+
+
+def _supplying_calls(unit, d, specs):
+    """[(call, [slot per spec])] for each call of the definition at d."""
+    out = []
+    for c in _calls_of(unit, d):
+        positional, labels, end = _call_args(unit, c)
+        vals = []
+        for spec in specs:
+            if spec[0] == "label" and spec[1] in labels:
+                vals.append(_arg_value(unit, *labels[spec[1]]))
+            elif spec[0] == "pos" and spec[1] < len(positional):
+                vals.append(_arg_value(unit, *positional[spec[1]]))
+            else:
+                vals.append(_inherited(unit, d, c, end, spec, len(positional)))
+        out.append((c, vals))
+    return out
+
+
+def _inherited(unit, d, c, end, spec, given):
+    """A parameter that the call at c leaves out.  When the call is the whole body of a definition g
+    (`let g x = f x`), it is the matching parameter of g; else it stays unresolved."""
+    toks = unit.toks
+    start = c
+    while start >= 2 and word(toks[start - 1]) == "." and toks[start - 2].kind == "id":
+        start -= 2
+    g = unit.def_at_eq.get(start - 1)
+    if g is not None and unit.defs[g].end == end:
+        if spec[0] == "pos":
+            spec = ("pos", sum(1 for p in unit.defs[g].params if p[0] == "pos") + spec[1] - given)
+        return _slot("param", None, c, g, spec)
+    return _slot("expr", _param_name(unit.defs[d], spec), c)
+
+
+def _calls_of(unit, d):
+    """Token indexes of the calls of the definition at d: unqualified ones in its scope, and qualified ones
+    through a module of this file that holds it."""
+    toks = unit.toks
+    df = unit.defs[d]
+    holders = [(name, e) for name, s, e in unit.mod_spans if s < d < e]
+    mods = {name for name, _ in holders}
+    stop = min([e for _, e in holders] or [len(toks)])
+    if df.toplevel:
+        for d2 in unit.def_order[bisect.bisect_right(unit.def_order, d):]:
+            if unit.defs[d2].toplevel and unit.defs[d2].name == df.name:
+                stop = min(stop, d2)
+                break
+    else:
+        i = bisect.bisect_right(unit.top_starts, d)
+        if i < len(unit.top_starts):
+            stop = min(stop, unit.top_starts[i])
+    out = []
+    for k in range(df.end, len(toks)):
+        t = toks[k]
+        if t.kind != "id" or t.text != df.name:
+            continue
+        prev = unit.prev_word(k)
+        if prev == ".":
+            if df.toplevel and k >= 2 and toks[k - 2].text in mods:
+                out.append(k)
+        elif k < stop and prev not in NOT_A_CALL:
+            out.append(k)
+    return out
+
+
+def _index(unit):
+    """The `let`/`and` definitions of the unit, and the module spans that hold them."""
+    if hasattr(unit, "defs"):
+        return
+    toks = unit.toks
+    top_and, let_and = set(), set()
+    stacks = collections.defaultdict(list)
+    depth = 0
+    for k, t in enumerate(toks):
+        w = word(t)
+        if w in OPENERS:
+            depth += 1
+        elif w in CLOSERS:
+            stacks.pop(depth, None)
+            depth = max(depth - 1, 0)
+        elif w in LETS:
+            stacks[depth].append(k)
+        elif w in ANDS and stacks[depth]:
+            let_and.add(k)
+            if stacks[depth][-1] in unit.toplevel_lets:
+                top_and.add(k)
+        elif w == "in" and stacks[depth]:
+            stacks[depth].pop()
+    unit.top_starts = sorted(unit.toplevel_lets | top_and)
+    unit.defs = {}
+    for k, t in enumerate(toks):
+        if word(t) in LETS or k in let_and:
+            parsed = _parse_def(unit, k)
+            if parsed:
+                name, eq, params = parsed
+                unit.defs[k] = Def(name, k in unit.toplevel_lets or k in top_and, eq, params, _def_end(unit, eq))
+    unit.def_order = sorted(unit.defs)
+    unit.def_at_eq = {df.eq: d for d, df in unit.defs.items()}
+    unit.mod_spans = _module_spans(unit)
+
+
+def _parse_def(unit, d):
+    """(name, index of `=`, parameters) of `let [rec] name params [: type] =`, or None for a pattern binding."""
+    toks = unit.toks
+    n = len(toks)
+    j = d + 1
+    while j < n and word(toks[j]) in ("rec", "nonrec"):
+        j += 1
+    if j >= n or not is_lower_ident(toks[j]) or toks[j].text == "_":
+        return None
+    name = toks[j].text
+    params = []
+    j += 1
+    while j < n:
+        t = toks[j]
+        w = word(t)
+        if w == "=":
+            return name, j, params
+        if w == ":":
+            eq = _depth0_find(unit, j, n, ("=",))
+            return (name, eq, params) if eq < n else None
+        if w in ("~", "?") and j + 1 < n and toks[j + 1].kind == "id":
+            label = toks[j + 1].text
+            var = label
+            j += 2
+            if j < n and word(toks[j]) == ":":
+                e = unit.simple_expr(j + 1)
+                inner = _strip_parens(toks[j + 1:e])
+                var = inner[0].text if inner and is_lower_ident(inner[0]) else None
+                j = e
+            params.append(("label", label, var))
+        elif w in ("~", "?") and j + 1 < n and word(toks[j + 1]) == "(":
+            e = unit.match_close(j + 1)
+            inner = toks[j + 2:e]
+            label = inner[0].text if inner and is_lower_ident(inner[0]) else None
+            params.append(("label", label, label))
+            j = e + 1
+        elif w in ("(", "[", "{"):
+            e = unit.match_close(j)
+            inner = _strip_parens(toks[j:e + 1])
+            simple = inner and is_lower_ident(inner[0]) and (len(inner) == 1 or word(inner[1]) == ":")
+            params.append(("pos", None, inner[0].text if simple and w == "(" else None))
+            j = e + 1
+        elif is_lower_ident(t):
+            params.append(("pos", None, None if t.text == "_" else t.text))
+            j += 1
+        else:
+            return None
+    return None
+
+
+def _def_end(unit, eq):
+    """Index where the body that starts after the `=` at eq ends."""
+    toks = unit.toks
+    n = len(toks)
+    depth = lets = 0
+    k = eq + 1
+    while k < n:
+        w = word(toks[k])
+        if w in OPENERS:
+            depth += 1
+        elif w in CLOSERS:
+            if depth == 0:
+                return k
+            depth -= 1
+        elif depth == 0 and w is not None:
+            prev = unit.prev_word(k)
+            if w in LETS:
+                if k in unit.toplevel_lets:
+                    return k
+                lets += 1
+            elif w == "in":
+                if lets == 0:
+                    return k
+                lets -= 1
+            elif w in ANDS:
+                if lets == 0:
+                    return k
+            elif w in ITEM_KEYWORDS or (w in ("module", "open") and prev != "let") or (
+                w == "exception" and prev not in ("let", "|", "with")
+            ):
+                return k
+        k += 1
+    return n
+
+
+def _module_spans(unit):
+    """(name, start, end) of each `module Name ... = struct ... end` of the unit."""
+    toks = unit.toks
+    spans = []
+    for k, t in enumerate(toks):
+        if word(t) != "module" or k + 1 >= len(toks) or toks[k + 1].kind != "id" or not toks[k + 1].text[:1].isupper():
+            continue
+        depth = 0
+        for j in range(k + 2, min(len(toks), k + 200)):
+            w = word(toks[j])
+            if depth == 0 and w == "struct" and word(toks[j - 1]) == "=":
+                spans.append((toks[k + 1].text, j, unit.match_close(j)))
+                break
+            if w in OPENERS:
+                depth += 1
+            elif w in CLOSERS:
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0 and (w in LETS or w == "module"):
+                break
+    return spans
+
+
+# --------------------------------------------------------------------------
 # Tree scan and rulings check
 
 # Census rows: CHANNELS.md rows 1-24, GRADE's M1-M7, CHANNELS.md section 2 items (S2.n), and rows the
@@ -868,7 +1439,8 @@ VALID_ROWS = (
 DISPOSITIONS = ("row", "ruling", "ineligible")
 
 
-def scan_tree(root, scope):
+def scan_tree(root, scope, scanners=(scan_source,)):
+    """One site list per scanner.  Each file is read and tokenized once, for every scanner."""
     include = scope.get("include") or []
     exclude = [e.rstrip("/") for e in scope.get("exclude") or []]
     files = []
@@ -882,13 +1454,16 @@ def scan_tree(root, scope):
             for fn in filenames:
                 if fn.endswith((".ml", ".mlg")):
                     files.append(os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/"))
-    sites = []
+    results = [[] for _ in scanners]
     for rel in sorted(set(files)):
         if any(rel == e or rel.startswith(e + "/") for e in exclude):
             continue
         with open(os.path.join(root, rel), encoding="utf-8", errors="surrogateescape") as f:
-            sites.extend(scan_source(rel, f.read()))
-    return sites
+            src = f.read()
+        cache = {}
+        for out, scan in zip(results, scanners):
+            out.extend(scan(rel, src, cache))
+    return results
 
 
 def describe(entry):
@@ -927,6 +1502,12 @@ def check(sites, rulings):
             problems.append("UNMAPPED %s %s:%d" % (s.key, s.path, s.line))
             continue
         err = validate(s.key, entry, reasons)
+        if err is None and s.want:
+            # A channel site's disposition repeats what the code passes: its row, or `@` and its reason.
+            d, v = s.want
+            expected = v if d == "row" else "@" + v
+            if entry.get(d) != expected:
+                err = "the code passes %s %r: the entry must be {%s}" % (d, v, json.dumps({d: expected})[1:-1])
         if err:
             problems.append("INVALID %s %s" % (s.key, err))
     for key in sorted(entries):
@@ -935,10 +1516,51 @@ def check(sites, rulings):
     return problems
 
 
+def load_rulings(path, what):
+    """The JSON object in path, or None after an error message on stderr."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        print("census_check: cannot read %s: %s" % (what, e), file=sys.stderr)
+        return None
+    if not isinstance(data, dict):
+        print("census_check: %s file is not a JSON object: %s" % (what, path), file=sys.stderr)
+        return None
+    return data
+
+
+def channel_rulings(args, rulings):
+    """The channel rulings for this run: --channels, else channels.json beside the rulings file when it names
+    the same source, else none (so every recorder read site is UNMAPPED).  None after a read error."""
+    path = args.channels
+    if path is None:
+        sibling = os.path.join(os.path.dirname(args.rulings) or ".", "channels.json")
+        if not os.path.isfile(sibling) or os.path.abspath(sibling) == os.path.abspath(args.rulings):
+            return {"sites": {}}
+        path = sibling
+    channels = load_rulings(path, "channel rulings")
+    if channels is not None and args.channels is None and channels.get("source") != rulings.get("source"):
+        return {"sites": {}}
+    return channels
+
+
+def summary(label, sites, problems):
+    counts = collections.Counter(s.kind for s in sites)
+    return "census_check: %d %s (%s), %d problems" % (
+        len(sites), label, ", ".join("%s %d" % kv for kv in sorted(counts.items())), len(problems),
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--root", required=True, help="source tree to scan")
     parser.add_argument("--rulings", required=True, help="rulings JSON file")
+    parser.add_argument(
+        "--channels",
+        help="channel rulings JSON file for the recorder's read sites (default: channels.json beside the rulings "
+        "file, when its source is the same; without one, every read site is unmapped)",
+    )
     parser.add_argument("--list", action="store_true", help="print every site with its disposition")
     try:
         args = parser.parse_args(argv)
@@ -947,36 +1569,41 @@ def main(argv=None):
     if not os.path.isdir(args.root):
         print("census_check: not a directory: %s" % args.root, file=sys.stderr)
         return 2
-    try:
-        with open(args.rulings, encoding="utf-8") as f:
-            rulings = json.load(f)
-    except (OSError, ValueError) as e:
-        print("census_check: cannot read rulings: %s" % e, file=sys.stderr)
+    rulings = load_rulings(args.rulings, "rulings")
+    if rulings is None:
         return 2
-    scope = rulings.get("scope") if isinstance(rulings, dict) else None
+    scope = rulings.get("scope")
     if not isinstance(scope, dict) or not scope.get("include"):
         print("census_check: rulings file needs a scope with an include list", file=sys.stderr)
         return 2
+    channels = channel_rulings(args, rulings)
+    if channels is None:
+        return 2
+    channel_scope = channels.get("scope")
+    if not isinstance(channel_scope, dict) or not channel_scope.get("include"):
+        channel_scope = scope
     try:
-        sites = scan_tree(args.root, scope)
+        if channel_scope == scope:
+            sites, channel_sites = scan_tree(args.root, scope, (scan_source, scan_channels))
+        else:
+            (sites,) = scan_tree(args.root, scope)
+            (channel_sites,) = scan_tree(args.root, channel_scope, (scan_channels,))
     except OSError as e:
         print("census_check: cannot read source: %s" % e, file=sys.stderr)
         return 2
-    entries = rulings.get("sites") or {}
     if args.list:
-        for s in sites:
-            entry = entries.get(s.key)
-            print("%s:%d\t%s\t%s" % (s.path, s.line, s.key, describe(entry) if entry else "UNMAPPED"))
-    problems = check(sites, rulings)
-    for p in problems:
+        for group, data in ((sites, rulings), (channel_sites, channels)):
+            entries = data.get("sites") or {}
+            for s in group:
+                entry = entries.get(s.key)
+                print("%s:%d\t%s\t%s" % (s.path, s.line, s.key, describe(entry) if entry else "UNMAPPED"))
+    state_problems = check(sites, rulings)
+    channel_problems = check(channel_sites, channels)
+    for p in state_problems + channel_problems:
         print(p)
-    counts = collections.Counter(s.kind for s in sites)
-    print(
-        "census_check: %d sites (%s), %d problems"
-        % (len(sites), ", ".join("%s %d" % kv for kv in sorted(counts.items())), len(problems)),
-        file=sys.stderr,
-    )
-    return 1 if problems else 0
+    print(summary("sites", sites, state_problems), file=sys.stderr)
+    print(summary("channel sites", channel_sites, channel_problems), file=sys.stderr)
+    return 1 if state_problems or channel_problems else 0
 
 
 if __name__ == "__main__":

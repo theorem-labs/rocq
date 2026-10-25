@@ -1843,7 +1843,16 @@ let open_counters = ref (0, 0)
    closes where it is saved, aborted or admitted. Replay (P3) looks the
    proof up in the registration's record at the same point, so key items 1
    (name, statement), 2 (toolchain) and 3 (position) are checked before a
-   single tactic runs. *)
+   single tactic runs.
+
+   This runs at every proof's start, with the recorder on or off, so it must
+   build as little as it can. [position] is cached on the [Lib] prefix and
+   costs nothing after the first proof of a module; [statement] is a thunk
+   that [open_proof] calls only when it keeps an entry. The name stays eager:
+   [open_proof] takes it as a string, and no exported test says the recorder
+   is enabled while no proof is open ([active] and [writing] both want one),
+   so the one path [Lib.make_path] builds per proof cannot be deferred
+   without a new predicate in [Proof_recorder]. *)
 let record_open_proof name ~statement =
   let path = lazy (Libnames.string_of_path (Lib.make_path name)) in
   open_counters := UnivGen.counters ();
@@ -2306,12 +2315,8 @@ let replayed_proof_object ~blob ~(proof : t) =
        the universe state joins the copy to this compile's own values, as
        the kernel's own hashconsing does for a term the tactics built. *)
     Impargs.refresh_flags ();
-    let hcons c = snd (Constr.hcons c) in
-    let hcons_entry (body, typ) = (hcons body, Option.map hcons typ) in
     let output =
-      { b.rb_output with
-        output_entries = List.map hcons_entry b.rb_output.output_entries;
-        output_ustate = UState.hcons_univs b.rb_output.output_ustate }
+      { b.rb_output with output_ustate = UState.hcons_univs b.rb_output.output_ustate }
     in
     Some
       ( { Proof_object.proof_object =
@@ -2453,10 +2458,13 @@ let record_close ?(replay = None) ~closer ~kernel_check declare =
   res
 
 let record_close_with_info ?(replay = None) ~closer ~kernel_check ~pinfo declare =
+  (* [writing] is exactly the state in which [set_name] does something (a
+     proof is open, suspended or not), so the path and the string are built
+     at a [Qed] only with the recorder on. *)
   let () = match pinfo.Proof_info.cinfo with
-    | { CInfo.name; _ } :: _ ->
+    | { CInfo.name; _ } :: _ when Proof_recorder.writing () ->
       Proof_recorder.set_name (Libnames.string_of_path (Lib.make_path name))
-    | [] -> ()
+    | _ -> ()
   in
   record_close ~replay ~closer ~kernel_check declare
 

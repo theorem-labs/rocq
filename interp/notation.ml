@@ -562,22 +562,26 @@ let notation_query_key (entry, text) scopes =
   "N" ^ encode_notation (entry, text)
   ^ String.concat "" (List.map encode_scope_item scopes)
 
-let interp_prim_token_gen ?loc g p local_scopes =
+(* [mode] names the query. A term query accepts every interpretation; a
+   pattern query rejects one that is not a constructor and goes on to an older
+   scope. With the same token and scopes they can find different answers, so
+   each is its own recorded read (cross-model delta review D3). *)
+let interp_prim_token_gen ~mode ?loc g p local_scopes =
   let scopes = make_current_scopes local_scopes in
   let p_as_ntn = try notation_of_prim_token p with Not_found -> InConstrEntry,"" in
   (* BET-84 census row 11: each number or string notation the proof reads,
-     with the scopes it was read in. *)
+     with the scopes it was read in and the query's mode. *)
   try
     let pat, sc = find_interpretation p_as_ntn (find_prim_token ?loc g p) scopes in
     if Proof_recorder.active () then
       Proof_recorder.read ~row:"11" ~channel:"prim_token"
-        ~key:(fun () -> notation_query_key p_as_ntn scopes)
+        ~key:(fun () -> mode ^ notation_query_key p_as_ntn scopes)
         ~value:(fun () -> Some (Proof_recorder.digest ~what:"prim_token" (pat, sc)));
     pat, sc
   with Not_found as exn ->
     if Proof_recorder.active () then
       Proof_recorder.read ~row:"11" ~channel:"prim_token"
-        ~key:(fun () -> notation_query_key p_as_ntn scopes)
+        ~key:(fun () -> mode ^ notation_query_key p_as_ntn scopes)
         ~value:(fun () -> None);
     let _, info = Exninfo.capture exn in
     user_err ?loc ~info
@@ -587,10 +591,10 @@ let interp_prim_token_gen ?loc g p local_scopes =
       | String s -> str "No interpretation for string " ++ qs s) ++ str ".")
 
 let interp_prim_token ?loc =
-  interp_prim_token_gen ?loc (fun _ -> ())
+  interp_prim_token_gen ~mode:"T" ?loc (fun _ -> ())
 
 let interp_prim_token_cases_pattern_expr ?loc check_allowed p =
-  interp_prim_token_gen ?loc check_allowed p
+  interp_prim_token_gen ~mode:"P" ?loc check_allowed p
 
 let warn_notation =
   UserWarn.create_depr_and_user_warnings ~object_name:"Notation" ~warning_name_base:"notation"

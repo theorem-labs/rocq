@@ -388,11 +388,11 @@ let record_transitivity_table name table =
    complete to proof of the last hypothesis (assumed to state an equality) *)
 
 let step left x tac =
-  let name, table =
-    if left then "transitivity-steps-l", !transitivity_left_table
-    else "transitivity-steps-r", !transitivity_right_table
-  in
-  record_transitivity_table name table;
+  (* The name and the table are taken apart, so that the recorder's key costs
+     no tuple when the recorder is off: both names are static strings. *)
+  let table = if left then !transitivity_left_table else !transitivity_right_table in
+  record_transitivity_table
+    (if left then "transitivity-steps-l" else "transitivity-steps-r") table;
   let l =
     List.map (fun lem ->
       let lem = EConstr.of_constr lem in

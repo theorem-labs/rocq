@@ -363,21 +363,24 @@ let add_rewrite_rules l env =
   }
 
 let lookup_rewrite_rules cst env =
-  let res = Cmap_env.find_opt cst env.symb_pats in
-  Recorded.constant Recorded.cst_rules cst ~channel:"rewrite_rules"
-    (fun () -> recorded_rewrite_rules cst env);
-  (match res with Some rs -> rs | None -> raise Not_found)
+  if Proof_recorder.active () then begin
+    let res = Cmap_env.find_opt cst env.symb_pats in
+    Recorded.constant Recorded.cst_rules cst ~channel:"rewrite_rules"
+      (fun () -> recorded_rewrite_rules cst env);
+    (match res with Some rs -> rs | None -> raise Not_found)
+  end else Cmap_env.find cst env.symb_pats
 
 (* Mutual Inductives *)
 let lookup_mind_key kn env =
   match Mindmap_env.find_opt kn env.env_inductives with
-  | Some v ->
-    Recorded.mind Recorded.minds kn ~channel:"inductive"
-      (fun () -> recorded_inductive kn env);
+  | Some ((mb, _, _) as v) ->
+    if Proof_recorder.active () then
+      Recorded.mind Recorded.minds kn ~channel:"inductive"
+        (fun () -> recorded_inductive kn env);
     v
   | None ->
-    Recorded.mind Recorded.minds kn ~channel:"inductive"
-      (fun () -> recorded_inductive kn env);
+    if Proof_recorder.active () then
+      Recorded.mind Recorded.minds kn ~channel:"inductive" (fun () -> recorded_inductive kn env);
     anomaly Pp.(str "Inductive " ++ MutInd.print kn ++ str" does not appear in the environment.")
 
 let lookup_mind kn env =
@@ -446,8 +449,9 @@ let expand_branch_contexts (mib, mip) u params br =
 
 let mem_mind kn env =
   let res = Mindmap_env.mem kn env.env_inductives in
-  Recorded.mind Recorded.minds_exists kn ~channel:"inductive_exists"
-    (fun () -> recorded_inductive_exists kn env);
+  if Proof_recorder.active () then
+    Recorded.mind Recorded.minds_exists kn ~channel:"inductive_exists"
+      (fun () -> recorded_inductive_exists kn env);
   res
 
 let mind_context env mind =
@@ -1013,16 +1017,20 @@ let shallow_add_module mp mb env =
   { env with env_modules = new_mods }
 
 let lookup_module mp env =
-  let res = ModPath.Map.find_opt mp env.env_modules in
-  Recorded.mpath Recorded.modules mp ~channel:"module"
-    (fun () -> recorded_module mp env);
-  (match res with Some m -> m | None -> raise Not_found)
+  if Proof_recorder.active () then begin
+    let res = ModPath.Map.find_opt mp env.env_modules in
+    Recorded.mpath Recorded.modules mp ~channel:"module"
+      (fun () -> recorded_module mp env);
+    (match res with Some m -> m | None -> raise Not_found)
+  end else ModPath.Map.find mp env.env_modules
 
 let lookup_modtype mp env =
-  let res = ModPath.Map.find_opt mp env.env_modtypes in
-  Recorded.mpath Recorded.modtypes mp ~channel:"modtype"
-    (fun () -> recorded_modtype mp env);
-  (match res with Some m -> m | None -> raise Not_found)
+  if Proof_recorder.active () then begin
+    let res = ModPath.Map.find_opt mp env.env_modtypes in
+    Recorded.mpath Recorded.modtypes mp ~channel:"modtype"
+      (fun () -> recorded_modtype mp env);
+    (match res with Some m -> m | None -> raise Not_found)
+  end else ModPath.Map.find mp env.env_modtypes
 
 (*s Judgments. *)
 
