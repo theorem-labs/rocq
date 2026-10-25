@@ -1537,7 +1537,7 @@ let check_one_fix cache ?evars renv recpos trees def =
                lookup that [split_struct_arg]'s reduction makes is shifted,
                and a body whose head resolves to a different local definition
                is analysed in place of the real one. That admits closed proofs
-               of False: test-suite/failure/guard_uniform_params_envshift.v. *)
+               of False: test-suite/failure/guard_envshift_x03.v. *)
             let nuniformparams = find_uniform_parameters illformed ?evars renv'.env recindxs (List.length stack) bodies in
             let bodies = drop_uniform_parameters (fun () -> illformed i) nuniformparams bodies in
             let fix_stack = filter_fix_stack_domain cache ?evars (redex_level rs) decrArg stack nuniformparams in

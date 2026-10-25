@@ -5,11 +5,14 @@
    first argument ever passed to that parameter was assumed to hold for every
    later call, and a non-decreasing outer recursive call went through.
 
-   The three definitions below are the three known counterexamples: the first
-   was produced by a model under evaluation (binary-equivalence-taiga,
-   dispatch://BET-214), the second and third are the counterexamples of
-   rocq-prover/rocq#21797 and rocq-prover/rocq#22382. Each of them yields a
-   closed proof of False that uses no axiom and no typing flag. *)
+   The three definitions below are the three counterexamples known when this
+   branch was written. The first was produced by a model under evaluation
+   (binary-equivalence-taiga, dispatch://BET-214); this base already rejects
+   that exact definition, and it is kept as the record of what the model
+   wrote. The second and third are the counterexamples of
+   rocq-prover/rocq#21797 and rocq-prover/rocq#22382, and this base accepts
+   both. Each of them yields a closed proof of False that uses no axiom and
+   no typing flag. *)
 
 (* An unapplied occurrence of the inner fixpoint g, hidden in a function
    position, makes g's parameter u look uniform. *)
