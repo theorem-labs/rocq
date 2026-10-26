@@ -355,9 +355,9 @@ let rec explain_exn = function
   | Mod_checking.BadConstant (cst, why) ->
     hov 0 (Constant.print cst ++ spc() ++ why)
 
-  | CheckWorkers.CheckError (cst, e) ->
+  | CheckWorkers.CheckError (job, e) ->
     explain_exn e ++ fnl () ++
-    hov 0 (str "while checking the opaque proof of" ++ spc () ++ Constant.print cst ++ str ".")
+    hov 0 (str "while " ++ CheckWorkers.pr_doing job ++ str ".")
 
   | CheckWorkers.WorkerFailed (pid, status, batch) ->
     let status = match status with
