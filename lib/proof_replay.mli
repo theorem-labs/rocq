@@ -85,6 +85,12 @@ val scan_late_rebind : string -> (string * int) option
     with its line; [None] if there is none. Comments and strings are
     skipped; words split as Rocq's lexer splits them. *)
 
+val register_plugin_audit : (string -> bool) -> unit
+(** [f name] says whether the loaded ML plugin [name] (a findlib package) is
+    one this tree builds. While a plugin [f] rejects is loaded, no proof is
+    replayed (counted ineligible; the summary's [fence] names it). Until a
+    predicate registers, every plugin is unaudited. *)
+
 val register_hit_hook : (Proof_record.read list -> unit) -> unit
 (** [f reads] runs at each hit with the replayed proof's recorded reads, so
     the owner of a process-wide cache can count them as looked up. *)

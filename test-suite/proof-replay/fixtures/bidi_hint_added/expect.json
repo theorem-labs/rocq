@@ -1,0 +1,16 @@
+{
+  "doc": "a bidirectionality hint is added to a function a proof applies under an expected type: the proof misses on that read, the control hits",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.l": {"eligible": true}, "PR.A.control": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.l", "read", "bidirectionality_hint", "changed"], ["PR.A.control", "hit"]]
+    }
+  }
+}

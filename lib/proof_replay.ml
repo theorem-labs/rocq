@@ -352,15 +352,16 @@ let scan_late_rebind text =
   let closed = ref false in
   (* One frame per open [Section] or [Module]: whether its [End] can change
      what a Rocqlib name answers. A module's always can; a section's can when
-     a late word appeared inside it, at any depth. *)
+     a late word appeared inside it, at any depth. Only a sentence's command
+     word opens or closes one: [Print Section S.] opens nothing, [Fail End S.]
+     closes nothing (Claude delta review of 2daae0ed39, P1-2). *)
   let frames : bool ref list ref = ref [] in
-  let prev = ref "" in
   let result = ref None in
-  let is_start c = match c with
-    | 'a'..'z' | 'A'..'Z' | '_' -> true
+  let is_letter c = match c with
+    | 'a'..'z' | 'A'..'Z' -> true
     | c -> Char.code c >= 128
   in
-  let is_word c = is_start c || (match c with '0'..'9' | '\'' -> true | _ -> false) in
+  let is_run c = is_letter c || (match c with '0'..'9' | '_' | '\'' -> true | _ -> false) in
   let step () = if text.[!i] = '\n' then incr line; incr i in
   let skip_string () =
     (* [""] inside a string is a quote *)
@@ -382,37 +383,120 @@ let scan_late_rebind text =
       else step ()
     done
   in
+  (* Whether the sentence from here to its terminating dot holds [:=],
+     comments and strings skipped. The position and line are restored. *)
+  let sentence_assigns () =
+    let i0 = !i and l0 = !line in
+    let res = ref None in
+    while !res = None && !i < n do
+      let c = text.[!i] in
+      if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
+      else if c = '"' then skip_string ()
+      else if c = ':' && !i + 1 < n && text.[!i + 1] = '=' then res := Some true
+      else if c = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1]) then res := Some false
+      else step ()
+    done;
+    i := i0; line := l0;
+    !res = Some true
+  in
   let found w = result := Some (w, !line) in
+  (* A late word is found wherever its letters end a run that is not part of
+     a longer word: Rocq's lexer reads [1Register], [1_Register] and
+     [0x1Register] as a number then [Register] (P1-1), so a late word counts
+     when it starts the run or follows a digit, [_] or ['] in it. This also
+     takes an identifier such as [x_Register] for the word, which only costs
+     a replay. *)
+  let late_in run =
+    List.find_opt
+      (fun k ->
+         let lr = String.length run and lk = String.length k in
+         lr >= lk && String.equal (String.sub run (lr - lk) lk) k
+         && (lr = lk || not (is_letter run.[lr - lk - 1])))
+      late_words
+  in
+  let prefixes =
+    [ "Local"; "Global"; "Time"; "Timeout"; "Redirect"; "Instructions"; "Profile"; "Polymorphic";
+      "Monomorphic"; "Cumulative"; "NonCumulative"; "Private"; "Program"; "Fail"; "Succeed" ] in
+  let at_start = ref true and under_fail = ref false and cmd_module = ref false in
   while !result = None && !i < n do
     let c = text.[!i] in
     if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
-    else if c = '"' then (skip_string (); prev := "")
-    else if is_start c then begin
+    else if c = '"' then (skip_string ())
+    else if c = '#' && !i + 1 < n && text.[!i + 1] = '[' then begin
+      (* an attribute: the command word is still to come *)
+      while !i < n && text.[!i] <> ']' do
+        if text.[!i] = '"' then skip_string () else step ()
+      done;
+      if !i < n then incr i
+    end
+    else if is_run c then begin
       let j = ref !i in
-      while !j < n && is_word text.[!j] do incr j done;
-      let w = String.sub text !i (!j - !i) in
-      i := !j;
-      let late = List.mem w late_words in
-      if late then List.iter (fun f -> f := true) !frames;
-      if !closed && late then found w
-      else if String.equal w "Module" && not (String.equal !prev "Declare") then frames := ref true :: !frames
-      else if String.equal w "Section" then frames := ref false :: !frames
-      else if String.equal w "End" then begin
-        match !frames with
-        | f :: rest -> frames := rest; if !closed && !f then found "End (of a module, or of a section that loads or imports)"
-        | [] -> if !closed then found "End"
-      end
-      else if String.equal w "Qed" || String.equal w "Save" then closed := true;
-      prev := w
+      while !j < n && is_run text.[!j] do incr j done;
+      let run = String.sub text !i (!j - !i) in
+      let lead_letter = is_letter c in
+      (match late_in run with
+       | Some w ->
+         List.iter (fun f -> f := true) !frames;
+         if !closed then found w
+       | None -> ());
+      if !result = None then begin
+        if !at_start && lead_letter && List.mem run prefixes then begin
+          if String.equal run "Fail" || String.equal run "Succeed" then under_fail := true
+        end
+        else if !at_start && not lead_letter then ()  (* [Timeout 5] *)
+        else if !at_start then begin
+          at_start := false;
+          if not !under_fail then begin
+            if String.equal run "Module" then cmd_module := true
+            else if String.equal run "Section" then frames := ref false :: !frames
+            else if String.equal run "End" then begin
+              match !frames with
+              | f :: rest -> frames := rest; if !closed && !f then found "End (of a module, or of a section that loads or imports)"
+              | [] -> if !closed then found "End"
+            end
+          end
+        end
+        else if !cmd_module then begin
+          (* [Module Type T], [Module Export M]: the name comes later *)
+          if not (List.mem run [ "Type"; "Import"; "Export" ]) then begin
+            cmd_module := false;
+            i := !j;
+            if not (sentence_assigns ()) then frames := ref true :: !frames
+          end
+        end;
+        if String.equal run "Qed" || String.equal run "Save" then closed := true
+      end;
+      i := !j
     end
     else begin
-      (* A number, punctuation or space: it ends the previous word, and a
-         digit run does not swallow the word after it. *)
-      if c <> ' ' && c <> '\n' && c <> '\t' && c <> '\r' then prev := "";
+      (* A sentence ends at a dot followed by a space or the end; a bullet or
+         a brace before a command leaves it at the start. *)
+      if c = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1]) then begin
+        at_start := true; under_fail := false; cmd_module := false
+      end;
       step ()
     end
   done;
   !result
+
+(* A plugin outside the audited set (the plugins this tree builds) can add
+   commands the source scan cannot read (one could rebind a Rocqlib name after
+   a replayed proof), and closures no read sees. Loading one after the first
+   closer is a [Require] or [Declare] the scan refuses; loading one before is
+   caught here: while such a plugin is loaded, no proof is replayed (Claude
+   delta review of 2daae0ed39, P2-1). The audit is the ltac plugin's list of
+   audited packages (Tacinterp.audited_ml_tactic_plugins); until it registers,
+   no plugin counts as audited. *)
+let plugin_audit : (string -> bool) ref = ref (fun _ -> false)
+
+let register_plugin_audit f = plugin_audit := f
+
+let toolchain_now : (unit -> R.toolchain) option ref = ref None
+
+let unaudited_plugin () =
+  match !toolchain_now with
+  | None -> None
+  | Some tc -> List.find_opt (fun (name, _) -> not (!plugin_audit name)) (tc ()).R.plugins
 
 let source_rebind = function
   | None -> None
@@ -481,6 +565,7 @@ let start ~library ~source ~toolchain =
         | None -> None, None
     in
     if refusal = None then Proof_recorder.start_tracking ();
+    toolchain_now := Some toolchain;
     state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal;
                     f_refused_detail = refused_detail; f_candidate = None }
 
@@ -521,6 +606,7 @@ let miss_read name channel why =
 let hit_hooks : (R.read list -> unit) Queue.t = Queue.create ()
 
 let register_hit_hook f = Queue.add f hit_hooks
+
 
 let candidate_open () = match !state with Some { f_candidate = Some _; _ } -> true | _ -> false
 
@@ -634,7 +720,12 @@ and decide_once ~sentences ~closer =
        (Proof_recorder.fence_tripped). It is checked here, right before a
        stored term would be used, so a trip anywhere before the closer
        counts. *)
-    match Proof_recorder.fence_tripped () with
+    let tripped =
+      match unaudited_plugin () with
+      | Some (name, _) -> Some ("unaudited_plugin", name)
+      | None -> Proof_recorder.fence_tripped ()
+    in
+    match tripped with
     | Some (reason, detail) ->
       if counts.fence = None then counts.fence <- Some (reason ^ ": " ^ detail);
       counts.m_ineligible <- counts.m_ineligible + 1;

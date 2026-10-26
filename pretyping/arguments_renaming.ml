@@ -87,7 +87,7 @@ let recorded_arguments_names env r =
    one: the proof misses (review P3Bugs F4). *)
 let globref_of_string s =
   let mind_of path =
-    match Nametab.global_of_path (Libnames.path_of_string (String.trim path)) with
+    match Lib.global_of_kernel_string (String.trim path) with
     | GlobRef.IndRef (m, _) | GlobRef.ConstructRef ((m, _), _) -> Some m
     | GlobRef.ConstRef _ | GlobRef.VarRef _ -> None
     | exception _ -> None
@@ -107,7 +107,7 @@ let globref_of_string s =
          | _ -> None)
       | _ -> None
     else
-      match Nametab.global_of_path (Libnames.path_of_string s) with
+      match Lib.global_of_kernel_string s with
       | r -> Some r
       | exception _ -> None
   in

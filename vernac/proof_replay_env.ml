@@ -38,34 +38,10 @@ open Names
    back as the recorded name. *)
 type 'a parsed = Found of 'a | Absent | Unreadable
 
-let rec section_lookup ~label cwd ~stop =
-  if List.length (DirPath.repr cwd) <= stop then Absent
-  else
-    let path = Libnames.make_path cwd (Id.of_string label) in
-    match Nametab.global_of_path path with
-    | g -> Found g
-    | exception Not_found ->
-      (match DirPath.repr cwd with
-       | _ :: outer -> section_lookup ~label (DirPath.make outer) ~stop
-       | [] -> Absent)
-
 let global_of_string s =
-  match Nametab.global_of_path (Libnames.path_of_string s) with
+  match Lib.global_of_kernel_string s with
   | g -> Found g
-  | exception Not_found ->
-    if not (Lib.sections_are_opened ()) then Absent
-    else begin
-      let mp = Lib.current_mp () in
-      match String.rindex_opt s '.' with
-      | Some i when String.equal (String.sub s 0 i) (ModPath.to_string mp) ->
-        let label = String.sub s (i + 1) (String.length s - i - 1) in
-        let stop = List.length (DirPath.repr (Lib.current_dirpath false)) in
-        (match section_lookup ~label (Lib.current_dirpath true) ~stop with
-         | r -> r
-         | exception _ -> Unreadable)
-      | Some _ -> Absent
-      | None -> Unreadable
-    end
+  | exception Not_found -> Absent
   | exception _ -> Unreadable
 
 let constant_of_string s =

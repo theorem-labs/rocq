@@ -1,0 +1,16 @@
+{
+  "doc": "a proof reads a constant of the open section by its kernel name; replay finds it under the section path and replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.S.l": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.S.l", "hit"]]
+    }
+  }
+}
