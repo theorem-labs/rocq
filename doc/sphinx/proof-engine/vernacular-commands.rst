@@ -454,6 +454,10 @@ Requests to the environment
    The message "Closed under the global context" indicates that all the theorems and
    definitions have no dependencies.
 
+   An opaque constant whose proof was not typechecked by the kernel, because
+   its library was compiled with ``-skip-qed-typecheck``, is reported under
+   "Axioms" as :n:`@qualid has an opaque proof not checked by the kernel.`
+
 .. flag:: Printing All Assumptions
 
    Turn this :term:`flag` on to make :cmd:`Print Assumptions` report
@@ -729,6 +733,56 @@ file is a particular case of a module called a *library file*.
       Note that the :cmd:`Import` and :cmd:`Export` commands can be used inside modules.
 
       .. seealso:: Chapter :ref:`therocqcommands`
+
+.. cmd:: {? From @dirpath } Require ( safe ) {? @safe_export_token } {+ @qualid }
+   :name: Require (safe); From … Require (safe)
+
+   Loads a compiled file and all the files it depends on (recursively),
+   but only the kernel-level content is made available: the constants,
+   inductive types, constructors and modules that the library adds to the
+   kernel environment.  The libraries are located and their names resolved
+   exactly as for plain :cmd:`Require` (including the optional :n:`From @dirpath`
+   clause), but *no* :term:`libobject` is replayed.  In particular, this form
+   does not load any notation, coercion, hint, canonical structure, implicit
+   argument, ``ML`` plugin, or flag setting from the required libraries.
+
+   This is intended for loading untrusted or heavyweight libraries: since
+   nothing but the kernel content is processed, ill-behaved side effects of a
+   library (for instance abusive notations or flag changes) cannot affect the
+   current document, while its definitions can still be type-checked and used.
+
+   By default the loaded objects are only accessible through their
+   *fully-qualified* names; short names are not registered.  For example, after
+   `Require (safe) Corelib.Classes.CRelationClasses.` the constant is available
+   as :n:`Corelib.Classes.CRelationClasses.flip` (and, since local loadpaths
+   are searched, typically also as the shorter qualified prefixes) but not as
+   the bare `flip`.
+
+   As with plain :cmd:`Require`, an optional ``Import`` or ``Export`` clause may
+   be given.  ``Require (safe) Import`` additionally makes the short names of
+   the safe-loaded libraries available in the current scope, and
+   ``Require (safe) Export`` also re-exports them to modules that later import
+   the current one.  Only the short names are exposed this way; no other
+   :term:`libobject` (notation, coercion, hint, and so on) is imported, so the
+   library remains safe-loaded.  A safe-loaded library may also be brought into
+   scope afterwards with a standalone :cmd:`Import`, which likewise registers
+   only its short names.
+
+   Constants and inductive types loaded this way can be printed with
+   :cmd:`Print`, inspected with :cmd:`About` and :cmd:`Check`, located with
+   :cmd:`Locate`, used in terms, and their axioms reported by
+   :cmd:`Print Assumptions`.  The universe constraints they rely on are loaded,
+   so terms mentioning them typecheck.
+
+   A given library may be safe-required and later safe-required again (this is
+   a no-op), but a safe-loaded library cannot subsequently be loaded with a
+   plain :cmd:`Require`.
+
+   .. exn:: Cannot unsafe-require library @qualid because it was previously required with (safe).
+
+      A plain :cmd:`Require` was used on a library that had already been loaded
+      with :cmd:`Require (safe)`.  Loading only the kernel content and then
+      replaying the full library object is not supported.
 
 .. cmd:: Print Libraries
 
@@ -1163,6 +1217,101 @@ Printing constructions in full
    potentially ambiguous short names.
 
    This flag is off by default.
+
+.. _reversible-printing:
+
+Checking that printed terms can be parsed back (reversible printing)
+--------------------------------------------------------------------
+
+Because notations, hidden implicit arguments, hidden coercions or hidden
+universe instances can make different terms print alike, the printed form
+of a term cannot always be parsed and elaborated back to the term it
+stands for. Rather than unconditionally making printing fully explicit as
+:flag:`Printing All` does, the following flags keep the current printing
+options, but check, each time a term is printed, that its printed form
+can be parsed and elaborated back to a term equal to the original one, up
+to the equivalence selected by the flag; when the check fails, printing
+options are progressively turned on — first :flag:`Printing Coercions`,
+then :flag:`Printing Implicit`, then unsetting :flag:`Printing Notations`,
+then :flag:`Printing Universes` (first with, then without notations),
+then :flag:`Printing Parentheses` and finally all the options implied by
+:flag:`Printing All` — until the printed form passes the check.
+
+These five flags are mutually exclusive: setting one of them unsets the
+others, and unsetting the currently set one turns the checks off
+entirely. All are off by default. Since every displayed term is re-parsed
+and re-elaborated (possibly several times), printing can become
+noticeably more expensive when one of these flags is set.
+
+.. flag:: Printing Reversible Up To Unification
+
+   The re-parsed form must unify with the original term: holes standing
+   for arguments that are not printed and universes introduced by the
+   re-elaboration may be instantiated by unifying against the original
+   term. This is the most permissive of the five checks; it accepts any
+   printed form that can denote the original term, even if only in a
+   context where the expected type is known.
+
+   .. warn:: The printed form of this term could not be re-parsed and re-elaborated to an equal term (up to ...), even with all printing options turned on.
+
+      If no printed form, however explicit, passes the check, the most
+      explicit one is printed anyway and this warning is emitted. This
+      happens for instance for terms mentioning universes that cannot be
+      referred to by name, such as the sort of ``Check Type``.
+
+.. flag:: Printing Reversible Up To Conversion Modulo Sorts And Universes
+
+   The printed form must re-elaborate on its own (without help from the
+   original term) to a term with no unresolved holes, and that term must
+   be convertible to the original one when sorts and universes are
+   ignored entirely: sort qualities (``SProp``, ``Prop``, ``Type``),
+   universe levels and universe instances may all differ. This is the
+   laxest of the conversion-based checks; in particular, unlike
+   :flag:`Printing Reversible Up To Conversion Modulo Universes` below,
+   it accepts a printed form whose re-elaboration lives at a different
+   sort quality than the original term.
+
+.. flag:: Printing Reversible Up To Conversion Modulo Universes
+
+   The printed form must re-elaborate on its own (without help from the
+   original term) to a term with no unresolved holes, and that term must
+   be convertible to the original one when universe levels (and the level
+   components of universe instances) are ignored, but *sort qualities
+   must agree*: ``Set`` and ``Type@{u}`` are accepted, but ``Prop``,
+   ``SProp`` and ``Type`` are pairwise distinguished. With this flag,
+   implicit arguments that can only be inferred from the type of the
+   original term get printed, and the universe levels of sorts (such as
+   the sort of ``Check Type``) generally do not, but the *sort quality*
+   part of a polymorphic instance is kept when it would otherwise
+   re-elaborate to a different quality.
+
+.. flag:: Printing Reversible Up To Conversion Modulo Universe Unification
+
+   Like :flag:`Printing Reversible Up To Conversion Modulo Universes`,
+   but instead of ignoring universe levels it lets the universes (and
+   sort qualities) introduced by the re-elaboration be unified against
+   the original ones, enforcing new universe (in)equalities as needed.
+   This is stricter than
+   :flag:`Printing Reversible Up To Conversion Modulo Universes` on
+   universe levels — a universe level cannot be unified with an
+   algebraic universe, so the sort of ``Check Type`` is printed
+   explicitly — but laxer on sort qualities, which get unified rather
+   than required to match syntactically.
+
+.. flag:: Printing Reversible Up To Conversion
+
+   Like :flag:`Printing Reversible Up To Conversion Modulo Universe
+   Unification`, but no new universe constraints are enforced: the
+   universe (in)equalities needed for convertibility must already be
+   valid in the current universe graph. With this flag, universe
+   instances of polymorphic constants generally need to be printed
+   (turning on :flag:`Printing Universes` for the terms where they
+   matter).
+
+For all five flags, when the printed expression stands for a term (as
+opposed to a type), the types of the original and re-elaborated terms
+are compared as well, so that, e.g., a printed form whose re-elaboration
+lives at a different universe instance is not considered reversible.
 
 .. _controlling-typing-flags:
 
