@@ -104,7 +104,7 @@ let recorded_structure_projection env cst =
    as the constant's path. A key that does not read back to the same name is
    not taken for another: the proof misses. *)
 let mind_of_string s =
-  match Nametab.global_of_path (Libnames.path_of_string s) with
+  match Lib.global_of_kernel_string s with
   | Names.GlobRef.IndRef (m, _) | Names.GlobRef.ConstructRef ((m, _), _)
     when String.equal (Names.MutInd.to_string m) s -> Some m
   | _ -> None
@@ -128,7 +128,7 @@ let () =
          | v -> Proof_replay.Value v
          | exception _ -> Proof_replay.Unknown));
   Proof_replay.register_evaluator "structure_projection" (fun key ->
-      match Nametab.global_of_path (Libnames.path_of_string key) with
+      match Lib.global_of_kernel_string key with
       | Names.GlobRef.ConstRef c when String.equal (Names.Constant.to_string c) key ->
         (match recorded_structure_projection (Global.env ()) c with
          | v -> Proof_replay.Value v
@@ -569,7 +569,7 @@ let lookup c = try Some (Cmap_env.find c !prim_table) with Not_found -> None
 
 let () =
   Proof_replay.register_evaluator "primitive_projection" (fun key ->
-      match Nametab.global_of_path (Libnames.path_of_string key) with
+      match Lib.global_of_kernel_string key with
       | Names.GlobRef.ConstRef c when String.equal (Names.Constant.to_string c) key ->
         (match recorded_primitive_projection (lookup c) with
          | v -> Proof_replay.Value v

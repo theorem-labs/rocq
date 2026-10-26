@@ -75,6 +75,9 @@ let audited_ml_tactic_plugins =
          (String.Set.add ("rocq-runtime.plugins." ^ suffix) set))
     String.Set.empty audited_ml_tactic_plugin_suffixes
 
+(* BET-84 P3: the same list decides which loaded plugins replay trusts. *)
+let () = Proof_replay.register_plugin_audit (fun name -> String.Set.mem name audited_ml_tactic_plugins)
+
 let fence_ml_tactic { mltac_plugin; mltac_tactic } =
   if Proof_recorder.active () &&
      not (String.Set.mem mltac_plugin audited_ml_tactic_plugins)

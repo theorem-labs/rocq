@@ -11,11 +11,10 @@
 # - a plugin installs a closure over Rocq's own (Evarconv.set_evar_conv and
 #   the other fenced setters): the process-wide fence trips, and no proof of
 #   the process after it is replayed, though its record is clean.
-# And it must still replay a proof whose hook lists are unchanged. The proof
-# that asks the canonical-solution hooks also reads the notation = and the
-# canonical_structure table, channels replay does not evaluate yet, so
-# uses_canonical misses on one of them (the runs show notation) in every
-# grade; for it the test requires only that it is never replayed.
+# The plugin is not one this tree builds, so the plugin audit refuses every
+# proof of the file while it is loaded: no hook or closure of it can decide
+# a replayed proof. The registration's records must still mark the proofs
+# that met an active hook or followed a plugin closure (reason plugin_hook).
 #
 # The plugin is misc/proof-record-plugin-hooks/src, built here in a copy so
 # that the two tests can run at the same time. Probe.v has two switch lines,
@@ -125,37 +124,22 @@ def want_fence(case, tripped):
               file=sys.stderr)
         failed = True
 
-# Nothing a proof read changed: every proof replays, the hook proofs too.
-for p, _ in HOOKED:
-    want("off-on-off", p, "hit")
-for p in ["before_closures"] + AFTER:
-    want("off-on-off", p, "hit")
-not_hit("off-on-off", "uses_canonical")
-want_fence("off-on-off", False)
+# The test plugin is not one this tree builds, so while it is loaded no
+# proof of the file is replayed, in every variant (Proof_replay's plugin
+# audit; Claude delta review of 2daae0ed39, P2-1). Its hooks and closures
+# can therefore never decide a replayed proof; the records below still show
+# that the recorder marks the proofs that met them.
+ALL = [p for p, _ in HOOKED] + ["uses_canonical", "before_closures"] + AFTER
+for case in ("off-on-off", "hooks-on-off", "closures-on-off", "on-on-on"):
+    for p in ALL:
+        want(case, p, "ineligible")
+    s, _ = summary(case)
+    fence = s.get("fence") or ""
+    print("%-20s fence %r" % (case, fence))
+    if not fence.startswith("unaudited_plugin: coq-test-suite.plugin_hooks"):
+        print("FAIL: %s: fence %r, wanted the unaudited test plugin" % (case, fence), file=sys.stderr)
+        failed = True
 
-# The grade activates the hooks the registration did not: each hook proof
-# misses on its own channel's read; the others still replay.
-for p, channel in HOOKED:
-    want("hooks-on-off", p, "read", channel)
-not_hit("hooks-on-off", "uses_canonical")
-for p in ["before_closures"] + AFTER:
-    want("hooks-on-off", p, "hit")
-want_fence("hooks-on-off", False)
-
-# The grade installs plugin closures the registration did not: the proofs
-# before replay, every proof after is refused by the fence.
-for p, _ in HOOKED:
-    want("closures-on-off", p, "hit")
-want("closures-on-off", "before_closures", "hit")
-for p in AFTER:
-    want("closures-on-off", p, "ineligible")
-want_fence("closures-on-off", True)
-
-# The registration itself asked active hooks and ran after plugin closures:
-# those proofs are ineligible in the record and never replayed.
-for p in [p for p, _ in HOOKED] + ["uses_canonical"] + AFTER:
-    want("on-on-on", p, "ineligible")
-want("on-on-on", "before_closures", "hit")
 with open("%s/rec/on.jsonl" % out, encoding="utf-8") as f:
     on = {l["name"].rsplit(".", 1)[-1]: l for l in map(json.loads, f) if l["kind"] == "proof"}
 for p in [p for p, _ in HOOKED] + ["uses_canonical"] + AFTER:

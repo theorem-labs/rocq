@@ -59,12 +59,30 @@ let bidi_hints =
 let add_bidirectionality_hint env gr n =
   bidi_hints := GlobRefMap.add env gr n !bidi_hints
 
+(* BET-84 census row 12: ONE value for the bidirectionality_hint channel.
+   The record site below and the replay evaluator call it
+   (dev/tools/census/replay_channels.py). The key is the printed reference,
+   which Arguments_renaming.globref_of_string reads back (it refuses a
+   string that does not print back), so the evaluator looks the hint up for
+   the same reference. *)
+let recorded_bidirectionality_hint env gr =
+  Option.map (Proof_recorder.digest ~what:"bidirectionality_hint") (GlobRefMap.find_opt env gr !bidi_hints)
+
+let () =
+  Proof_replay.register_evaluator "bidirectionality_hint" (fun key ->
+      match Arguments_renaming.globref_of_string key with
+      | None -> Proof_replay.Unknown
+      | Some gr ->
+        (match recorded_bidirectionality_hint (Global.env ()) gr with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown))
+
 let get_bidirectionality_hint env gr =
   let hint = GlobRefMap.find_opt env gr !bidi_hints in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"12" ~channel:"bidirectionality_hint"
       ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print gr))
-      ~value:(fun () -> Option.map (Proof_recorder.digest ~what:"bidirectionality_hint") hint);
+      ~value:(fun () -> recorded_bidirectionality_hint env gr);
   hint
 
 let clear_bidirectionality_hint env gr =

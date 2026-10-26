@@ -201,7 +201,7 @@ let () =
     Proof_replay.register_evaluator "reduction_behaviour" (fun key ->
         if String.equal key "" then Proof_replay.Unknown
         else
-          match Nametab.global_of_path (Libnames.path_of_string key) with
+          match Lib.global_of_kernel_string key with
           | Names.GlobRef.ConstRef c when String.equal (Names.Constant.to_string c) key ->
             (match recorded_reduction_behaviour c with
              | v -> Proof_replay.Value v

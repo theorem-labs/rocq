@@ -685,3 +685,36 @@ let init () =
   Interp.init ();
   Summary.Synterp.init_summaries ();
   Summary.Interp.init_summaries ()
+
+(* BET-84 P3: the reference a kernel name printed by [Names.*.to_string]
+   names now, for the replay evaluators that read a recorded key back. Its
+   absolute path is the printed name, except while sections are open: the
+   nametab binds an object declared in an open section under a path that
+   holds the section, and its kernel name does not. So when the printed name
+   finds nothing and its prefix is the current module, the label is looked
+   up under each open section's path, innermost first (no module can be
+   opened inside a section, so every open section belongs to the current
+   module). Raises [Not_found] when nothing binds it. Callers still require
+   the result to print back as the key. *)
+let global_of_kernel_string s =
+  match Nametab.global_of_path (Libnames.path_of_string s) with
+  | g -> g
+  | exception Not_found when sections_are_opened () ->
+    let mp = Names.ModPath.to_string (current_mp ()) in
+    (match String.rindex_opt s '.' with
+     | Some i when String.equal (String.sub s 0 i) mp ->
+       let label = Names.Id.of_string (String.sub s (i + 1) (String.length s - i - 1)) in
+       let depth dir = List.length (Names.DirPath.repr dir) in
+       let stop = depth (Libnames.dirpath_of_path (cwd_except_section ())) in
+       let rec go dir =
+         if depth dir <= stop then raise Not_found
+         else
+           match Nametab.global_of_path (Libnames.make_path dir label) with
+           | g -> g
+           | exception Not_found ->
+             (match Names.DirPath.repr dir with
+              | _ :: outer -> go (Names.DirPath.make outer)
+              | [] -> raise Not_found)
+       in
+       go (Libnames.dirpath_of_path (cwd ()))
+     | _ -> raise Not_found)

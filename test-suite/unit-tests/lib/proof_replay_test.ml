@@ -311,6 +311,13 @@ let rebind_scan =
      && s "Lemma a : True. Qed. Include M." = Some ("Include", 1)
      && s "Lemma a : True. Qed. Module M (* x. *) := F E." = Some ("Module", 1)
      && s "Declare Module M : T. Section S. Lemma a : True. Qed. End S." = None
+     && s "Lemma a : True. Qed. Timeout 1_Register x as core.eq.type." = Some ("Register", 1)
+     && s "Lemma a : True. Qed. Timeout 0x1Register x as core.eq.type." = Some ("Register", 1)
+     && s "Section S. Import M. Print Section S. Lemma a : True. Qed. End S." = Some (end_, 1)
+     && s "Section S. Lemma a : True. Qed. Fail End S. End S." = None
+     && s "Module M := F X. Section S. Lemma a : True. Qed. End S." = None
+     && s "Module M (* x. *) := F E. Section S. Lemma a : True. Qed. End S." = None
+     && s "#[local] Section S. Import M. Lemma a : True. Qed. End S." = Some (end_, 1)
      && s "Lemma a : True. Qed. Import M." = Some ("Import", 1)
      && s "Lemma a : True. Qed. Load \"f\"." = Some ("Load", 1)
      && s "Lemma Requires : True. Qed." = None
@@ -360,6 +367,28 @@ let miss_reason =
      has changed "\"why\":\"changed\"" && has unknown "\"why\":\"unknown\""
      && has none "\"why\":\"no_evaluator\"")
 
+(* A plugin this tree does not build can add commands and closures no read
+   sees: while one is loaded, no proof is replayed, and the summary names it. *)
+let plugin_audit_refuses =
+  let tc = R.{ toolchain with plugins = [ ("unit.test.unaudited", "d") ] } in
+  let h = R.{ header with toolchain = tc } in
+  let p = R.{ proof with toolchain_key = R.toolchain_key tc } in
+  let attempt () =
+    setup ~header:h ~proof:p ~now:tc ();
+    Replay.open_proof ~name:"Top.File.lemma" ~statement:(fun () -> statement)
+      ~position:(fun () -> position) ~toolchain_key:(fun () -> R.toolchain_key tc);
+    Replay.decide ~sentences ~closer:"Qed"
+  in
+  mk_bool_test "proof-replay-plugin-audit"
+    "while a plugin outside the audited set is loaded, no proof is replayed"
+    (current := Replay.Value (Some (String.make 32 'e'));
+     Replay.register_plugin_audit (fun name -> not (String.equal name "unit.test.unaudited"));
+     let refused = attempt () in
+     Replay.register_plugin_audit (fun _ -> true);
+     let audited = attempt () in
+     Replay.register_plugin_audit (fun _ -> false);
+     refused = None && audited <> None)
+
 (* A process-wide fence (Proof_recorder.fence_tripped): a closure a plugin
    installs over Rocq's own, or a cache that no longer matches its table, is
    state no recorded read sees. Once one trips, no proof of the process is
@@ -394,7 +423,7 @@ let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
     binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
-    rebind_scan; hit_hook_runs; miss_reason;
+    rebind_scan; hit_hook_runs; miss_reason; plugin_audit_refuses;
     (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]
 

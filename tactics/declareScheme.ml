@@ -58,7 +58,7 @@ let key_of_string key =
     let kind = String.sub key 0 i in
     let path = String.sub key (i + 1) (j - i - 1) in
     let index = String.sub key (j + 1) (String.length key - j - 1) in
-    (match Nametab.global_of_path (Libnames.path_of_string path), int_of_string_opt index with
+    (match Lib.global_of_kernel_string path, int_of_string_opt index with
      | (GlobRef.IndRef (m, _) | GlobRef.ConstructRef ((m, _), _)), Some n
        when String.equal (MutInd.to_string m) path -> Some (kind, (m, n))
      | _ -> None
