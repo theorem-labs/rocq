@@ -29,10 +29,10 @@ Lemma uses_coercion : True.
 Proof. try exact (tt : nat). exact I. Qed.
 
 (* [unwrap ?w] against [true] asks for a canonical solution of [unwrap];
-   there is none, so the lookup asks the canonical-solution hooks. It asks
-   only after a canonical_structure lookup, a channel replay does not
-   evaluate yet, so this proof misses there in every grade: the test can
-   require only that it is never replayed. *)
+   there is none, so the lookup asks the canonical-solution hooks. The proof
+   also reads the notation [=] and the canonical_structure table, channels
+   replay does not evaluate yet, so it misses on one of them in every grade
+   (the runs show notation): the test requires only that it never replays. *)
 Lemma uses_canonical : True.
 Proof. try exact (eq_refl : unwrap _ = true). exact I. Qed.
 
