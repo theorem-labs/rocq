@@ -148,6 +148,9 @@ type counts = {
   mutable charged : float;  (** r times [registered] *)
   mutable registered : float;  (** the replayed proofs' registered wall seconds *)
   mutable outcomes : (string * string * string option) list;  (** newest first *)
+  mutable fence : string option;
+      (** the process-wide fence that refused a proof of this file, as
+          ["reason: detail"] *)
 }
 
 type file_state = {
@@ -162,7 +165,7 @@ let state : file_state option ref = ref None
 
 let counts = {
   n_proofs = 0; n_hits = 0; m_key = 0; m_read = 0; m_ineligible = 0; m_missing = 0;
-  charged = 0.; registered = 0.; outcomes = [];
+  charged = 0.; registered = 0.; outcomes = []; fence = None;
 }
 
 let channel_miss : (string, int) Hashtbl.t = Hashtbl.create 16
@@ -322,6 +325,7 @@ let start ~library ~toolchain =
     counts.charged <- 0.;
     counts.registered <- 0.;
     counts.outcomes <- [];
+    counts.fence <- None;
     Hashtbl.reset channel_miss;
     Hashtbl.reset proof_provided;
     pending_counters := [];
@@ -352,6 +356,11 @@ let start ~library ~toolchain =
              List.iter (fun (p : R.proof) -> Hashtbl.replace index p.R.name p) file.R.proofs;
            refusal)
     in
+    (* The registration ran its process-wide cache fences from its start
+       ([Proof_recorder.start]); a replay that does not run them would let
+       a dirty history here match the clean one recorded there. From here
+       on they run at each decision ({!decide}). *)
+    if refusal = None then Proof_recorder.start_tracking ();
     state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal; f_candidate = None }
 
 let check_budget () =
@@ -483,6 +492,20 @@ and decide_once ~sentences ~closer =
   | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_provided = at_start; c_counters = starts };
             _ } as st) ->
     st.f_candidate <- None;
+    (* A process-wide fence this process tripped (a stale Rocqlib cache, a
+       closure a plugin installed over Rocq's own) stays tripped: from then
+       on the proofs depend on state that no recorded read sees, so none is
+       replayed for the rest of the process, whatever its record holds
+       (Proof_recorder.fence_tripped). It is checked here, right before a
+       stored term would be used, so a trip anywhere before the closer
+       counts. *)
+    match Proof_recorder.fence_tripped () with
+    | Some (reason, detail) ->
+      if counts.fence = None then counts.fence <- Some (reason ^ ": " ^ detail);
+      counts.m_ineligible <- counts.m_ineligible + 1;
+      outcome name "ineligible" None;
+      None
+    | None ->
     (* The closer is part of key item 1: a registered [Qed] is never an
        [Admitted] or a [Defined] now (GRADE's review, case V5). *)
     if closer <> p.R.closer || (closer <> "Qed" && closer <> "Save") then (miss_key name; None)
@@ -547,11 +570,12 @@ let summary ~killed =
     "{\"version\":1,\"proofs\":%d,\"hits\":%d,\
      \"misses\":{\"key\":%d,\"read\":%d,\"ineligible\":%d,\"missing_record\":%d},\
      \"refused\":%s,\"charged_s\":%.6f,\"registered_s\":%.6f,\"elapsed_s\":%.6f,\"killed\":%s,\
-     \"channel_misses\":[%s],\"outcomes\":[%s]}\n"
+     \"fence\":%s,\"channel_misses\":[%s],\"outcomes\":[%s]}\n"
     counts.n_proofs counts.n_hits counts.m_key counts.m_read counts.m_ineligible counts.m_missing
     (match refused () with None -> "null" | Some r -> quote r)
     counts.charged counts.registered elapsed
     (if killed then "true" else "false")
+    (match counts.fence with None -> "null" | Some f -> quote f)
     channels outcomes
 
 let write ~killed path =

@@ -284,9 +284,38 @@ let sha256_vectors =
      && Proof_sha256.digest_hex (String.make 1_000_000 'a')
         = "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
 
+(* A process-wide fence (Proof_recorder.fence_tripped): a closure a plugin
+   installs over Rocq's own, or a cache that no longer matches its table, is
+   state no recorded read sees. Once one trips, no proof of the process is
+   replayed, whatever its record holds, and the summary names the fence. The
+   setter here stands for Evarconv.set_evar_conv: Rocq's own count is 0, so
+   one call trips it. The fence is never cleared, so this test runs LAST. *)
+let fence_refuses =
+  let set = Proof_recorder.closure_setter ~what:"unit-test setter" ~stock:0 in
+  mk_bool_test "proof-replay-fence"
+    "after a process-wide fence trips, no proof of the process is replayed, and the summary says why"
+    (current := Replay.Value (Some (String.make 32 'e'));
+     let before = hits () in
+     set ();
+     setup ();
+     let tripped = decide () in
+     let path = Filename.temp_file "proof-replay" ".json" in
+     Replay.write_summary path;
+     let ic = open_in_bin path in
+     let text = really_input_string ic (in_channel_length ic) in
+     close_in ic;
+     Sys.remove path;
+     let later = hits () in
+     let has s = CString.string_contains ~where:text ~what:s in
+     before && tripped = None && (not later)
+     && has "\"fence\":\"plugin_hook: unit-test setter\""
+     && has "\"outcome\":\"ineligible\"" && has "\"hits\":0")
+
 let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
-    binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts ]
+    binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
+    (* Last: it trips the process-wide fence for good. *)
+    fence_refuses ]
 
 let _ = run_tests __FILE__ log_out_ch tests
