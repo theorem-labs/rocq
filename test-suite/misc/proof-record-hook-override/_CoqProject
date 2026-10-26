@@ -1,9 +1,0 @@
-src/META.coq-test-suite
--Q theories HookOverride
--I src
-
-src/hookOverride.mlg
-src/hookOverrideImpl.ml
-src/hookOverrideImpl.mli
-src/hook_override_plugin.mlpack
-theories/Probe.v

@@ -1196,22 +1196,10 @@ type tc_solver = solver * condition
 
 let class_solvers = ref (CString.Map.empty : tc_solver CString.Map.t)
 
-(* BET-84: a name does not name a closure. [register_solver ~override:true]
-   replaces the solver behind an unchanged name, from a plugin whose files are
-   unchanged, so neither the active-name list nor the toolchain key moves
-   while behaviour does (cross-model delta-2 review, P1). Each name carries
-   the number of times it was registered, and that number is recorded with
-   it. A closure cannot be digested, and its address is not its identity. *)
-let solver_generation = ref (CString.Map.empty : int CString.Map.t)
-
-let generation_of name =
-  match CString.Map.find_opt name !solver_generation with None -> 0 | Some n -> n
-
 let register_solver ~name ?(override=false) h =
   if not override && CString.Map.mem name !class_solvers then
     CErrors.anomaly ~label:"Class_tactics.register_solver"
       Pp.(str (Printf.sprintf {|Solver "%s" is already registered|} name));
-  solver_generation := CString.Map.add name (generation_of name + 1) !solver_generation;
   class_solvers := CString.Map.add name h !class_solvers
 
 let active_solvers = Summary.ref ~name:"typeclass_solvers" ([] : string list)
@@ -1224,21 +1212,25 @@ let activate_solver ~name =
   deactivate_solver ~name;
   active_solvers := name :: !active_solvers
 
-(* BET-84 census row 8: the ordered list of active typeclass solvers. It is
-   the selection's stable input: which solver a component gets is a function
-   of that list, of the solvers' code (in the plugin digests) and of the
-   component, which the proof's other reads fix. Recording the solver a call
-   chose would keep only the first component's choice, and the name
-   "default" would not tell the built-in fallback from a registered solver of
-   that name (cross-model delta review D6). *)
+(* BET-84 census row 8: the ordered list of active typeclass solvers. A
+   solver and its condition are closures from a plugin, and what they do can
+   depend on state that neither the solver's name nor the plugin's files fix:
+   rocq-elpi's condition reads a mode table that [Elpi TC Solver Override]
+   changes, and its solver runs the accumulated elpi program (Claude gate at
+   0f8d815732, finding 4). Rocq registers no solver, so a stock proof reads
+   the empty list, and a proof whose resolution asks an active solver stores
+   no term. Recording the solver a call chose would not do: the choice is a
+   closure's answer (cross-model delta review D6). *)
 let find_solver env evd (s : Intpart.set) =
   let active = !active_solvers in
-  if Proof_recorder.active () then
+  if Proof_recorder.active () then begin
     Proof_recorder.read ~row:"8" ~channel:"typeclass_solver"
       ~key:(fun () -> "active")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest ~what:"typeclass_solver"
-                  (List.map (fun n -> (n, generation_of n)) active)));
+      ~value:(fun () -> Some (Proof_recorder.digest ~what:"typeclass_solver" active));
+    if not (List.is_empty active) then
+      Proof_recorder.ineligible ~reason:"plugin_hook"
+        ~detail:("typeclass_solver: " ^ String.concat ", " active)
+  end;
   let rec find_solver = function
     | [] -> Search.typeclasses_resolve
     | hd :: tl ->

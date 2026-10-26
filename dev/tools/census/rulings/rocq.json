@@ -85,7 +85,7 @@
     "summary:parsing/notgram_ops.ml:\"notation_grammar_map\"": {"row": "S2.1"},
     "summary:parsing/notgram_ops.ml:\"notation_prefixes_map\"": {"row": "S2.1"},
     "summary:parsing/notgram_ops.ml:\"notation_non_terminals_map\"": {"row": "S2.1"},
-    "summary:parsing/procq.ml:\"GRAMMAR_LEXER\"": {"row": "17", "note": "fresh reads the keyword state (plugins/ltac/tacinterp.ml:533); also parser state (S2.1)"},
+    "summary:parsing/procq.ml:\"GRAMMAR_LEXER\"": {"row": "17", "note": "fresh reads the keyword state; recorded at plugins/ltac/tacinterp.ml interp_fresh_id, channel keyword; also parser state (S2.1)"},
 
     "summary:plugins/extraction/table.ml:\"ExtrBlacklist\"": {"ruling": "@extraction"},
     "nosummary-option:plugins/extraction/table.ml:\"Extraction Optimize\"": {"ruling": "@extraction"},
