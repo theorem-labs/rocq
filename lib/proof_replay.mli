@@ -62,7 +62,8 @@ exception Budget_exhausted
 
 (** {6 The compile} *)
 
-val start : library:string -> toolchain:(unit -> Proof_record.toolchain) -> unit
+val start :
+  library:string -> source:string option -> toolchain:(unit -> Proof_record.toolchain) -> unit
 (** Loads the record for this library and starts the clock. A no-op when no
     source is configured. After it, {!refused} says whether the whole file
     runs without replay, and why. [toolchain] is this compile's: a record
@@ -70,7 +71,23 @@ val start : library:string -> toolchain:(unit -> Proof_record.toolchain) -> unit
     safe-dependency set or stack limit is refused for the whole file, before
     any of its proofs is declared (reason ["toolchain"]). A file that is not
     refused turns on {!Proof_recorder.start_tracking}, so the process-wide
-    cache fences run here as they ran in the registration. *)
+    cache fences run here as they ran in the registration. [source] is the
+    [.v] file: a file whose text, after its first [Qed] or [Save], can rebind
+    a Rocqlib name or load code ({!scan_late_rebind}) runs without replay
+    (reason ["rebind"], with the command and its line in the summary's
+    [refused_detail]). *)
+
+val scan_late_rebind : string -> (string * int) option
+(** The first command in this source text, after its first [Qed] or [Save],
+    that can rebind a Rocqlib name or load code — [Register], [Require],
+    [Load], [Declare ML Module], [Import], [Export], [Include], a [Module]
+    defined by [:=], or [End] in a text that uses [Register] — with its line;
+    [None] if there is none.
+    Comments and strings are skipped. *)
+
+val register_hit_hook : (Proof_record.read list -> unit) -> unit
+(** [f reads] runs at each hit with the replayed proof's recorded reads, so
+    the owner of a process-wide cache can count them as looked up. *)
 
 val set_vo_path : string -> unit
 (** The [.vo] this compile writes, as its command line gives it. With
@@ -95,7 +112,7 @@ val enabled : unit -> bool
 val refused : unit -> string option
 (** The reason the whole file runs without replay: ["memory"] (the recorded
     peak is above the limit), ["rlimit"], ["overcommit"], ["bad_record"]
-    (missing or unreadable), or [None]. *)
+    (missing or unreadable), ["rebind"] ({!start}), or [None]. *)
 
 val check_budget : unit -> unit
 (** Raises {!Budget_exhausted} when the elapsed time plus the charge has

@@ -76,6 +76,17 @@ let () = Proof_recorder.register_fence_check (fun () ->
           Proof_recorder.trip_fence ~reason:"rocqlib_rebound" ~detail:s)
       !observed)
 
+(* BET-84 P3: a replayed proof's tactics do not run, so the lookups its
+   record holds never reach [observe]. Treat them as looked up, with the
+   answer they have now (the read matched, so it is the registration's): a
+   later rebinding of one of these keys then trips the fence, and no later
+   proof of the process is replayed. *)
+let () = Proof_replay.register_hit_hook (fun reads ->
+    if Proof_recorder.tracking () then
+      List.iter (fun (r : Proof_record.read) ->
+          if String.equal r.channel "lib_ref" then observe r.key (CString.Map.find_opt r.key !table))
+        reads)
+
 let record_ref s res =
   if Proof_recorder.tracking () then observe s res;
   if Proof_recorder.active () then

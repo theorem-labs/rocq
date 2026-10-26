@@ -1,0 +1,16 @@
+{
+  "doc": "a plugin is loaded after the first proof: the whole file runs without replay, and the summary names the command and its line",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}, "PR.A.q": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 0,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": "rebind",
+      "refused_detail": "Declare ML Module at line 6",
+      "killed": false,
+      "fence": null
+    }
+  }
+}

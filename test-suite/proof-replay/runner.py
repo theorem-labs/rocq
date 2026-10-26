@@ -490,7 +490,7 @@ class Fixture:
             self.compare_summary(src, want, got)
 
     def compare_summary(self, src, want, got):
-        for field in ("proofs", "hits", "refused", "killed", "fence"):
+        for field in ("proofs", "hits", "refused", "refused_detail", "killed", "fence"):
             if field in want and got.get(field) != want[field]:
                 self.fail("%s: summary %s is %r, wanted %r" % (src, field, got.get(field), want[field]))
         if "misses" in want:
@@ -511,9 +511,14 @@ class Fixture:
                 if basic != wanted_basic:
                     self.fail("%s: outcomes are %s, wanted %s" % (src, basic, wanted_basic))
                 for got_outcome, expected in zip(have, wanted):
-                    if len(expected) == 3 and got_outcome.get("channel") != expected[2]:
+                    if len(expected) >= 3 and got_outcome.get("channel") != expected[2]:
                         self.fail("%s: %s has mismatch channel %r, wanted %r"
                                   % (src, expected[0], got_outcome.get("channel"), expected[2]))
+                    # [name, "read", channel, why]: why the read missed
+                    # (no_evaluator, unknown, changed).
+                    if len(expected) == 4 and got_outcome.get("why") != expected[3]:
+                        self.fail("%s: %s missed for %r, wanted %r"
+                                  % (src, expected[0], got_outcome.get("why"), expected[3]))
 
     def check_objects(self, a, b, replay):
         spec = self.spec
