@@ -1,0 +1,13 @@
+{
+  "doc": "a replayed proof raises a deprecation warning; replay must re-raise it and a later proof runs",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.writer": {"eligible": true, "writes_nonempty": ["warnings_raised"]}}},
+  "compare_stderr": ["A.v"],
+  "stderr_contains": {"A.v": ["deprecated"]},
+  "summaries": {
+    "A.v": {"proofs": 2, "hits": 1,
+              "misses": {"key": 1, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.writer", "hit"], ["PR.A.later_reader", "key"]]}
+  }
+}

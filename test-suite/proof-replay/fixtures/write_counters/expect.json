@@ -1,0 +1,11 @@
+{
+  "doc": "a replayed proof runs auto using a hint; a later Hint Resolve and proof expose counter advancement",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {"proofs": 3, "hits": 2,
+              "misses": {"key": 1, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.hint_source", "hit"], ["PR.A.writer", "hit"],
+                           ["PR.A.later_reader", "key"]]}
+  }
+}

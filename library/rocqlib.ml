@@ -42,6 +42,20 @@ let () = Proof_recorder.register_tables (fun () ->
    a restore) trips the fence, and every proof from then on is ineligible.
    This is coarse, and sound; the start-of-proof table read stays, for the
    proofs before the fence trips. *)
+(* BET-84: ONE value for the lib_ref channel. The record site below and the
+   replay evaluator call this, so the value is never computed two ways
+   (dev/tools/census/replay_channels.py). *)
+let recorded_lib_ref s =
+  match CString.Map.find_opt s !table with
+  | None -> None
+  | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r)
+
+let () =
+  Proof_replay.register_evaluator "lib_ref" (fun key ->
+      match recorded_lib_ref key with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let observed : GlobRef.t option CString.Map.t ref = ref CString.Map.empty
 
 let same a b = match a, b with
@@ -66,9 +80,20 @@ let record_ref s res =
   if Proof_recorder.tracking () then observe s res;
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
-      ~value:(fun () -> match res with
-          | None -> None
-          | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r))
+      ~value:(fun () -> ignore res; recorded_lib_ref s)
+
+(* BET-84: ONE value for the lib_ref_domain channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_lib_ref_domain () =
+  Some (Proof_recorder.digest_cached ~what:"rocqlib_table" !table)
+
+let () =
+  Proof_replay.register_evaluator "lib_ref_domain" (fun _key ->
+      match recorded_lib_ref_domain () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
 
 let get_lib_refs () =
   let current = !table in
@@ -76,7 +101,7 @@ let get_lib_refs () =
   if Proof_recorder.tracking () then List.iter (fun (s, r) -> observe s (Some r)) refs;
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"15" ~channel:"lib_ref_domain" ~key:(fun () -> "")
-      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"rocqlib_table" current));
+      ~value:recorded_lib_ref_domain;
   refs
 
 let has_ref s =

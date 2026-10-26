@@ -51,13 +51,17 @@ let alias_map = Summary.ref ~name:"tactic-alias"
 let register_alias key tac =
   alias_map := KerName.Map.add key tac !alias_map
 
-(* BET-84 census row 9: each Ltac alias and definition the proof reads. *)
-let record channel k v =
+(* BET-84 census row 9: each Ltac alias and definition the proof reads.
+   The value comes from the one function per channel below. *)
+let record_hook : (string -> KerName.t -> string option) ref = ref (fun _ _ -> None)
+
+(* The lookup passes what it found, so that it builds no option when the
+   recorder is off; the recorded value still comes from the shared value
+   function through [record_hook], never from that argument. *)
+let record channel k (_found : 'a option) =
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> KerName.to_string k)
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some v -> Some (Proof_recorder.digest ~what:channel v))
+      ~value:(fun () -> !record_hook channel k)
 
 (* The lookup itself must build no option when the recorder is off: these run
    at every call of a tactic notation. [record] is reached with an already
@@ -167,6 +171,43 @@ let is_ltac_for_ml_tactic r =
   | exception Not_found ->
     record "tactic_definition" r None;
     raise Not_found
+
+(* BET-84: ONE value for each of the two Ltac channels. The record sites
+   above and the replay evaluators below call these, so a read's value is
+   never computed two ways (dev/tools/census/replay_channels.py). *)
+let recorded_tactic_alias k =
+  match KerName.Map.find_opt k !alias_map with
+  | None -> None
+  | Some v -> Some (Proof_recorder.digest ~what:"tactic_alias" v)
+
+let recorded_tactic_definition k =
+  match KerName.Map.find_opt k !mactab with
+  | None -> None
+  | Some v -> Some (Proof_recorder.digest ~what:"tactic_definition" v)
+
+(* The record holds the printed kernel name. Both tables are scanned, so a
+   name in neither really is absent, which is what the lookup recorded. *)
+let kername_of_string s =
+  let found = ref None in
+  let look k _ = if Option.is_empty !found && String.equal (KerName.to_string k) s then found := Some k in
+  KerName.Map.iter look !mactab;
+  if Option.is_empty !found then KerName.Map.iter look !alias_map;
+  !found
+
+let () =
+  record_hook :=
+    (fun channel k ->
+       if String.equal channel "tactic_alias" then recorded_tactic_alias k
+       else recorded_tactic_definition k)
+
+let () =
+  let evaluator recorded key =
+    match kername_of_string key with
+    | None -> Proof_replay.Value None
+    | Some k -> (match recorded k with v -> Proof_replay.Value v | exception _ -> Proof_replay.Unknown)
+  in
+  Proof_replay.register_evaluator "tactic_alias" (evaluator recorded_tactic_alias);
+  Proof_replay.register_evaluator "tactic_definition" (evaluator recorded_tactic_definition)
 
 let add ~depr kn b t =
   let entry = {

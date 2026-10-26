@@ -457,6 +457,9 @@ let () =
       [Proof_record.{ row = "18"; channel = "counter_start"; key = "REWHINT-COUNTER";
                       value = Some (string_of_int !rewrite_hint_counter) }])
 
+(* BET-84 P3: see the hint counter in [Hints]. *)
+let () = Proof_replay.register_summary_counter "rewrite_hint_counter"
+
 let fresh_key () =
   let cur = incr rewrite_hint_counter; !rewrite_hint_counter in
   if Proof_recorder.writing () then

@@ -1,0 +1,11 @@
+{
+  "doc": "a value changes that the proof never looks up: per-constant tracking replays the proof",
+  "files": ["A.v"],
+  "record_layout": "slashed",
+  "summaries": {
+    "A.v": {"proofs": 1, "hits": 1,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.reads_used", "hit"]]}
+  }
+}

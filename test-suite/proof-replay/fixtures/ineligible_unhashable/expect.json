@@ -1,0 +1,11 @@
+{
+  "doc": "a constant whose body passes the structural digest's block limit makes the proof that reads it unhashable-ineligible (slow: the constant costs about 250 s and 4.7 GB to build)",
+  "files": ["A.v"],
+  "slow": true,
+  "stack_kb": 8192,
+  "records": {"A.v": {"PR.A.control": {"eligible": true},
+                       "PR.A.unhashable_proof": {"ineligible": ["unhashable"], "stores_no_term": true}}},
+  "summaries": {"A.v": {"proofs": 2, "hits": 1,
+    "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0}, "refused": null, "killed": false,
+    "outcomes": [["PR.A.control", "hit"], ["PR.A.unhashable_proof", "ineligible"]]}}
+}

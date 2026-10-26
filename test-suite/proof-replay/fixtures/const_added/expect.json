@@ -1,0 +1,14 @@
+{
+  "doc": "a constant and a proof are added: the old proof hits, the new proof has no record entry",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 1},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.A.l1", "hit"], ["PR.A.l2", "missing_record"]]
+    }
+  }
+}

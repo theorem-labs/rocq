@@ -1,0 +1,11 @@
+{
+  "doc": "the grade uses -skip-qed-typecheck: replay writes the grade's unchecked mark and later uses the opaque",
+  "files": ["A.v"],
+  "grade_flags": ["-skip-qed-typecheck"],
+  "summaries": {
+    "A.v": {"proofs": 2, "hits": 2,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.writer", "hit"], ["PR.A.later_reader", "hit"]]}
+  }
+}

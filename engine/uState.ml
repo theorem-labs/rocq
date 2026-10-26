@@ -37,7 +37,6 @@ module PContextSet = struct
   let levels (univs, _cst) = univs
 
 end
-
 let template_default_univs = Summary.ref ~name:"template default univs" Univ.Level.Set.empty
 
 let cache_template_default_univs us =
@@ -530,6 +529,23 @@ let union uctx uctx' =
         minim_extra = extra}
 
 let context_set uctx = uctx.local
+
+(* BET-84 P3: a universe state read back from a Marshal blob is a fresh
+   copy, so its levels are equal to, but not the same values as, the ones
+   this compile made. A [.vo] marshals the library with its sharing, so a
+   replayed proof would write two equal copies of a level where a full
+   compile writes one, and a library compiled against the one object
+   refuses to load against the other ("makes inconsistent assumptions",
+   measured 2026-10-25). Interning the levels through the global hashcons
+   table joins the copy to this compile's own values. *)
+let hcons_univs uctx =
+  let level l = snd (Level.hcons l) in
+  let set s = Level.Set.fold (fun l acc -> Level.Set.add (level l) acc) s Level.Set.empty in
+  let univs, (qcst, ucst) = uctx.local in
+  (* The constraints hold levels too: a constraint between two levels of a
+     replayed proof is written into the [.vo], and its levels must be the
+     same values as the ones the set holds. *)
+  { uctx with local = (set univs, (qcst, snd (Univ.UnivConstraints.hcons ucst))) }
 
 let universe_context_set uctx =
   let us, (_, ucst) = uctx.local in
