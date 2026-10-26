@@ -1613,7 +1613,12 @@ let check_one_fix ?evars renv recpos trees def =
                 (pi1 recdef) k (push_rec_types recdef renv.env)
                 (judgment_of_fixpoint recdef)
             in
-            let nuniformparams = find_uniform_parameters illformed ?evars renv.env recindxs (List.length stack) bodies in
+            (* The bodies live under the block's own declarations, so they
+               must be reduced in [renv'.env]. In [renv.env], every variable
+               lookup made by [split_struct_arg] would land [nbodies] places
+               too far out, and the analysis could unfold a local definition
+               other than the one the body uses. *)
+            let nuniformparams = find_uniform_parameters illformed ?evars renv'.env recindxs (List.length stack) bodies in
             let bodies = drop_uniform_parameters nuniformparams bodies in
             let fix_stack = filter_fix_stack_domain ?evars (redex_level rs) decrArg stack nuniformparams in
             let fix_stack = if List.length stack > decrArg then List.firstn (decrArg+1) fix_stack else fix_stack in
