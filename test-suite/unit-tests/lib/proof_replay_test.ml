@@ -111,7 +111,7 @@ let setup ?(budget = None) ?(proof = proof) ?(now = toolchain) ?(header = header
     | None -> Some (Proof_sha256.digest_hex (record_bytes ~header ~proof ()))
   in
   Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget ~peak_limit_kb:None ~digest;
-  Replay.start ~library ~toolchain:(fun () -> now);
+  Replay.start ~library ~source:None ~toolchain:(fun () -> now);
   Unix.chmod path 0o644;
   Sys.remove path
 
@@ -284,6 +284,73 @@ let sha256_vectors =
      && Proof_sha256.digest_hex (String.make 1_000_000 'a')
         = "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
 
+(* The whole-file refusal (Claude review of c2190e74e0, P1): after the first
+   closer, a command that can rebind a Rocqlib name or load code refuses the
+   file. Before it, nothing has been replayed, so it is allowed; comments and
+   strings are not commands. *)
+let rebind_scan =
+  let s = Replay.scan_late_rebind in
+  mk_bool_test "proof-replay-rebind-scan"
+    "a Register, Require, Load, Declare ML Module, Import, Export, Include, Module := or Register-file End after the first closer is found, with its line"
+    (s "Lemma a : True.\nProof. exact I. Qed.\nRegister x as core.eq.type.\n" = Some ("Register", 3)
+     && s "Register x as core.eq.type.\nLemma a : True.\nProof. exact I. Qed.\n" = None
+     && s "Lemma a : True.\nProof. exact I. Save a.\nRequire Import Foo.\n" = Some ("Require", 3)
+     && s "Lemma a : True. Proof. exact I. Qed. Declare ML Module \"p\"." = Some ("Declare ML Module", 1)
+     && s "Lemma a : True. Proof. exact I. Qed. (* Register (* nested *) Require *) Lemma b : True. Qed." = None
+     && s "Lemma a : True. Qed. Lemma b : True. Proof. idtac \"Require \"\"Load\"\"\". Qed." = None
+     && s "Section S. Register x as core.eq.type. Lemma a : True. Qed.\nEnd S." = Some ("End (in a file that uses Register)", 2)
+     && s "Section S. Lemma a : True. Qed. End S." = None
+     && s "Lemma a : True. Qed. Module M. End M." = None
+     && s "Lemma a : True. Qed. Module N := F X." = Some ("Module ... :=", 1)
+     && s "Lemma a : True. Qed. Import M." = Some ("Import", 1)
+     && s "Lemma a : True. Qed. Load \"f\"." = Some ("Load", 1)
+     && s "Lemma Requires : True. Qed." = None
+     && s "" = None)
+
+(* The hit hooks see the replayed proof's reads, and only on a hit (Rocqlib
+   marks the lib_ref keys observed through one). *)
+let hit_hook_seen : R.read list option ref = ref None
+
+let () = Replay.register_hit_hook (fun reads -> hit_hook_seen := Some reads)
+
+let hit_hook_runs =
+  mk_bool_test "proof-replay-hit-hook"
+    "a hit hands the replayed proof's reads to the hit hooks; a miss does not"
+    (current := Replay.Value (Some (String.make 32 'f'));
+     hit_hook_seen := None;
+     let _ = hits () in
+     let after_miss = !hit_hook_seen in
+     current := Replay.Value (Some (String.make 32 'e'));
+     let _ = hits () in
+     after_miss = None && !hit_hook_seen = Some [ the_read ])
+
+(* A read miss says why: the value changed, the evaluator could not answer,
+   or the channel has no evaluator. *)
+let miss_reason =
+  let summary_text () =
+    let path = Filename.temp_file "proof-replay" ".json" in
+    Replay.write_summary path;
+    let ic = open_in_bin path in
+    let text = really_input_string ic (in_channel_length ic) in
+    close_in ic; Sys.remove path; text
+  in
+  let why () = summary_text () in
+  let has text s = CString.string_contains ~where:text ~what:s in
+  mk_bool_test "proof-replay-miss-reason"
+    "a read miss names changed, unknown or no_evaluator"
+    (current := Replay.Value (Some (String.make 32 'f'));
+     let _ = hits () in
+     let changed = why () in
+     current := Replay.Unknown;
+     let _ = hits () in
+     let unknown = why () in
+     current := Replay.Value (Some (String.make 32 'e'));
+     setup ~proof:R.{ proof with reads = [ { the_read with channel = "unit_test_channel_with_no_evaluator" } ] } ();
+     let _ = decide () in
+     let none = why () in
+     has changed "\"why\":\"changed\"" && has unknown "\"why\":\"unknown\""
+     && has none "\"why\":\"no_evaluator\"")
+
 (* A process-wide fence (Proof_recorder.fence_tripped): a closure a plugin
    installs over Rocq's own, or a cache that no longer matches its table, is
    state no recorded read sees. Once one trips, no proof of the process is
@@ -318,6 +385,7 @@ let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
     binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
+    rebind_scan; hit_hook_runs; miss_reason;
     (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]
 
