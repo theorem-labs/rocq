@@ -99,6 +99,22 @@ let access_opaque_table dp i =
   let () = assert (0 <= i && i < Array.length t) in
   t.(i)
 
+(* A test-only cross-check, off by default: with ROCQCHK_COOK_CROSS_CHECK
+   set to a non-empty value, every opaque body is also cooked the stock way,
+   as a tree, and an anomaly is raised unless the two terms are
+   [Constr.equal]. *)
+let cook_cross_check_on =
+  match Sys.getenv_opt "ROCQCHK_COOK_CROSS_CHECK" with
+  | None | Some "" -> false
+  | Some _ -> true
+
+let cook_cross_check ci stored cooked =
+  if cook_cross_check_on then
+    let (tree, _) = Discharge.cook_opaque_proofterm ci stored in
+    if not (Constr.equal cooked tree) then
+      CErrors.anomaly
+        Pp.(str "cook cross-check: the shared cook differs from the stock cook.")
+
 let indirect_accessor o =
   let (sub, ci, dp, i) = Opaqueproof.repr o in
   let c = access_opaque_table dp i in
@@ -106,8 +122,9 @@ let indirect_accessor o =
   | None ->  CErrors.user_err Pp.(str "Cannot access opaque delayed proof.")
   | Some c -> c
   in
-  let (c, prv) = Discharge.cook_opaque_proofterm ci c in
-  let c = Mod_subst.subst_mps_list sub c in
+  let (cooked, prv) = Discharge.cook_opaque_proofterm_shared ci c in
+  let () = cook_cross_check ci c cooked in
+  let c = Mod_subst.subst_mps_list sub cooked in
   (c, prv)
 
 let () = Mod_checking.set_indirect_accessor indirect_accessor
