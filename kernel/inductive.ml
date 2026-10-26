@@ -1450,6 +1450,24 @@ let find_uniform_parameters illformed ?evars env recindx nargs bodies =
     aux (recindx + 1) nuniformparams c)
     min_indx recindx bodies
 
+(* [find_uniform_parameters] analyses the bodies after [split_struct_arg] has
+   reduced them, but [drop_uniform_parameters] rewrites the unreduced bodies.
+   An occurrence of the block that only the unreduced bodies contain, such as
+   one that the reduction erases or one that is an argument of a variable and
+   has no arguments itself, is not counted by the analysis. Bound the prefix
+   by the number of arguments of every occurrence in the unreduced bodies, so
+   that the rewriting never drops more arguments than an occurrence has. *)
+let bound_uniform_parameters nuniformparams bodies =
+  let nbodies = Array.length bodies in
+  let rec aux k nuniformparams c =
+    let f, l = decompose_app_list c in
+    match kind f with
+    | Rel n when n > k && n <= k + nbodies ->
+      List.fold_left (aux k) (min nuniformparams (List.length l)) l
+    | _ -> fold_constr_with_binders succ aux k nuniformparams c
+  in
+  Array.fold_left (aux 0) nuniformparams bodies
+
 (*  Given a fixpoint [fix f x y z n {struct n} := phi(f x y u t, ..., f x y u' t')]
     with [z] not uniform we build in context [x:A, y:B(x), z:C(x,y)] a term
     [fix f z n := phi(f u t, ..., f u' t')], say [psi], of some type
@@ -1614,6 +1632,7 @@ let check_one_fix ?evars renv recpos trees def =
                 (judgment_of_fixpoint recdef)
             in
             let nuniformparams = find_uniform_parameters illformed ?evars renv.env recindxs (List.length stack) bodies in
+            let nuniformparams = bound_uniform_parameters nuniformparams bodies in
             let bodies = drop_uniform_parameters nuniformparams bodies in
             let fix_stack = filter_fix_stack_domain ?evars (redex_level rs) decrArg stack nuniformparams in
             let fix_stack = if List.length stack > decrArg then List.firstn (decrArg+1) fix_stack else fix_stack in
