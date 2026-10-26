@@ -722,32 +722,40 @@ let push_fix_renv renv (_,v,_ as recdef) =
    reduced its binder prefix away, but the kernel stores the body as
    WRITTEN, so an occurrence of a recursive function that the reduction
    ERASES is checked by nothing and is still evaluated. Walk the chain of
-   abstractions the stripping consumes and report whether [mentions k c]
-   holds in a position the reduction erases and that carries a value:
+   abstractions the stripping consumes, reducing it the way the stripping
+   does, and report whether [mentions k c] holds in a position the reduction
+   erases:
 
-   - the value of a [let] whose binder the body does not use (when it does
-     use it, the reduction substitutes the value into the body the analysis
-     measures, so the analysis sees the occurrence);
-   - the argument of a beta redex whose binder the body does not use (same
-     reason for the ones it does use);
+   - the value of a [let] whose binder the body does not use. A [let] whose
+     binder the body does use is substituted, as the reduction does, and the
+     walk goes on: its value then sits wherever the binder was, so it is
+     reported if that place is erased (a second dead [let], a type, a branch
+     not taken) and measured by the analysis if it is not. Stopping at the
+     first use instead lets a chain [let x := f 1 in let y := x in ...]
+     hide the call;
+   - the argument of a beta redex whose binder the body does not use (the
+     others are substituted the same way);
+   - the types of the chain: a lambda's domain, a let's annotation and a
+     cast's type. A substituted value can land in one, and call-by-value
+     evaluation computes a let's value even when its binder is read only in
+     a type. A lambda's domain also stays in the context [split_struct_arg]
+     returns, and leaving it to [check_nested_fix_body] reaches a kernel
+     anomaly on breaka/D5.v;
    - everything that is left when the abstractions are not written out at
-     all, such as a match in the prefix or an application whose head is not
-     an abstraction: those the reduction may erase in ways this walk does
-     not model, and they are refused as a whole.
-
-   The TYPES of that chain are not reported — a let's annotation and a
-   cast's type — because they are erased as types, which no evaluation of
-   the function turns into a recursive call. A lambda's domain IS reported:
-   [split_struct_arg] keeps it in the context it returns, and leaving it to
-   [check_nested_fix_body] reaches a kernel anomaly on breaka/D5.v. *)
+     all, such as a match in the prefix (with the branches it does not
+     select) or an application whose head is not an abstraction: those the
+     reduction may erase in ways this walk does not model, and they are
+     refused as a whole. *)
 let raw_prefix_escapes mentions recindx body =
   let rec walk k needed c =
     if Int.equal needed 0 then false
     else match kind c with
       | Lambda (_, ty, bd) -> mentions k ty || walk (k+1) (needed-1) bd
-      | LetIn (_, v, _, bd) ->
-        (noccurn 1 bd && mentions k v) || walk (k+1) needed bd
-      | Cast (c, _, _) -> walk k needed c
+      | LetIn (_, v, ty, bd) ->
+        mentions k ty
+        || (noccurn 1 bd && mentions k v)
+        || walk k needed (subst1 v bd)
+      | Cast (c, _, t) -> mentions k t || walk k needed c
       | App (f, args) when isLambda f -> beta k needed f (Array.to_list args)
       | _ -> mentions k c
   and beta k needed f args =
@@ -1514,13 +1522,17 @@ let check_one_fix ?evars renv recpos trees def =
                when the erased material would have been refused had the
                reduction kept it: a legitimate call in a dead [let] stays
                legitimate, a call on a bigger argument is a guard error
-               wherever it sits. The erased positions are the value of a
-               [let] whose binder the body does not use, the argument of a
-               beta redex whose binder the body does not use, and, for any
-               other head, the whole term — the reduction can erase inside it
-               in ways this walk does not model. A [let]'s annotation and a
-               cast's type are not positions: they are erased as TYPES, which
-               no evaluation turns into a recursive call.
+               wherever it sits. The positions are those of
+               [raw_prefix_escapes]: the value of a [let] whose binder the
+               body does not use, the argument of a beta redex whose binder
+               the body does not use, the types of the chain (a lambda's
+               domain, a let's annotation, a cast's type), and, for any other
+               head, the whole term — the reduction can erase inside it in
+               ways this walk does not model. A [let] whose binder IS used is
+               substituted, as the reduction does, so that its value is
+               checked wherever the binder sits: a chain
+               [let x := outer (S n) in let y := x in ...] does not hide the
+               call behind the variable [x].
 
                What this reaches that nothing else does is a call to a
                function of an ENCLOSING block: the functions of this block
@@ -1533,11 +1545,13 @@ let check_one_fix ?evars renv recpos trees def =
                   let rs = check_inert_subterm_rec_call renv rs ty in
                   check_erased_prefix
                     (push_var_renv renv (redex_level rs) (x,ty)) (needed-1) bd rs
-                | LetIn (x, v, ty, bd) ->
+                | LetIn (_, v, ty, bd) ->
+                  let rs = check_inert_subterm_rec_call renv rs ty in
                   let rs = if noccurn 1 bd then check_inert_subterm_rec_call renv rs v else rs in
-                  let spec = lazy_subterm_specif ?evars renv [] v in
-                  check_erased_prefix (push_let renv (x,v,ty,spec)) needed bd rs
-                | Cast (c, _, _) -> check_erased_prefix renv needed c rs
+                  check_erased_prefix renv needed (subst1 v bd) rs
+                | Cast (c, _, t) ->
+                  let rs = check_inert_subterm_rec_call renv rs t in
+                  check_erased_prefix renv needed c rs
                 | App (f, args) when isLambda f ->
                   check_erased_beta renv needed f (Array.to_list args) rs
                 | _ -> check_inert_subterm_rec_call renv rs c
