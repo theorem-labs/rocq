@@ -1,4 +1,9 @@
-(* Red on the release-7 rule (accepted, coqchk 0, Eval cbv overflows the stack); stock Rocq 9.0.1 refuses it with "Recursive call to outer has principal argument equal to ...". The nested prefix walk now substitutes the live let, so the call reaches the analysis. dispatch://BET-214 *)
+(* Red on the release-7 rule: accepted with coqchk 0, and Eval cbv overflows the
+   stack. Stock Rocq 9.0.1 refuses this file too, but for the inner body's
+   call "outer a" (its uniform-parameter analysis), not for the call in the
+   prefix, so stock does not close this hole. The nested prefix walk now
+   substitutes the live let, and the call "outer (S (S p))" reaches the
+   analysis. dispatch://BET-214 *)
 (* Nested fixpoint. A call of the ENCLOSING function on a BIGGER argument
    sits in a let read only by a second, dead let in the inner prefix.
    check_erased_prefix checks the dead value "x" (a let variable) and
