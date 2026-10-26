@@ -448,6 +448,11 @@ let discharge_constant obj = Some obj
 
 let classify_constant cst = Libobject.Substitute
 
+(* [cst_loc] is the source location of the declaration
+   ([Nametab.set_cci_src_loc]); the kind, the import status and the user
+   warnings (strings and global references) hold none. *)
+let strip_constant obj = { obj with cst_loc = LocStrip.loc_opt obj.cst_loc }
+
 let (objConstant : (Id.t * constant_obj) Libobject.Dyn.tag) =
   let open Libobject in
   declare_named_object_full { (default_object "CONSTANT") with
@@ -456,7 +461,8 @@ let (objConstant : (Id.t * constant_obj) Libobject.Dyn.tag) =
     open_function = filtered_open open_constant;
     classify_function = classify_constant;
     subst_function = ident_subst_function;
-    discharge_function = discharge_constant }
+    discharge_function = discharge_constant;
+    interface_key = Key_stripped strip_constant }
 
 let inConstant v = Libobject.Dyn.Easy.inj v objConstant
 
@@ -724,7 +730,9 @@ type variable_declaration =
 let objVariable : Id.t Libobject.Dyn.tag =
   let open Libobject in
   declare_object_full { (default_object "VARIABLE") with
-    classify_function = (fun _ -> Dispose)}
+    classify_function = (fun _ -> Dispose);
+    (* An identifier: no source location. *)
+    interface_key = Key_as_is}
 
 let inVariable v = Libobject.Dyn.Easy.inj v objVariable
 

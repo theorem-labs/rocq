@@ -68,6 +68,11 @@ let filter_or f1 f2 = match f1, f2 with
   | Unfiltered, f | f, Unfiltered -> Unfiltered
   | Filtered f1, Filtered f2 -> Filtered (CString.Pred.union f1 f2)
 
+type 'a interface_key =
+  | Not_in_key
+  | Key_as_is
+  | Key_stripped of ('a -> 'a)
+
 type ('a,'b,'discharged) object_declaration = {
   object_name : string;
   object_stage : Summary.Stage.t;
@@ -78,6 +83,7 @@ type ('a,'b,'discharged) object_declaration = {
   subst_function :  Mod_subst.substitution * 'a -> 'a;
   discharge_function : 'a -> 'discharged option;
   rebuild_function : 'discharged -> 'a;
+  interface_key : 'a interface_key;
 }
 
 let default_object ?(stage=Summary.Stage.Interp) s = {
@@ -92,6 +98,7 @@ let default_object ?(stage=Summary.Stage.Interp) s = {
   classify_function = (fun _ -> CErrors.anomaly Pp.(str "no classify function for " ++ str s));
   discharge_function = (fun _ -> None);
   rebuild_function = (fun x -> x);
+  interface_key = Not_in_key;
 }
 
 
@@ -182,6 +189,10 @@ let declare_named_object_full odecl =
       subst_function = (fun (subst, (id, o)) -> id, odecl.subst_function (subst, o));
       discharge_function = (fun (id, o) -> Option.map (fun x -> id, x) (odecl.discharge_function o));
       rebuild_function = Util.on_snd odecl.rebuild_function;
+      interface_key = (match odecl.interface_key with
+          | Not_in_key -> Not_in_key
+          | Key_as_is -> Key_as_is
+          | Key_stripped f -> Key_stripped (fun (id, o) -> (id, f o)));
     }
   in
   declare_object_gen odecl
@@ -249,6 +260,19 @@ let object_stage (Dyn.Dyn (tag, v)) =
 let object_name (Dyn.Dyn (tag, v)) =
   let O decl = DynMap.find tag !cache_tab in
   decl.object_name
+
+let interface_object (Dyn.Dyn (tag, v) as obj) =
+  if not (DynMap.mem tag !cache_tab) then Error "unregistered object kind"
+  else
+    let O decl = DynMap.find tag !cache_tab in
+    match decl.interface_key with
+    | Not_in_key -> Error ("object kind " ^ decl.object_name)
+    | Key_as_is -> Ok obj
+    | Key_stripped f ->
+      match f v with
+      | v -> Ok (Dyn.Dyn (tag, v))
+      | exception LocStrip.Unknown what ->
+        Error ("object kind " ^ decl.object_name ^ ": " ^ what)
 
 let dump = Dyn.dump
 

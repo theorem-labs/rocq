@@ -81,11 +81,24 @@ let cache_tactic_notation (key, body, parule) =
 
 type tactic_grammar_obj = KerName.t * Tacenv.alias_tactic * Pptactic.pp_tactic
 
+(* Interface key: the kernel name and the arguments' ids hold no location;
+   the alias body is a glob tactic and each nonterminal of the printing
+   rule carries a Loc.t option. *)
+let strip_tactic_grammar_obj ((key, body, parule) : tactic_grammar_obj) =
+  let strip_prod = function
+    | Pptactic.TacTerm s -> Pptactic.TacTerm s
+    | Pptactic.TacNonTerm x -> Pptactic.TacNonTerm (LocStrip.located (fun x -> x) x)
+  in
+  (key,
+   { body with Tacenv.alias_body = Tacstrip.strip_tactic body.Tacenv.alias_body },
+   { parule with Pptactic.pptac_prods = List.map strip_prod parule.Pptactic.pptac_prods })
+
 let inSsrGrammar : tactic_grammar_obj -> obj =
   declare_object {(default_object "SsrGrammar") with
                   load_function = (fun _ -> cache_tactic_notation);
                   cache_function = cache_tactic_notation;
-                  classify_function = (fun x -> Keep)}
+                  classify_function = (fun x -> Keep);
+                  interface_key = Key_stripped strip_tactic_grammar_obj}
 
 let path = MPfile (DirPath.make @@ List.map Id.of_string ["ssreflect"; "ssr"; "Corelib"])
 
@@ -173,11 +186,47 @@ let pr_name = function Name id -> pr_id id | Anonymous -> str "_"
 let pr_spc () = str " "
 let pr_list = prlist_with_sep
 
+(* Interface key (D18): typed location strippers of ssr glob values. *)
+
+let strip_ssrhyp (SsrHyp h) = SsrHyp (LocStrip.located (fun id -> id) h)
+
+let strip_ssrhoi = function
+  | Hyp h -> Hyp (strip_ssrhyp h)
+  | Id h -> Id (strip_ssrhyp h)
+
+let strip_or_var (v : 'a Locus.or_var) : 'a Locus.or_var = match v with
+  | Locus.ArgArg x -> Locus.ArgArg x
+  | Locus.ArgVar id -> Locus.ArgVar (LocStrip.cast (fun id -> id) id)
+
+(* A glob ast_closure_term has no interp_sign (it is set only at
+   interpretation time). Its glob_env holds identifier sets, the
+   notation-variable status and the Genintern.Store (see ledger). *)
+let strip_ast_closure_term (t : ast_closure_term) : ast_closure_term =
+  match t.interp_env with
+  | Some _ -> LocStrip.unknown "ssr ast_closure_term with interp_sign"
+  | None -> { t with body = ConstrStrip.constr_expr t.body }
+
+let strip_ssrterm ((k, c) : ssrterm) : ssrterm =
+  (k, ConstrStrip.glob_constr_and_expr c)
+
+let rec strip_ipat = function
+  | (IPatNoop | IPatId _ | IPatAnon _ | IPatRewrite _ | IPatSimpl _
+    | IPatAbstractVars _ | IPatFastNondep) as x -> x
+  | IPatDispatch b -> IPatDispatch (strip_ipat_block b)
+  | IPatCase b -> IPatCase (strip_ipat_block b)
+  | IPatInj l -> IPatInj (List.map (List.map strip_ipat) l)
+  | IPatView v -> IPatView (List.map strip_ast_closure_term v)
+  | IPatClear c -> IPatClear (List.map strip_ssrhyp c)
+and strip_ipat_block = function
+  | Block b -> Block b
+  | Regular l -> Regular (List.map (List.map strip_ipat) l)
+
 (**************************** ssrhyp **************************************)
 
 let pr_ssrhyp _ _ _ = pr_hyp
 
 let wit_ssrhyprep = add_genarg "ssrhyprep" (fun env sigma -> pr_hyp)
+let () = Genstrip.register_strip0 wit_ssrhyprep strip_ssrhyp
 
 let intern_hyp ist (SsrHyp (loc, id) as hyp) =
   let _ = Tacintern.intern_genarg ist (in_gen (rawwit wit_hyp) CAst.(make ?loc id)) in
@@ -191,6 +240,7 @@ open Procq.Prim
 ARGUMENT EXTEND ssrhyp TYPED AS ssrhyprep PRINTED BY { pr_ssrhyp }
                        INTERPRETED BY { interp_hyp }
                        GLOBALIZED BY { intern_hyp }
+                       STRIPPED BY { strip_ssrhyp }
   | [ ident(id) ] -> { SsrHyp (Loc.tag ~loc id) }
 END
 
@@ -200,6 +250,7 @@ let pr_hoi = hoik pr_hyp
 let pr_ssrhoi _ _ _ = pr_hoi
 
 let wit_ssrhoirep = add_genarg "ssrhoirep" (fun env sigma -> pr_hoi)
+let () = Genstrip.register_strip0 wit_ssrhoirep strip_ssrhoi
 
 let intern_ssrhoi ist = function
   | Hyp h -> Hyp (intern_hyp ist h)
@@ -218,11 +269,13 @@ let interp_ssrhoi ist env sigma = function
 ARGUMENT EXTEND ssrhoi_hyp TYPED AS ssrhoirep PRINTED BY { pr_ssrhoi }
                        INTERPRETED BY { interp_ssrhoi }
                        GLOBALIZED BY { intern_ssrhoi }
+                       STRIPPED BY { strip_ssrhoi }
   | [ ident(id) ] -> { Hyp (SsrHyp(Loc.tag ~loc id)) }
 END
 ARGUMENT EXTEND ssrhoi_id TYPED AS ssrhoirep PRINTED BY { pr_ssrhoi }
                        INTERPRETED BY { interp_ssrhoi }
                        GLOBALIZED BY { intern_ssrhoi }
+                       STRIPPED BY { strip_ssrhoi }
   | [ ident(id) ] -> { Id (SsrHyp(Loc.tag ~loc id)) }
 END
 
@@ -231,12 +284,16 @@ END
 {
 
 let wit_ssrdir = add_genarg "ssrdir" (fun env sigma -> pr_dir)
+(* Interface key: no location, ssrdir is L2R | R2L. *)
+let () = Genstrip.register_strip0 wit_ssrdir (fun x -> x)
 
 (** Simpl switch *)
 
 let pr_ssrsimpl _ _ _ = pr_simpl
 
 let wit_ssrsimplrep = add_genarg "ssrsimplrep" (fun env sigma -> pr_simpl)
+(* Interface key: no location, ssrsimpl holds only ints. *)
+let () = Genstrip.register_strip0 wit_ssrsimplrep (fun x -> x)
 
 let test_ssrslashnum b1 b2 kwstate strm =
   match LStream.peek_nth kwstate 0 strm with
@@ -387,6 +444,7 @@ open Pltac
 
 ARGUMENT EXTEND ssrindex PRINTED BY { pr_ssrindex }
   INTERPRETED BY { interp_index }
+  STRIPPED BY { strip_or_var }
 END
 
 
@@ -425,6 +483,8 @@ END
 let pr_mmod = function May -> str "?" | Must -> str "!" | Once -> mt ()
 
 let wit_ssrmmod = add_genarg "ssrmmod" (fun env sigma -> pr_mmod)
+(* Interface key: no location, ssrmmod is May | Must | Once. *)
+let () = Genstrip.register_strip0 wit_ssrmmod (fun x -> x)
 let ssrmmod = Procq.create_generic_entry2 "ssrmmod" (Genarg.rawwit wit_ssrmmod);;
 
 }
@@ -523,6 +583,7 @@ ARGUMENT EXTEND ssrterm
      PRINTED BY { pr_ssrterm }
      INTERPRETED BY { interp_ssrterm }
      GLOBALIZED BY { glob_ssrterm } SUBSTITUTED BY { subst_ssrterm }
+     STRIPPED BY { strip_ssrterm }
      RAW_PRINTED BY { pr_ssrterm }
      GLOB_PRINTED BY { pr_ssrterm }
 END
@@ -545,6 +606,7 @@ ARGUMENT EXTEND ast_closure_term
      INTERPRETED BY { interp_ast_closure_term }
      GLOBALIZED BY { glob_ast_closure_term }
      SUBSTITUTED BY { subst_ast_closure_term }
+     STRIPPED BY { strip_ast_closure_term }
      RAW_PRINTED BY { pp_ast_closure_term }
      GLOB_PRINTED BY { pp_ast_closure_term }
   | [ term_annotation(a) constr(c) ] -> { mk_ast_closure_term a c }
@@ -554,6 +616,7 @@ ARGUMENT EXTEND ast_closure_lterm
      INTERPRETED BY { interp_ast_closure_term }
      GLOBALIZED BY { glob_ast_closure_term }
      SUBSTITUTED BY { subst_ast_closure_term }
+     STRIPPED BY { strip_ast_closure_term }
      RAW_PRINTED BY { pp_ast_closure_term }
      GLOB_PRINTED BY { pp_ast_closure_term }
   | [ term_annotation(a) lconstr(c) ] -> { mk_ast_closure_term a c }
@@ -653,6 +716,7 @@ and map_block map_id = function
 
 type ssripatrep = ssripat
 let wit_ssripatrep = add_genarg "ssripatrep" (fun env sigma -> pr_ipat)
+let () = Genstrip.register_strip0 wit_ssripatrep strip_ipat
 
 let pr_ssripat _ _ _ = pr_ipat
 let pr_ssripats _ _ _ = pr_ipats
@@ -759,7 +823,9 @@ let test_ident_no_do =
 
 }
 
+(* Interface key: the glob value is a bare Names.Id.t, no location. *)
 ARGUMENT EXTEND ident_no_do PRINTED BY { fun _ _ _ -> Names.Id.print }
+  STRIPPED BY { (fun x -> x) }
 END
 
 
@@ -771,6 +837,7 @@ END
 ARGUMENT EXTEND ssripat TYPED AS ssripatrep list PRINTED BY { pr_ssripats }
   INTERPRETED BY { interp_ipats }
   GLOBALIZED BY { intern_ipats }
+  STRIPPED BY { List.map strip_ipat }
   | [ "_" ] -> { [IPatAnon Drop] }
   | [ "*" ] -> { [IPatAnon All] }
   | [ ">" ] -> { [IPatFastNondep] }
@@ -858,6 +925,7 @@ let _test_nobinder = Procq.Entry.(of_parser "test_nobinder" { parser_fun = rejec
 ARGUMENT EXTEND ssrcpat TYPED AS ssripatrep PRINTED BY { pr_ssripat }
   INTERPRETED BY { interp_ipat }
   GLOBALIZED BY { intern_ipat }
+  STRIPPED BY { strip_ipat }
 
 END
 
@@ -1144,6 +1212,8 @@ let pr_clseq = function
   | InAllHyps       -> str "* |-"
 
 let wit_ssrclseq = add_genarg "ssrclseq" (fun env sigma -> pr_clseq)
+(* Interface key: no location, ssrclseq is a constant-only variant. *)
+let () = Genstrip.register_strip0 wit_ssrclseq (fun x -> x)
 let pr_clausehyps = pr_list pr_spc pr_wgen
 let pr_ssrclausehyps _ _ _ = pr_clausehyps
 
@@ -1247,6 +1317,8 @@ let pr_fwdkind = function
 let pr_fwdfmt (fk, _ : ssrfwdfmt) = pr_fwdkind fk
 
 let wit_ssrfwdfmt = add_genarg "ssrfwdfmt" (fun env sigma -> pr_fwdfmt)
+(* Interface key: no location, ssrfwdfmt holds strings, bools, ints. *)
+let () = Genstrip.register_strip0 wit_ssrfwdfmt (fun x -> x)
 
 (* type ssrfwd = ssrfwdfmt * ssrterm *)
 
@@ -1736,6 +1808,7 @@ module Internal = struct
   let noindex = noindex
   let tclintros_expr = tclintros_expr
   let intern_ipat = intern_ipat
+  let strip_ipat = strip_ipat
   let interp_ipat = interp_ipat
   let pr_intros = pr_intros
   let pr_view = pr_view

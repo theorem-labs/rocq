@@ -63,6 +63,16 @@ let cache_inductive o =
 let discharge_inductive names =
   Some names
 
+(* The names of the block and of its constructors are [lident]s: their
+   [CAst] nodes hold the source locations ([Nametab.set_cci_src_loc]). *)
+let strip_inductive obj =
+  { ind_names =
+      List.map
+        (fun (typ, cons) ->
+           (LocStrip.cast (fun id -> id) typ,
+            List.map (LocStrip.cast (fun id -> id)) cons))
+        obj.ind_names }
+
 let objInductive : (Id.t * inductive_obj) Libobject.Dyn.tag =
   let open Libobject in
   declare_named_object_full {(default_object "INDUCTIVE") with
@@ -72,6 +82,7 @@ let objInductive : (Id.t * inductive_obj) Libobject.Dyn.tag =
     classify_function = (fun a -> Substitute);
     subst_function = ident_subst_function;
     discharge_function = discharge_inductive;
+    interface_key = Key_stripped strip_inductive;
   }
 
 let inInductive v = Libobject.Dyn.Easy.inj v objInductive
@@ -92,7 +103,9 @@ let inPrim : (Projection.Repr.t * Constant.t) -> Libobject.obj =
     load_function = load_prim;
     subst_function = subst_prim;
     classify_function = (fun x -> Substitute);
-    discharge_function = discharge_prim }
+    discharge_function = discharge_prim;
+    (* A projection and a constant: no source location. *)
+    interface_key = Key_as_is }
 
 let declare_primitive_projection p c = Lib.add_leaf (inPrim (p,c))
 

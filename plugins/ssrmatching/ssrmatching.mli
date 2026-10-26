@@ -244,6 +244,10 @@ val pr_econstr_pat : env -> evar_map -> econstr -> Pp.t
 
 val ssrinstancesof : cpattern -> unit Proofview.tactic
 
+(** Interface key (D18): copies with every source location replaced. *)
+val strip_cpattern : cpattern -> cpattern
+val strip_rpattern : rpattern -> rpattern
+
 (** Functions used for grammar extensions. Do not use. *)
 
 module Internal :

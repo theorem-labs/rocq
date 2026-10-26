@@ -109,6 +109,9 @@ let inStrategy : strategy_obj -> Libobject.obj =
      subst_function = subst_strategy;
      discharge_function = discharge_strategy;
      classify_function = classify_strategy;
+     (* A flag, oracle levels and evaluable references: no source
+        location. *)
+     interface_key = Key_as_is;
     }
 
 let check_not_fully_opaque l ref =
@@ -442,6 +445,15 @@ let subst_red_expr subs =
     (Patternops.subst_pattern env sigma subs)
     (subst_user_red_expr subs)
 
+(* A [red_expr] holds kernel terms, evaluable references, kernel patterns
+   ([Util.Empty.t constr_pattern_r]) and integer occurrences: no source
+   location, except in the payload of a user reduction, whose type the
+   key does not know. *)
+let strip_red_expr (e : red_expr) : red_expr = match e with
+  | Red | Hnf | Simpl _ | Cbv _ | Cbn _ | Lazy _ | Unfold _ | Fold _
+  | Pattern _ | ExtraRedExpr _ | CbvVm _ | CbvNative _ -> e
+  | UserRed _ -> LocStrip.unknown "user reduction expression (Redexpr.User)"
+
 let inReduction : bool * string * red_expr -> Libobject.obj =
   let open Libobject in
   declare_object
@@ -451,7 +463,8 @@ let inReduction : bool * string * red_expr -> Libobject.obj =
      subst_function =
        (fun (subs,(b,s,e)) -> b,s,subst_red_expr subs e);
      classify_function =
-       (fun ((b,_,_)) -> if b then Dispose else Substitute) }
+       (fun ((b,_,_)) -> if b then Dispose else Substitute);
+     interface_key = Key_stripped (fun (b,s,e) -> (b,s,strip_red_expr e)) }
 
 let declare_red_expr locality s expr =
     Lib.add_leaf (inReduction (locality,s,expr))
@@ -462,6 +475,13 @@ let make0 ?dyn name =
   wit
 
 let wit_red_expr = make0 "redexpr"
+
+(* The payload of a user reduction has a type the key does not know. *)
+let strip_glob_red_expr : glob_red_expr -> glob_red_expr =
+  RedStrip.glob_red_expr (fun (_ : Genarg.glevel user_red_expr) ->
+      LocStrip.unknown "user reduction expression (Redexpr.User)")
+
+let () = Genstrip.register_strip0 wit_red_expr strip_glob_red_expr
 
 module Intern = struct
   open CAst

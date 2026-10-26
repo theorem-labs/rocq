@@ -45,6 +45,9 @@ let inBidiHints =
                    classify_function = (fun o -> Substitute);
                    subst_function = subst_bidi_hints;
                    discharge_function = discharge_bidi_hints;
+                   (* A global reference and an argument count: no source
+                      location. *)
+                   interface_key = Key_as_is;
                  }
 
 

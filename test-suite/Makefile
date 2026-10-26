@@ -347,6 +347,14 @@ unit-tests/src/utest.cmi: unit-tests/src/utest.mli
 
 unit-tests: $(UNIT_LOGFILES)
 
+# Unit tests of a plugin link it too.
+unit-tests/plugins/ltac/%.ml.log: unit-tests/plugins/ltac/%.ml unit-tests/src/$(UNIT_LINK)
+	$(SHOW) 'TEST      $<'
+	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package rocq-runtime.toplevel,rocq-runtime.checklib,rocq-runtime.plugins.ltac,ounit2 \
+	     -I unit-tests/src $(UNIT_LINK) $< -o $<.test;
+	$(HIDE)$(call WITH_TIMER,$@,./$<.test)
+	$(HIDE)$(call REPORT_TIMER,$@)
+
 # Build executable, run it to generate log file
 unit-tests/%.ml.log: unit-tests/%.ml unit-tests/src/$(UNIT_LINK)
 	$(SHOW) 'TEST      $<'

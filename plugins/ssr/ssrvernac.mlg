@@ -239,7 +239,9 @@ let pr_ssrviewpos _ _ _ = pr_viewpos
 
 }
 
+(* Interface key: the glob value is an AdaptorDb.kind option, no location. *)
 ARGUMENT EXTEND ssrviewpos PRINTED BY { pr_ssrviewpos }
+  STRIPPED BY { (fun x -> x) }
   | [ "for" "move" "/" ] -> {  Some Ssrview.AdaptorDb.Forward  }
   | [ "for" "apply" "/" ] -> {  Some Ssrview.AdaptorDb.Backward  }
   | [ "for" "apply" "/" "/" ] -> {  Some Ssrview.AdaptorDb.Equivalence  }

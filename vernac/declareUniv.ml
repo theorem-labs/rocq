@@ -79,7 +79,10 @@ let input_univ_names : universe_name_decl -> Libobject.obj =
       load_function = load_univ_names;
       open_function = filtered_open open_univ_names;
       discharge_function = discharge_univ_names;
-      classify_function = (fun _ -> Escape) }
+      classify_function = (fun _ -> Escape);
+      (* A universe source (a dirpath) and named universe levels: no
+         source location. *)
+      interface_key = Key_as_is }
 
 let input_univ_names (src, l) =
   if CList.is_empty l then ()
@@ -131,7 +134,9 @@ let input_sort_names : sort_name_decl -> Libobject.obj =
       load_function = load_sort_names;
       open_function = filtered_open open_sort_names;
       discharge_function = discharge_sort_names;
-      classify_function = (fun a -> Escape) }
+      classify_function = (fun a -> Escape);
+      (* A sort source and named sort qualities: no source location. *)
+      interface_key = Key_as_is }
 
 let input_sort_names (src, l) =
   if CList.is_empty l then ()
@@ -277,6 +282,9 @@ let constraint_obj =
     load_function = (fun _ c -> cache_constraint_source c);
     discharge_function = (fun x -> Some x);
     classify_function = (fun _ -> Escape);
+    (* A global reference and universe constraints: no source
+       location. *)
+    interface_key = Libobject.Key_as_is;
   }
 
 (* XXX this seems like it could be merged with declare_univ_binders

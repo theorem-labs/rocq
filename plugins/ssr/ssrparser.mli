@@ -175,6 +175,8 @@ module Internal : sig
     -> Ssrast.ssripat
     -> Ssrast.ssripat
 
+  val strip_ipat : Ssrast.ssripat -> Ssrast.ssripat
+
   val interp_ipat
     : Tacinterp.interp_sign
     -> Environ.env

@@ -401,10 +401,11 @@ let cache_transitivity_lemma (left,lem) =
 
 let subst_transitivity_lemma (subst,(b,ref)) = (b,subst_mps subst ref)
 
+(* The payload is a kernel term, which holds no source location. *)
 let inTransitivity : bool * Constr.t -> obj =
-  declare_object @@ global_object_nodischarge "TRANSITIVITY-STEPS"
+  declare_object { (global_object_nodischarge "TRANSITIVITY-STEPS"
     ~cache:cache_transitivity_lemma
-    ~subst:(Some subst_transitivity_lemma)
+    ~subst:(Some subst_transitivity_lemma)) with interface_key = Key_as_is }
 
 (* Main entry points *)
 
@@ -608,7 +609,8 @@ let pr_itest' _prc _prlc _prt = pr_itest
 
 }
 
-ARGUMENT EXTEND comparison PRINTED BY { pr_cmp' }
+(* A [comparison] is a constant constructor: no location. *)
+ARGUMENT EXTEND comparison PRINTED BY { pr_cmp' } STRIPPED BY { fun x -> x }
 | [ "="  ] -> { Eq }
 | [ "<"  ] -> { Lt }
 | [ "<=" ] -> { Le }
@@ -627,6 +629,8 @@ let interp_test ist env sigma = function
 ARGUMENT EXTEND test
   PRINTED BY { pr_itest' }
   INTERPRETED BY { interp_test }
+  STRIPPED BY { fun (Test (c, x, y)) ->
+    Test (c, Tacstrip.or_var (fun n -> n) x, Tacstrip.or_var (fun n -> n) y) }
   RAW_PRINTED BY { pr_test' }
   GLOB_PRINTED BY { pr_test' }
 | [ int_or_var(x) comparison(c) int_or_var(y) ] -> { Test(c,x,y) }

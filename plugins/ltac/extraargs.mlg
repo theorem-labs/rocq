@@ -130,6 +130,7 @@ ARGUMENT EXTEND occurrences
   INTERPRETED BY { interp_occs }
   GLOBALIZED BY { glob_occs }
   SUBSTITUTED BY { subst_occs }
+  STRIPPED BY { Tacstrip.or_var (fun l -> l) }
 
   RAW_PRINTED BY { pr_occurrences }
   GLOB_PRINTED BY { pr_occurrences }
@@ -163,6 +164,7 @@ ARGUMENT EXTEND glob
      INTERPRETED BY { interp_glob }
      GLOBALIZED BY { glob_glob }
      SUBSTITUTED BY { subst_glob }
+     STRIPPED BY { ConstrStrip.glob_constr_and_expr }
 
      RAW_PRINTED BY { pr_gen env sigma }
      GLOB_PRINTED BY { pr_gen env sigma }
@@ -188,6 +190,7 @@ ARGUMENT EXTEND lglob
      INTERPRETED BY { interp_glob }
      GLOBALIZED BY { glob_glob }
      SUBSTITUTED BY { subst_glob }
+     STRIPPED BY { ConstrStrip.glob_constr_and_expr }
 
      RAW_PRINTED BY { pr_gen env sigma }
      GLOB_PRINTED BY { pr_gen env sigma }
@@ -230,6 +233,7 @@ ARGUMENT EXTEND hloc
     INTERPRETED BY { interp_place }
     GLOBALIZED BY { intern_place }
     SUBSTITUTED BY { subst_place }
+    STRIPPED BY { Option.map (fun (id, fl) -> (Tacstrip.lident id, fl)) }
     RAW_PRINTED BY { pr_loc_place }
     GLOB_PRINTED BY { pr_loc_place }
 | [ ] ->
@@ -318,7 +322,8 @@ let pr_strategy _ _ _ v = Conv_oracle.pr_level v
 
 }
 
-ARGUMENT EXTEND strategy_level PRINTED BY { pr_strategy }
+(* A [Conv_oracle.level] holds no location. *)
+ARGUMENT EXTEND strategy_level PRINTED BY { pr_strategy } STRIPPED BY { fun x -> x }
 | [ strategy_level0(n) ] -> { n }
 END
 
@@ -355,6 +360,7 @@ ARGUMENT EXTEND strategy_level_or_var
     INTERPRETED BY { interp_strategy }
     GLOBALIZED BY { intern_strategy }
     SUBSTITUTED BY { subst_strategy }
+    STRIPPED BY { Tacstrip.or_var (fun x -> x) }
     RAW_PRINTED BY { pr_loc_strategy }
     GLOB_PRINTED BY { pr_loc_strategy }
 | [ strategy_level(n) ] -> { ArgArg n }

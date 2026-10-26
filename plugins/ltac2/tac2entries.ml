@@ -103,13 +103,19 @@ let subst_tacdef (subst, def) =
 
 let classify_tacdef o = Substitute
 
+(* The type scheme and deprecation hold no location. *)
+let strip_tacdef { tacdef_local; tacdef_mutable; tacdef_expr; tacdef_type; tacdef_deprecation } =
+  { tacdef_local; tacdef_mutable; tacdef_expr = Tac2strip.glb_tacexpr tacdef_expr;
+    tacdef_type; tacdef_deprecation }
+
 let inTacDef : Id.t -> tacdef -> obj =
   declare_named_object {(default_object "TAC2-DEFINITION") with
      cache_function  = cache_tacdef;
      load_function   = load_tacdef;
      open_function   = filtered_open open_tacdef;
      subst_function = subst_tacdef;
-     classify_function = classify_tacdef}
+     classify_function = classify_tacdef;
+     interface_key = Key_stripped strip_tacdef}
 
 (** Type definition *)
 
@@ -219,7 +225,10 @@ let inTypDef : Id.t -> typdef -> obj =
      load_function   = load_typdef;
      open_function   = filtered_open open_typdef;
      subst_function = subst_typdef;
-     classify_function = classify_typdef}
+     classify_function = classify_typdef;
+     (* bools and a glb_quant_typedef: kernel names, identifiers, ints,
+        UserWarn.t (strings), Ltac2 types; no location *)
+     interface_key = Key_as_is}
 
 (** Type extension *)
 
@@ -291,7 +300,10 @@ let inTypExt : typext -> obj =
      load_function   = load_typext;
      open_function   = filtered_open open_typext;
      subst_function = subst_typext;
-     classify_function = classify_typext}
+     classify_function = classify_typext;
+     (* bool, int, kernel name, and per constructor UserWarn.t (strings),
+        identifier and Ltac2 types; no location *)
+     interface_key = Key_as_is}
 
 (** Toplevel entries *)
 
@@ -582,6 +594,8 @@ let inImportType =
      subst_function = (fun (subst,kn) -> Mod_subst.subst_kn subst kn);
      (* NB don't bother supporting Local as it doesn't seem useful *)
      classify_function = (fun _ -> Substitute);
+     (* a kernel name *)
+     interface_key = Key_as_is;
     }
 
 (* TODO deprecate attr *)
@@ -639,6 +653,21 @@ let syntax_class_interns : (sexpr list -> used_levels * SynclassDyn.t) Id.Map.t 
 
 let syntax_class_interps = ref SynclassInterpMap.empty
 
+(** Location strippers of the internalized arguments of syntax classes, for
+    the interface key of TAC2-NOTATION objects. A class registered without
+    one makes stripping raise [LocStrip.Unknown]. *)
+module SynclassStripMap = SynclassDyn.Map(struct
+    type 'a t = 'a -> 'a
+  end)
+
+let syntax_class_strips = ref SynclassStripMap.empty
+
+let strip_syntax_class (SynclassDyn.Dyn (tag, data)) =
+  match SynclassStripMap.find tag !syntax_class_strips with
+  | strip -> SynclassDyn.Dyn (tag, strip data)
+  | exception Not_found ->
+    LocStrip.unknown ("Ltac2 syntax class " ^ SynclassDyn.repr tag)
+
 module CustomV = struct
   include Tac2Custom
   let is_var _ = None
@@ -692,6 +721,8 @@ let inCustomEntry : Id.t -> bool -> Libobject.obj =
     open_function = filtered_open import_custom_entry;
     subst_function = (fun (_,x) -> x);
     classify_function = (fun local -> if local then Dispose else Substitute);
+    (* a bool *)
+    interface_key = Key_as_is;
   }
 
 let check_custom_entry_name id =
@@ -712,7 +743,7 @@ let register_custom_entry name =
   let local = false in
   Lib.add_leaf (inCustomEntry name local)
 
-let register_syntax_class id (s:_ syntax_class_decl) =
+let register_syntax_class ?strip id (s:_ syntax_class_decl) =
   assert (not (Id.Map.mem id !syntax_class_interns));
   let tag = SynclassDyn.create (Id.to_string id) in
   let intern args =
@@ -720,7 +751,10 @@ let register_syntax_class id (s:_ syntax_class_decl) =
     used, SynclassDyn.Dyn (tag, data)
   in
   syntax_class_interns := Id.Map.add id intern !syntax_class_interns;
-  syntax_class_interps := SynclassInterpMap.add tag s.interp_synclass !syntax_class_interps
+  syntax_class_interps := SynclassInterpMap.add tag s.interp_synclass !syntax_class_interps;
+  Option.iter (fun strip ->
+      syntax_class_strips := SynclassStripMap.add tag strip !syntax_class_strips)
+    strip
 
 let level_name lev = string_of_int lev
 
@@ -731,7 +765,9 @@ let interp_terminal str : syntax_class_rule =
   SyntaxRule (Procq.Symbol.token (Tok.PIDENT (Some str)), (fun _ -> v_unit))
 
 let () =
-  syntax_class_interps := SynclassInterpMap.add terminal_synclass_tag interp_terminal !syntax_class_interps
+  syntax_class_interps := SynclassInterpMap.add terminal_synclass_tag interp_terminal !syntax_class_interps;
+  (* a string *)
+  syntax_class_strips := SynclassStripMap.add terminal_synclass_tag (fun s -> s) !syntax_class_strips
 
 type custom_synclass_data = {
   custom_synclass_name : Tac2Custom.t;
@@ -750,7 +786,9 @@ let interp_custom_entry data : syntax_class_rule =
 let custom_synclass_tag : custom_synclass_data SynclassDyn.tag = SynclassDyn.create "<custom>"
 
 let () =
-  syntax_class_interps := SynclassInterpMap.add custom_synclass_tag interp_custom_entry !syntax_class_interps
+  syntax_class_interps := SynclassInterpMap.add custom_synclass_tag interp_custom_entry !syntax_class_interps;
+  (* a kernel name and an int option *)
+  syntax_class_strips := SynclassStripMap.add custom_synclass_tag (fun d -> d) !syntax_class_strips
 
 let intern_custom_entry ?loc qid ename args : used_levels * custom_synclass_data =
   let lev =
@@ -964,13 +1002,25 @@ let classify_synext o =
 
 let ltac2_notation_cat = Libobject.create_category "ltac2.notations"
 
+let strip_token = function
+  | TacTerm _ as t -> t
+  | TacNonTerm (na, cls) -> TacNonTerm (na, strip_syntax_class cls)
+
+(* used levels, kernel names, entry, bools and deprecation hold no location *)
+let strip_synext { synext_kn; synext_raw; synext_used; synext_tok; synext_entry;
+                   synext_loc; synext_depr } =
+  { synext_kn; synext_raw = List.map Tac2strip.sexpr synext_raw; synext_used;
+    synext_tok = List.map strip_token synext_tok; synext_entry; synext_loc;
+    synext_depr }
+
 let inTac2Notation : synext -> obj =
   declare_object {(default_object "TAC2-NOTATION") with
      object_stage = Summary.Stage.Synterp;
      cache_function  = cache_synext;
      open_function   = simple_open ~cat:ltac2_notation_cat cache_synext;
      subst_function = subst_synext;
-     classify_function = classify_synext}
+     classify_function = classify_synext;
+     interface_key = Key_stripped strip_synext}
 
 let cache_synext_interp (local,kn,tac) =
   Tac2env.define_notation kn tac
@@ -1000,7 +1050,9 @@ let inTac2NotationInterp : (bool*KerName.t*Tac2env.notation_data) -> obj =
      cache_function  = cache_synext_interp;
      open_function   = simple_open ~cat:ltac2_notation_cat cache_synext_interp;
      subst_function = subst_synext_interp;
-     classify_function = classify_synext_interp}
+     classify_function = classify_synext_interp;
+     interface_key = Key_stripped (fun (local, kn, data) ->
+         (local, kn, Tac2strip.notation_data data))}
 
 type abbreviation = {
   abbr_body : raw_tacexpr;
@@ -1025,13 +1077,17 @@ let subst_abbreviation (subst, abbr) =
 
 let classify_abbreviation o = Substitute
 
+let strip_abbreviation { abbr_body; abbr_depr } =
+  { abbr_body = Tac2strip.raw_tacexpr abbr_body; abbr_depr }
+
 let inTac2Abbreviation : Id.t -> abbreviation -> obj =
   declare_named_object {(default_object "TAC2-ABBREVIATION") with
      cache_function  = cache_abbreviation;
      load_function   = load_abbreviation;
      open_function   = filtered_open ~cat:ltac2_notation_cat open_abbreviation;
      subst_function = subst_abbreviation;
-     classify_function = classify_abbreviation}
+     classify_function = classify_abbreviation;
+     interface_key = Key_stripped strip_abbreviation}
 
 let rec string_of_syntax_class = function
 | SexprStr s -> Printf.sprintf "str(%s)" s.CAst.v
@@ -1212,6 +1268,10 @@ let classify_redefinition o = match o.redef_local with
   | Local -> Dispose
   | Export | SuperGlobal -> Substitute
 
+(* locality, kernel name and identifier hold no location *)
+let strip_redefinition { redef_local; redef_kn; redef_body; redef_old } =
+  { redef_local; redef_kn; redef_body = Tac2strip.glb_tacexpr redef_body; redef_old }
+
 let inTac2Redefinition : redefinition -> obj =
   declare_named_object_gen
     {(default_object "TAC2-REDEFINITION") with
@@ -1220,6 +1280,7 @@ let inTac2Redefinition : redefinition -> obj =
      open_function   = simple_open open_redefinition;
      subst_function = subst_redefinition;
      classify_function = classify_redefinition;
+     interface_key = Key_stripped strip_redefinition;
     }
 
 let register_redefinition ~local qid old ({loc=eloc} as e) =
