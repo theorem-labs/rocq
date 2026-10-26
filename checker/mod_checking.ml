@@ -363,10 +363,15 @@ and check_structure_field env opac mp lab res opacify = function
   | SFBconst cb ->
       let kn = KerName.make mp lab in
       let kn = Mod_subst.constant_of_delta_kn res kn in
+      let () = Check_stat.record_constant kn cb in
       check_constant_declaration env opac kn cb (Cset.mem kn opacify)
   | SFBmind mib ->
       let kn = KerName.make mp lab in
       let kn = Mod_subst.mind_of_delta_kn res kn in
+      let () =
+        let indices_matter = (Environ.typing_flags env).indices_matter in
+        Check_stat.record_inductive ~indices_matter kn mib
+      in
       CheckInductive.check_inductive env kn mib, opac
   | SFBmodule msb ->
       let mp = MPdot(mp, lab) in

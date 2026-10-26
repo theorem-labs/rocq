@@ -1,0 +1,42 @@
+
+CONTEXT SUMMARY
+===============
+
+* Theory: Set is predicative
+  
+* Theory: Rewrite rules are not allowed
+  
+* Axioms:
+    alias_summary.A.Sub.Y.tgt
+  
+* Constants/Inductives relying on type-in-type: <none>
+  
+* Constants/Inductives relying on unsafe (co)fixpoints:
+    alias_summary.A.Sub.Seal.loop
+  
+* Inductives whose positivity is assumed: <none>
+  
+* Inductives relying on indices not mattering:
+    Corelib.Init.Datatypes.eq_true
+    Corelib.Init.Logic.eq
+  
+* Libraries admitted without checking, so the sections above cannot see unsafe flags inside their sealed modules:
+    Corelib.Init.Ltac
+    Corelib.Init.Notations
+    Corelib.Init.Logic
+    Corelib.Init.Datatypes
+    Corelib.Init.Specif
+    Corelib.Init.Sumbool
+    Corelib.Init.Tauto
+    Corelib.Init.Tactics
+    Corelib.Init.Wf
+    Corelib.Init.Decimal
+    Corelib.Init.Hexadecimal
+    Corelib.Init.Number
+    Corelib.Init.Nat
+    Corelib.Init.Peano
+    Corelib.Init.Byte
+    Corelib.Init.Equality
+    Corelib.Init.Prelude
+
+
