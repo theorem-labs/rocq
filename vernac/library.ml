@@ -154,8 +154,7 @@ let library_full_filename dir =
   with Not_found -> "<unavailable filename>"
 
 let library_is_loaded dir =
-  try let _ = find_library dir in true
-  with Not_found -> false
+  Option.has_some (find_library dir)
 
   (* If a library is loaded several time, then the first occurrence must
      be performed first, thus the libraries_loaded_list ... *)
@@ -188,8 +187,21 @@ type table_status =
 let opaque_tables =
   ref (DirPath.Map.empty : table_status DirPath.Map.t)
 
+(* [opaque_tables] is not part of the state a rollback restores, and
+   [add_opaque_table] can replace the table of a library that stays loaded:
+   [intern_from_file] writes it under the name the file holds, before
+   [intern_library] checks that name, so a Require that finds a file holding
+   a loaded library replaces that library's table and then fails. The
+   generation counts the writes, for a cache of what the tables return. The
+   [Fetched] write of [access_table] does not count: it keeps what the table
+   returns. *)
+let opaque_generation = ref 0
+
 let add_opaque_table dp st =
+  incr opaque_generation;
   opaque_tables := DirPath.Map.add dp st !opaque_tables
+
+let opaque_tables_generation () = !opaque_generation
 
 let access_table what tables dp i =
   let t = match DirPath.Map.find dp !tables with
