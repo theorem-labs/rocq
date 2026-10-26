@@ -1,0 +1,22 @@
+{
+  "doc": "each proof reads a channel of the recorder's fix round (keyword, autorewrite found and absent, typeclass_solver, coercion_hooks); nothing it read changes, so each replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.lfresh": {"eligible": true}, "PR.A.lauto": {"eligible": true},
+                       "PR.A.labsent": {"eligible": true}, "PR.A.uses_solver": {"eligible": true},
+                       "PR.A.uses_coercion": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 5,
+      "hits": 5,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.lfresh", "hit"], ["PR.A.lauto", "hit"], ["PR.A.labsent", "hit"],
+                   ["PR.A.uses_solver", "hit"], ["PR.A.uses_coercion", "hit"]]
+    }
+  },
+  "vo_exempt": {
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of a shared identifier string (here \"Datatypes\": vodiff on 2026-10-26 found 0 value differences and 2 sharing differences in the library segment, every other segment equal). GRADE retired byte identity as a correctness gate on 2026-10-26; the contract is value equality, and byte identity is a reuse-rate target for D18."
+  }
+}
