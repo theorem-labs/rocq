@@ -8,6 +8,7 @@
     "note": "The same scope as rocq.json, so one pass reads each file once for both checks. Audited on the commit that last changed this file (git log -1 -- dev/tools/census/rulings/channels.json), whose parent is the commit above; it fences Tac2env.set_compiled_global for the Claude review of e16e9d2ae4 and checks the fence when a proof closes (dispatch://BET-114), 2026-10-26. Each read site's row is the census row it records (README.md, census row table); each ineligibility reason is the string its record entry carries."
   },
   "reasons": {
+    "unmarshallable": "Any row: the registration cannot marshal the proof's stored term (Marshal.to_string raised), so the proof stores no term and is never replayed (vernac/declare.ml stored_term).",
     "catchall": "A handler that catches every exception tests CErrors.noncritical and marks the running proof when a critical exception reaches it (README.md, catch-all handlers: pretyping/evarconv.ml:282,285,1022, pretyping/evarsolve.ml:1786, tactics/equality.ml:466).",
     "command_in_proof": "Row 21: a sentence that the classifier does not call a proof step, run while a proof is open (toplevel/vernac.ml).",
     "control_flag": "Rows 21 and 22: a sentence under Time, Instructions, Profile, Redirect, Timeout, Fail or Succeed, whose result depends on the clock, on the output channel, or on a state restored behind the recorder's back (vernac/vernacControl.ml under_one_control).",
@@ -28,6 +29,9 @@
     "unhashable": "Any row: a value the recorder cannot digest (a closure, an unforced lazy, an object or an abstract block). Proof_recorder.digest returns \"unhashable\" and marks the proof, and digest_cached and digest_slot mark every proof that reuses a kept \"unhashable\" (lib/proof_recorder.ml digest, digest_cached, digest_slot)."
   },
   "sites": {
+    "ineligible:vernac/declare.ml:unmarshallable": {"ineligible": "@unmarshallable"},
+    "read:vernac/proof_record_env.ml:read_at_start/row/channel": {"ruling": "BET-84 P3: read_at_start records the list start_reads builds, one Proof_record.read per start-of-proof channel; each element is built by a literal `one <row> <channel>` call that has its own entry here (rows 2, 3, 4, 13, M3, M7), and replay evaluates the same list (vernac/proof_replay_env.ml providers)."},
+
     "read:engine/evarutil.ml:18/counter_start": {"row": "18"},
     "read:engine/evd.ml:18/counter_start": {"row": "18"},
     "read:engine/univGen.ml:18/counter_start": {"row": "18"},
