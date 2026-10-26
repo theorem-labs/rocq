@@ -16,14 +16,18 @@
 #
 # The plugin in misc/proof-record-plugin-hooks/src registers one probe in each
 # registry, each of which always declines, and TestHookActivate activates
-# them. Two compiles of theories/Probe.v, each with -proof-record, each in a
-# new process and its own directory:
-# - off: the TestHookActivate line commented out. Each probe proof must be
-#        ELIGIBLE and hold its channel's read, or the test below proves
-#        nothing;
+# them. Its TestSetUnifier installs a unifier with Evarconv.set_evar_conv, as
+# unicoq's Set Use Unicoq does: process-wide plugin state that no read sees
+# (Claude review of 467292ce69, finding 1), so every proof after it must store
+# no term. Two compiles of theories/Probe.v, each with -proof-record, each in
+# a new process and its own directory:
+# - off: the TestHookActivate and TestSetUnifier lines commented out. Each
+#        probe proof must be ELIGIBLE and hold its channel's read, and so must
+#        after_unifier, or the test below proves nothing;
 # - on:  the file as it is. Each probe proof must carry reason plugin_hook
 #        with a detail that names its channel, and its read must differ from
-#        the one of "off".
+#        the one of "off"; after_unifier must carry plugin_hook with detail
+#        Evarconv.set_evar_conv.
 
 set -e
 
@@ -41,9 +45,12 @@ make src/plugin_hooks_plugin.cmxs
 rm -rf out
 mkdir -p out/off out/on
 cp theories/Probe.v out/on/Probe.v
-sed 's/^TestHookActivate\.$/(* TestHookActivate. *)/' theories/Probe.v > out/off/Probe.v
+sed -e 's/^TestHookActivate\.$/(* TestHookActivate. *)/' \
+    -e 's/^TestSetUnifier\.$/(* TestSetUnifier. *)/' theories/Probe.v > out/off/Probe.v
 grep -q '^TestHookActivate\.$' out/on/Probe.v
+grep -q '^TestSetUnifier\.$' out/on/Probe.v
 grep -q '^(\* TestHookActivate\. \*)$' out/off/Probe.v
+grep -q '^(\* TestSetUnifier\. \*)$' out/off/Probe.v
 
 for d in off on; do
   rocq c -I src -R "out/$d" PluginHooks -proof-record "out/$d/Probe.v"
@@ -96,5 +103,24 @@ for name, channel, _, _ in CHANNELS:
         print("FAIL: %s: the read is the same with and without an active hook" % channel,
               file=sys.stderr)
         failed = True
+
+def after_unifier(path):
+    with open(path, encoding="utf-8") as f:
+        entries = [l for l in map(json.loads, f)
+                   if l["kind"] == "proof" and l["name"].endswith(".after_unifier")]
+    if len(entries) != 1:
+        sys.exit("%s: expected one proof after_unifier, found %d" % (path, len(entries)))
+    return entries[0]["ineligible"]
+
+off_u, on_u = (after_unifier(p) for p in sys.argv[1:3])
+print("after_unifier    off %s" % off_u)
+print("after_unifier    on  %s" % on_u)
+if off_u:
+    print("FAIL: after_unifier is ineligible with no plugin unifier", file=sys.stderr)
+    failed = True
+if not any(i["reason"] == "plugin_hook" and i["detail"] == "Evarconv.set_evar_conv" for i in on_u):
+    print("FAIL: after_unifier follows a plugin unifier and carries no plugin_hook reason",
+          file=sys.stderr)
+    failed = True
 sys.exit(1 if failed else 0)
 PY

@@ -438,7 +438,13 @@ let next_name_away_with_default default na avoid =
   next_ident_away id avoid
 
 let reserved_type_name = ref (fun _ _ _ -> Anonymous)
-let set_reserved_typed_name f = reserved_type_name := f
+
+(* BET-84: interp/reserve.ml installs Rocq's own once, when it loads; a later
+   one is a plugin's (Proof_recorder.closure_setter). *)
+let reserved_type_name_set =
+  Proof_recorder.closure_setter ~what:"Namegen.set_reserved_typed_name" ~stock:1
+
+let set_reserved_typed_name f = reserved_type_name_set (); reserved_type_name := f
 
 let next_name_away_with_default_using_types env sigma default na avoid t =
   let id = match na with

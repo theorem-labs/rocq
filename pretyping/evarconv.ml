@@ -1540,7 +1540,11 @@ let evar_conv_hook = ref evar_conv_x
 
 let evar_conv_x flags = !evar_conv_hook flags
 
-let set_evar_conv f = evar_conv_hook := f
+(* BET-84: Rocq never calls this; a plugin's unifier makes every later proof
+   of the process ineligible (Proof_recorder.closure_setter). *)
+let evar_conv_set = Proof_recorder.closure_setter ~what:"Evarconv.set_evar_conv" ~stock:0
+
+let set_evar_conv f = evar_conv_set (); evar_conv_hook := f
 
 
 (* We assume here |l1| <= |l2| *)
@@ -1668,7 +1672,11 @@ let filter_possible_projections evd i0 c ty ctxt args =
     0 ctxt
 
 let solve_evars = ref (fun _ -> failwith "solve_evars not installed")
-let set_solve_evars f = solve_evars := f
+
+(* BET-84: pretyping/typing.ml installs Rocq's own once, when it loads. *)
+let solve_evars_set = Proof_recorder.closure_setter ~what:"Evarconv.set_solve_evars" ~stock:1
+
+let set_solve_evars f = solve_evars_set (); solve_evars := f
 
 (* We solve the problem env_rhs |- ?e[u1..un] = rhs knowing
  * x1:T1 .. xn:Tn |- ev : ty

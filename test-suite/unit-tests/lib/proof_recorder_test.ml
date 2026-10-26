@@ -293,20 +293,24 @@ let writes =
      && w.R.counters = [ ("evar", 5) ])
 
 (* A slot digests a value once and gives the same digest back while the
-   value is the same one; a different value is digested again. *)
+   value is the same one (by address); a different value is digested again.
+   The test changes [a] in place between the two reads, which no global value
+   a slot holds ever does: a slot that digested again would return the digest
+   of the changed contents, so the reuse is seen. *)
 let slot_reuse =
   start ();
   let s = Rec.slot () in
-  let a = Sys.opaque_identity [ 1; 2; 3 ] and b = Sys.opaque_identity [ 4 ] in
+  let a = Sys.opaque_identity [| 1; 2; 3 |] and b = Sys.opaque_identity [| 4 |] in
   open_proof ();
   let d1 = Rec.digest_slot s ~what:"probe" a in
+  a.(0) <- 9;
   let d2 = Rec.digest_slot s ~what:"probe" a in
   let d3 = Rec.digest_slot s ~what:"probe" b in
   close_proof ();
   let p = List.hd (the_file ()).R.proofs in
   mk_bool_test "recorder-slot-reuse"
     "a slot returns the kept digest for the same value and digests a new one"
-    (d1 = R.digest_value a && d2 = d1 && d3 = R.digest_value b && p.R.ineligible = [])
+    (d2 = d1 && d2 <> R.digest_value a && d3 = R.digest_value b && p.R.ineligible = [])
 
 (* "unhashable" is one stand-in for every value that cannot be digested, so
    every proof that reuses a kept "unhashable" must be marked, not only the

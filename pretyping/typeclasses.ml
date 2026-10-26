@@ -239,7 +239,12 @@ let solve_all_instances_hook = ref (fun env evd filter unique fail -> assert fal
 let solve_all_instances env evd filter unique fail =
   !solve_all_instances_hook env evd filter unique fail
 
-let set_solve_all_instances f = solve_all_instances_hook := f
+(* BET-84: tactics/class_tactics.ml installs Rocq's own once, when it loads;
+   a later one is a plugin's (Proof_recorder.closure_setter). *)
+let solve_all_instances_set =
+  Proof_recorder.closure_setter ~what:"Typeclasses.set_solve_all_instances" ~stock:1
+
+let set_solve_all_instances f = solve_all_instances_set (); solve_all_instances_hook := f
 
 let resolve_typeclasses ?(filter=no_goals) ?(unique=get_typeclasses_unique_solutions ())
     ?(fail=true) env evd =
@@ -270,4 +275,8 @@ let solve_one_instance = ref (fun env evm t -> assert false)
 let resolve_one_typeclass ?unique:_ env evm t =
   !solve_one_instance env evm t
 
-let set_solve_one_instance f = solve_one_instance := f
+(* BET-84: as for [set_solve_all_instances]. *)
+let solve_one_instance_set =
+  Proof_recorder.closure_setter ~what:"Typeclasses.set_solve_one_instance" ~stock:1
+
+let set_solve_one_instance f = solve_one_instance_set (); solve_one_instance := f

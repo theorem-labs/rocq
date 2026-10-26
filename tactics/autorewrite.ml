@@ -336,15 +336,18 @@ let raw_find_base bas = String.Map.find bas !rewtab
    [find_matches] (Claude gate at 0f8d815732, finding 2). An absent base is
    recorded before the error, so that a proof that tried the base and caught
    the error sees it created. *)
+let record_base bas db =
+  Proof_recorder.read ~row:"15" ~channel:"autorewrite" ~key:(fun () -> bas)
+    ~value:(fun () ->
+        Option.map (fun db -> Proof_recorder.digest_cached ~what:"autorewrite" db) db)
+
 let find_base bas =
-  let db = String.Map.find_opt bas !rewtab in
-  if Proof_recorder.active () then
-    Proof_recorder.read ~row:"15" ~channel:"autorewrite" ~key:(fun () -> bas)
-      ~value:(fun () ->
-          Option.map (fun db -> Proof_recorder.digest_cached ~what:"autorewrite" db) db);
-  match db with
-  | Some db -> db
-  | None ->
+  match String.Map.find bas !rewtab with
+  | db ->
+    if Proof_recorder.active () then record_base bas (Some db);
+    db
+  | exception Not_found ->
+    if Proof_recorder.active () then record_base bas None;
     user_err
       (str "Rewriting base " ++ str bas ++ str " does not exist.")
 

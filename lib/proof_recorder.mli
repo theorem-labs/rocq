@@ -55,6 +55,17 @@ val register_fence_check : (unit -> unit) -> unit
     and in {!fence_tripped}, while {!tracking} is true, and calls
     {!trip_fence} when the state its cache holds has changed. *)
 
+val closure_setter : what:string -> stock:int -> unit -> unit
+(** [closure_setter ~what ~stock] is for a setter that installs a
+    process-wide closure (the unifier behind [Evarconv.set_evar_conv], the
+    typeclass resolution behind [Typeclasses.set_solve_all_instances]).
+    Rocq's own modules call that setter [stock] times when they load, before
+    any plugin can; the setter calls the function returned at each call.
+    Once it has been called more than [stock] times, a plugin's closure is
+    installed, which can read plugin state that no read sees, and a fence
+    check trips the fence with reason ["plugin_hook"] and detail [what]: the
+    open proof and every later one in the process is ineligible. *)
+
 val current_name : unit -> string option
 (** The name of the open proof, if any. *)
 
