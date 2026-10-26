@@ -2692,6 +2692,14 @@ end
 
 let default_tactic = ref (Proofview.tclUNIT ())
 
+(* BET-84: vernac/g_obligations.mlg installs Rocq's once, when it loads; a
+   later one is a plugin's (Proof_recorder.closure_setter; Claude review of
+   23b37e36fb, finding 1). The ref is not exported. *)
+let default_tactic_set =
+  Proof_recorder.closure_setter ~what:"Declare.Obls.set_default_tactic" ~stock:1
+
+let set_default_tactic t = default_tactic_set (); default_tactic := t
+
 let subst_deps expand obls deps t =
   let osubst = Obls_.obl_substitution expand obls deps in
     (Vars.replace_vars (List.map (fun (n, (_, b)) -> n, b) osubst) t)
