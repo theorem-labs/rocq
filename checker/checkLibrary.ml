@@ -51,7 +51,9 @@ let pr_path sp =
 
 type compilation_unit_name = DirPath.t
 
-type seg_proofs = Opaqueproof.opaque_proofterm option array
+(* The boolean beside each proof records that coqc did not type it. The
+   checker types every proof regardless, so it never reads the boolean. *)
+type seg_proofs = (Opaqueproof.opaque_proofterm * bool) option array
 
 type library_t = {
   library_name : compilation_unit_name;
@@ -106,7 +108,7 @@ let indirect_accessor o =
   let c = access_opaque_table dp i in
   let c = match c with
   | None ->  CErrors.user_err Pp.(str "Cannot access opaque delayed proof.")
-  | Some c -> c
+  | Some (c, _unchecked) -> c
   in
   let (c, prv) = Discharge.cook_opaque_proofterm ci c in
   let c = Mod_subst.subst_mps_list sub c in
@@ -124,6 +126,7 @@ let check_one_lib admit senv (dir,m) =
     if LibrarySet.mem dir admit then
       (Flags.if_verbose Feedback.msg_notice
          (str "Admitting library: " ++ pr_dirpath dir);
+       Check_stat.record_admitted (DirPath.to_string dir);
        Safe_checking.unsafe_import (fst senv) md dig),
       (snd senv)
     else
@@ -284,6 +287,7 @@ type summary_disk = {
   md_deps : (compilation_unit_name * Safe_typing.vodigest) array;
   md_ocaml : string;
   md_info : library_info;
+  md_safe_deps : DirPath.Set.t;
 }
 
 type library_objects
@@ -449,6 +453,15 @@ let recheck_library senv ~norec ~admit ~check =
   Flags.if_verbose Feedback.msg_notice (fnl()++hv 2 (str "Ordered list:" ++ fnl() ++
     prlist
     (fun (dir,_) -> pr_dirpath dir ++ fnl()) needed));
-  let senv = List.fold_left (check_one_lib nochk) (senv, Mod_checking.empty_opaques) needed in
+  let senv =
+    try
+      let senv = List.fold_left (check_one_lib nochk) (senv, Mod_checking.empty_opaques) needed in
+      CheckWorkers.finish ();
+      senv
+    with e ->
+      let e = Exninfo.capture e in
+      CheckWorkers.abort ();
+      Exninfo.iraise e
+  in
   Flags.if_verbose Feedback.msg_notice (str"Modules were successfully checked");
   senv

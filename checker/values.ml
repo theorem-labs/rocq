@@ -614,7 +614,7 @@ let v_compiled_lib =
 (** Toplevel structures in a vo (see Cic.mli) *)
 
 let v_libsum =
-  v_tuple_c ("summary", [|v_dp;v_deps;v_string;v_any|])
+  v_tuple_c ("summary", [|v_dp;v_deps;v_string;v_any;v_set v_dp|])
 
 let v_lib =
   v_tuple_c ("library",[|v_compiled_lib;v_any;v_any|])
@@ -622,6 +622,6 @@ let v_lib =
 let v_delayed_universes =
   v_sum_c ("delayed_universes", 0, [| [| v_unit |]; [| v_univ_context_set |] |])
 
-let v_opaquetable = v_array (v_opt (v_pair v_constr v_delayed_universes))
+let v_opaquetable = v_array (v_opt (v_pair (v_pair v_constr v_delayed_universes) v_bool))
 
 let v_vmlib = v_tuple "vmlibrary" [|v_dp; v_array v_vm_to_patch|]

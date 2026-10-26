@@ -21,9 +21,14 @@ open Names
 (** Type of libraries loaded in memory *)
 type library_t
 
+(** Whether a library of a required closure is fully loaded (its objects are
+    replayed) or only safe-loaded (imported kernel-side, full-qualified names
+    only). *)
+type require_mode = ModeFull | ModeSafe
+
 (** {6 ... }
     Require = load in the environment *)
-val require_library_from_dirpath : library_t list -> unit
+val require_library : (require_mode * library_t) list -> unit
 
 (** Intern from a .vo file located by libresolver *)
 module Intern : sig
@@ -39,10 +44,15 @@ end
 val intern_from_file : CUnix.physical_path ->
   (library_t, Exninfo.iexn) Result.t * Intern.Provenance.t
 
+(** Intern the dependency closure of the given roots, compute per-library
+    modes ([cmd_safe] is the command mode: [false] for [Require], [true] for
+    [Require (safe)]), register the syntactic part and return the interp-side
+    closure tagged with the computed modes. *)
 val require_library_syntax_from_dirpath
-  :  intern:Intern.t
+  : cmd_safe:bool
+  -> intern:Intern.t
   -> DirPath.t Loc.located list
-  -> library_t list
+  -> (require_mode * library_t) list
 
 (** {6 Start the compilation of a library } *)
 
@@ -77,6 +87,16 @@ val library_compiled : DirPath.t -> Safe_typing.compiled_library
 
 (** {6 Native compiler. } *)
 val native_name_from_filename : string -> string
+
+(** {6 Opaque tables} *)
+
+(** Changes whenever the opaque proofs of a loaded library can have changed:
+    at each library file read, also by a [Require] that then fails, which can
+    replace the opaque proofs of a library that stays loaded. The rollback of
+    a failed command does not undo that, and does not change
+    [Global.env ()]. The opaque proofs of the library being compiled are part
+    of the state and are not counted. *)
+val opaque_tables_generation : unit -> int
 
 (** {6 Opaque accessors} *)
 val indirect_accessor : Global.indirect_accessor
