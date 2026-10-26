@@ -68,7 +68,9 @@ val start : library:string -> toolchain:(unit -> Proof_record.toolchain) -> unit
     runs without replay, and why. [toolchain] is this compile's: a record
     whose header names another binary, plugin set, load order,
     safe-dependency set or stack limit is refused for the whole file, before
-    any of its proofs is declared (reason ["toolchain"]). *)
+    any of its proofs is declared (reason ["toolchain"]). A file that is not
+    refused turns on {!Proof_recorder.start_tracking}, so the process-wide
+    cache fences run here as they ran in the registration. *)
 
 val set_vo_path : string -> unit
 (** The [.vo] this compile writes, as its command line gives it. With
@@ -130,7 +132,10 @@ val candidate_open : unit -> bool
 val decide : sentences:string list -> closer:string -> string option
 (** The decision at the closer, before any tactic ran. [Some blob] is the
     stored term; [None] means the proof runs its tactics. Counts the hit or
-    the miss, and charges the clock on a hit. *)
+    the miss, and charges the clock on a hit. Once a process-wide fence has
+    tripped ({!Proof_recorder.fence_tripped}), every proof from then on is
+    refused and counted as ineligible, and the summary's [fence] names the
+    first trip. *)
 
 val abandon : unit -> unit
 (** Drops the open candidate without a decision: the proof ran as stock. *)
