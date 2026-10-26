@@ -904,3 +904,14 @@ let integer_solver lp =
     if debug then
       Printf.fprintf stdout "Proof %a\n" ProofFormat.output_proof prf;
     Some prf
+
+(** [relaxed_point lp] solves the rational relaxation of [lp] once, with the environment that
+    [integer_solver] builds, but only up to feasibility ([solve false], as [find_point]).
+    @return [Some sol], a point of [lp] (the values of the variables of [lp], 0 when absent), or [None]
+    if it is infeasible. It does not count in [get_profile_info]. *)
+let relaxed_point lp =
+  let vr0 = LinPoly.MonT.get_fresh () in
+  let l', _ = PrfEnv.of_list [] PrfEnv.empty (List.rev lp) in
+  match solve false l' (Restricted.make vr0) IMap.empty with
+  | Inr _ -> None
+  | Inl (rst, t, _) -> Some (find_solution rst t)

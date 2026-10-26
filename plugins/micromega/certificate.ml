@@ -497,6 +497,8 @@ let develop_constraints prfdepth n_spec sys =
   let sys = List.mapi (fun i (p, o) -> WithProof.mkhyp (LinPoly.linpol_of_pol p) o i) sys in
   ProofFormat.Env.make (List.length sys), sys
 
+let develop_z_constraints prfdepth sys = snd (develop_constraints prfdepth z_spec sys)
+
 let square_of_var i =
   let x = LinPoly.var i in
   WithProof.square (LinPoly.product x x) x
