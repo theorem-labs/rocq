@@ -19,16 +19,18 @@ open Tac2bt
 
 exception LtacError = Tac2ffi.LtacError
 
+module IdMap = Tac2env.IdMap
+
 type environment = Tac2env.environment = {
-  env_ist : valexpr Id.Map.t;
+  env_ist : valexpr IdMap.t;
 }
 
 let empty_environment = {
-  env_ist = Id.Map.empty;
+  env_ist = IdMap.empty;
 }
 
 type closure = {
-  mutable clos_env : valexpr Id.Map.t;
+  mutable clos_env : valexpr IdMap.t;
   (** Mutable so that we can implement recursive functions imperatively *)
   clos_var : Name.t list;
   (** Bound variables *)
@@ -38,14 +40,14 @@ type closure = {
   (** Global constant from which the closure originates *)
 }
 
-let push_id ist id v = { env_ist = Id.Map.add id v ist.env_ist }
+let push_id ist id v = { env_ist = IdMap.add id v ist.env_ist }
 
 let push_name ist id v = match id with
 | Anonymous -> ist
 | Name id -> push_id ist id v
 
 let get_var ist id =
-  try Id.Map.find id ist.env_ist with Not_found ->
+  try IdMap.find id ist.env_ist with Not_found ->
     anomaly (str "Unbound variable " ++ Id.print id)
 
 let return = Proofview.tclUNIT
@@ -96,6 +98,162 @@ let eval_glb_ext ist (Tac2dyn.Arg.Glb (tag,e)) =
   let tpe = Tac2env.interp_ml_object tag in
   with_frame (FrExtn (tag, e)) (tpe.Tac2env.ml_interp ist e)
 
+(** The value of a global, computed once and reused where reuse cannot be observed.
+
+    [eval_global] below computes the value of a global from three tables only: the compiled
+    globals, the globals and, through [eval_pure]'s [GTacPrm] arm, the ML primitives. The value of
+    a global is therefore the same as long as the three are the ones it was computed under, and
+    computing it again is work that can be saved. On Igraph/RtLgTopA.v of the speed lane's fast
+    set, [eval_global] was about 9% of the samples (dispatch://INFRA-217).
+
+    Reusing a value is not the same as computing it again where Ltac2 code can write into the
+    value or into a value it holds: [Valexpr.set_field] writes into the fields of any block
+    (tac2val.ml:65-68), which the interpreter reaches through [GTacSet] (interp_set below) and
+    Ltac2 code through "array_set", "array_blit" and "array_fill", whose implementations take the
+    generic block (tac2core.ml:356-372, tac2ffi.ml:374-382), and "string_set" writes into the
+    bytes of a [ValStr] (tac2core.ml:432-433). A primitive's declared Ltac2 type is not checked
+    against its implementation (tac2entries.ml:472-488, [register_primitive]), so a user external
+    declared at a permissive type reaches any block, not only an [Ltac2.Array]. So a value is
+    reused only where it holds no block and no bytes at all: [shareable_value] below. *)
+module GlobalValue :
+sig
+  val get : (ltac_constant -> valexpr) -> ltac_constant -> valexpr
+  (** [get compute kn] is [compute kn], computed once while the tables are the ones it was
+      computed under. [compute] must read those tables only and have no other effect. *)
+end =
+struct
+
+module KNTbl = Hashtbl.Make(struct
+  type t = KerName.t
+  let equal kn1 kn2 = kn1 == kn2 || KerName.equal kn1 kn2
+  let hash = KerName.hash
+end)
+
+type entry =
+| Shared of valexpr
+  (** The value of the global. No evaluation can tell it from a value computed again. *)
+| Recompute
+  (** The global's value is computed at each use, as it holds, or may hold, a value Ltac2 code
+      can write into. The entry saves deciding that again. *)
+
+(** At most this many globals are kept. One input can define globals without end, and an entry
+    holds its value and what the value holds; past the bound a global is computed at each use, as
+    it was before this cache. The bound is far above what a development defines between two
+    writes to the tables (Corelib's Ltac2 defines about a thousand globals), and 65536 entries of
+    two words cost about 1 MB. *)
+let bound = 65536
+
+let table : entry KNTbl.t = KNTbl.create 512
+
+(** The tables the entries were computed under. Holding the two maps also keeps them alive, so no
+    later map can be the same address as one of them and pass the test below. *)
+let table_globals = ref (Tac2env.globals ())
+let table_compiled = ref (Tac2env.compiled_globals ())
+let table_primitives = ref (Tac2env.primitive_definitions ())
+
+(** Whether [eval_pure] of [e], under bindings whose values are themselves shareable, gives a
+    value that no Ltac2 code can tell from the value of a later evaluation of [e]: a value that is
+    an immediate integer, or a closure, or the value of the primitive table, and that holds only
+    such values.
+
+    The arms follow [eval_pure]'s, and this descends only where [eval_pure] descends, so it ends
+    wherever evaluating the global ends.
+
+    - [GTacAtm (AtmInt _)] and a constructor without arguments ([GTacCst (_, _, [])]) give
+      [ValInt], an immediate: there is nothing to write into.
+    - [GTacFun] gives a closure over the bindings of the enclosing [GTacLet]s, which the arms
+      below have checked. A closure holds no field Ltac2 code can write: [set_field] and the array
+      primitives refuse anything but a block, and the environment a closure captures is read when
+      the closure is called ([interp_closure]) and written only by [push_let_rec], on closures it
+      has just built. Calling it evaluates its body, which allocates then, as calling a closure
+      computed again would. Ltac2 has no equality on closures, so a shared closure is not visible.
+    - [GTacVar] reads a binding of an enclosing [GTacLet], checked by the arms below.
+    - [GTacPrm] gives the value of the primitive table. Every evaluation reads the same entry
+      ([Tac2env.interp_primitive]), so evaluating it again gives that one value too, and reuse
+      shares nothing new. [table_primitives] drops the entries where that table is written.
+    - [GTacRef] gives the value of another global, shareable where that global's is.
+    - [GTacLet] gives the value of its body, under values its bindings give. A binding of a
+      recursive [GTacLet] is a closure ([push_let_rec]) over those same bindings. An anonymous
+      non-recursive binding is not evaluated and binds nothing.
+    - A string gives [ValStr], whose bytes "string_set" writes. [GTacCst] with arguments and
+      [GTacOpn] with arguments give a block, whose fields [GTacSet] and the array primitives
+      write. [GTacPrj] gives a field of a block, which is any value that block holds. The rest
+      [eval_pure] refuses as not a syntactic value. *)
+let rec shareable_value = function
+| GTacAtm (AtmInt _) -> true
+| GTacCst (_, _, []) -> true
+| GTacFun _ -> true
+| GTacVar _ -> true
+| GTacPrm _ -> true
+| GTacRef kn -> shareable_global kn
+| GTacLet (false, bnd, body) ->
+  List.for_all (fun (na, e) -> match na with Anonymous -> true | Name _ -> shareable_value e) bnd
+  && shareable_value body
+| GTacLet (true, bnd, body) ->
+  List.for_all (fun (_, e) -> match e with GTacFun _ -> true | _ -> false) bnd
+  && shareable_value body
+| GTacAtm (AtmStr _) | GTacCst _ | GTacOpn _ | GTacPrj _
+| GTacApp _ | GTacCse _ | GTacSet _ | GTacExt _ | GTacWth _ | GTacFullMatch _ -> false
+
+(** Whether the value [eval_global] gives for [kn] is shareable. A compiled global's value is the
+    one the table holds, which every evaluation returns, so reuse shares nothing new. *)
+and shareable_global kn = match Tac2env.get_compiled_global kn with
+| Some _ -> true
+| None ->
+  match Tac2env.interp_global kn with
+  | exception Not_found -> false
+  | { gdata_expr = e } -> shareable_value e
+
+let get compute kn =
+  let globals = Tac2env.globals () in
+  let compiled = Tac2env.compiled_globals () in
+  let primitives = Tac2env.primitive_definitions () in
+  let () =
+    if globals != !table_globals || compiled != !table_compiled
+       || not (Int.equal primitives !table_primitives)
+    then begin
+      KNTbl.reset table;
+      table_globals := globals;
+      table_compiled := compiled;
+      table_primitives := primitives
+    end
+  in
+  match KNTbl.find table kn with
+  | Shared v -> v
+  | Recompute -> compute kn
+  | exception Not_found ->
+    let v = compute kn in
+    let () =
+      if KNTbl.length table < bound then
+        KNTbl.replace table kn (if shareable_global kn then Shared v else Recompute)
+    in
+    v
+
+end
+(** [simple_fuel fuel e]: [fuel] minus the number of nodes of [e] if [e] is an expression whose value
+    [interp] computes without any effect (an atom, a variable, a global, a function, a primitive, or a
+    constructor, open constructor or projection of such) and has at most [fuel] nodes; otherwise -1.
+    [interp] returns [return v] on such an expression, with no bind, except under a constructor or
+    projection, where it binds the values of the subexpressions in order. The node budget bounds the
+    OCaml stack that [eval_simple] uses; stock's monadic path uses a near-constant stack, so a deeper
+    expression (a long list literal, for example) takes that path. *)
+let rec simple_fuel fuel e =
+  if fuel <= 0 then -1
+  else match e with
+  | GTacAtm _ | GTacVar _ | GTacRef _ | GTacFun _ | GTacPrm _ -> fuel - 1
+  | GTacCst (_, _, el) | GTacOpn (_, el) -> simple_fuel_list (fuel - 1) el
+  | GTacPrj (_, e, _) -> simple_fuel (fuel - 1) e
+  | GTacApp _ | GTacLet _ | GTacCse _ | GTacWth _ | GTacFullMatch _ | GTacSet _ | GTacExt _ -> -1
+
+and simple_fuel_list fuel = function
+  | [] -> fuel
+  | e :: l -> let fuel = simple_fuel fuel e in if fuel < 0 then -1 else simple_fuel_list fuel l
+
+(** At most this many nodes in all the arguments of one application go through [eval_simple]. *)
+let max_simple_nodes = 64
+
+let simple_args args = simple_fuel_list max_simple_nodes args >= 0
+
 let rec interp (ist : environment) = function
 | GTacAtm (AtmInt n) -> return (Tac2ffi.of_int n)
 | GTacAtm (AtmStr s) -> return (Tac2ffi.of_string s)
@@ -107,6 +265,13 @@ let rec interp (ist : environment) = function
   return f
 | GTacApp (f, args) ->
   interp ist f >>= fun f ->
+  (* Arguments that are all simple are evaluated here, in one step. This gives what the general path
+     gives: [Proofview.Monad.List.map] evaluates the first argument here and each next one in the
+     continuation of the previous one's [return], which has exactly one success, so each of those
+     continuations runs once each time this one does, with no effect in between. On
+     Igraph/RtLgTopA.v the binds and returns of the proof monad were 22.8% of the samples. *)
+  if simple_args args then Tac2val.apply_val f (eval_simple_list ist args)
+  else
   Proofview.Monad.List.map (fun e -> interp ist e) args >>= fun args ->
   Tac2val.apply_val f args
 | GTacLet (false, el, e) ->
@@ -153,7 +318,7 @@ and push_let_rec ist el =
   let fixs = List.map map el in
   let fold accu (na, _, cls) =match na with
     | Anonymous -> accu
-    | Name id -> Id.Map.add id cls accu
+    | Name id -> IdMap.add id cls accu
   in
   let ist = List.fold_left fold ist fixs in
   (* Hack to make a cycle imperatively in the environment *)
@@ -212,15 +377,17 @@ and interp_set ist e p r =
   let () = Valexpr.set_field e p r in
   return (Valexpr.make_int 0)
 
-and eval_global kn =
+and eval_global kn = GlobalValue.get compute_global kn
+
+and compute_global kn =
   match Tac2env.get_compiled_global kn with
   | Some (_info,v) -> v
   | None -> match Tac2env.interp_global kn with
     | exception Not_found -> anomaly (str "Unbound reference" ++ KerName.print kn)
-    | { gdata_expr = e } -> eval_pure Id.Map.empty (Some kn) e
+    | { gdata_expr = e } -> eval_pure IdMap.empty (Some kn) e
 
 and eval_pure bnd kn = function
-| GTacVar id -> Id.Map.get id bnd
+| GTacVar id -> IdMap.get id bnd
 | GTacAtm (AtmInt n) -> Valexpr.make_int n
 | GTacRef kn -> eval_global kn
 | GTacFun (na, e) ->
@@ -236,7 +403,7 @@ and eval_pure bnd kn = function
     accu
   | Name id ->
     let v = eval_pure bnd None e in
-    Id.Map.add id v accu
+    IdMap.add id v accu
   in
   let bnd = List.fold_left fold bnd vals in
   eval_pure bnd kn body
@@ -258,6 +425,29 @@ and eval_pure bnd kn = function
 and eval_pure_args bnd args =
   let map e = eval_pure bnd None e in
   Array.map_of_list map args
+
+(** [eval_simple ist e], [e] simple ([simple_fuel]): the value that [interp ist e] returns, computed
+    directly. The subexpressions of a constructor are evaluated from left to right, as
+    [Proofview.Monad.List.map] does. *)
+and eval_simple ist = function
+| GTacAtm (AtmInt n) -> Tac2ffi.of_int n
+| GTacAtm (AtmStr s) -> Tac2ffi.of_string s
+| GTacVar id -> get_var ist id
+| GTacRef kn -> eval_global kn
+| GTacFun (ids, e) ->
+  interp_closure { clos_ref = None; clos_env = ist.env_ist; clos_var = ids; clos_exp = e }
+| GTacPrm ml -> Tac2env.interp_primitive ml
+| GTacCst (_, n, []) -> Valexpr.make_int n
+| GTacCst (_, n, el) -> Valexpr.make_block n (Array.of_list (eval_simple_list ist el))
+| GTacOpn (kn, el) -> Tac2ffi.of_open (kn, Array.of_list (eval_simple_list ist el))
+| GTacPrj (_, e, p) -> Valexpr.field (eval_simple ist e) p
+| GTacApp _ | GTacLet _ | GTacCse _ | GTacWth _ | GTacFullMatch _ | GTacSet _ | GTacExt _ ->
+  anomaly (Pp.str "Term is not simple")
+
+(* left to right, explicitly *)
+and eval_simple_list ist = function
+| [] -> []
+| e :: l -> let v = eval_simple ist e in v :: eval_simple_list ist l
 
 let interp_value ist tac =
   eval_pure ist.env_ist None tac

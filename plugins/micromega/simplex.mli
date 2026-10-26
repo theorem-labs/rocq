@@ -29,3 +29,8 @@ val find_unsat_certificate : cstr list -> Vect.t option
 
 val integer_solver :
   WithProof.t list -> ProofFormat.proof option
+
+(** [relaxed_point lp] solves the rational relaxation of [lp] once, up to feasibility, with the
+    environment that [integer_solver lp] builds: [Some sol], one of its points, or [None] if it is
+    infeasible. *)
+val relaxed_point : WithProof.t list -> Vect.t option
