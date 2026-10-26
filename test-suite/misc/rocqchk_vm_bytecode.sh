@@ -32,8 +32,11 @@ Definition poc_evil : bool := idb true.
 EOF
 sed 's/idb true/idb false/' "$d/d1/Defs.v" > "$d/d2/Defs.v"
 
-rocq c -noinit -R "$d/d1" "" "$d/d1/Defs.v"
-rocq c -noinit -R "$d/d2" "" "$d/d2/Defs.v"
+# Native compilation is off throughout: splicing Defs.vo leaves the .coq-native
+# files of the two builds behind, and compiling Evil against them fails to find
+# the module they were emitted for. The bug under test is about VM bytecode.
+rocq c -noinit -native-compiler no -R "$d/d1" "" "$d/d1/Defs.v"
+rocq c -noinit -native-compiler no -R "$d/d2" "" "$d/d2/Defs.v"
 
 # Splice: library from d1 (body says true), vmlibrary from d2 (bytecode says
 # false), keeping d1's opaques/summary. All per-segment MD5s and the summary
@@ -106,7 +109,7 @@ Definition discr (b : bool) : Prop := match b with true => False | false => True
 Definition oops : discr poc_evil := (I <: discr poc_evil).
 Definition boom : False := oops.
 EOF
-rocq c -noinit -bytecode-compiler yes -R "$d" "" "$d/Evil.v"
+rocq c -noinit -native-compiler no -bytecode-compiler yes -R "$d" "" "$d/Evil.v"
 
 # rocqchk computes with its own bytecode, so the VMcast simply fails to convert
 # and Evil is rejected with the same type error the default checker gives.
