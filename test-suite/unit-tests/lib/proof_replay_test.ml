@@ -290,18 +290,27 @@ let sha256_vectors =
    strings are not commands. *)
 let rebind_scan =
   let s = Replay.scan_late_rebind in
+  let end_ = "End (of a module, or of a section that loads or imports)" in
   mk_bool_test "proof-replay-rebind-scan"
-    "a Register, Require, Load, Declare ML Module, Import, Export, Include, Module := or Register-file End after the first closer is found, with its line"
+    "a Register, Require, Load, Declare, Import, Export, Include, Module, or an End that can rebind, after the first closer, is found with its line"
     (s "Lemma a : True.\nProof. exact I. Qed.\nRegister x as core.eq.type.\n" = Some ("Register", 3)
      && s "Register x as core.eq.type.\nLemma a : True.\nProof. exact I. Qed.\n" = None
      && s "Lemma a : True.\nProof. exact I. Save a.\nRequire Import Foo.\n" = Some ("Require", 3)
-     && s "Lemma a : True. Proof. exact I. Qed. Declare ML Module \"p\"." = Some ("Declare ML Module", 1)
+     && s "Lemma a : True. Proof. exact I. Qed. Declare ML Module \"p\"." = Some ("Declare", 1)
      && s "Lemma a : True. Proof. exact I. Qed. (* Register (* nested *) Require *) Lemma b : True. Qed." = None
      && s "Lemma a : True. Qed. Lemma b : True. Proof. idtac \"Require \"\"Load\"\"\". Qed." = None
-     && s "Section S. Register x as core.eq.type. Lemma a : True. Qed.\nEnd S." = Some ("End (in a file that uses Register)", 2)
+     && s "Section S. Register x as core.eq.type. Lemma a : True. Qed.\nEnd S." = Some (end_, 2)
      && s "Section S. Lemma a : True. Qed. End S." = None
-     && s "Lemma a : True. Qed. Module M. End M." = None
-     && s "Lemma a : True. Qed. Module N := F X." = Some ("Module ... :=", 1)
+     && s "Lemma a : True. Qed. Module M. End M." = Some ("Module", 1)
+     && s "Lemma a : True. Qed. Module N := F X." = Some ("Module", 1)
+     && s "Lemma a : True. Qed. Timeout 1Register x as core.eq.type." = Some ("Register", 1)
+     && s "Module M : T. Lemma a : True. Qed. End M." = Some (end_, 1)
+     && s "Section S. Import M. Lemma a : True. Qed. End S." = Some (end_, 1)
+     && s "Section S. Section T. Import M. End T. Lemma a : True. Qed. End S." = Some (end_, 1)
+     && s "Lemma a : True. Qed. Export M." = Some ("Export", 1)
+     && s "Lemma a : True. Qed. Include M." = Some ("Include", 1)
+     && s "Lemma a : True. Qed. Module M (* x. *) := F E." = Some ("Module", 1)
+     && s "Declare Module M : T. Section S. Lemma a : True. Qed. End S." = None
      && s "Lemma a : True. Qed. Import M." = Some ("Import", 1)
      && s "Lemma a : True. Qed. Load \"f\"." = Some ("Load", 1)
      && s "Lemma Requires : True. Qed." = None

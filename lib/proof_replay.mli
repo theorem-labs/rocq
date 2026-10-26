@@ -80,10 +80,10 @@ val start :
 val scan_late_rebind : string -> (string * int) option
 (** The first command in this source text, after its first [Qed] or [Save],
     that can rebind a Rocqlib name or load code — [Register], [Require],
-    [Load], [Declare ML Module], [Import], [Export], [Include], a [Module]
-    defined by [:=], or [End] in a text that uses [Register] — with its line;
-    [None] if there is none.
-    Comments and strings are skipped. *)
+    [Load], [Declare], [Import], [Export], [Include], [Module], or an [End]
+    that closes a module or a section inside which one of those appeared —
+    with its line; [None] if there is none. Comments and strings are
+    skipped; words split as Rocq's lexer splits them. *)
 
 val register_hit_hook : (Proof_record.read list -> unit) -> unit
 (** [f reads] runs at each hit with the replayed proof's recorded reads, so

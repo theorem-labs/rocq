@@ -326,30 +326,41 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    [Save] (no proof can be replayed before it), its text holds a command that
    can rebind a Rocqlib name or load code. A [Register] object is applied
    when it is declared, when its library or module is loaded (a superglobal
-   object, Libobject.object_with_locality), and when its module is opened
-   (an export one). So the commands are: [Register]; [Require] (a library
-   brings its own [Register] objects and plugins, which the text does not
-   show); [Load]; [Declare ML Module]; [Import] and [Export]; [Include]; a
-   [Module] defined by [:=] (a functor application or alias loads the
-   objects again, substituted); and an [End] in a file that uses [Register]
-   anywhere (a section's end takes back a local registration). Decided from
-   the source text, before any proof is replayed. The scan skips nested
-   comments and strings and reads whole words, so it can only refuse too
-   much (a word inside a quotation, say), which costs hits and never
-   soundness. Main's ruling, 2026-10-26 18:10Z, asked for [Register],
-   [Declare ML Module], a plugin-loading [Require] and [Load]; the rest are
-   the other ways a [Register] object is applied. *)
-let late_words = [ "Register"; "Require"; "Load"; "Import"; "Export"; "Include" ]
+   object, Libobject.object_with_locality), when its module is opened (an
+   export one), when a module is sealed by a signature that holds one, and a
+   section's end takes back what was applied inside it. So, after the first
+   closer: [Register]; [Require] (a library brings its own [Register]
+   objects and plugins, which the text does not show); [Load]; [Declare] (ML
+   Module, Module); [Import]; [Export]; [Include]; any [Module]; and an [End]
+   that closes a module (a sealed one applies its signature's objects there)
+   or a section inside which one of those commands appeared, before or after
+   the first closer (Claude delta review of 7b2a60f377, P1-2 to P1-4).
+   Decided from the source text, before any proof is replayed. The scan
+   skips nested comments and strings, and splits words as Rocq's lexer does:
+   a word starts with a letter or [_], so [1Register] is the number [1] and
+   the word [Register] (P1-1). It is meant to err toward refusing (a keyword
+   inside a quotation or a notation's text refuses too); a command that a
+   [Load]ed file, a plugin or a notation builds is covered because [Load],
+   [Declare] and [Require] refuse. Main's ruling, 2026-10-26 18:10Z, asked
+   for [Register], [Declare ML Module], a plugin-loading [Require] and
+   [Load]; the rest are the other ways a [Register] object is applied. *)
+let late_words = [ "Register"; "Require"; "Load"; "Declare"; "Import"; "Export"; "Include"; "Module" ]
 
 let scan_late_rebind text =
   let n = String.length text in
   let line = ref 1 and i = ref 0 in
-  let closed = ref false and saw_register = ref false and prev = ref "" in
+  let closed = ref false in
+  (* One frame per open [Section] or [Module]: whether its [End] can change
+     what a Rocqlib name answers. A module's always can; a section's can when
+     a late word appeared inside it, at any depth. *)
+  let frames : bool ref list ref = ref [] in
+  let prev = ref "" in
   let result = ref None in
-  let is_word c = match c with
-    | 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' | '\'' -> true
+  let is_start c = match c with
+    | 'a'..'z' | 'A'..'Z' | '_' -> true
     | c -> Char.code c >= 128
   in
+  let is_word c = is_start c || (match c with '0'..'9' | '\'' -> true | _ -> false) in
   let step () = if text.[!i] = '\n' then incr line; incr i in
   let skip_string () =
     (* [""] inside a string is a quote *)
@@ -372,36 +383,31 @@ let scan_late_rebind text =
     done
   in
   let found w = result := Some (w, !line) in
-  (* Whether the sentence from here to its terminating dot holds [:=]. *)
-  let sentence_assigns () =
-    let k = ref !i and res = ref None in
-    while !res = None && !k < n do
-      if text.[!k] = ':' && !k + 1 < n && text.[!k + 1] = '=' then res := Some true
-      else if text.[!k] = '.' && (!k + 1 >= n || String.contains " \n\t\r" text.[!k + 1]) then res := Some false
-      else incr k
-    done;
-    !res = Some true
-  in
   while !result = None && !i < n do
     let c = text.[!i] in
     if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
     else if c = '"' then (skip_string (); prev := "")
-    else if is_word c then begin
+    else if is_start c then begin
       let j = ref !i in
       while !j < n && is_word text.[!j] do incr j done;
       let w = String.sub text !i (!j - !i) in
       i := !j;
-      if String.equal w "Register" then saw_register := true;
-      if !closed then begin
-        if List.mem w late_words then found w
-        else if String.equal w "ML" && String.equal !prev "Declare" then found "Declare ML Module"
-        else if String.equal w "End" && !saw_register then found "End (in a file that uses Register)"
-        else if String.equal w "Module" && sentence_assigns () then found "Module ... :="
+      let late = List.mem w late_words in
+      if late then List.iter (fun f -> f := true) !frames;
+      if !closed && late then found w
+      else if String.equal w "Module" && not (String.equal !prev "Declare") then frames := ref true :: !frames
+      else if String.equal w "Section" then frames := ref false :: !frames
+      else if String.equal w "End" then begin
+        match !frames with
+        | f :: rest -> frames := rest; if !closed && !f then found "End (of a module, or of a section that loads or imports)"
+        | [] -> if !closed then found "End"
       end
       else if String.equal w "Qed" || String.equal w "Save" then closed := true;
       prev := w
     end
     else begin
+      (* A number, punctuation or space: it ends the previous word, and a
+         digit run does not swallow the word after it. *)
       if c <> ' ' && c <> '\n' && c <> '\t' && c <> '\r' then prev := "";
       step ()
     end
@@ -413,7 +419,7 @@ let source_rebind = function
   | Some path ->
     match read_file path with
     | text -> scan_late_rebind text
-    | exception Sys_error _ -> Some ("an unreadable source", 0)
+    | exception (Sys_error _ | End_of_file) -> Some ("an unreadable source", 0)
 
 let start ~library ~source ~toolchain =
   match !options with
