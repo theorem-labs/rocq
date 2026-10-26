@@ -1,0 +1,10 @@
+{
+open PluginHooksImpl
+}
+
+DECLARE PLUGIN "coq-test-suite.plugin_hooks"
+
+VERNAC COMMAND EXTEND ProofRecordPluginHooks CLASSIFIED AS SIDEFF
+| [ "TestHookActivate" ] -> { activate () }
+| [ "TestSetClosures" ] -> { set_closures () }
+END

@@ -173,7 +173,17 @@ module Addr = Hashtbl.Make (struct
    rest of the state, so a compile without the option holds nothing. *)
 let digest_cache : string Addr.t = Addr.create 1024
 
-let stop () = state := None; recording := false; Addr.reset digest_cache; R.reset_memo ()
+(* The last value of one start read and its digest (see [digest_slot]). Every
+   slot is emptied with the rest of the state. *)
+type slot = (Obj.t * string) option ref
+
+let slots : slot list ref = ref []
+
+let slot () = let s = ref None in slots := s :: !slots; s
+
+let stop () =
+  state := None; recording := false; Addr.reset digest_cache; R.reset_memo ();
+  List.iter (fun s -> s := None) !slots
 
 (* The digest memo and the address cache hold a strong reference to every
    value they digested. A replay-only compile never calls [stop], so it
@@ -432,6 +442,19 @@ let trip_fence ~reason ~detail =
   (match !fence_state with None -> fence_state := Some (reason, detail) | Some _ -> ());
   ineligible ~reason ~detail
 
+(* A setter of a process-wide closure, such as the unifier behind
+   Evarconv.set_evar_conv: Rocq's own modules call it [stock] times when
+   they load, before any plugin can. A later call installs a plugin's
+   closure, which can read plugin state no read sees (unicoq's Set Use
+   Unicoq installs its unifier, and Unset does not remove it), so from then
+   on the fence is tripped (Claude review of the fix round at 467292ce69,
+   findings 1 and 2). *)
+let closure_setter ~what ~stock =
+  let sets = ref 0 in
+  register_fence_check (fun () ->
+      if !sets > stock then trip_fence ~reason:"plugin_hook" ~detail:what);
+  fun () -> incr sets
+
 let digest ?locs ~what v =
   match R.digest_value ?locs v with
   | d -> d
@@ -462,6 +485,20 @@ let digest_cached_by ~what ~key view =
   | None ->
     let d = digest ?locs:!locs_source ~what (view ()) in
     Addr.add digest_cache o d;
+    d
+
+(* A cached "unhashable" is a stand-in shared by every value that cannot be
+   digested, so each proof that reuses it is marked, not only the first one
+   (Claude gate at 0f8d815732, finding 6). *)
+let digest_slot s ~what v =
+  let o = Obj.repr v in
+  match !s with
+  | Some (o0, d) when o0 == o ->
+    if d = "unhashable" then ineligible ~reason:"unhashable" ~detail:what;
+    d
+  | Some _ | None ->
+    let d = digest ~what v in
+    s := Some (o, d);
     d
 
 let without_recording f =

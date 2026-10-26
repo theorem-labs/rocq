@@ -1,0 +1,7 @@
+# P0-1 of the Claude gate at 0f8d815732. A.v defines t as [exact I], B.v as
+# [constructor]. par: runs t in a tactic worker process, which reads the
+# definition of t where no recorder runs, so lpar must store no term.
+refuse-ineligible lpar par
+# The control: all: runs t in this process, and the record of lall holds the
+# definition of t, so the edit shows there.
+refuse-by-read lall tactic_definition

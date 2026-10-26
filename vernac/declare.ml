@@ -2627,8 +2627,8 @@ let save_lemma_proved_delayed ~pm ~proof ~idopt =
 
 end (* Proof module *)
 
-let _ = Ind_tables.declare_definition_scheme := declare_definition_scheme
-let _ = Ind_tables.register_definition_scheme := register_definition_scheme
+let _ = Ind_tables.set_declare_definition_scheme declare_definition_scheme
+let _ = Ind_tables.set_register_definition_scheme register_definition_scheme
 
 module Internal = struct
 

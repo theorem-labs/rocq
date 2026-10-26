@@ -256,14 +256,15 @@ let memo_moves =
      let t1 = Sys.time () in
      before = after && before = fresh && t1 -. t0 < 5.0)
 
-(* The memo's keys are weak and hashed by address, so a key can die and the
-   allocator can put a NEW block at that address. The entry must never answer
-   for the new block. It cannot: the key of an ephemeron is the block itself,
-   and a dead key makes its binding absent, so a lookup can only miss
-   ([Ephemeron.K1.Make] over [let equal = ( == )] in lib/proof_record.ml).
-   This test is the guard on that property, which must never regress: it
-   churns the heap so that addresses are reused, and requires every digest
-   taken with the live memo to equal the one taken with an empty memo. *)
+(* The memo's keys are hashed by address, and the table is emptied above its
+   bound, so an entry can go and the allocator can put a NEW block at that
+   address. The entry must never answer for the new block. It cannot: the key
+   is the block itself and the lookup compares it with [==]
+   ([Hashtbl.Make] over [let equal = ( == )] in lib/proof_record.ml), so a
+   block at a reused address can only MISS and be walked again. This test is
+   the guard on that property, which must never regress: it churns the heap so
+   that addresses are reused, and requires every digest taken with the live
+   memo to equal the one taken with an empty memo. *)
 let memo_reused_address =
   mk_bool_test "proof-record-digest-memo-reused-address"
     "a digest never comes from a collected block at the same address"

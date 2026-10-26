@@ -105,11 +105,21 @@ let pr_tacname t =
 
 let tac_tab = ref MLTacMap.empty
 
+(* BET-84: [~overwrite:true] puts another closure under a name that is
+   already registered, possibly the name of one of this tree's plugins, which
+   [Tacinterp.fence_ml_tactic] trusts by name. Rocq never overwrites, so a
+   replacement makes every later proof of the process ineligible
+   (Proof_recorder.closure_setter; Claude review of 467292ce69, finding 2). *)
+let ml_tactic_overwritten =
+  Proof_recorder.closure_setter ~what:"Tacenv.register_ml_tactic ~overwrite" ~stock:0
+
 let register_ml_tactic ?(overwrite = false) s (t : ml_tactic array) =
   let () =
     if MLTacMap.mem s !tac_tab then
-      if overwrite then
+      if overwrite then begin
+        ml_tactic_overwritten ();
         tac_tab := MLTacMap.remove s !tac_tab
+      end
       else
         CErrors.anomaly (str "Cannot redeclare tactic " ++ pr_tacname s ++ str ".")
   in

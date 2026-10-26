@@ -572,7 +572,15 @@ let interp_fresh_id ist env sigma l =
         String.concat "" (List.map (function
           | ArgArg s -> s
           | ArgVar {v=id} -> Id.to_string (extract_ident ist env sigma id)) l) in
-      let s = if CLexer.is_keyword (Procq.get_keyword_state()) s then s^"0" else s in
+      let kw = CLexer.is_keyword (Procq.get_keyword_state()) s in
+      (* BET-84 census row 17: [fresh "s"] gives [s0] when [s] is a keyword,
+         and a [Reserved Notation] that makes [s] one leaves the parsed
+         sentences unchanged, since the string literal is not reparsed (Claude
+         gate at 0f8d815732, finding 3). *)
+      if Proof_recorder.active () then
+        Proof_recorder.read ~row:"17" ~channel:"keyword" ~key:(fun () -> s)
+          ~value:(fun () -> Some (string_of_bool kw));
+      let s = if kw then s^"0" else s in
       Id.of_string s in
   Tactics.fresh_id_in_env avoid id env
 
