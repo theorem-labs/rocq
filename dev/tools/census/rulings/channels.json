@@ -16,6 +16,7 @@
     "message_to_string": "Row N1: Ltac2 Message.to_string turns printed text into data (plugins/ltac2/tac2core.ml).",
     "ml_tactic": "Row 16: an ML tactic or Ltac2 primitive of a plugin that is not one of this tree's, which the census did not audit (plugins/ltac/tacinterp.ml TacML, plugins/ltac2/tac2env.ml interp_primitive).",
     "mutual": "Row 21: a proof that declares more than one constant, which one record entry cannot join to its objects (vernac/declare.ml record_mutual).",
+    "par": "Row 21: a par: goal selector, which rocq compile runs in tactic worker processes by default (stm/partac.ml, two workers whatever the async mode). The tactic's reads happen in a process with no recorder, and the main process only installs the term a worker returns (vernac/comTactic.ml solve_parallel).",
     "native_compute": "Row 23: native_compute compiles and loads OCaml code outside the process (kernel/nativelib.ml compile).",
     "nested_proof": "Row 21: a proof opened while another is open (an abstract sub-proof, a nested obligation) keeps its reads in the outer proof, which is not replayed (lib/proof_recorder.ml open_proof).",
     "recorder_desync": "Row 21: the recorder holds a proof that the live proof stack does not (toplevel/vernac.ml).",
@@ -113,6 +114,7 @@
     "ineligible:toplevel/vernac.ml:command_in_proof": {"ineligible": "@command_in_proof"},
     "ineligible:toplevel/vernac.ml:recorder_desync": {"ineligible": "@recorder_desync"},
 
+    "ineligible:vernac/comTactic.ml:par": {"ineligible": "@par"},
     "read:vernac/declare.ml:19/proof_using": {"row": "19"},
     "read:vernac/declare.ml:19/proof_using_set": {"row": "19"},
     "ineligible:vernac/declare.ml:mutual": {"ineligible": "@mutual"},
