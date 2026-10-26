@@ -1,9 +1,9 @@
-(* misc/proof-record-hook-override.sh compiles this file with -proof-record
-   twice as it is, and once with the OVERRIDE line replaced by
-   TestHookRegister. Each proof below reaches one of the three choke points
-   that record the names of a registry of hooks. *)
+(* misc/proof-record-plugin-hooks.sh compiles this file with -proof-record
+   as it is, and once with the TestHookActivate line commented out. Each
+   proof below reaches one of the three choke points that ask the active
+   hooks of a registry. *)
 
-Declare ML Module "coq-test-suite.hook_override".
+Declare ML Module "coq-test-suite.plugin_hooks".
 
 TestHookActivate.
 
@@ -15,10 +15,8 @@ Class Pick (A : Type) := pick : A.
    canonical-solution hooks. *)
 Structure Wrap := wrap { unwrap : nat }.
 
-(* OVERRIDE *)
-
-(* [exists pick] runs typeclass resolution inside the proof, so the record of
-   [uses_solver] holds the typeclass_solver read. *)
+(* [exists pick] runs typeclass resolution inside the proof, so it asks the
+   active typeclass solvers. *)
 Lemma uses_solver : exists n : nat, n = 0.
 Proof. exists pick. reflexivity. Qed.
 

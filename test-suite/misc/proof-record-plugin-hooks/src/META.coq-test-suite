@@ -1,0 +1,11 @@
+package "plugin_hooks" (
+    directory = "."
+    version = "dev"
+    description = "A test plugin that registers a typeclass solver, a coercion hook and a canonical-solution hook, and activates them on request"
+    requires = "rocq-runtime.plugins.ltac"
+    archive(byte) = "plugin_hooks_plugin.cma"
+    archive(native) = "plugin_hooks_plugin.cmxa"
+    plugin(byte) = "plugin_hooks_plugin.cma"
+    plugin(native) = "plugin_hooks_plugin.cmxs"
+)
+directory = "."
