@@ -52,3 +52,15 @@ rocq check -Q theories UncheckedElim -o -silent -norec UncheckedElim.unchecked 2
 
 grep -q "Constants/Inductives relying on unchecked sort eliminations" chklog
 grep -q "UncheckedElim.unchecked.unchecked_or" chklog
+# ... and the one hidden behind an opaque seal, which the summary's
+# environment fold cannot see (rocq-prover/rocq#22632). The whole name is
+# matched, so that a listed recursor cannot stand in for the inductive.
+grep -qE '^ +UncheckedElim\.unchecked\.Sealed\.hidden_or$' chklog
+
+# rocq check -statement-report reports it for a constant whose closure reaches
+# the inductive.
+reqs=$(mktemp)
+printf 'large UncheckedElim.unchecked.unchecked_large -\n' > "$reqs"
+rocq check -Q theories UncheckedElim -statement-report "$reqs" -silent -norec UncheckedElim.unchecked 2>&1 | tee srlog
+rm -f "$reqs"
+grep -q "^flag large unchecked-eliminations UncheckedElim.unchecked.unchecked_or$" srlog
