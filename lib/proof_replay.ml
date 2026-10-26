@@ -147,7 +147,8 @@ type counts = {
   mutable m_missing : int;
   mutable charged : float;  (** r times [registered] *)
   mutable registered : float;  (** the replayed proofs' registered wall seconds *)
-  mutable outcomes : (string * string * string option) list;  (** newest first *)
+  mutable outcomes : (string * string * (string * string) option) list;
+      (** newest first; a read miss carries its channel and why it missed *)
   mutable fence : string option;
       (** the process-wide fence that refused a proof of this file, as
           ["reason: detail"] *)
@@ -157,6 +158,7 @@ type file_state = {
   f_index : (string, R.proof) Hashtbl.t;
   f_wall0 : float;
   f_refused : string option;
+  f_refused_detail : string option;  (** for ["rebind"]: the command and its line *)
   mutable f_candidate : candidate option;
 }
 
@@ -309,7 +311,111 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
   then Some "toolchain"
   else None
 
-let start ~library ~toolchain =
+(* A replayed proof's tactics do not run, so the process-wide caches they
+   would have filled stay empty (about 120 [lazy] values hold a [lib_ref]
+   answer the first time they are forced, and never ask again), and a closure
+   they would have installed is not installed. A later command that rebinds
+   a Rocqlib name, or loads code, then makes a later proof see what stock
+   would not have seen: stock's lazy holds the old answer, replay's is forced
+   after the rebinding (Claude review of c2190e74e0, P1: a [congruence] proof
+   replayed, then [Register myeq as core.eq.type.], then a [congruence] proof
+   that fails under replay and passes in stock). The trip of a fence comes too
+   late to help: the proofs already replayed cannot be taken back.
+
+   So the whole file runs without replay when, after its first [Qed] or
+   [Save] (no proof can be replayed before it), its text holds a command that
+   can rebind a Rocqlib name or load code. A [Register] object is applied
+   when it is declared, when its library or module is loaded (a superglobal
+   object, Libobject.object_with_locality), and when its module is opened
+   (an export one). So the commands are: [Register]; [Require] (a library
+   brings its own [Register] objects and plugins, which the text does not
+   show); [Load]; [Declare ML Module]; [Import] and [Export]; [Include]; a
+   [Module] defined by [:=] (a functor application or alias loads the
+   objects again, substituted); and an [End] in a file that uses [Register]
+   anywhere (a section's end takes back a local registration). Decided from
+   the source text, before any proof is replayed. The scan skips nested
+   comments and strings and reads whole words, so it can only refuse too
+   much (a word inside a quotation, say), which costs hits and never
+   soundness. Main's ruling, 2026-10-26 18:10Z, asked for [Register],
+   [Declare ML Module], a plugin-loading [Require] and [Load]; the rest are
+   the other ways a [Register] object is applied. *)
+let late_words = [ "Register"; "Require"; "Load"; "Import"; "Export"; "Include" ]
+
+let scan_late_rebind text =
+  let n = String.length text in
+  let line = ref 1 and i = ref 0 in
+  let closed = ref false and saw_register = ref false and prev = ref "" in
+  let result = ref None in
+  let is_word c = match c with
+    | 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' | '\'' -> true
+    | c -> Char.code c >= 128
+  in
+  let step () = if text.[!i] = '\n' then incr line; incr i in
+  let skip_string () =
+    (* [""] inside a string is a quote *)
+    incr i;
+    let fin = ref false in
+    while not !fin && !i < n do
+      if text.[!i] = '"' then
+        if !i + 1 < n && text.[!i + 1] = '"' then i := !i + 2 else (incr i; fin := true)
+      else step ()
+    done
+  in
+  let skip_comment () =
+    i := !i + 2;
+    let depth = ref 1 in
+    while !depth > 0 && !i < n do
+      if text.[!i] = '(' && !i + 1 < n && text.[!i + 1] = '*' then (incr depth; i := !i + 2)
+      else if text.[!i] = '*' && !i + 1 < n && text.[!i + 1] = ')' then (decr depth; i := !i + 2)
+      else if text.[!i] = '"' then skip_string ()
+      else step ()
+    done
+  in
+  let found w = result := Some (w, !line) in
+  (* Whether the sentence from here to its terminating dot holds [:=]. *)
+  let sentence_assigns () =
+    let k = ref !i and res = ref None in
+    while !res = None && !k < n do
+      if text.[!k] = ':' && !k + 1 < n && text.[!k + 1] = '=' then res := Some true
+      else if text.[!k] = '.' && (!k + 1 >= n || String.contains " \n\t\r" text.[!k + 1]) then res := Some false
+      else incr k
+    done;
+    !res = Some true
+  in
+  while !result = None && !i < n do
+    let c = text.[!i] in
+    if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
+    else if c = '"' then (skip_string (); prev := "")
+    else if is_word c then begin
+      let j = ref !i in
+      while !j < n && is_word text.[!j] do incr j done;
+      let w = String.sub text !i (!j - !i) in
+      i := !j;
+      if String.equal w "Register" then saw_register := true;
+      if !closed then begin
+        if List.mem w late_words then found w
+        else if String.equal w "ML" && String.equal !prev "Declare" then found "Declare ML Module"
+        else if String.equal w "End" && !saw_register then found "End (in a file that uses Register)"
+        else if String.equal w "Module" && sentence_assigns () then found "Module ... :="
+      end
+      else if String.equal w "Qed" || String.equal w "Save" then closed := true;
+      prev := w
+    end
+    else begin
+      if c <> ' ' && c <> '\n' && c <> '\t' && c <> '\r' then prev := "";
+      step ()
+    end
+  done;
+  !result
+
+let source_rebind = function
+  | None -> None
+  | Some path ->
+    match read_file path with
+    | text -> scan_late_rebind text
+    | exception Sys_error _ -> Some ("an unreadable source", 0)
+
+let start ~library ~source ~toolchain =
   match !options with
   | None -> ()
   | Some opts ->
@@ -360,8 +466,17 @@ let start ~library ~toolchain =
        ([Proof_recorder.start]); a replay that does not run them would let
        a dirty history here match the clean one recorded there. From here
        on they run at each decision ({!decide}). *)
+    let refusal, refused_detail =
+      match refusal with
+      | Some _ -> refusal, None
+      | None ->
+        match source_rebind source with
+        | Some (cmd, line) -> Some "rebind", Some (Printf.sprintf "%s at line %d" cmd line)
+        | None -> None, None
+    in
     if refusal = None then Proof_recorder.start_tracking ();
-    state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal; f_candidate = None }
+    state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal;
+                    f_refused_detail = refused_detail; f_candidate = None }
 
 let check_budget () =
   match !options, !state with
@@ -386,10 +501,20 @@ let outcome name kind channel = counts.outcomes <- (name, kind, channel) :: coun
 
 let miss_key name = counts.m_key <- counts.m_key + 1; outcome name "key" None
 
-let miss_read name channel =
+let miss_read name channel why =
   counts.m_read <- counts.m_read + 1;
-  outcome name "read" (Some channel);
+  outcome name "read" (Some (channel, why));
   Hashtbl.replace channel_miss channel (1 + Option.default 0 (Hashtbl.find_opt channel_miss channel))
+
+(* Run on each hit with the replayed proof's reads: the owner of a
+   process-wide cache can treat what the proof read as looked up (Rocqlib
+   marks its [lib_ref] keys observed, so a later rebinding of one trips its
+   fence and no later proof is replayed). It stops later replays only; the
+   whole-file refusal above is what keeps later tactics seeing what stock
+   sees. *)
+let hit_hooks : (R.read list -> unit) Queue.t = Queue.create ()
+
+let register_hit_hook f = Queue.add f hit_hooks
 
 let candidate_open () = match !state with Some { f_candidate = Some _; _ } -> true | _ -> false
 
@@ -456,25 +581,29 @@ let open_proof ~name ~statement ~position ~toolchain_key =
    The one-value-per-channel check (dev/tools/census/replay_channels.py)
    makes sure a provider row and an evaluator of one channel are not two
    implementations of one value. *)
+(* Why a read missed: its channel has no evaluator in this Rocq
+   (["no_evaluator"]), the evaluator could not answer (["unknown"]), or the
+   value now is another one (["changed"]). *)
 let first_read_mismatch (p : R.proof) ~at_start =
   let now (r : R.read) =
     let table, _channels = at_start in
     match Hashtbl.find_opt proof_provided (r.R.channel, r.R.key) with
-    | Some v -> Value v
+    | Some v -> Some (Value v)
     | None ->
       match Hashtbl.find_opt table (r.R.channel, r.R.key) with
-      | Some v -> Value v
+      | Some v -> Some (Value v)
       | None ->
         match Hashtbl.find_opt evaluators r.R.channel with
-        | None -> Unknown
-        | Some f -> (match f r.R.key with v -> v | exception _ -> Unknown)
+        | None -> None
+        | Some f -> Some (match f r.R.key with v -> v | exception _ -> Unknown)
   in
   let rec loop = function
     | [] -> None
     | (r : R.read) :: rest ->
       (match now r with
-       | Unknown -> Some r.R.channel
-       | Value v -> if v = r.R.value then loop rest else Some r.R.channel)
+       | None -> Some (r.R.channel, "no_evaluator")
+       | Some Unknown -> Some (r.R.channel, "unknown")
+       | Some (Value v) -> if v = r.R.value then loop rest else Some (r.R.channel, "changed"))
   in
   loop (p.R.start_tables @ p.R.reads)
 
@@ -517,10 +646,11 @@ and decide_once ~sentences ~closer =
         if not (!precheck blob) then (miss_key name; None)
         else
           match first_read_mismatch p ~at_start with
-          | Some channel -> miss_read name channel; None
+          | Some (channel, why) -> miss_read name channel why; None
           | None ->
             counts.n_hits <- counts.n_hits + 1;
             outcome name "hit" None;
+            Queue.iter (fun f -> f (p.R.start_tables @ p.R.reads)) hit_hooks;
             take_counters ~starts ~recorded:p.R.writes.R.counters;
             counts.registered <- counts.registered +. p.R.wall_s;
             (match !options with
@@ -562,17 +692,19 @@ let summary ~killed =
          (fun (name, kind, channel) ->
             match channel with
             | None -> Printf.sprintf "{\"name\":%s,\"outcome\":%s}" (quote name) (quote kind)
-            | Some c ->
-              Printf.sprintf "{\"name\":%s,\"outcome\":%s,\"channel\":%s}" (quote name) (quote kind) (quote c))
+            | Some (c, why) ->
+              Printf.sprintf "{\"name\":%s,\"outcome\":%s,\"channel\":%s,\"why\":%s}"
+                (quote name) (quote kind) (quote c) (quote why))
          counts.outcomes)
   in
   Printf.sprintf
     "{\"version\":1,\"proofs\":%d,\"hits\":%d,\
      \"misses\":{\"key\":%d,\"read\":%d,\"ineligible\":%d,\"missing_record\":%d},\
-     \"refused\":%s,\"charged_s\":%.6f,\"registered_s\":%.6f,\"elapsed_s\":%.6f,\"killed\":%s,\
-     \"fence\":%s,\"channel_misses\":[%s],\"outcomes\":[%s]}\n"
+     \"refused\":%s,\"refused_detail\":%s,\"charged_s\":%.6f,\"registered_s\":%.6f,\"elapsed_s\":%.6f,\
+     \"killed\":%s,\"fence\":%s,\"channel_misses\":[%s],\"outcomes\":[%s]}\n"
     counts.n_proofs counts.n_hits counts.m_key counts.m_read counts.m_ineligible counts.m_missing
     (match refused () with None -> "null" | Some r -> quote r)
+    (match !state with Some { f_refused_detail = Some d; _ } -> quote d | _ -> "null")
     counts.charged counts.registered elapsed
     (if killed then "true" else "false")
     (match counts.fence with None -> "null" | Some f -> quote f)

@@ -10,7 +10,7 @@
       "refused": null,
       "killed": false,
       "fence": null,
-      "outcomes": [["PR.A.lfresh", "read", "keyword"], ["PR.A.lbar", "hit"]]
+      "outcomes": [["PR.A.lfresh", "read", "keyword", "changed"], ["PR.A.lbar", "hit"]]
     }
   }
 }
