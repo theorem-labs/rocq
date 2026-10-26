@@ -372,18 +372,42 @@ let uses_uip mib =
 
 let unresolved = { refs = []; axiom = true; flags = [] }
 
+(* Test-only seam, beside [test_fault] below: a test sets this to make the
+   opaque accessor fail for one constant, so the unreadable-body warning has a
+   test without a damaged .vo. The real failures it stands for — a proof stored
+   nowhere, and a lazy reader refusing a table whose bytes changed since intern
+   — are not reachable from this test suite's own objects. *)
+let test_unreadable_opaque kn =
+  match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE" with
+  | Some c when String.equal c (Constant.to_string kn) ->
+    CErrors.user_err Pp.(str "test unreadable opaque body")
+  | None | Some _ -> ()
+
 let constant_node st view kn =
   match lookup_constant st view kn with
   | None -> unresolved
   | Some (declaration_view, cb) ->
     (* An opaque body that cannot be read is reported as an axiom, as
-       vernac/assumptions.ml's [get_constant_body] does. *)
+       vernac/assumptions.ml's [get_constant_body] does: a constant whose body
+       this process cannot see rests on something it cannot check. The read can
+       fail for two unrelated reasons, though — the proof was not stored, which
+       is what upstream means, or the table could not be READ (damaged bytes, or
+       a lazy reader refusing a table whose bytes changed since intern) — and
+       the verdict alone does not tell them apart. So the failure is named here.
+       The exit status is deliberately unchanged: a stored-nowhere body is an
+       ordinary answer, and failing the whole check on it would turn every
+       delayed proof into a failed grade. A reader who needs certainty reads the
+       warning, which names the constant. *)
     let body, axiom = match cb.const_body with
       | Def c -> [declaration_view, c], false
       | OpaqueDef o ->
-        (match st.access o with
+        (match (test_unreadable_opaque kn; st.access o) with
          | c, _ -> [declaration_view, c], false
-         | exception e when CErrors.noncritical e -> [], true)
+         | exception e when CErrors.noncritical e ->
+           Feedback.msg_warning
+             Pp.(str "Statement report: the opaque body of " ++ str (Constant.to_string kn)
+                 ++ str " could not be read, so it is reported as an axiom: " ++ CErrors.print e);
+           [], true)
       | Undef _ | Primitive _ | Symbol _ -> [], true
     in
     let refs = walk st (fresh_gen st) empty_refs ((declaration_view, cb.const_type) :: body) in
