@@ -161,7 +161,7 @@ let () =
   in
   let interp env (ids,c) =
     let open Ltac_pretype in
-    let get_preterm id = match Id.Map.find_opt id env.env_ist with
+    let get_preterm id = match Tac2env.IdMap.find_opt id env.env_ist with
       | Some v -> to_preterm v
       | None -> assert false
     in
@@ -261,7 +261,7 @@ let () =
   let interp ?loc ~poly env sigma tycon (ids, tac) =
     (* Syntax prevents bound notation variables in constr quotations *)
     let ist = Tac2interp.get_env @@ GlobEnv.lfun env in
-    let () = assert (Id.Set.subset ids (Id.Map.domain ist.env_ist)) in
+    let () = assert (Id.Set.for_all (fun id -> Tac2env.IdMap.mem id ist.env_ist) ids) in
     let tac = Proofview.tclIGNORE (Tac2interp.interp ist tac) in
     let name = Id.of_string "ltac2" in
     let sigma, concl = match tycon with
@@ -289,7 +289,7 @@ let check_judge ?loc env sigma tycon j =
 let interp_constr_var_as_constr ?loc env sigma tycon id =
   let ist = Tac2interp.get_env @@ GlobEnv.lfun env in
   let env = GlobEnv.renamed_env env in
-  let c = Id.Map.find id ist.env_ist in
+  let c = Tac2env.IdMap.find id ist.env_ist in
   let c = Tac2ffi.to_constr c in
   let t = Retyping.get_type_of env sigma c in
   let j = { Environ.uj_val = c; uj_type = t } in
@@ -299,7 +299,7 @@ let interp_preterm_var_as_constr ?loc env sigma tycon id =
   let open Ltac_pretype in
   let ist = Tac2interp.get_env @@ GlobEnv.lfun env in
   let env = GlobEnv.renamed_env env in
-  let c = Id.Map.find id ist.env_ist in
+  let c = Tac2env.IdMap.find id ist.env_ist in
   let {closure; term} = Tac2ffi.to_preterm c in
   let vars = {
     ltac_constrs = closure.typed;
@@ -329,7 +329,7 @@ let () = CErrors.register_handler @@ function
 let interp_hyp_var_as_constr ?loc globenv sigma tycon id0 =
   let ist = Tac2interp.get_env @@ GlobEnv.lfun globenv in
   let env = GlobEnv.renamed_env globenv in
-  let v = Id.Map.find id0 ist.env_ist in
+  let v = Tac2env.IdMap.find id0 ist.env_ist in
   let id = Tac2ffi.to_ident v in
   let c = try GlobEnv.lookup_renamed globenv id
     with Not_found ->
@@ -368,7 +368,7 @@ let () =
       | PatternVar -> ()
     in
     let ist = Tac2interp.get_env ist.Ltac_pretype.ltac_genargs in
-    let c = Id.Map.find id ist.env_ist in
+    let c = Tac2env.IdMap.find id ist.env_ist in
     let c = Tac2ffi.to_pattern c in
     c
   in
