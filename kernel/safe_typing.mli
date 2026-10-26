@@ -119,6 +119,20 @@ val check_opaque : safe_environment -> Opaqueproof.opaque_handle ->
     filled. *)
 val fill_opaque : opaque_certificate -> safe_transformer0
 
+(** Same as {!fill_opaque}, but for a proof that the kernel does not type. Only
+    its section variables are checked. The caller is responsible for storing
+    the proof in the opaque table. *)
+val fill_unchecked_opaque : Opaqueproof.opaque_handle -> Constr.t ->
+  Univ.ContextSet.t Opaqueproof.delayed_universes -> safe_transformer0
+
+(** The universe substitution that {!check_opaque} applies to a proof for this
+    handle, and to its private constraints when the constant is polymorphic.
+    A caller that stores a proof through {!fill_unchecked_opaque} applies it
+    first, so that the stored term uses the constant's bound universes.
+    Precondition: the handle must exist and must not have been filled. *)
+val delayed_universe_subst : safe_environment -> Opaqueproof.opaque_handle ->
+  UVars.sort_level_subst
+
 (** Check whether a handle was filled. It assumes that the handle was introduced
     in the opaque table and throws an anomaly otherwise. *)
 val is_filled_opaque : Opaqueproof.opaque_handle -> safe_environment -> bool

@@ -1,0 +1,6 @@
+Axioms:
+bad : False
+used in usedin_nestedmatch to prove
+ k u = k u
+used in usedin_nestedmatch to prove
+ k u = k u
