@@ -415,6 +415,19 @@ let trip_fence ~reason ~detail =
   (match !fence_state with None -> fence_state := Some (reason, detail) | Some _ -> ());
   ineligible ~reason ~detail
 
+(* A setter of a process-wide closure, such as the unifier behind
+   Evarconv.set_evar_conv: Rocq's own modules call it [stock] times when
+   they load, before any plugin can. A later call installs a plugin's
+   closure, which can read plugin state no read sees (unicoq's Set Use
+   Unicoq installs its unifier, and Unset does not remove it), so from then
+   on the fence is tripped (Claude review of the fix round at 467292ce69,
+   findings 1 and 2). *)
+let closure_setter ~what ~stock =
+  let sets = ref 0 in
+  register_fence_check (fun () ->
+      if !sets > stock then trip_fence ~reason:"plugin_hook" ~detail:what);
+  fun () -> incr sets
+
 let digest ?locs ~what v =
   match R.digest_value ?locs v with
   | d -> d

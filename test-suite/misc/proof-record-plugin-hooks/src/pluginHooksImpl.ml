@@ -30,6 +30,14 @@ let () = Class_tactics.register_solver ~name:solver_name (solver, condition)
 let () = Coercion.register_hook ~name:coercion_name coercion_hook
 let () = Evarconv.register_hook ~name:canonical_name canonical_hook
 
+(* A unifier a plugin installs in place of Rocq's: it accepts every problem.
+   The proof after it in Probe.v is [exact I] against [True], which it
+   accepts as Rocq's would, and the kernel checks the term at Qed. *)
+let unifier : Evarconv.unify_fun =
+  fun _flags _env sigma _pb _t1 _t2 -> Evarsolve.Success sigma
+
+let set_unifier () = Evarconv.set_evar_conv unifier
+
 let activate () =
   Class_tactics.activate_solver ~name:solver_name;
   Coercion.activate_hook ~name:coercion_name;

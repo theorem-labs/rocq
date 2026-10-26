@@ -1,7 +1,7 @@
 (* misc/proof-record-plugin-hooks.sh compiles this file with -proof-record
-   as it is, and once with the TestHookActivate line commented out. Each
-   proof below reaches one of the three choke points that ask the active
-   hooks of a registry. *)
+   as it is, and once with the TestHookActivate and TestSetUnifier lines
+   commented out. Each of the first three proofs reaches one of the three
+   choke points that ask the active hooks of a registry. *)
 
 Declare ML Module "coq-test-suite.plugin_hooks".
 
@@ -33,3 +33,10 @@ Proof. try exact (S tt). exact I. Qed.
    so the step fails and [try] keeps the proof alive. *)
 Lemma uses_canonical : True.
 Proof. try exact (eq_refl : unwrap _ = 0). exact I. Qed.
+
+(* A plugin's unifier is process-wide state that no read sees: after it is
+   installed, every proof of the process must store no term. *)
+TestSetUnifier.
+
+Lemma after_unifier : True.
+Proof. exact I. Qed.
