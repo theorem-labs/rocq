@@ -200,6 +200,24 @@ def publish_records(spec, reg, records):
             slashed.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(rec, slashed)
             published.append(slashed)
+    # `record_patch` sets one recorded read's value before the digest is
+    # taken, so a fixture can hold a record no registration of its tree would
+    # write (a null read inside an open section, say) and still be bound.
+    for patch in spec.get("record_patch", []):
+        for path in published:
+            lines = path.read_text().splitlines()
+            hit = False
+            for k, line in enumerate(lines):
+                entry = json.loads(line)
+                if entry.get("kind") == "proof" and entry.get("name") == patch["proof"]:
+                    for read in entry.get("reads", []):
+                        if read.get("channel") == patch["channel"] and read.get("key") == patch["key"]:
+                            read["value"] = patch["value"]
+                            hit = True
+                    lines[k] = json.dumps(entry, separators=(",", ":"))
+            if not hit:
+                return None, "record_patch matched no read: %r" % (patch,)
+            path.write_text("".join(l + "\n" for l in lines))
     # A record the compiling user can write is refused, and so is one with no
     # digest to check it against (P3Deep F1, P3Bugs): a registration publishes
     # its records read-only with their SHA-256 beside them, so the fixtures do.
