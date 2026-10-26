@@ -321,8 +321,11 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: one. GRADE retired byte identity as a correctness gate on 2026-10-26, so
 #: a Marshal sharing difference is a reuse-rate item; everything else is a
 #: failure, and an unlisted fixture is never excused whatever its
-#: `expect.json` says.
-EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed")
+#: `expect.json` says. channels_unchanged replays five proofs whose terms
+#: name bool and nat, and its library segment shares the string "Datatypes"
+#: where stock's does (vodiff, 2026-10-26: 0 value differences, 2 sharing
+#: differences, every other segment equal).
+EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged")
 
 
 def exemption_allowed(fixture, differing_segments, library_values_equal):
@@ -487,7 +490,7 @@ class Fixture:
             self.compare_summary(src, want, got)
 
     def compare_summary(self, src, want, got):
-        for field in ("proofs", "hits", "refused", "killed"):
+        for field in ("proofs", "hits", "refused", "killed", "fence"):
             if field in want and got.get(field) != want[field]:
                 self.fail("%s: summary %s is %r, wanted %r" % (src, field, got.get(field), want[field]))
         if "misses" in want:
