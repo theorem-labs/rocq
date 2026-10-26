@@ -98,6 +98,9 @@ COQFLAGS?=$(COQEXTRAFLAGS)
 
 coqc := $(BIN)rocq c -q -R prerequisite TestSuite $(COQFLAGS)
 coqchk := $(BIN)rocqchk -R prerequisite TestSuite
+# Every coqchk the suite runs also cooks each opaque body the stock way and
+# fails unless that equals the shared cook (checker/checkLibrary.ml).
+export ROCQCHK_COOK_CROSS_CHECK := 1
 coqdoc := $(BIN)rocq doc
 coqtop := $(BIN)rocq repl -q -test-mode -R prerequisite TestSuite
 
