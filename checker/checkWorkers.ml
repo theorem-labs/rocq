@@ -223,12 +223,25 @@ let rec waitpid_non_intr flags pid =
    headers of the objects it marks, and each page written to is copied.
    A larger minor heap promotes fewer objects, so there is less work for
    the major GC, and compaction, which would copy everything, is turned
-   off. The space overhead is left alone: a lazier major GC would copy
-   fewer pages, but let the heap grow with garbage instead. *)
+   off. A space overhead of 1000, against the default 120, makes the major
+   GC mark about an eighth as much per word allocated (and sweep about 0.6
+   as much), at the cost of a heap that holds more garbage. Measured on
+   r160 (2026-10-26, this code against the same tree without the line): at
+   -j 16 under a 124 GB cap, five interleaved pairs, the workers' user and
+   system time fell in every pair (medians 328 s and 97 s), the median wall
+   by 6.7% (faster in 4 of 5 pairs), and the peak by 15%, probably because
+   fewer inherited pages are written. At -j 5 and -j 8 the peak rises
+   instead (r160 -j 5: +25%; r190 and r187 -j 8: +34% and +15%), and a cap
+   that the default fits can then kill a worker, which fails the run (r160
+   -j 8 under 22 GB). OCAMLRUNPARAM can raise this value but not lower it.
+   In production only the final grade (-j 16, 124 GB) runs workers. The
+   main process keeps its own setting: it is the one whose heap the
+   workers inherit. *)
 let tune_gc () =
   let gc = Gc.get () in
   Gc.set { gc with
            Gc.minor_heap_size = max gc.Gc.minor_heap_size (4 * 1024 * 1024);
+           space_overhead = max gc.Gc.space_overhead 1000;
            max_overhead = 1000000 }
 
 (* What a worker tells the main process at the end: the number of checks
