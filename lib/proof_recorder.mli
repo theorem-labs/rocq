@@ -108,6 +108,11 @@ val library_digest : string -> string option
 (** The digest the toplevel installed for that library, [None] for the
     library being compiled and for one that is not loaded. *)
 
+val table_reads : unit -> Proof_record.read list
+(** The same digests as values, whatever the compile's options: the side
+    that checks a record evaluates this list at the proof it is about to
+    replay. *)
+
 val write : string -> unit
 (** Writes the record to that path and turns the recorder off. Call it
     after the [.vo], so that a compile that fails leaves no record. A no-op
@@ -115,6 +120,11 @@ val write : string -> unit
 
 val stop : unit -> unit
 (** Turns the recorder off and drops what it holds, with no file. *)
+
+val reset_caches : unit -> unit
+(** Empties the digest memo and the address cache without turning the
+    recorder off. A replay-only compile calls it after each proof's
+    decision, so the caches hold one proof's reads at most. *)
 
 (** {6 Proofs} *)
 
@@ -128,18 +138,22 @@ val open_proof :
     it marks the open proof ineligible with reason ["nested_proof"], and
     its reads are kept as the open proof's own. *)
 
-val sentence : (unit -> string) -> (unit -> 'a) -> 'a
-(** [sentence digest run] runs one parsed sentence. When a proof is open at
-    the end of [run], or was opened by it, [digest ()] is kept as one of
-    the proof's sentences (key item 1, the statement's sentence included).
-    [digest] is called only then. *)
+val sentence : ?span:int * int -> (unit -> string) -> (unit -> 'a) -> 'a
+(** [sentence ?span digest run] runs one parsed sentence. When a proof is
+    open at the end of [run], or was opened by it, [digest ()] is kept as
+    one of the proof's sentences (key item 1, the statement's sentence
+    included). [digest] is called only then. [span] is the sentence's byte
+    range in the compiled file: the statement's start and the closer's end
+    make the proof's {!Proof_record.proof.span}. A caller that gives no
+    span records no span. *)
 
-val close_proof : closer:string -> kernel_check:bool -> unit
+val close_proof : closer:string -> kernel_check:bool -> replay:string option -> unit
 (** Ends the entry of the innermost open proof and, at the outermost one,
     appends it to the record, with the sentences and the writes collected
     since {!open_proof}. [kernel_check] says whether the kernel typed the
-    proof at this closer. Call it after the declaration, inside
-    {!without_recording}. *)
+    proof at this closer. [replay] is the stored term
+    ({!Proof_record.proof.replay}), [None] for a proof that stores none.
+    Call it after the declaration, inside {!without_recording}. *)
 
 val drop_proof : unit -> unit
 (** Ends the innermost open proof and writes NO entry: the [Abort] of a
@@ -208,6 +222,17 @@ val digest : ?locs:Loc.source -> what:string -> 'a -> string
     to go on. A value it cannot digest is not an error: the result is
     ["unhashable"] and the open proof is marked ineligible with reason
     ["unhashable"] and detail [what], so the proof runs as today. *)
+
+val set_locs_source : Loc.source -> unit
+(** The file this compile reads. {!digest_cached_by} leaves out its
+    locations. Set by the compile driver, for a recording compile and a
+    replaying one alike. *)
+
+val digest_cached_by : what:string -> key:'k -> (unit -> 'a) -> string
+(** [digest_cached_by ~what ~key view] is the digest of [view ()], with the
+    locations of the compiled file left out, computed once per physical
+    [key] for the whole compile: for a persistent value (a hint database)
+    whose digest is a view of it rather than the value itself. *)
 
 val digest_cached : what:string -> 'a -> string
 (** {!digest} of a value of the global environment, kept for the whole

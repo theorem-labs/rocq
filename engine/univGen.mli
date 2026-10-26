@@ -59,6 +59,14 @@ val new_sort_global : Id.t -> Sorts.QGlobal.t
 val fresh_level : unit -> Level.t
 val fresh_sort_quality : unit -> Sorts.QVar.t
 
+val counters : unit -> int * int
+(** The level and sort-quality counters of this process. A fresh level's
+    name holds the first of them, so a proof that makes levels moves it.
+    BET-84 P3 reads them at a proof's start and sets them after replaying
+    its term, so the proofs after it name their levels as stock does. *)
+
+val set_counters : int * int -> unit
+
 (** Build a fresh instance for a given context, its associated substitution and
     the instantiated constraints. *)
 

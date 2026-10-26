@@ -296,6 +296,29 @@ module Recorded = struct
     | Some v -> Some (Proof_recorder.digest_cached ~what:"rewrite_rules" v)
 end
 
+(* BET-84: ONE value per channel. The recorder's call sites below and the
+   replay evaluators (vernac/proof_replay_env.ml) both call these, so a
+   read's value is never computed two ways. A second implementation of a
+   channel is the defect class that would let a replay accept a changed
+   input, and dev/tools/census/replay_channels.py fails on one. *)
+let recorded_constant kn env =
+  Recorded.of_value "constant" (Constant.modpath kn)
+    (match Cmap_env.find_opt kn env.env_constants with None -> None | Some (cb, _, _) -> Some cb)
+
+let recorded_constant_exists kn env = Some (string_of_bool (Cmap_env.mem kn env.env_constants))
+
+let recorded_rewrite_rules kn env = Recorded.of_rules (Cmap_env.find_opt kn env.symb_pats)
+
+let recorded_inductive kn env =
+  Recorded.of_value "inductive" (MutInd.modpath kn)
+    (match Mindmap_env.find_opt kn env.env_inductives with None -> None | Some (mb, _, _) -> Some mb)
+
+let recorded_inductive_exists kn env = Some (string_of_bool (Mindmap_env.mem kn env.env_inductives))
+
+let recorded_module mp env = Recorded.of_value "module" mp (ModPath.Map.find_opt mp env.env_modules)
+
+let recorded_modtype mp env = Recorded.of_value "modtype" mp (ModPath.Map.find_opt mp env.env_modtypes)
+
 let lookup_constant_opt kn env =
   let res = match Cmap_env.find_opt kn env.env_constants with
     | None -> None
@@ -303,19 +326,20 @@ let lookup_constant_opt kn env =
   in
   if Proof_recorder.active () then
     Recorded.constant Recorded.cst_body kn ~channel:"constant"
-      (fun () -> Recorded.of_value "constant" (Constant.modpath kn) res);
+      (fun () -> recorded_constant kn env);
   res
 
 let lookup_constant_key kn env =
   match Cmap_env.find_opt kn env.env_constants with
-  | Some ((cb, _, _) as v) ->
+  | Some v ->
     if Proof_recorder.active () then
       Recorded.constant Recorded.cst_body kn ~channel:"constant"
-        (fun () -> Recorded.of_value "constant" (Constant.modpath kn) (Some cb));
+        (fun () -> recorded_constant kn env);
     v
   | None ->
     if Proof_recorder.active () then
-      Recorded.constant Recorded.cst_body kn ~channel:"constant" (fun () -> None);
+      Recorded.constant Recorded.cst_body kn ~channel:"constant"
+        (fun () -> recorded_constant kn env);
     anomaly Pp.(str "Constant " ++ Constant.print kn ++ str" does not appear in the environment.")
 
 let lookup_constant kn env =
@@ -325,7 +349,7 @@ let mem_constant kn env =
   let res = Cmap_env.mem kn env.env_constants in
   if Proof_recorder.active () then
     Recorded.constant Recorded.cst_exists kn ~channel:"constant_exists"
-      (fun () -> Some (string_of_bool res));
+      (fun () -> recorded_constant_exists kn env);
   res
 
 let add_rewrite_rules l env =
@@ -342,7 +366,7 @@ let lookup_rewrite_rules cst env =
   if Proof_recorder.active () then begin
     let res = Cmap_env.find_opt cst env.symb_pats in
     Recorded.constant Recorded.cst_rules cst ~channel:"rewrite_rules"
-      (fun () -> Recorded.of_rules res);
+      (fun () -> recorded_rewrite_rules cst env);
     (match res with Some rs -> rs | None -> raise Not_found)
   end else Cmap_env.find cst env.symb_pats
 
@@ -352,11 +376,11 @@ let lookup_mind_key kn env =
   | Some ((mb, _, _) as v) ->
     if Proof_recorder.active () then
       Recorded.mind Recorded.minds kn ~channel:"inductive"
-        (fun () -> Recorded.of_value "inductive" (MutInd.modpath kn) (Some mb));
+        (fun () -> recorded_inductive kn env);
     v
   | None ->
     if Proof_recorder.active () then
-      Recorded.mind Recorded.minds kn ~channel:"inductive" (fun () -> None);
+      Recorded.mind Recorded.minds kn ~channel:"inductive" (fun () -> recorded_inductive kn env);
     anomaly Pp.(str "Inductive " ++ MutInd.print kn ++ str" does not appear in the environment.")
 
 let lookup_mind kn env =
@@ -427,7 +451,7 @@ let mem_mind kn env =
   let res = Mindmap_env.mem kn env.env_inductives in
   if Proof_recorder.active () then
     Recorded.mind Recorded.minds_exists kn ~channel:"inductive_exists"
-      (fun () -> Some (string_of_bool res));
+      (fun () -> recorded_inductive_exists kn env);
   res
 
 let mind_context env mind =
@@ -996,7 +1020,7 @@ let lookup_module mp env =
   if Proof_recorder.active () then begin
     let res = ModPath.Map.find_opt mp env.env_modules in
     Recorded.mpath Recorded.modules mp ~channel:"module"
-      (fun () -> Recorded.of_value "module" mp res);
+      (fun () -> recorded_module mp env);
     (match res with Some m -> m | None -> raise Not_found)
   end else ModPath.Map.find mp env.env_modules
 
@@ -1004,7 +1028,7 @@ let lookup_modtype mp env =
   if Proof_recorder.active () then begin
     let res = ModPath.Map.find_opt mp env.env_modtypes in
     Recorded.mpath Recorded.modtypes mp ~channel:"modtype"
-      (fun () -> Recorded.of_value "modtype" mp res);
+      (fun () -> recorded_modtype mp env);
     (match res with Some m -> m | None -> raise Not_found)
   end else ModPath.Map.find mp env.env_modtypes
 

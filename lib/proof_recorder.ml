@@ -38,6 +38,7 @@ type proof_state = {
   p_counter_order : string Queue.t;
   p_wall0 : float;
   p_cpu0 : float;
+  mutable p_span_start : int option;  (** first byte of the statement's sentence *)
   mutable p_depth : int;  (** 0 for the outermost proof; >0 inside a nested one *)
 }
 
@@ -50,7 +51,7 @@ type file_state = {
   mutable f_count : int;
   mutable f_proof : proof_state option;
   mutable f_suspended : int;  (** >0 inside [without_recording] *)
-  mutable f_pending : (unit -> string) option;  (** the sentence being run *)
+  mutable f_pending : ((unit -> string) * (int * int) option) option;  (** the sentence being run *)
 }
 
 (* The one bit every choke point tests. It is false unless a proof is open
@@ -153,6 +154,11 @@ let tables : (unit -> R.read list) Queue.t = Queue.create ()
 
 let register_tables f = Queue.add f tables
 
+(* The same digests as values. The replay side evaluates them at the proof
+   it is about to replay, so the recorded value and the value now are made
+   the same way. *)
+let table_reads () = List.rev (Queue.fold (fun acc f -> List.rev_append (f ()) acc) [] tables)
+
 module Addr = Hashtbl.Make (struct
     type t = Obj.t
     let equal = ( == )
@@ -178,6 +184,12 @@ let slot () = let s = ref None in slots := s :: !slots; s
 let stop () =
   state := None; recording := false; Addr.reset digest_cache; R.reset_memo ();
   List.iter (fun s -> s := None) !slots
+
+(* The digest memo and the address cache hold a strong reference to every
+   value they digested. A replay-only compile never calls [stop], so it
+   empties them after each proof's decision, which bounds them by one
+   proof's reads (review P3Deep F7). *)
+let reset_caches () = Addr.reset digest_cache; R.reset_memo ()
 
 let write path =
   match !state with
@@ -216,6 +228,7 @@ let open_proof ~name ~statement ~position =
         Queue.add R.{ reason = "nested_proof"; detail = name } p.p_ineligible
       end
     | None ->
+      let span_start = match st.f_pending with Some (_, Some (bp, _)) -> Some bp | _ -> None in
       (* The proof is opened first, so that a table this cannot digest marks
          this proof ineligible and not the one before it. *)
       incr gen;
@@ -239,6 +252,7 @@ let open_proof ~name ~statement ~position =
           p_counter_order = Queue.create ();
           p_wall0 = Unix.gettimeofday ();
           p_cpu0 = cpu_time ();
+          p_span_start = span_start;
           p_depth = 0;
         };
       set_recording st;
@@ -256,14 +270,17 @@ let open_proof ~name ~statement ~position =
 let take_pending st p =
   match st.f_pending with
   | None -> ()
-  | Some d -> st.f_pending <- None; Queue.add (d ()) p.p_sentences
+  | Some (d, _) -> st.f_pending <- None; Queue.add (d ()) p.p_sentences
 
-let sentence digest run =
+(* The span of the sentence being run, for the closer's end byte. *)
+let pending_span st = match st.f_pending with Some (_, span) -> span | None -> None
+
+let sentence ?span digest run =
   match !state with
   | None -> run ()
   | Some st ->
     let outer = st.f_pending in
-    st.f_pending <- Some digest;
+    st.f_pending <- Some (digest, span);
     let finish () =
       (match st.f_proof with Some p when p.p_depth = 0 -> take_pending st p | Some _ | None -> ());
       st.f_pending <- outer
@@ -273,7 +290,7 @@ let sentence digest run =
      | exception e -> let bt = Printexc.get_raw_backtrace () in
        finish (); Printexc.raise_with_backtrace e bt)
 
-let close_proof ~closer ~kernel_check =
+let close_proof ~closer ~kernel_check ~replay =
   match !state with
   | None -> ()
   | Some st ->
@@ -281,6 +298,10 @@ let close_proof ~closer ~kernel_check =
     | None -> ()
     | Some p when p.p_depth > 0 -> p.p_depth <- p.p_depth - 1
     | Some p ->
+      let span = match p.p_span_start, pending_span st with
+        | Some bp, Some (_, ep) when ep > bp -> Some (bp, ep)
+        | _ -> None
+      in
       take_pending st p;
       let list q = List.of_seq (Queue.to_seq q) in
       let proof = R.{
@@ -304,6 +325,12 @@ let close_proof ~closer ~kernel_check =
           kernel_check;
           wall_s = Unix.gettimeofday () -. p.p_wall0;
           cpu_s = cpu_time () -. p.p_cpu0;
+          span;
+          (* An ineligible proof stores no term (BET-84 spec, gate step 2:
+             "each ineligible class: the registration stores no term").
+             The ineligibility is final only here: a reason can be added
+             after the closer computed the term, by the declaration. *)
+          replay = (if Queue.is_empty p.p_ineligible then replay else None);
         }
       in
       R.output_proof st.f_buf proof;
@@ -441,6 +468,22 @@ let digest_cached ~what v =
   | Some d -> if d = "unhashable" then ineligible ~reason:"unhashable" ~detail:what; d
   | None ->
     let d = digest ~what v in
+    Addr.add digest_cache o d;
+    d
+
+(* The file this compile reads, so that a digest can leave out the
+   locations of that file: a value that differs only by where in the file it
+   was written (a hint written two lines lower) digests the same. *)
+let locs_source : Loc.source option ref = ref None
+
+let set_locs_source src = locs_source := Some src
+
+let digest_cached_by ~what ~key view =
+  let o = Obj.repr key in
+  match Addr.find_opt digest_cache o with
+  | Some d -> if d = "unhashable" then ineligible ~reason:"unhashable" ~detail:what; d
+  | None ->
+    let d = digest ?locs:!locs_source ~what (view ()) in
     Addr.add digest_cache o d;
     d
 

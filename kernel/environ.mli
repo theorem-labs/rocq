@@ -188,6 +188,23 @@ val mem_constant : Constant.t -> env -> bool
 val add_rewrite_rules : (Constant.t * machine_rewrite_rule) list -> env -> env
 val lookup_rewrite_rules : Constant.t -> env -> machine_rewrite_rule list
 
+(** {6 BET-84: the value of one recorded read of census row 1}
+
+    One function per channel, called by the recorder at the lookup and by
+    the replay evaluator that checks the record again
+    ([vernac/proof_replay_env.ml]). A channel whose value is computed a
+    second way could make a replay accept a changed input, so
+    [dev/tools/census/replay_channels.py] fails on a second
+    implementation. [None] is "the lookup found nothing". *)
+
+val recorded_constant : Constant.t -> env -> string option
+val recorded_constant_exists : Constant.t -> env -> string option
+val recorded_rewrite_rules : Constant.t -> env -> string option
+val recorded_inductive : MutInd.t -> env -> string option
+val recorded_inductive_exists : MutInd.t -> env -> string option
+val recorded_module : ModPath.t -> env -> string option
+val recorded_modtype : ModPath.t -> env -> string option
+
 (** New-style polymorphism *)
 val polymorphic_constant  : Constant.t -> env -> bool
 val polymorphic_pconstant : pconstant -> env -> bool
