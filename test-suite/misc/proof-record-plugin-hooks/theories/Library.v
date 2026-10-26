@@ -14,6 +14,10 @@ Declare ML Module "coq-test-suite.library_closures".
 Lemma before_library : True.
 Proof. exact I. Qed.
 
+(* The Ltac2 global whose compiled form TestSetLibraryClosures replaces; no
+   proof runs it. *)
+Ltac2 probe_target () := ().
+
 TestSetLibraryClosures.
 
 Lemma after_library : True.
