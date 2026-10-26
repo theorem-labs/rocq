@@ -1,0 +1,7 @@
+{
+  "doc": "-proof-replay with no -proof-replay-ratio is rejected before the file compiles",
+  "mode": "usage",
+  "files": ["A.v"],
+  "usage": {"exit": 1, "message_contains": ["proof-replay-ratio", "ratio"]},
+  "coqchk": false
+}

@@ -26,7 +26,7 @@ let open_proof ?(name = "Top.File.lemma") () =
     ~position:R.{ module_path = "Top.File"; section_path = "" }
 
 let close_proof ?(closer = "Qed") ?(kernel_check = true) () =
-  Rec.close_proof ~closer ~kernel_check
+  Rec.close_proof ~closer ~kernel_check ~replay:None
 
 let the_file () =
   let path = Filename.temp_file "proof-record" ".jsonl" in

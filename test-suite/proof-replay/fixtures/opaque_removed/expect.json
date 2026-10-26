@@ -1,0 +1,10 @@
+{
+  "doc": "Transparent applies to a constant the proof unfolds; its declaration remains replayable",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {"proofs": 1, "hits": 1,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.uses_k", "hit"]]}
+  }
+}

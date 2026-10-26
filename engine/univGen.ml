@@ -120,7 +120,11 @@ let () = CErrors.register_handler (function
                spc() ++ str "but should be " ++ ppexpected ++ str".")
   | _ -> None)
 
-(* Generator of levels *)
+(* Generator of levels. The two counters are process-wide and monotone, so
+   a level's name depends on how many were made before it in this compile.
+   BET-84 P3 reads them at a proof's start and sets them after a replay, so
+   that a replayed proof leaves them where its tactics would have, and the
+   proofs after it name their levels as stock does. *)
 let univ_level_counter = ref 0
 
 let () = Proof_recorder.register_tables (fun () ->
@@ -151,6 +155,10 @@ let new_sort_id () =
   if Proof_recorder.writing () then
     Proof_recorder.write_counters [("sort_quality", 1)];
   !sort_quality_counter
+
+let counters () = (!univ_level_counter, !sort_quality_counter)
+
+let set_counters (u, q) = univ_level_counter := u; sort_quality_counter := q
 
 let new_sort_global id =
   Sorts.QGlobal.make (Global.current_dirpath ()) id

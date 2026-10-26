@@ -275,11 +275,25 @@ let activate_hook ~name =
    the elpi program that [Elpi CS] names (Claude gate at 0f8d815732, finding
    4). Rocq registers no hook, so a stock proof reads the empty list, and a
    proof that asks an active hook stores no term. *)
+(* BET-84: ONE value for the canonical_hooks channel, read under the fixed key
+   "" as the digest of the active names. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). A registration that read
+   the empty list replays only while the list is still empty. *)
+let recorded_canonical_hooks () =
+  Some (Proof_recorder.digest ~what:"canonical_hooks" !active_hooks)
+
+let () =
+  Proof_replay.register_evaluator "canonical_hooks" (fun _key ->
+      match recorded_canonical_hooks () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let apply_hooks env sigma proj pat =
   let active = !active_hooks in
   if Proof_recorder.active () then begin
     Proof_recorder.read ~row:"14" ~channel:"canonical_hooks" ~key:(fun () -> "")
-      ~value:(fun () -> Some (Proof_recorder.digest ~what:"canonical_hooks" active));
+      ~value:recorded_canonical_hooks;
     if not (List.is_empty active) then
       Proof_recorder.ineligible ~reason:"plugin_hook"
         ~detail:("canonical_hooks: " ^ String.concat ", " active)

@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-let format_version = 1
+let format_version = 2
 
 type toolchain = {
   binary : string;
@@ -71,6 +71,8 @@ type proof = {
   kernel_check : bool;
   wall_s : float;
   cpu_s : float;
+  span : (int * int) option;
+  replay : string option;
 }
 
 type trailer = { file_wall_s : float; file_cpu_s : float; peak_rss_kb : int; proof_count : int }
@@ -220,6 +222,8 @@ let output_proof b p =
     field "kernel_check" add_bool p.kernel_check;
     field "wall_s" add_float p.wall_s;
     field "cpu_s" add_float p.cpu_s;
+    field "span" (add_option (add_pair add_int add_int)) p.span;
+    field "replay" (add_option add_string) p.replay;
   ];
   Buffer.add_char b '\n'
 
@@ -238,11 +242,21 @@ let digest_json add v =
   add b v;
   Digest.to_hex (Digest.string (Buffer.contents b))
 
-(* The key of one toolchain record, kept for as long as the caller hands back
-   the same record. Every proof asks for it, and the three digests walk three
-   lists, so a compile of many proofs would otherwise pay that walk for each
-   of them. The caller ({!Proof_record_env.toolchain}) returns one physical
-   record while no library, no plugin and no warning flag has moved. *)
+(* Key item 2 is the load ORDER of the required libraries (BET-84 spec, key
+   item 2): their logical names, not their contents. A library's contents
+   reach a proof only through reads, which the record holds one by one, so
+   a changed library makes a proof miss only when the proof read what
+   changed. With each library's digest in the key, every proof of a file
+   that requires an edited file would miss, which is the largest part of
+   what replay is for. The header's [toolchain.load_order] keeps the
+   digests, as data.
+
+   The key of one toolchain record is kept for as long as the caller hands
+   back the same record. Every proof asks for it, and the three digests walk
+   three lists, so a compile of many proofs would otherwise pay that walk for
+   each of them. The caller ({!Proof_record_env.toolchain}) returns one
+   physical record while no library, no plugin and no warning flag has
+   moved. *)
 let toolchain_key_memo : (toolchain * toolchain_key) option ref = ref None
 
 let toolchain_key (t : toolchain) : toolchain_key =
@@ -252,7 +266,7 @@ let toolchain_key (t : toolchain) : toolchain_key =
     let k = {
       binary = t.binary;
       plugins = digest_json add_string_pairs t.plugins;
-      load_order = digest_json add_string_pairs t.load_order;
+      load_order = digest_json (add_list add_string) (List.map fst t.load_order);
       warnings = t.warnings;
       safe_deps = digest_json (add_list add_string) t.safe_deps;
       stack_limit = t.stack_limit;
@@ -498,13 +512,15 @@ let to_header v =
 let to_proof v =
   match fields "proof"
           [ "kind"; "name"; "statement"; "sentences"; "closer"; "toolchain_key"; "position"; "ineligible"; "reads";
-            "start_tables"; "writes"; "kernel_check"; "wall_s"; "cpu_s" ] v with
-  | [ _; nm; st; se; cl; tk; po; ie; rd; sts; wr; kc; ws; cs ] ->
+            "start_tables"; "writes"; "kernel_check"; "wall_s"; "cpu_s"; "span"; "replay" ] v with
+  | [ _; nm; st; se; cl; tk; po; ie; rd; sts; wr; kc; ws; cs; sp; rp ] ->
     { name = to_str "name" nm; statement = to_str "statement" st; sentences = to_str "sentences" se;
       closer = to_str "closer" cl; toolchain_key = to_toolchain_key tk; position = to_position po;
       ineligible = to_list "ineligible" to_ineligible ie; reads = to_list "reads" to_read rd;
       start_tables = to_list "start_tables" to_read sts; writes = to_writes wr;
-      kernel_check = to_bool "kernel_check" kc; wall_s = to_float "wall_s" ws; cpu_s = to_float "cpu_s" cs }
+      kernel_check = to_bool "kernel_check" kc; wall_s = to_float "wall_s" ws; cpu_s = to_float "cpu_s" cs;
+      span = to_option (to_pair "span" (to_int "span") (to_int "span")) sp;
+      replay = to_option (to_str "replay") rp }
   | _ -> assert false
 
 let to_trailer v =
