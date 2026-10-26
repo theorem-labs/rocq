@@ -10,9 +10,9 @@
 # l1 to l20, two of them long, l1 and l2, the first two the walk defers,
 # then 120 short ones, p1 to p120. A batch is a stripe of whole pieces of
 # libraries, and a library's piece keeps its jobs in order, so the batch
-# that holds l1 holds l2 after it (a model of the dealing gives this for
-# any number of dependencies from 8 to 30 at -j 4): l2 runs in parallel
-# with l1 only if the worker gives it back while it checks l1.
+# that holds l1 holds l2 after it ((a) checks that it does in this run):
+# l2 runs in parallel with l1 only if the worker gives it back while it
+# checks l1.
 #  (a) -j 4: the worker that holds l1 gives back what is left of its batch
 #      once it has started l1; the batch headed by l2 is dealt before that
 #      worker has finished; no worker stops early, and each is asked at
@@ -188,19 +188,22 @@ if cmd == "done":
 
 elif cmd == "a":
     # The batch dealt with l2 at its head is the tail that a worker gave
-    # back: that worker released at least one check, after it had started
-    # at least two jobs (the jobs before l1, then l1), and the batch headed
-    # by l2 is forked after the release and before that worker's final
-    # report is read, so while it still checks l1.
+    # back: the worker whose batch is headed by l1 released at least one
+    # check once it had started l1, and the batch headed by l2 is forked
+    # after the release and before that worker's final report is read, so
+    # while it still checks l1. Library tables are not in these batches:
+    # one worker reads them all before the walk (validate_tables).
     l2 = [i for i, (k, g) in enumerate(ev) if k == "fork" and g[2] == "Lib.l2"]
     if len(l2) != 1:
         fail("expected one batch headed by Lib.l2", ev)
     l2 = l2[0]
+    head = {g[0]: g[2] for k, g in ev if k == "fork"}
     rel = [(i, g[0]) for i, (k, g) in enumerate(ev[:l2])
-           if k == "release" and int(g[1]) >= 1 and int(g[3]) >= 2]
+           if k == "release" and int(g[1]) >= 1 and int(g[3]) >= 1
+           and head.get(g[0]) == "Lib.l1"]
     if not rel:
-        fail("no worker gave back checks after it had started two jobs, "
-             "before the batch headed by Lib.l2", ev)
+        fail("the worker whose batch is headed by Lib.l1 gave nothing back "
+             "once it had started l1, before the batch headed by Lib.l2", ev)
     i, w = rel[-1]
     kept = [j for j, (k, g) in enumerate(ev) if k == "kept" and g[0] == w]
     if kept and not l2 < kept[0]:
@@ -226,10 +229,17 @@ elif cmd == "unasked":
             fail("worker %s released without being asked" % g[0], ev)
 
 elif cmd == "window":
-    # What the worker keeps in each race window.
+    # What the worker keeps in each race window. The worker that reads the
+    # library tables before the walk (its batch is headed by "the opaque
+    # proofs of ...") never releases, by design, so it is left out.
     kind = sys.argv[3]
-    rel = [tuple(int(x) for x in g) for k, g in ev if k == "release"]
-    forks = [g for k, g in ev if k == "fork"]
+    reader = {g[0] for k, g in ev
+              if k == "fork" and g[2].startswith("the opaque proofs of ")}
+    rel = [tuple(int(x) for x in g) for k, g in ev
+           if k == "release" and g[0] not in reader]
+    if any(k == "release" and g[0] in reader for k, g in ev):
+        fail("the worker that reads the tables released", ev)
+    forks = [g for k, g in ev if k == "fork" and g[0] not in reader]
     if kind == "first":
         # Every worker is signalled before its first check, so every one of
         # them releases, keeping 1, and some give something back.
@@ -300,8 +310,8 @@ for j in 1 2 4 16; do
 done
 [ -s "$d/o-j1.out" ] || fail "(b) the output of -j 1 is empty"
 
-# (a) What is left of the batch [the table of Lib, l1, l2, ...] is given
-# back while l1 runs, so l2 runs in parallel with it.
+# (a) What is left of the batch [l1, l2, ...] is given back while l1 runs,
+# so l2 runs in parallel with it.
 sched a "$d/j4.log"
 expect "(a) releases at -j 4" "$(sched done "$d/j4.log" released)" -ge 1
 expect "(a) workers stopped early at -j 4" "$(sched done "$d/j4.log" stopped)" -eq 0

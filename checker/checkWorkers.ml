@@ -20,9 +20,10 @@ type job =
 | Table of DirPath.t
 
 (* A task, and the library whose walk deferred it. The jobs of one library
-   are next to each other in the queue -- its table first, then the checks
-   of its opaque bodies -- and [group] numbers those runs, so that a batch
-   can take them whole and parse each table once. *)
+   are next to each other in the queue -- its table first, unless the
+   worker of [validate_tables] reads the tables, then the checks of its
+   opaque bodies -- and [group] numbers those runs, so that a batch can
+   take them whole and parse each table once. *)
 type task = {
   job : job;
   group : int;
@@ -32,7 +33,8 @@ type task = {
 (* What the main process keeps about a running worker. The batch is for
    error messages. The tasks are kept to re-queue what the worker did not
    check: the checks it released on request, or those it did not reach
-   before its time budget ran out. [report] is the read end of the pipe on
+   before its time budget ran out (the worker of [validate_tables] has no
+   budget and is never asked to release). [report] is the read end of the pipe on
    which the worker says how many checks it will complete, and then how
    many it completed. [buf] holds the bytes read from that pipe that are
    not a whole message yet. [asked] says that a release has been
@@ -108,7 +110,7 @@ let set_budget t =
    row; and every process that checks a library's opaque proofs parses
    that library's whole table first. So a batch is a stripe of the
    queue over whole libraries: a library's jobs, with the task that reads
-   its table, are cut into pieces of the size wanted, which a library of
+   its table when there is one (see [validate_tables]), are cut into pieces of the size wanted, which a library of
    ordinary size fits in one piece, and when the queue holds [s] batches,
    a batch takes one piece in [s] (see [deal]). Libraries next to each
    other in the queue go to different batches, and a batch parses about
@@ -189,7 +191,9 @@ let note_table_read ~bytes =
   table_bytes := !table_bytes + bytes
 
 (* The tables that a process which ended successfully read: a worker,
-   once its report says it completed that task, or the main process. *)
+   once its report says it completed that task, or the main process; and,
+   once a run has failed, the tables that the worker of [validate_tables]
+   read without error before it stopped ([validator_progress]). *)
 let tables_read = ref DirPath.Set.empty
 let table_checked dp = DirPath.Set.mem dp !tables_read
 
@@ -281,13 +285,18 @@ let release_written = ref false
 let release_failed = ref false
 let release_fd = ref Unix.stdout
 
+(* Set in the worker of [validate_tables], which never releases: other
+   workers would run the tables it gives back and write to its progress
+   file, which then would no longer say how far it got. *)
+let never_release = ref false
+
 (* Writes the one release message, for the handler and for [run_worker]'s
    entry alike. A worker always completes at least one check, as the
    budget stop does, so a request that arrives before the first check
    cannot give a whole batch back and make the main process fork again for
    nothing. *)
 let write_release () =
-  if not !release_written then begin
+  if not !release_written && not !never_release then begin
     release_written := true;
     release_at := max !started 1;
     try write_release_message !release_fd !release_at
@@ -531,7 +540,7 @@ let close_output w =
   Option.iter (fun (out, err) -> close_fd out; close_fd err) w.output;
   w.output <- None
 
-let spawn tasks =
+let spawn ?(releasable = true) tasks =
   let batch = batch_of_tasks tasks in
   (* Otherwise the child would print again what is still buffered. *)
   flush_output ();
@@ -576,7 +585,7 @@ let spawn tasks =
       incr forks;
       debug (fun () -> str "worker " ++ int pid ++ str ": " ++ pr_tasks batch);
       running := { pid; batch; tasks; report; output;
-                   asked = false; released = None; buf = "" } :: !running;
+                   asked = not releasable; released = None; buf = "" } :: !running;
       if !forks = 1 then release_test_at "main" 0
     | exception Unix.Unix_error (err, _, _) ->
       Unix.close report;
@@ -928,8 +937,8 @@ let dispatch () =
        first: costly proofs come late in a library, so one deferred last no
        longer waits for the rest of its batch and is not the one given back
        when the worker's budget runs out. The task that reads a library's
-       table is the oldest job of its group, so it runs after the checks
-       that already parsed the table. *)
+       table, when there is one, is the oldest job of its group, so it runs
+       after the checks that already parsed the table. *)
     if k > 0 then deal ~walk:true k size
     (* No release is requested here: a request needs an empty queue,
        which the walk rarely leaves, and the walk reads a release message
@@ -946,13 +955,88 @@ let defer kn check =
     dispatch ()
   end
 
+(* Whether [validate_tables] handed every hashed table to a worker of its
+   own: then the per-library table tasks are not needed. *)
+let tables_validated = ref false
+
+(* The validator's progress: an unnamed file in which, after each table
+   it reads without error, it writes how many it has read, and the tables
+   in its order. Only used when it fails: a successful worker's reads are
+   counted from its report. *)
+let validator = ref None
+
+let write_progress fd k =
+  let b = Bytes.create 8 in
+  Bytes.set_int64_be b 0 (Int64.of_int k);
+  try
+    ignore (Unix.lseek fd 0 Unix.SEEK_SET);
+    ignore (Unix.write fd b 0 8)
+  with Unix.Unix_error _ -> ()
+
+let validator_progress () =
+  match !validator with
+  | None -> ()
+  | Some (fd, tables) ->
+    validator := None;
+    let b = Bytes.create 8 in
+    let k =
+      try
+        ignore (Unix.lseek fd 0 Unix.SEEK_SET);
+        if Unix.read fd b 0 8 = 8 then Int64.to_int (Bytes.get_int64_be b 0) else 0
+      with Unix.Unix_error _ -> 0
+    in
+    close_fd fd;
+    for i = 0 to min k (Array.length tables) - 1 do
+      tables_read := DirPath.Set.add tables.(i) !tables_read
+    done
+
 let defer_table dp read =
-  incr tables_deferred;
   incr current_group;
-  if !max_workers = 0 then begin read (); incr tables_done end
-  else begin
+  if !max_workers = 0 then begin incr tables_deferred; read (); incr tables_done end
+  else if not !tables_validated then begin
+    incr tables_deferred;
     Queue.push { job = Table dp; group = !current_group; run = read } queue;
     dispatch ()
+  end
+
+(* Stock parses every table while it interns the libraries, before it
+   checks any, so a malformed table stops it there. The tables are read
+   here, in that order, by one worker started before the walk, so that a
+   malformed table stops the run near where it stops stock, instead of when
+   the workers reach that library's checks, which on a whole tree is most of
+   the way through. The checks still read the tables they need, in their own
+   batches.
+
+   The worker has no time budget. The budget exists because a worker's
+   memory grows while it lives, as its garbage collector touches the heap it
+   shares with the main process; a worker that stopped at the budget would
+   give its tables back to the queue, where they wait behind the checks,
+   which is the delay this worker removes. This one keeps no table it reads,
+   so it holds at most one table beyond the heap it was forked with. For the
+   same reason it is never asked to release the tables it has not read.
+
+   If it fails, the tables it read without error before the one that failed
+   are credited ([validator_progress]), so that the main process, which then
+   looks for the first table that does not parse, starts where it stopped
+   instead of reading them all again. *)
+let validate_tables tables =
+  if !max_workers > 0 && not (CList.is_empty tables) then begin
+    let progress = open_capture () in
+    let tasks = Array.of_list (List.mapi (fun i (dp, read) ->
+        let run () =
+          read ();
+          Option.iter (fun fd -> write_progress fd (i + 1)) progress
+        in
+        { job = Table dp; group = 0; run }) tables) in
+    Option.iter (fun fd ->
+        validator := Some (fd, Array.of_list (List.map fst tables))) progress;
+    tables_deferred := !tables_deferred + Array.length tasks;
+    tables_validated := true;
+    let b = !budget in
+    budget := infinity;
+    never_release := true;
+    Fun.protect ~finally:(fun () -> budget := b; never_release := false)
+      (fun () -> spawn ~releasable:false tasks)
   end
 
 let finish () =

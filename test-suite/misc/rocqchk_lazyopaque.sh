@@ -393,7 +393,8 @@ expect "(b) tables parsed in the main process" \
   "$(field "$d/b.flat" 'deferred, \([0-9]*\) parsed in the main process')" -eq 0
 
 # (c) A corrupted table in a checked library that has no opaque constant.
-# Stock fails on it when it interns it; here the deferred task fails.
+# Stock fails on it when it interns it; here the worker that reads every
+# table before the walk fails (validate_tables).
 for case in NoOp:c Dep:d; do
   lib=${case%%:*}; tag=${case##*:}
   rm -rf "$d/$tag"; cp -a "$d/good" "$d/$tag"
@@ -755,7 +756,8 @@ done
 # so it refuses the file it cannot read, exit code 1, and never reaches
 # the proof. At -j 1 this build does the same, because it too parses
 # every table when it interns the library. With workers the proof can be
-# checked, and fail, while the table task is still queued; the main
+# checked, and fail, before the worker that reads the tables reaches that
+# table; the main
 # process then reads the tables in stock's order, and reports the table,
 # with stock's words and exit code, and not the worker's error.
 rm -rf "$d/s"; cp -a "$d/g" "$d/s"
