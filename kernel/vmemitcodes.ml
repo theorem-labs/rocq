@@ -540,6 +540,9 @@ let emit_instr env = function
   | Ksequence _ -> invalid_arg "Vmemitcodes.emit_instr"
   | Kproj p -> out env opPROJ; out_int env p
   | Kensurestackcapacity size -> out env opENSURESTACKCAPACITY; out_int env size
+  | Kbinnum (k, n) -> out env opBINNUM; out_int env k; out_int env n
+  | Kbinnumcall (k, n, lbl) ->
+      out env opBINNUMCALL; out_int env k; out_int env n; out_label env lbl
   | Kbranch lbl -> out env opBRANCH; out_label env lbl
   | Kprim (op, (q,_u)) ->
       out env (check_prim_op op);
