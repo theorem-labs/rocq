@@ -34,6 +34,8 @@ type 'v node =
 | Lcase         of case_annot * 'v lambda * 'v lambda * 'v lam_branches
   (* annotations, term being matched, accu, branches *)
 | Lfix          of (int array * inductive array * int) * 'v fix_decl
+  (* after [optimize], each body starts with Llam and binds its recursive argument among its
+     leading Llam binders, Llet crossed (see eta_fix_body) *)
 | Lcofix        of int * 'v fix_decl
 | Lint          of int
 | Lparray       of 'v lambda array * 'v lambda
@@ -503,9 +505,40 @@ let occur_once lam =
   try let _ = occurrence 1 true lam in true
   with Not_found -> false
 
+let make_args start _end =
+  Array.init (start - _end + 1) (fun i -> mknode @@ Lrel (Anonymous, start - i))
+
+(** The kernel finds the recursive argument of a fixpoint after reducing its
+    body, so it accepts bodies such as [id (fun n => n)] (#16599). Both
+    compilers need more: the native compiler takes the parameters of a
+    fixpoint from the leading [Llam] binders of its body, [Llet]s crossed,
+    and reads the recursive argument among them; VM conversion needs the body
+    to start with [Llam] ([Vm.decompose_vfun2]). [eta_fix_body rec_arg body]
+    returns [body] when it starts with [Llam] and has at least
+    [n = rec_arg + 1] abstractions, [Llet]s crossed. It turns any other body
+    into [fun x1 .. xn => body x1 .. xn], where [simplify] reduces the
+    application: the leading let-ins of [body] stay in front of its remaining
+    abstractions, under [x1 .. xn]. So both compilers evaluate those let-ins
+    as before: the VM when the abstractions in front of them have their
+    arguments (at least [n]), the native compiler once all the parameters
+    have theirs. *)
+let eta_fix_body rec_arg body =
+  let n = rec_arg + 1 in
+  let rec nb_lambdas lam = match lam.node with
+  | Llam (ids, body) -> Array.length ids + nb_lambdas body
+  | Llet (_, _, body) -> nb_lambdas body
+  | _ -> 0
+  in
+  match body.node with
+  | Llam _ when nb_lambdas body >= n -> body
+  | _ ->
+    let anon = Context.anonR in (* TODO relevance *)
+    mkLlam (Array.make n anon) (simplify (mkLapp (lam_lift n body) (make_args n 1)))
+
 (* [remove_let lam] remove let expression in [lam] if the variable is *)
 (* used at most once time in the body, and does not appear under      *)
-(* a lambda or a fix or a cofix                                       *)
+(* a lambda or a fix or a cofix. It then passes the bodies of each     *)
+(* fixpoint to [eta_fix_body], after their let-ins are removed.        *)
 
 let is_value lam = match node lam with
 | Lrel _ | Lvar _ | Lconst _ | Luint _
@@ -522,6 +555,14 @@ let rec remove_let subst lam =
     else
       let body' = remove_let (lift subst) body in
       if def == def' && body == body' then lam else mknode @@ Llet(id,def',body')
+  | Lfix ((rec_args, _, _) as info, (ids, types, bodies)) ->
+    let types' = Array.Smart.map (remove_let subst) types in
+    let subst' = liftn (Array.length ids) subst in
+    let bodies' = Array.Smart.map2
+        (fun rec_arg body -> eta_fix_body rec_arg (remove_let subst' body)) rec_args bodies
+    in
+    if types == types' && bodies == bodies' then lam
+    else mknode @@ Lfix (info, (ids, types', bodies'))
   | _ -> map_lam_with_binders liftn remove_let subst lam
 
 let optimize lam =
@@ -540,9 +581,6 @@ let rec get_alias env sigma kn =
   | Vmemitcodes.BCdefined (mask, _, _) -> kn, mask
 
 (* Translation of constructors *)
-
-let make_args start _end =
-  Array.init (start - _end + 1) (fun i -> mknode @@ Lrel (Anonymous, start - i))
 
 let expand_constructor ind tag nparams arity =
   let anon = Context.make_annot Anonymous Sorts.Relevant in (* TODO relevance *)
