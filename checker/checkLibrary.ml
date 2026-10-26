@@ -282,11 +282,11 @@ let check_one_lib admit senv (dir,m) =
   let md = m.library_compiled in
   let dig = m.library_digest in
   (* Stock parses the table of opaque proofs of every library it interns,
-     so a malformed table fails coqchk even when no check reads it. One
-     deferred task reads each table the same way, queued just before the
-     library's own checks, or alone when it has none: a batch holds them
-     together, so that one process parses the table once for all of
-     them. *)
+     so a malformed table fails coqchk even when no check reads it. With
+     workers, the worker of [CheckWorkers.validate_tables] reads every
+     hashed table before the walk, and this only opens the library's group;
+     otherwise one deferred task reads the table the same way, queued just
+     before the library's own checks, or alone when it has none. *)
   let () = CheckWorkers.defer_table dir (fun () -> ignore (opaque_table dir)) in
   (* Look up if the library is to be admitted correct. We could
      also check if it carries a validation certificate (yet to
@@ -562,8 +562,9 @@ let intern_from_file ~intern_mode ~validated (dir, f) =
          read them: their bytes are hashed, and the table is read, by
          whichever process first needs it, from that same range. Nothing
          the main process checks looks into an opaque body
-         ([Mod_checking], [Check_stat]); the deferred task of
-         [check_one_lib] keeps the rejections of a table nothing reads.
+         ([Mod_checking], [Check_stat]); the worker of
+         [CheckWorkers.validate_tables] keeps the rejections of a table
+         nothing reads.
          Without workers there is nothing to gain by waiting, and [-j 1]
          is stock to the byte: see [intern_opaques]. *)
       let src = intern_opaques ~validate ~segment:seg_opaque f ch in
@@ -663,6 +664,14 @@ let recheck_library_in_order senv ~norec ~admit ~check =
   Flags.if_verbose Feedback.msg_notice (fnl()++hv 2 (str "Ordered list:" ++ fnl() ++
     prlist
     (fun (dir,_) -> pr_dirpath dir ++ fnl()) needed));
+  (* Every library is interned by now, so every table stock would have
+     parsed is recorded: read them all early, in stock's order, so that a
+     malformed one stops the run near where it stops stock. The reader
+     keeps no table, so the worker holds at most one table beyond the heap
+     it was forked with. *)
+  let () = CheckWorkers.validate_tables
+      (List.rev_map (fun (dp, src) -> dp, (fun () -> ignore (read_opaque_table dp src)))
+         !hashed_tables) in
   let senv = List.fold_left (check_one_lib nochk) (senv, Cmap.empty) needed in
   CheckWorkers.finish ();
   Flags.if_verbose Feedback.msg_notice (str"Modules were successfully checked");
@@ -673,6 +682,7 @@ let recheck_library senv ~norec ~admit ~check =
   with e ->
     let e = Exninfo.capture e in
     CheckWorkers.abort ();
+    CheckWorkers.validator_progress ();
     let () = match fst e with
       | Sys.Break -> ()
       | _ ->

@@ -23,7 +23,9 @@
     A batch is checked only if its worker exits with code 0. It is a run
     of the queue: the jobs of one library are next to each other there,
     so a batch holds whole libraries, the libraries next to it go to
-    other workers, and one process parses each table once.
+    other workers, and one process parses each table once for the checks.
+    The worker of [validate_tables] reads every table once more, before
+    the walk, so that a malformed one stops the run early, as in stock.
 
     A worker lives for at most a time budget (see [set_budget]): the
     longer a worker lives, the more of the heap it shares with the main
@@ -31,6 +33,7 @@
     has completed at least one job, it stops after the job it is in
     and reports how many jobs of its batch, the first ones in order, it
     completed. The main process queues the others again, at the front.
+    The worker of [validate_tables] is the exception: it has no budget.
 
     A worker also stops that way on request. When the main process has
     dealt everything and a worker slot is free, it asks the worker with the
@@ -92,7 +95,22 @@ val defer_table : Names.DirPath.t -> (unit -> unit) -> unit
 (** [defer_table dp read] runs or queues the read of the table of opaque
     proofs of the library [dp], and opens the group of the jobs that
     [defer] takes next: they are the checks of that library, and a batch
-    takes them together with this one. *)
+    takes them together with this one. After [validate_tables] handed the
+    tables to a worker, it only opens the group. *)
+
+val validate_tables : (Names.DirPath.t * (unit -> unit)) list -> unit
+(** [validate_tables tables] starts one worker that runs each read, in
+    the order given, which is the order stock parses the tables while it
+    interns the libraries; so a malformed table stops the run near where it
+    stops stock. Called before the libraries are checked. It reads every
+    table once more than the checks do, keeps none, has no time budget and
+    is never asked to release. Without workers it does nothing: the tables
+    were parsed when the libraries were interned. *)
+
+val validator_progress : unit -> unit
+(** After a failure: counts as read without error the tables that the
+    worker of [validate_tables] read before the one it failed on, so that
+    [table_checked] holds for them. *)
 
 val note_cook : unit -> unit
 (** Called by the cook of an opaque body ([Mod_checking]): counts it when
@@ -118,7 +136,9 @@ val abort : unit -> unit
 val table_checked : Names.DirPath.t -> bool
 (** Whether a process that ended successfully read the table of opaque
     proofs of this library: the main process, or a worker whose report
-    says it completed that read. *)
+    says it completed that read; and, once a run has failed, whether the
+    worker of [validate_tables] read it without error before it stopped
+    (see [validator_progress]). *)
 
 type batch = {
   size : int;
