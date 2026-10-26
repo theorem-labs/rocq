@@ -83,13 +83,16 @@ val scan_late_rebind : string -> (string * int) option
     [Load], [Declare], [Import], [Export], [Include], [Module], or an [End]
     that closes a module or a section inside which one of those appeared —
     with its line; [None] if there is none. Comments and strings are
-    skipped; words split as Rocq's lexer splits them. *)
+    skipped; a number is read as Rocq's lexer reads it, and a late word also
+    counts at the end of a longer identifier. *)
 
 val register_plugin_audit : (string -> bool) -> unit
 (** [f name] says whether the loaded ML plugin [name] (a findlib package) is
     one this tree builds. While a plugin [f] rejects is loaded, no proof is
     replayed (counted ineligible; the summary's [fence] names it). Until a
-    predicate registers, every plugin is unaudited. *)
+    predicate registers, every plugin is unaudited, except the plugins from
+    outside the tree that replay itself lists as audited
+    ([rocq-read-file.plugin]). *)
 
 val register_hit_hook : (Proof_record.read list -> unit) -> unit
 (** [f reads] runs at each hit with the replayed proof's recorded reads, so
