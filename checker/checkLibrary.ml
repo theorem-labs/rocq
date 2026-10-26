@@ -100,9 +100,12 @@ let access_opaque_table dp i =
   t.(i)
 
 (* A test-only cross-check, off by default: with ROCQCHK_COOK_CROSS_CHECK
-   set to a non-empty value, every opaque body is also cooked the stock way,
-   as a tree, and an anomaly is raised unless the two terms are
-   [Constr.equal]. *)
+   set to a non-empty value, every opaque body is also cooked by the stock
+   [Discharge.cook_opaque_proofterm] (no memo: it keeps unchanged subterms
+   shared but rebuilds every changed one at each occurrence), and an anomaly
+   is raised unless the two terms are [Constr.equal]. The test suite sets it
+   (test-suite/Makefile), so that every coqchk run there checks that
+   [Cooking.expand_constr_shared] still agrees with [Cooking.expand_constr]. *)
 let cook_cross_check_on =
   match Sys.getenv_opt "ROCQCHK_COOK_CROSS_CHECK" with
   | None | Some "" -> false
