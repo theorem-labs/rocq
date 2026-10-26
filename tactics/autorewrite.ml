@@ -336,10 +336,25 @@ let raw_find_base bas = String.Map.find bas !rewtab
    [find_matches] (Claude gate at 0f8d815732, finding 2). An absent base is
    recorded before the error, so that a proof that tried the base and caught
    the error sees it created. *)
+(* ONE value for the autorewrite channel: the record site below and the
+   replay evaluator call it (dev/tools/census/replay_channels.py). *)
+let recorded_base db =
+  Option.map (fun db -> Proof_recorder.digest_cached ~what:"autorewrite" db) db
+
 let record_base bas db =
   Proof_recorder.read ~row:"15" ~channel:"autorewrite" ~key:(fun () -> bas)
-    ~value:(fun () ->
-        Option.map (fun db -> Proof_recorder.digest_cached ~what:"autorewrite" db) db)
+    ~value:(fun () -> recorded_base db)
+
+(* The key is the base's name, which is [rewtab]'s own key: the same string
+   names the same entry again, so the evaluator looks it up exactly as
+   [find_base] does. A base the registration found absent (value None)
+   matches only while it is still absent, and one created since gives its
+   digest, which is never None. *)
+let () =
+  Proof_replay.register_evaluator "autorewrite" (fun bas ->
+      match recorded_base (String.Map.find_opt bas !rewtab) with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
 
 let find_base bas =
   match String.Map.find bas !rewtab with
