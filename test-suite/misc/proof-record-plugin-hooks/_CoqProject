@@ -6,4 +6,9 @@ src/pluginHooks.mlg
 src/pluginHooksImpl.ml
 src/pluginHooksImpl.mli
 src/plugin_hooks_plugin.mlpack
+src/libraryClosures.mlg
+src/libraryClosuresImpl.ml
+src/libraryClosuresImpl.mli
+src/library_closures_plugin.mlpack
 theories/Probe.v
+theories/Library.v

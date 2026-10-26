@@ -1,0 +1,9 @@
+{
+open LibraryClosuresImpl
+}
+
+DECLARE PLUGIN "coq-test-suite.library_closures"
+
+VERNAC COMMAND EXTEND ProofRecordLibraryClosures CLASSIFIED AS SIDEFF
+| [ "TestSetLibraryClosures" ] -> { set_closures () }
+END

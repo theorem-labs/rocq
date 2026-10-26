@@ -85,8 +85,8 @@ let fence_state : (string * string) option ref = ref None
 (* The checks of the process-wide cache fences, registered at module load by
    the module that owns each cache. A check compares what a cache may hold
    with the state it caches, and calls [trip_fence] on a difference. They run
-   at each proof's start and when a replay asks [fence_tripped], so a state
-   that changed behind the cache (a re-registration, a section end that
+   at each proof's start and end and when a replay asks [fence_tripped], so a
+   state that changed behind the cache (a re-registration, a section end that
    restores a table) is seen before the next proof is recorded or replayed. *)
 let fence_checks : (unit -> unit) Queue.t = Queue.create ()
 
@@ -282,6 +282,14 @@ let close_proof ~closer ~kernel_check =
     | Some p when p.p_depth > 0 -> p.p_depth <- p.p_depth - 1
     | Some p ->
       take_pending st p;
+      (* A fence can trip while the proof runs (a plugin closure installed by
+         a tactic, a lazy rebound by its declaration), and the next check
+         would only come at the next proof's start: check here too, so the
+         proof that was open when it tripped is not written eligible. *)
+      run_fence_checks ();
+      (match !fence_state with
+       | None -> ()
+       | Some (reason, detail) -> add_ineligible p ~reason ~detail);
       let list q = List.of_seq (Queue.to_seq q) in
       let proof = R.{
           name = p.p_name;

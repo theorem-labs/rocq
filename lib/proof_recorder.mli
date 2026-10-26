@@ -52,7 +52,7 @@ val fence_tripped : unit -> (string * string) option
 
 val register_fence_check : (unit -> unit) -> unit
 (** Adds a check of a process-wide cache fence. It runs at each proof's start
-    and in {!fence_tripped}, while {!tracking} is true, and calls
+    and end and in {!fence_tripped}, while {!tracking} is true, and calls
     {!trip_fence} when the state its cache holds has changed. *)
 
 val closure_setter : what:string -> stock:int -> unit -> unit
@@ -137,9 +137,10 @@ val sentence : (unit -> string) -> (unit -> 'a) -> 'a
 val close_proof : closer:string -> kernel_check:bool -> unit
 (** Ends the entry of the innermost open proof and, at the outermost one,
     appends it to the record, with the sentences and the writes collected
-    since {!open_proof}. [kernel_check] says whether the kernel typed the
-    proof at this closer. Call it after the declaration, inside
-    {!without_recording}. *)
+    since {!open_proof}. It runs the fence checks first, as {!open_proof}
+    does, so a fence that tripped while the proof ran marks it ineligible.
+    [kernel_check] says whether the kernel typed the proof at this closer.
+    Call it after the declaration, inside {!without_recording}. *)
 
 val drop_proof : unit -> unit
 (** Ends the innermost open proof and writes NO entry: the [Abort] of a

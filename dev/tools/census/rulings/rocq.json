@@ -29,7 +29,7 @@
     "debug-output": "Debug dump flags (CDebug `vmbytecode` and `vmlambda`, kernel/vmbytegen.ml:902, kernel/vmlambda.ml:90). They only print.",
     "native": "Native libraries loaded for native_compute (vernac/library.ml:126,174-176). A proof that uses native_compute is ineligible (spec 'Proofs that always run').",
     "reduction-effect": "reduction_effect_hook calls an ML effect function for a registered constant and returns unit (pretyping/reductionops.ml:44-50). The functions come from effect_table, filled only by declare_reduction_effect, which nothing in Rocq or the pinned plugins calls (`git grep -n declare_reduction_effect` finds only its definition at pretyping/reductionops.ml:63). The table cannot change a term.",
-    "derived-cache": "Process-local cache (`~local:true`) of Ltac2 definitions compiled from ltac2-state (plugins/ltac2/tac2env.ml:67,90-92). Its contents are a function of row 10's recorded definitions."
+    "derived-cache": "Process-local cache (`~local:true`) of compiled Ltac2 globals (plugins/ltac2/tac2env.ml, compiled_tacs), which Tac2interp.eval_global runs in place of the global's definition. Nothing in this tree fills it: its only writer is the exported Tac2env.set_compiled_global, so every entry is a closure a plugin installed and is NOT a function of row 10's recorded definitions. The first call trips the process-wide fence (reason plugin_hook, detail Tac2env.set_compiled_global; lib/proof_recorder.ml closure_setter, stock 0), so no proof that can reach an entry is replayed."
   },
   "sites": {
     "catchall:clib/cList.ml:fold_left2_set/e' when e' = e -> find (a2 :: seen) l2": {"ruling": "@specific-exception"},
