@@ -567,6 +567,7 @@ let print_statement_report env requests =
 
 let main () =
   let senv = init() in
+  Check_stat.start_summary !output_context;
   let senv, opac = run senv in
   let env = Safe_typing.env_of_safe_env senv in
   Option.iter (print_statement_report env) !statement_report;
