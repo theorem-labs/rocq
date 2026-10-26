@@ -318,6 +318,11 @@ let rebind_scan =
      && s "Module M := F X. Section S. Lemma a : True. Qed. End S." = None
      && s "Module M (* x. *) := F E. Section S. Lemma a : True. Qed. End S." = None
      && s "#[local] Section S. Import M. Lemma a : True. Qed. End S." = Some (end_, 1)
+     && s "Lemma a : True. Qed. Timeout 0xaRegister x as core.eq.type." = Some ("Register", 1)
+     && s "Section S. Import M. Section T. Timeout 1End T. Lemma a : True. Qed. End S." = Some (end_, 1)
+     && s "Section S. Import M. Timeout 1Print Section S. Lemma a : True. Qed. End S." = Some (end_, 1)
+     && s "Lemma a : True. Qed. Timeout 1e5 Register x as core.eq.type." = Some ("Register", 1)
+     && s "Section S. Lemma a : True. Qed. Notation \"x .. y\" := (x) (at level 0). End S." = None
      && s "Lemma a : True. Qed. Import M." = Some ("Import", 1)
      && s "Lemma a : True. Qed. Load \"f\"." = Some ("Load", 1)
      && s "Lemma Requires : True. Qed." = None
@@ -389,6 +394,27 @@ let plugin_audit_refuses =
      Replay.register_plugin_audit (fun _ -> false);
      refused = None && audited <> None)
 
+(* rocq-read-file.plugin, which every BET memory image loads, is audited by
+   name (Main's ruling): alone it leaves replay on; with any other plugin
+   beside it, replay is off. *)
+let plugin_allowlist =
+  let with_plugins plugins =
+    let tc = R.{ toolchain with plugins } in
+    let h = R.{ header with toolchain = tc } in
+    let p = R.{ proof with toolchain_key = R.toolchain_key tc } in
+    setup ~header:h ~proof:p ~now:tc ();
+    Replay.open_proof ~name:"Top.File.lemma" ~statement:(fun () -> statement)
+      ~position:(fun () -> position) ~toolchain_key:(fun () -> R.toolchain_key tc);
+    Replay.decide ~sentences ~closer:"Qed"
+  in
+  mk_bool_test "proof-replay-plugin-allowlist"
+    "rocq-read-file.plugin alone leaves replay on; any other plugin beside it turns it off"
+    (current := Replay.Value (Some (String.make 32 'e'));
+     Replay.register_plugin_audit (fun _ -> false);
+     let alone = with_plugins [ ("rocq-read-file.plugin", "d") ] in
+     let other = with_plugins [ ("rocq-read-file.plugin", "d"); ("some.other.plugin", "d") ] in
+     alone <> None && other = None)
+
 (* A process-wide fence (Proof_recorder.fence_tripped): a closure a plugin
    installs over Rocq's own, or a cache that no longer matches its table, is
    state no recorded read sees. Once one trips, no proof of the process is
@@ -423,7 +449,7 @@ let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
     binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
-    rebind_scan; hit_hook_runs; miss_reason; plugin_audit_refuses;
+    rebind_scan; hit_hook_runs; miss_reason; plugin_audit_refuses; plugin_allowlist;
     (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]
 

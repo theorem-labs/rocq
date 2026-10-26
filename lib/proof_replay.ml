@@ -336,14 +336,18 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    or a section inside which one of those commands appeared, before or after
    the first closer (Claude delta review of 7b2a60f377, P1-2 to P1-4).
    Decided from the source text, before any proof is replayed. The scan
-   skips nested comments and strings, and splits words as Rocq's lexer does:
-   a word starts with a letter or [_], so [1Register] is the number [1] and
-   the word [Register] (P1-1). It is meant to err toward refusing (a keyword
-   inside a quotation or a notation's text refuses too); a command that a
-   [Load]ed file, a plugin or a notation builds is covered because [Load],
-   [Declare] and [Require] refuse. Main's ruling, 2026-10-26 18:10Z, asked
-   for [Register], [Declare ML Module], a plugin-loading [Require] and
-   [Load]; the rest are the other ways a [Register] object is applied. *)
+   skips nested comments and strings, and reads a number as Rocq's lexer
+   reads one ([0-9][0-9_]*, a fraction and an exponent only when a digit
+   follows, or [0x] and hexadecimal digits), so in [1Register],
+   [0xaRegister] or [1End] the rest is a word (Claude delta reviews of
+   7b2a60f377 and a158379eb4, P1-1). It is meant to err toward refusing: a
+   late word inside a quotation, a notation's text or an identifier ending
+   in one ([x_Register]) refuses too. A command a [Load]ed file builds is
+   covered because [Load] refuses; one a plugin adds is covered by the
+   plugin audit below ({!unaudited_plugin}), not by this scan. Main's
+   ruling, 2026-10-26 18:10Z, asked for [Register], [Declare ML Module], a
+   plugin-loading [Require] and [Load]; the rest are the other ways a
+   [Register] object is applied. *)
 let late_words = [ "Register"; "Require"; "Load"; "Declare"; "Import"; "Export"; "Include"; "Module" ]
 
 let scan_late_rebind text =
@@ -429,6 +433,23 @@ let scan_late_rebind text =
       done;
       if !i < n then incr i
     end
+    else if c >= '0' && c <= '9' then begin
+      (* A number, exactly as the lexer takes it; what follows is a new
+         word. It does not move the command start: [Timeout 5 Register]. *)
+      let is_dig ch = ch >= '0' && ch <= '9' in
+      let is_hex ch = is_dig ch || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') in
+      let take p = while !i < n && (p text.[!i] || text.[!i] = '_') do incr i done in
+      let hex = c = '0' && !i + 2 < n && (text.[!i + 1] = 'x' || text.[!i + 1] = 'X') && is_hex text.[!i + 2] in
+      let digits = if hex then is_hex else is_dig in
+      if hex then i := !i + 2;
+      take digits;
+      if !i + 1 < n && text.[!i] = '.' && digits text.[!i + 1] then (incr i; take digits);
+      let expo = if hex then (fun ch -> ch = 'p' || ch = 'P') else (fun ch -> ch = 'e' || ch = 'E') in
+      if !i < n && expo text.[!i] then begin
+        let k = if !i + 1 < n && (text.[!i + 1] = '+' || text.[!i + 1] = '-') then !i + 2 else !i + 1 in
+        if k < n && is_dig text.[k] then (i := k; take is_dig)
+      end
+    end
     else if is_run c then begin
       let j = ref !i in
       while !j < n && is_run text.[!j] do incr j done;
@@ -471,7 +492,8 @@ let scan_late_rebind text =
     else begin
       (* A sentence ends at a dot followed by a space or the end; a bullet or
          a brace before a command leaves it at the start. *)
-      if c = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1]) then begin
+      if c = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1])
+         && not (!i > 0 && text.[!i - 1] = '.') then begin
         at_start := true; under_fail := false; cmd_module := false
       end;
       step ()
@@ -489,6 +511,19 @@ let scan_late_rebind text =
    no plugin counts as audited. *)
 let plugin_audit : (string -> bool) ref = ref (fun _ -> false)
 
+(* Plugins from outside this tree that the replay audit has read, by exact
+   findlib package name (Main's ruling, 2026-10-26).
+   - [rocq-read-file.plugin]: theorem-labs/rocq-read-file at 68887ad, the
+     commit binary-equivalence-taiga's Dockerfile pins. Every BET memory
+     image loads it ([Declare ML Module "rocq-read-file.plugin"] in
+     ReadFile.v). Audited 2026-10-26 (Claude delta review of a158379eb4,
+     P2-1): it adds side-effect vernacular commands only (g_read_file.mlg),
+     and no tactic, hook, closure setter, [register_ref], module import or
+     cached [lib_ref].
+   If BET's Dockerfile moves that pin, this audit must be redone before the
+   entry is kept. *)
+let audited_outside_tree = [ "rocq-read-file.plugin" ]
+
 let register_plugin_audit f = plugin_audit := f
 
 let toolchain_now : (unit -> R.toolchain) option ref = ref None
@@ -496,7 +531,10 @@ let toolchain_now : (unit -> R.toolchain) option ref = ref None
 let unaudited_plugin () =
   match !toolchain_now with
   | None -> None
-  | Some tc -> List.find_opt (fun (name, _) -> not (!plugin_audit name)) (tc ()).R.plugins
+  | Some tc ->
+    List.find_opt
+      (fun (name, _) -> not (!plugin_audit name || List.mem name audited_outside_tree))
+      (tc ()).R.plugins
 
 let source_rebind = function
   | None -> None
