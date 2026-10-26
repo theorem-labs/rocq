@@ -63,6 +63,27 @@ val mk_closure : 'v arity -> 'v -> closure
 val mk_closure_val : 'v arity -> 'v -> valexpr
 (** Composition of [mk_closure] and [ValCls] *)
 
+(** The direct implementation of a primitive whose result is pure ([Tac2externals.ret]) or pure
+    given the environment and the evar map ([Tac2externals.eret]), and that takes the given number
+    of arguments. Applied to that many arguments [args], the closure that carries it is, in the
+    proof monad, [tclUNIT () >>= fun () -> tclUNIT (f args)] for [DirectPure (_, f)], and
+    [tclUNIT () >>= fun () -> let g = f args in tclENV >>= fun env -> tclEVARMAP >>= fun sigma ->
+    tclUNIT (g env sigma)] for [DirectEnv (_, f)] (the arguments are converted and passed to the
+    implementation in [f args], as the closure does before it reads the environment). *)
+type direct =
+| DirectPure of int * (valexpr list -> valexpr)
+| DirectEnv of int * (valexpr list -> Environ.env -> Evd.evar_map -> valexpr)
+
+val mk_closure_direct : 'v arity -> 'v -> direct -> closure
+(** For internal use (Tac2externals). [mk_closure arity f], which carries [d]. [d] must be the
+    direct implementation of [f] as described above: the interpreter runs [d] instead of [f]
+    where it can, so a [d] that does not agree with [f] changes the results of Ltac2 code. *)
+
+val closure_direct : valexpr -> direct option
+(** The direct implementation that the closure [v] carries, if any, provided that applying [v] adds
+    no frame at this moment ([Tac2bt.with_frame_is_identity] for an annotated closure). A closure
+    that [apply] returns after a partial application carries none. *)
+
 val annotate_closure : Tac2expr.frame -> closure -> closure
 (** The closure must not be already annotated *)
 
