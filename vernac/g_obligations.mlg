@@ -18,7 +18,7 @@ DECLARE GLOBAL PLUGIN
 
 open Stdarg
 
-let (set_default_tactic, get_default_tactic, print_default_tactic) =
+let (set_obligation_tactic, get_default_tactic, print_default_tactic) =
   Tactic_option.declare_tactic_option "Program tactic"
 
 let () =
@@ -27,7 +27,7 @@ let () =
       get_default_tactic ()
     end
   in
-  Declare.Obls.default_tactic := tac
+  Declare.Obls.set_default_tactic tac
 
 let with_tac f tac =
   let tac = Option.map (fun tac -> Gentactic.intern (Global.env()) tac) tac in
@@ -99,7 +99,7 @@ END
 
 VERNAC COMMAND EXTEND Set_Solver CLASSIFIED AS SIDEFF
 | #[ locality = Tactic_option.tac_option_locality; ] [ "Obligation" "Tactic" ":=" generic_tactic(t) ] -> {
-        set_default_tactic
+        set_obligation_tactic
           locality
           (Gentactic.intern (Global.env()) t);
   }
