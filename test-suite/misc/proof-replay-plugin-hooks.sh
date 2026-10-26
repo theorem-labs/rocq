@@ -11,10 +11,11 @@
 # - a plugin installs a closure over Rocq's own (Evarconv.set_evar_conv and
 #   the other fenced setters): the process-wide fence trips, and no proof of
 #   the process after it is replayed, though its record is clean.
-# And it must still replay a proof whose hook lists are unchanged. The
-# canonical-solution hooks are asked only after a canonical_structure lookup,
-# a channel replay does not evaluate yet, so uses_canonical misses there in
-# every grade; for it the test requires only that it is never replayed.
+# And it must still replay a proof whose hook lists are unchanged. The proof
+# that asks the canonical-solution hooks also reads the notation = and the
+# canonical_structure table, channels replay does not evaluate yet, so
+# uses_canonical misses on one of them (the runs show notation) in every
+# grade; for it the test requires only that it is never replayed.
 #
 # The plugin is misc/proof-record-plugin-hooks/src, built here in a copy so
 # that the two tests can run at the same time. Probe.v has two switch lines,
