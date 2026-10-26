@@ -289,7 +289,10 @@ let sha256_vectors =
    state no recorded read sees. Once one trips, no proof of the process is
    replayed, whatever its record holds, and the summary names the fence. The
    setter here stands for Evarconv.set_evar_conv: Rocq's own count is 0, so
-   one call trips it. The fence is never cleared, so this test runs LAST. *)
+   one call trips it. The fence is never cleared, so this test must run after
+   every other one. It does because mk_bool_test evaluates its check when the
+   test is DEFINED, and this is the last definition in the file; its place in
+   [tests] below does not order anything. *)
 let fence_refuses =
   let set = Proof_recorder.closure_setter ~what:"unit-test setter" ~stock:0 in
   mk_bool_test "proof-replay-fence"
@@ -315,7 +318,7 @@ let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
     binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
-    (* Last: it trips the process-wide fence for good. *)
+    (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]
 
 let _ = run_tests __FILE__ log_out_ch tests
