@@ -172,11 +172,6 @@ module LinPoly : sig
       i.e can be written c*x+r where c is a constant and r is independent from x *)
   val is_linear_for : var -> t -> bool
 
-  (** [factorise x p]
-      @return [(a, b)] such that [p = x * a + b] and [b] is independent of [x].
-      For a vector all of whose monomials are of degree <= 1 this takes a
-      single pass; otherwise it goes through the monomial map. *)
-  val factorise : var -> t -> t * t
 
   (** [constant c]
       @return the constant polynomial c
