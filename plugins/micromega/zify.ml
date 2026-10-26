@@ -16,7 +16,7 @@ module NamedDecl = Context.Named.Declaration
 
 module ERelevance = EConstr.ERelevance
 
-let debug_zify = CDebug.create ~name:"zify" ()
+let debug_zify_flag, debug_zify = CDebug.create_full ~name:"zify" ()
 
 (* The following [constr] are necessary for constructing the proof terms *)
 
@@ -106,6 +106,9 @@ module ConstrMap = struct
     | [] -> assert false
 
   let find_all evd h m = Map.find (fst (EConstr.destRef evd h)) m
+
+  (** [mem c m]: [m] has an entry for the head [c], a constant, inductive type or constructor. *)
+  let mem c m = Map.mem (fst (Constr.destRef c)) m
 
   let fold f m acc =
     Map.fold
@@ -774,6 +777,35 @@ open EInjT
 
 (** Get constr of lemma and projections in ZifyClasses. *)
 
+(** [Effects] logs the effects of a translation, so that [TypeMemo] can replay them when it reuses
+    the translation: the [CstrTable] registrations and the [Typing.checked_appvect] calls that
+    thread the evar map, in order. *)
+module Effects = struct
+  type t =
+    | Register of EConstr.t * EConstr.t
+    | Checked_appvect of EConstr.t * EConstr.t array
+
+  let log : t list ref option ref = ref None
+  let add e = match !log with None -> () | Some r -> r := e :: !r
+
+  (** [record f] runs [f ()] and returns its result with the effects it had, in order. The
+      translation that [f] runs does not use the memo, so [record] is never nested. *)
+  let record f =
+    let r = ref [] in
+    log := Some r;
+    let v = Fun.protect ~finally:(fun () -> log := None) f in
+    (v, List.rev !r)
+end
+
+(** Every [Typing.checked_appvect] threads the evar map, so it is logged in [Effects]. *)
+module Typing = struct
+  include Typing
+
+  let checked_appvect env evd f args =
+    Effects.add (Effects.Checked_appvect (f, args));
+    checked_appvect env evd f args
+end
+
 (** Module [CstrTable] records terms  [x] injected into [inj x]
     together with the corresponding type constraint.
     The terms are stored by side-effect during the traversal
@@ -790,7 +822,10 @@ module CstrTable = struct
   end)
 
   let table : EConstr.t HConstr.t = HConstr.create 10
-  let register evd t (i : EConstr.t) = HConstr.add table t i
+
+  let register evd t (i : EConstr.t) =
+    HConstr.add table t i;
+    Effects.add (Effects.Register (t, i))
 
   let get () =
     let l = HConstr.fold (fun k i acc -> (k, i) :: acc) table [] in
@@ -798,8 +833,10 @@ module CstrTable = struct
 
   (** [gen_cstr table] asserts (cstr k) for each element of the table (k,cstr).
         NB: the constraint is only asserted if it does not already exist in the context.
+        With an empty table there is nothing to assert, and the hypothesis table is not built.
      *)
   let gen_cstr table =
+    match table with [] -> Proofview.tclUNIT () | _ :: _ ->
     Proofview.Goal.enter (fun gl ->
         let env = Proofview.Goal.env gl in
         let evd = Proofview.Goal.sigma gl in
@@ -1329,6 +1366,426 @@ let trans_check_prop env evd t =
     evd, Some p
   else evd, None
 
+(** [TypeMemo] memoises [trans_check_prop] on hypothesis types and conclusions across zify calls:
+    repeated lia calls on one proof context zify the same hypotheses again and again.
+
+    An entry computed for the type [key] is reused for the type [c] in the environment [env] when
+    - [c] and [key] are syntactically equal, binder names, relevances and casts included
+      ([exact_eq]);
+    - every variable reachable from [key] has the same declaration in [env] as in the environment of
+      the computation. The variables reachable from a term are its free variables, the section
+      variables that its constants, inductive types and constructors depend on
+      ([Environ.vars_of_global]: a constant [mytype := a] over a section [Let a := nat] unfolds to
+      [a], whose body [clearbody] removes), and, recursively, those of their declarations;
+    - the global environment and zify's instance table are physically those of the computation
+      ([validate] empties the memo on any change). The global environment holds the bodies of the
+      global constants, the global universe graph, and the conversion strategies that [Opaque],
+      [Transparent] and [Strategy] set: these change the global environment, and the
+      translation's conversions ([is_convertible]) use full transparency anyway;
+    - the evar map's universe graph relates the global levels as the graph of the computation did
+      ([univs_ok]): it is physically the same graph, or the proof's own universe context differs
+      from the computation's only as [same_global_relations] allows.
+    Only evar-free and universe-free terms get entries ([scan]), and the instance terms that the
+    translation converts against are closed and universe-free too ([closed_instances]). So the
+    proof's own universes reach the translation only through the relations of the evar map's graph
+    among global levels (the levels that unfolding global constants exposes), which the last
+    condition keeps. Only terms whose constants are in the global environment get entries ([scan]):
+    the private constants of [abstract] and [transparent_abstract] live in the evar map until the end
+    of the sentence, so a backtracked branch of one sentence can define a private constant whose
+    name another branch reuses with another type or body, under the same global environment. The
+    translation reads nothing else: no option (the [zify] debug flag turns the memo off), no
+    [Arguments] or typeclass table (it uses zify's own instance table), and of the goal's context
+    only the declarations reachable from the term. It is then a function of the entry's inputs, and
+    its effects ([Effects]: the [CstrTable] registrations and the evar map threaded through
+    [Typing.checked_appvect]) are had again, in order, when the entry is reused.
+
+    A miss translates the key first, and keeps an entry only when the translation allocated at least
+    [min_words] words: a cheaper translation costs no more than the memo's own work would, so it is
+    not worth the dependency scan. The scan of a kept key visits at most [nodes_per_word] nodes per
+    word of its translation, and at most [max_deps] variables. A key whose scan reaches either bound
+    gets an [Over_cap] entry instead of a translation: the verdict that the memo does not apply to
+    it, so that a later lookup in the same context runs the translation at once, without the scan.
+    It is reused under the conditions above, its dependencies being the declarations that the scan
+    read, except the condition on the universe graph, which the scan does not read. So a miss costs
+    the translation, plus a scan of at most a fixed fraction of its work. *)
+module TypeMemo : sig
+  (** To call once per zify call, after [init_cache]: empties the memo when the global environment
+      or zify's instance table changed. *)
+  val validate : unit -> unit
+
+  (** [memo env evd c f] is [f ()], the translation of the type [c] in [env] and [evd], or the
+      result of an earlier [f] for [c] whose inputs are the same, with its effects had again. *)
+  val memo :
+       Environ.env
+    -> Evd.evar_map
+    -> Constr.t
+    -> (unit -> Evd.evar_map * prfp option)
+    -> Evd.evar_map * prfp option
+end = struct
+  exception Uncacheable
+
+  let eq_annot = Context.eq_annot Name.equal Sorts.relevance_equal
+  let eq_mind m1 m2 = MutInd.UserOrd.equal m1 m2 && MutInd.CanOrd.equal m1 m2
+
+  (** Syntactic equality; false on the constructors that [scan] rejects. *)
+  let rec exact_eq c1 c2 =
+    c1 == c2
+    ||
+    match (Constr.kind c1, Constr.kind c2) with
+    | Rel n1, Rel n2 -> Int.equal n1 n2
+    | Var i1, Var i2 -> Id.equal i1 i2
+    | Sort s1, Sort s2 -> Sorts.equal s1 s2
+    | Cast (c1, k1, t1), Cast (c2, k2, t2) -> k1 == k2 && exact_eq c1 c2 && exact_eq t1 t2
+    | Prod (n1, t1, b1), Prod (n2, t2, b2) -> eq_annot n1 n2 && exact_eq t1 t2 && exact_eq b1 b2
+    | Lambda (n1, t1, b1), Lambda (n2, t2, b2) ->
+      eq_annot n1 n2 && exact_eq t1 t2 && exact_eq b1 b2
+    | LetIn (n1, v1, t1, b1), LetIn (n2, v2, t2, b2) ->
+      eq_annot n1 n2 && exact_eq v1 v2 && exact_eq t1 t2 && exact_eq b1 b2
+    | App (f1, a1), App (f2, a2) ->
+      Int.equal (Array.length a1) (Array.length a2) && exact_eq f1 f2 && Array.for_all2 exact_eq a1 a2
+    | Const (k1, u1), Const (k2, u2) ->
+      Constant.UserOrd.equal k1 k2 && Constant.CanOrd.equal k1 k2 && UVars.Instance.equal u1 u2
+    | Ind ((m1, i1), u1), Ind ((m2, i2), u2) ->
+      Int.equal i1 i2 && eq_mind m1 m2 && UVars.Instance.equal u1 u2
+    | Construct (((m1, i1), j1), u1), Construct (((m2, i2), j2), u2) ->
+      Int.equal i1 i2 && Int.equal j1 j2 && eq_mind m1 m2 && UVars.Instance.equal u1 u2
+    | Int i1, Int i2 -> Uint63.equal i1 i2
+    | String s1, String s2 -> Pstring.equal s1 s2
+    | _ -> false
+
+  (** [scan env step reach c] applies [reach] to the free variables of [c] and to the section
+      variables that the global references of [c] depend on in [env], to those of one reference until
+      [reach] returns false, and [step] to each node of [c]; it raises [Uncacheable] on evars, metas,
+      universes, constants outside the global environment (private constants) and the constructors
+      [exact_eq] does not compare. *)
+  let rec scan env step reach c =
+    step ();
+    match Constr.kind c with
+    | Rel _ | Int _ | String _ | Sort (Sorts.SProp | Sorts.Prop | Sorts.Set) -> ()
+    | Var id -> ignore (reach id)
+    | Cast (c, _, t) | Prod (_, c, t) | Lambda (_, c, t) -> scan env step reach c; scan env step reach t
+    | LetIn (_, v, t, b) -> scan env step reach v; scan env step reach t; scan env step reach b
+    | App (f, a) -> scan env step reach f; Array.iter (scan env step reach) a
+    | Const (kn, _) when not (Environ.mem_constant kn (Global.env ())) -> raise Uncacheable
+    | Const _ | Ind _ | Construct _ ->
+      let gr, u = Constr.destRef c in
+      if UVars.Instance.is_empty u then ignore (Id.Set.for_all reach (Environ.vars_of_global env gr))
+      else raise Uncacheable
+    | Sort _ | Meta _ | Evar _ | Case _ | Fix _ | CoFix _ | Proj _ | Float _ | Array _ ->
+      raise Uncacheable
+
+  (** The most variables that an entry may depend on. Without the bound, a chain of [n] local
+      definitions [x_i := x_(i-1) + 1], each with a hypothesis on [x_i], costs [O(n)] per hypothesis
+      and [O(n^2)] per zify call, where the translation itself costs [O(n)]. *)
+  let max_deps = 64
+
+  (** The fewest words that a translation must allocate for the memo to keep its key. A cheaper one
+      (a hypothesis that zify leaves alone, such as [P x] for a predicate [P] it does not know) costs
+      about what a lookup and a dependency scan would. *)
+  let min_words = 2048.
+
+  (** The nodes that the dependency scan of a key may visit per word that its translation allocated. *)
+  let nodes_per_word = 0.125
+
+  (** The dependencies of a key: [Deps l], [l] the declarations of the variables reachable from the
+      key; or [Over l], the scan reached one of its bounds and [l] are the declarations that it read
+      in full before that. *)
+  type deps =
+    | Deps of Constr.named_declaration list
+    | Over of Constr.named_declaration list
+
+  exception Bound
+
+  (** [deps env nodes c]: the dependencies of the key [c] in [env]. The variables reachable from [c]
+      are its free variables, the section variables that its constants, inductive types and
+      constructors depend on ([Environ.vars_of_global]: a constant [mytype := a] over a section
+      [Let a := nat] unfolds to [a], whose body [clearbody] removes), and, recursively, those of
+      their declarations. The scan reads [c], then the declarations of the variables it reaches, in
+      the order it reaches them. It stops at the first variable beyond [max_deps] or at the first node
+      beyond [nodes], so it costs at most [nodes] nodes, whatever the context. Raises [Uncacheable] as
+      [scan] does, and on a variable without a declaration, unless a bound was reached first. *)
+  let deps env nodes c =
+    let seen = ref Id.Set.empty and n = ref 0 and todo = ref [] and left = ref nodes and acc = ref [] in
+    let step () = decr left; if !left < 0 then raise Bound in
+    let reach id =
+      if Id.Set.mem id !seen then true
+      else if !n < max_deps then begin
+        seen := Id.Set.add id !seen;
+        incr n;
+        todo := id :: !todo;
+        true
+      end
+      else raise Bound
+    in
+    let rec close () =
+      match !todo with
+      | [] -> ()
+      | id :: rest ->
+        todo := rest;
+        let d = try Environ.lookup_named id env with Not_found -> raise Uncacheable in
+        scan env step reach (NamedDecl.get_type d);
+        Option.iter (scan env step reach) (NamedDecl.get_value d);
+        acc := d :: !acc;
+        close ()
+    in
+    match scan env step reach c; close () with
+    | () -> Deps !acc
+    | exception Bound -> Over !acc
+
+  (** What an entry holds for its key. *)
+  type result =
+    | Translation of
+        { mutable univs : UGraph.t
+              (** the evar map's universe graph ([Evd.universes]) at the computation, or at a later
+                  lookup where [same_global_relations] held *)
+        ; mutable uctx : Univ.ContextSet.t  (** the evar map's local universe context, likewise *)
+        ; res : prfp option
+        ; effects : Effects.t list }
+    | Over_cap  (** the scan of the key reached one of its bounds: [deps] returned [Over] *)
+
+  type entry =
+    { key : Constr.t
+    ; deps : Constr.named_declaration list
+          (** the declarations that [deps] returned for [key], in [Deps] or [Over] *)
+    ; mutable gen : int
+          (** the generation ([contexts]) of a named context where [deps_ok] holds: that of the
+              computation, or of a later lookup where it held *)
+    ; result : result }
+
+  type named_map = Constr.named_declaration Id.Map.t
+
+  (** The [max_contexts] latest named contexts in which the memo was used, newest first, by their
+      variable maps ([Environ.env_named_map], which [Environ.lookup_named] reads) and a generation
+      number of each. An entry records the generation of a context where [deps_ok] holds for it;
+      only these few maps are kept, whatever the number of entries. *)
+  let max_contexts = 8
+
+  let contexts : (int * named_map) list ref = ref []
+  let last_gen = ref 0
+
+  (** The [rebound] sets of the older contexts of [contexts] against the newest, by generation. *)
+  let rebound_sets : (int * Id.Set.t) list ref = ref []
+
+  let forget_contexts () =
+    contexts := [];
+    rebound_sets := []
+
+  (** [generation map]: the generation of the context of variable map [map], which becomes the
+      newest of [contexts]. *)
+  let generation map =
+    match !contexts with
+    | (g, m) :: _ when m == map -> g
+    | l ->
+      let g, l =
+        match List.find_opt (fun (_, m) -> m == map) l with
+        | Some (g, _) -> (g, List.filter (fun (g', _) -> g' <> g) l)
+        | None ->
+          incr last_gen;
+          (!last_gen, l)
+      in
+      contexts := (g, map) :: List.filteri (fun i _ -> i < max_contexts - 1) l;
+      rebound_sets := [];
+      g
+
+  (** [rebound map0 map1]: the variables that [map0] binds and whose declaration in [map1] is not
+      physically the same, or which [map1] does not bind. [Id.Map.symmetric_diff_fold] skips the
+      subtrees that the two maps share, so its cost is that of their difference. *)
+  let rebound map0 map1 =
+    Id.Map.symmetric_diff_fold
+      (fun id d0 _ s -> if Option.has_some d0 then Id.Set.add id s else s)
+      map0 map1 Id.Set.empty
+
+  (** [rebound_set g0 map]: the [rebound] set of the context of generation [g0] against [map], the
+      newest context; [None] if [contexts] no longer holds [g0]. *)
+  let rebound_set g0 map =
+    match List.assoc_opt g0 !rebound_sets with
+    | Some _ as s -> s
+    | None -> (
+      match List.assoc_opt g0 !contexts with
+      | None -> None
+      | Some map0 ->
+        let s = rebound map0 map in
+        rebound_sets := (g0, s) :: !rebound_sets;
+        Some s )
+
+  let decl_ok map d =
+    match Id.Map.find_opt (NamedDecl.get_id d) map with
+    | Some d' -> d == d' || NamedDecl.equal Sorts.relevance_equal exact_eq d d'
+    | None -> false
+
+  (** [deps_ok env e]: each declaration of [e.deps] is that of its variable in [env] (physically,
+      or equal by [exact_eq]). It holds in the context of generation [e.gen]; so it holds at once in
+      that context, and in another one it needs checking only for the variables that [rebound]
+      gives against [e.gen]'s context, or for all of them if [contexts] no longer holds it. When it
+      holds, [env]'s context's generation becomes [e.gen]. *)
+  let deps_ok env e =
+    let map = (Environ.named_context_val env).Environ.env_named_map in
+    let g = generation map in
+    e.gen = g
+    || (match rebound_set e.gen map with
+        | Some s ->
+          Id.Set.is_empty s
+          || List.for_all (fun d -> not (Id.Set.mem (NamedDecl.get_id d) s) || decl_ok map d) e.deps
+        | None -> List.for_all (decl_ok map) e.deps)
+       && begin
+         e.gen <- g;
+         true
+       end
+
+  let memo : (int, entry list) Hashtbl.t = Hashtbl.create 1024
+  let stamp : (Environ.env * (term_kind * decl_kind) ConstrMap.t) option ref = ref None
+
+  (** The number of entries in [memo]; [validate] empties it at [max_entries]. *)
+  let entries = ref 0
+  let max_entries = 100_000
+
+  (** The most entries that [memo] keeps for one hash. [add] runs after [find] returned no entry, so
+      an entry with the same key has dependencies that fail in the current environment: [add]
+      replaces it, and drops the oldest entries beyond [max_bucket]. Without this bound, one type
+      whose local declarations change at every call (a [pose]d body, backtracked) piles up entries
+      that every lookup compares. *)
+  let max_bucket = 4
+
+  (** The memo is used only when the instance terms that the translation converts against
+      ([Application] keys of the table, see [match_operator]) are closed and universe-free, as the
+      memoised terms are. *)
+  let usable = ref false
+
+  let closed_instances env table =
+    ConstrMap.fold
+      (fun _ (k, _) ok ->
+        ok
+        &&
+        match k with
+        | OtherTerm _ -> true
+        | Application t -> (
+          let closed = ref true in
+          let reach _ = closed := false; false in
+          match scan env ignore reach (EConstr.Unsafe.to_constr t) with
+          | () -> !closed
+          | exception Uncacheable -> false ))
+      table true
+
+  (** To call once per zify call, after [init_cache]. *)
+  let validate () =
+    let genv = Global.env () in
+    match !stamp with
+    | Some (e, t) when e == genv && t == !table_cache && !entries < max_entries -> ()
+    | _ ->
+      Hashtbl.reset memo;
+      entries := 0;
+      forget_contexts ();
+      stamp := Some (genv, !table_cache);
+      usable := closed_instances genv !table_cache
+
+  (** [same_global_relations (l1, c1) (l2, c2)]: over the same global universe graph, a graph with
+      the local universes [(l2, c2)] relates the levels outside [n = l2 \ l1] as the graph with
+      [(l1, c1)] does. It holds when [l1 ⊆ l2], [c1 ⊆ c2], every constraint of [c2 \ c1] has an
+      end in [n], and either no constraint of [c2 \ c1] leads from [n] to a level outside [n], or
+      none leads into [n] from outside (an [Eq] leads both ways): a path between two levels outside
+      [n] that the first graph lacks would have to enter [n] and leave it. The translation compares
+      only levels outside [n]: global levels, reached by unfolding the global constants of a
+      universe-free key. *)
+  let same_global_relations (l1, c1) (l2, c2) =
+    let open Univ in
+    Level.Set.subset l1 l2
+    && UnivConstraints.subset c1 c2
+    &&
+    let n = Level.Set.diff l2 l1 in
+    let isnew l = Level.Set.mem l n in
+    let into = ref false and out = ref false and ok = ref true in
+    UnivConstraints.iter
+      (fun (u, k, v) ->
+        match isnew u, isnew v with
+        | false, false -> ok := false
+        | true, true -> ()
+        | true, false -> out := true; if k = UnivConstraint.Eq then into := true
+        | false, true -> into := true; if k = UnivConstraint.Eq then out := true)
+      (UnivConstraints.diff c2 c1);
+    !ok && not (!into && !out)
+
+  (** The verdicts of [same_global_relations] against the current local context [cur], by the
+      physical identity of an entry's local context. [Evd.universe_context_set] returns the evar
+      map's stored level set and constraint set, and [univs_ok] refreshes an accepted entry to the
+      current ones, so the entries checked at one universe state share them. *)
+  let cur : (Univ.Level.Set.t * Univ.UnivConstraints.t) option ref = ref None
+  let verdicts : (Univ.Level.Set.t * Univ.UnivConstraints.t * bool) list ref = ref []
+
+  let univs_ok evd = function
+    | Over_cap -> true
+    | Translation t ->
+      let univs = Evd.universes evd in
+      t.univs == univs
+      ||
+      let ((l2, c2) as uctx) = Evd.universe_context_set evd in
+      let l1, c1 = t.uctx in
+      (match !cur with
+       | Some (l, c) when l == l2 && c == c2 -> ()
+       | _ -> cur := Some (l2, c2); verdicts := []);
+      let ok =
+        (l1 == l2 && c1 == c2)
+        ||
+        match List.find_opt (fun (l, c, _) -> l == l1 && c == c1) !verdicts with
+        | Some (_, _, b) -> b
+        | None ->
+          let b = same_global_relations t.uctx uctx in
+          verdicts := (l1, c1, b) :: !verdicts;
+          b
+      in
+      if ok then begin t.univs <- univs; t.uctx <- uctx end;
+      ok
+
+  let find env evd h c =
+    match Hashtbl.find_opt memo h with
+    | None -> None
+    | Some l -> List.find_opt (fun e -> exact_eq e.key c && univs_ok evd e.result && deps_ok env e) l
+
+  let add h e =
+    let old = Option.default [] (Hashtbl.find_opt memo h) in
+    let others = List.filter (fun e' -> not (exact_eq e'.key e.key)) old in
+    let l = e :: List.filteri (fun i _ -> i < max_bucket - 1) others in
+    entries := !entries - List.length old + List.length l;
+    Hashtbl.replace memo h l
+
+  (** [replay_effects env evd l] has the effects [l] again: it registers the terms in [CstrTable]
+      and threads [evd] through the [Typing.checked_appvect] calls. *)
+  let replay_effects env evd l =
+    List.fold_left
+      (fun evd -> function
+        | Effects.Register (t, i) -> CstrTable.HConstr.add CstrTable.table t i; evd
+        | Effects.Checked_appvect (f, args) -> fst (Typing.checked_appvect env evd f args))
+      evd l
+
+  let memo env evd c f =
+    if not !usable then f ()
+    else
+      let h = Constr.hash c in
+      match find env evd h c with
+      | Some {result = Translation t; _} -> (replay_effects env evd t.effects, t.res)
+      | Some {result = Over_cap; _} -> f ()
+      | None ->
+        let w = Gc.minor_words () in
+        let ((_, res) as r), effects = Effects.record f in
+        let words = Gc.minor_words () -. w in
+        if words >= min_words then begin
+          let gen = generation (Environ.named_context_val env).Environ.env_named_map in
+          match deps env (int_of_float (words *. nodes_per_word)) c with
+          | exception Uncacheable -> ()
+          | Over deps -> add h {key = c; deps; gen; result = Over_cap}
+          | Deps deps ->
+            let univs = Evd.universes evd and uctx = Evd.universe_context_set evd in
+            add h {key = c; deps; gen; result = Translation {univs; uctx; res; effects}}
+        end;
+        r
+end
+
+(** [trans_check_prop], memoised by [TypeMemo], except under [Set Debug "zify"]: a memo hit would
+    skip the debug output of the translation. *)
+let trans_check_prop_memo env evd t =
+  if CDebug.get_flag debug_zify_flag then trans_check_prop env evd t
+  else
+    TypeMemo.memo env evd (EConstr.Unsafe.to_constr t) (fun () -> trans_check_prop env evd t)
+
 let get_hyp_typ = function
   | NamedDecl.LocalDef (h, _, ty) | NamedDecl.LocalAssum (h, ty) ->
     (h.Context.binder_name, EConstr.of_constr ty)
@@ -1337,7 +1794,7 @@ let trans_hyps env evd l =
   List.fold_left
     (fun (evd, acc) decl ->
       let h, ty = get_hyp_typ decl in
-      match trans_check_prop env evd ty with
+      match trans_check_prop_memo env evd ty with
       | evd, None -> evd, acc
       | evd, Some p' -> evd, (h, ty, p') :: acc)
     (evd, []) l
@@ -1443,11 +1900,12 @@ let zify_tac =
       Rocqlib.check_required_library ["Stdlib"; "micromega"; "ZifyClasses"];
       Rocqlib.check_required_library ["Stdlib"; "micromega"; "ZifyInst"];
       init_cache ();
+      TypeMemo.validate ();
       let evd = Proofview.Goal.sigma gl in
       let env = Proofview.Goal.env gl in
       let sign = Environ.named_context env in
       let concl = Proofview.Goal.concl gl in
-      let evd, concl = trans_check_prop env evd concl in
+      let evd, concl = trans_check_prop_memo env evd concl in
       let evd, hyps = trans_hyps env evd sign in
       let l = CstrTable.get () in
       Proofview.tclTHEN (Proofview.Unsafe.tclEVARS evd)
@@ -1535,12 +1993,29 @@ let rec interp_pscripts l =
   | [] -> Tacticals.tclIDTAC
   | s :: l -> Tacticals.tclTHEN (interp_pscript s) (interp_pscripts l)
 
+(** [may_have_spec specs c] is false when [c] has no evar and none of its applications has a head
+    with an entry in [specs]. [spec_of_term] then registers nothing for [c]. *)
+let may_have_spec specs c =
+  let rec go c =
+    (match Constr.kind c with
+     | Evar _ | Meta _ -> raise Exit
+     | App (f, _) when Constr.isRef f && ConstrMap.mem f specs ->
+       raise Exit
+     | _ -> ());
+    Constr.iter go c
+  in
+  try go c; false with Exit -> true
+
 let spec_of_hyps =
   Proofview.Goal.enter (fun gl ->
       let env = Proofview.Goal.env gl in
       let concl = Proofview.Goal.concl gl in
       let evd = Proofview.Goal.sigma gl in
       let terms = concl :: List.map NamedDecl.get_type (EConstr.named_context env) in
+      let specs = !specs_cache in
+      if not (List.exists (fun t -> may_have_spec specs (EConstr.Unsafe.to_constr t)) terms) then
+        Tacticals.tclIDTAC
+      else
       let s = fresh_subscript env in
       let env =
         List.fold_left
@@ -1635,6 +2110,7 @@ let saturate =
       (* Collect all the potential saturation lemma *)
       sat concl;
       let () = List.iter (fun decl -> sat (NamedDecl.get_type decl)) hyps in
+      if CstrTable.HConstr.length table = 0 then Tacticals.tclIDTAC else
       let s0 = fresh_subscript env in
       let (_,tacs,_) = CstrTable.HConstr.fold (fun c d acc -> sat_constr env evd hyps acc c d) table (s0,[],[]) in
       Tacticals.tclTHENLIST tacs)
