@@ -322,7 +322,9 @@ let rebind_scan =
      && s "Section S. Import M. Section T. Timeout 1End T. Lemma a : True. Qed. End S." = Some (end_, 1)
      && s "Section S. Import M. Timeout 1Print Section S. Lemma a : True. Qed. End S." = Some (end_, 1)
      && s "Lemma a : True. Qed. Timeout 1e5 Register x as core.eq.type." = Some ("Register", 1)
-     && s "Section S. Lemma a : True. Qed. Notation \"x .. y\" := (x) (at level 0). End S." = None
+     && s "Section S. Import M. Lemma a : True. Qed. Check (x .. Section y). End S." = Some (end_, 1)
+     && s "Section S. Import M. #[program (* ] Section *)] Definition d := 0. Lemma a : True. Qed. End S." = Some (end_, 1)
+     && s "Section S. Import M. #[warnings=\"]\"] Definition d := 0. Lemma a : True. Qed. End S." = Some (end_, 1)
      && s "Lemma a : True. Qed. Import M." = Some ("Import", 1)
      && s "Lemma a : True. Qed. Load \"f\"." = Some ("Load", 1)
      && s "Lemma Requires : True. Qed." = None

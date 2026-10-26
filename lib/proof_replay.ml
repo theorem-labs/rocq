@@ -426,12 +426,20 @@ let scan_late_rebind text =
     let c = text.[!i] in
     if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
     else if c = '"' then (skip_string ())
-    else if c = '#' && !i + 1 < n && text.[!i + 1] = '[' then begin
-      (* an attribute: the command word is still to come *)
-      while !i < n && text.[!i] <> ']' do
-        if text.[!i] = '"' then skip_string () else step ()
-      done;
-      if !i < n then incr i
+    else if !at_start && c = '#' && !i + 1 < n && text.[!i + 1] = '[' then begin
+      (* An attribute before the command word: skip to its matching ']',
+         skipping comments and strings inside it, so a ']' in either does
+         not end it (Claude review of 951eb445f9, P1-1). *)
+      i := !i + 2;
+      let depth = ref 1 in
+      while !depth > 0 && !i < n do
+        let d = text.[!i] in
+        if d = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
+        else if d = '"' then skip_string ()
+        else if d = '[' then (incr depth; incr i)
+        else if d = ']' then (decr depth; incr i)
+        else step ()
+      done
     end
     else if c >= '0' && c <= '9' then begin
       (* A number, exactly as the lexer takes it; what follows is a new
