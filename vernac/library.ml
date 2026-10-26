@@ -625,7 +625,11 @@ let in_require : require_obj -> obj =
      load_function = load_require;
      open_function = (fun _ _ -> assert false);
      discharge_function = (fun o -> Some o);
-     classify_function = (fun o -> Anticipate) }
+     classify_function = (fun o -> Anticipate);
+     (* An [Anticipate] object: [Declaremods.end_library] drops it from
+        the segments a library stores ([drop_anticipate]), so the label
+        never reads one. *)
+     interface_key = Not_in_key }
 
 let cache_require_syntax needed =
   List.iter register_one_syntax needed
@@ -645,7 +649,9 @@ let in_require_syntax : require_obj_syntax -> obj =
      load_function = load_require_syntax;
      open_function = (fun _ _ -> assert false);
      discharge_function = (fun o -> Some o);
-     classify_function = (fun o -> Anticipate) }
+     classify_function = (fun o -> Anticipate);
+     (* Dropped from the stored segments like REQUIRE above. *)
+     interface_key = Not_in_key }
 
 (* Require libraries, import them if [export <> None], mark them for export
    if [export = Some true] *)
@@ -712,12 +718,12 @@ type 'doc todo_proofs =
 
 (* EJGA: would be nice maybe to have a version that performs extra
    cleanup in the case the computation raises? *)
-let save_library_base f sum lib proofs vmlib =
+let save_library_base f sum lib ~label proofs vmlib =
   try
     let open Memprof_coq.Resource_bind in
     let& ch = Memprof_coq.Masking.with_resource ~acquire:raw_extern_library ~release:ObjFile.close_out f in
     ObjFile.marshal_out_segment ch ~segment:summary_seg sum;
-    ObjFile.marshal_out_segment ch ~segment:library_seg lib;
+    ObjFile.marshal_out_segment ?hash:label ch ~segment:library_seg lib;
     ObjFile.marshal_out_segment ch ~segment:opaques_seg proofs;
     ObjFile.marshal_out_segment ch ~segment:vm_seg vmlib
   with exn ->
@@ -725,8 +731,31 @@ let save_library_base f sum lib proofs vmlib =
     Sys.remove f;
     Exninfo.iraise iexn
 
+(* [-location-free-label]: store the location-free label as the library's
+   digest and the attempted-resolution records in the library. Off (the
+   default), coqc writes stock's bytes. *)
+let location_free_label = ref false
+
+let set_location_free_label b =
+  location_free_label := b;
+  Attempts.set_enabled b
+
 (* This is the basic vo save structure *)
 let save_library_struct ~output_native_objects dir =
+  (* Under [-location-free-label], the attempted resolutions that nothing
+     else in the library records are stored in it ([Attempts]): only a
+     library that made such an attempt gets the object. Off, nothing was
+     logged ([Attempts.set_enabled]). *)
+  let () =
+    (* The libraries loaded in the final state ([libraries_loaded_list], from
+       which the dependencies are written; [library_is_loaded] cannot tell). *)
+    let loaded dir =
+      List.exists (fun (_, d) -> DirPath.equal d dir) !libraries_loaded_list in
+    if !location_free_label then
+      Option.iter (fun t -> Lib.add_leaf (Attempts.inject t))
+        (Attempts.finish ~loaded ~loaded_plugin:Mltop.is_loaded_module);
+    Attempts.reset ()
+  in
   let md_compiled, md_objects, md_syntax_objects, vmlib, ast, info =
     Declaremods.end_library ~output_native_objects dir in
   let sd =
@@ -745,12 +774,24 @@ let save_library_struct ~output_native_objects dir =
     error_recursively_dependent_library dir;
   sd, md, vmlib, ast
 
+(* The digest a library's file stores for its [library] segment, and that
+   its dependents record, under [-location-free-label]: the location-free
+   label (LibkeyObjects). [None] without the flag, or when the library has
+   no label: the MD5 of the segment's bytes, as stock writes it. Stock
+   [coqc] and [rocqchk] only compare stored copies of this digest, so they
+   read a file written either way. *)
+let library_label (md : library_disk) =
+  if not !location_free_label then None
+  else
+    LibkeyObjects.label ~compiled:md.md_compiled ~syntax:md.md_syntax_objects
+      ~objects:md.md_objects
+
 let save_library dir : library_t =
   let sd, md, vmlib, _ast = save_library_struct ~output_native_objects:false dir in
-  (* Digest for .vo files is on the md part, for now we also play it
-     safe when we work on-memory and compute the digest for the lib
-     part, even if that's slow. Better safe than sorry. *)
-  let digest = Marshal.to_string md [] |> Digest.string in
+  let digest = match library_label md with
+    | Some label -> label
+    | None -> Marshal.to_string md [] |> Digest.string
+  in
   mk_library sd md (Dvo_or_vi digest) (Vmlibrary.inject vmlib)
 
 let save_library_to todo_proofs ~output_native_objects dir f =
@@ -772,7 +813,7 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   in
   let sd, md, vmlib, ast = save_library_struct ~output_native_objects dir in
   (* Writing vo payload *)
-  save_library_base f sd md opaque_table vmlib;
+  save_library_base f sd md ~label:(library_label md) opaque_table vmlib;
   (* Writing native code files *)
   if output_native_objects then
     let fn = Filename.dirname f ^"/"^ Nativecode.mod_uid_of_dirpath dir in

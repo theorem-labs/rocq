@@ -18,6 +18,9 @@ module PluginSpec : sig
       such as [rocq-runtime.plugins.ltac] *)
   type t
 
+  (** [of_package name], [name] as in Declare ML Module. *)
+  val of_package : ?usercode:bool -> string -> t
+
   (** [to_package p] returns the findlib name of the package *)
   val to_package : t -> string
 
@@ -91,6 +94,10 @@ val interp_only_obj : (unit -> unit) -> cache_obj
 
 (** Register a callback with an interp phase. *)
 val declare_cache_obj_full : cache_obj -> string -> unit
+
+(** Whether the plugin with this findlib name is loaded in the current state
+    (declared by the library being compiled or by a library it loaded). *)
+val is_loaded_module : string -> bool
 
 (** {5 Declaring modules} *)
 

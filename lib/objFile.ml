@@ -112,7 +112,7 @@ let marshal_in_segment (type a) h ~segment : a * Digest.t =
   let () = assert (String.equal h s.hash) in
   (v, s.hash)
 
-let marshal_out_segment h ~segment v =
+let marshal_out_segment ?hash h ~segment v =
   let { out_channel = ch } = h in
   let () = assert (not (CString.Map.mem segment.id h.out_segments)) in
   let pos = LargeFile.pos_out ch in
@@ -120,12 +120,14 @@ let marshal_out_segment h ~segment v =
   let () = flush ch in
   let pos' = LargeFile.pos_out ch in
   let len = Int64.sub pos' pos in
-  let hash =
-    let in_ch = open_in_bin h.out_filename in
-    let () = LargeFile.seek_in in_ch pos in
-    let digest = Digest.channel in_ch (Int64.to_int len) in
-    let () = close_in in_ch in
-    digest
+  let hash = match hash with
+    | Some hash -> hash
+    | None ->
+      let in_ch = open_in_bin h.out_filename in
+      let () = LargeFile.seek_in in_ch pos in
+      let digest = Digest.channel in_ch (Int64.to_int len) in
+      let () = close_in in_ch in
+      digest
   in
   let () = Digest.output ch hash in
   let s = { name = segment.id; pos; len; hash } in

@@ -284,6 +284,39 @@ let locate_qualified_library ?root qid =
      | Error _ -> e
      | Ok _ as o -> warn_deprecated_missing_stdlib ?loc:qid.loc qid; o
 
+(* The candidate files a lookup probes, as (directory, file name), for the
+   attempted-resolution records (Attempts): what [select_vo_file] looks for
+   in each directory that [expand_path] or [filter_path] gives. All the
+   blocks a qualified lookup could search are listed, and, for a name with
+   no root, the Stdlib fallback's too, so the list is a superset of what one
+   lookup probed. *)
+let library_probes dirs base =
+  let base = Names.Id.to_string base in
+  let names = (if !load_vos_libraries then [base ^ ".vos"] else []) @ [base ^ ".vo"] in
+  List.concat_map (fun (ph, _) -> List.map (fun n -> (ph, n)) names) dirs
+
+let qualified_library_probes ?root qid =
+  let dir, base = Libnames.repr_qualid qid in
+  let probes ?root () =
+    let (full_installed, full_local), (installed, local) = expand_path ?root dir in
+    library_probes (full_local @ full_installed @ local @ installed) base
+  in
+  match root with
+  | Some _ -> probes ?root ()
+  | None ->
+    let root_stdlib =
+      Names.(Libnames.add_dirpath_suffix DirPath.empty (Id.of_string "Stdlib")) in
+    probes () @ probes ~root:root_stdlib ()
+
+let absolute_library_probes dir =
+  let pref, base = Libnames.split_dirpath dir in
+  library_probes (filter_path (fun dir -> DP.equal dir pref)) base
+
+(* As [System.find_file_in_path] in [locate_file]. *)
+let file_probes fname =
+  if not (Filename.is_implicit fname) then [(Filename.dirname fname, Filename.basename fname)]
+  else List.map (fun p -> (p.path_physical, fname)) !load_paths
+
 (** { 5 Extending the load path } *)
 
 type vo_path =

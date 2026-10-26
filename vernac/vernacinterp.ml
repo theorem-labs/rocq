@@ -172,7 +172,10 @@ let interp_entry ?(verbosely=true) ~st entry =
 module Intern = struct
 
   let fs_intern dp =
-    match Loadpath.locate_absolute_library dp with
+    let result = Loadpath.locate_absolute_library dp in
+    Attempts.record_require_absolute dp ~probes:(fun () -> Loadpath.absolute_library_probes dp)
+      ~found:(Result.to_option result);
+    match result with
     | Ok file ->
       Feedback.feedback @@ Feedback.FileDependency (Some file, Names.DirPath.to_string dp);
       let res, provenance = Library.intern_from_file file in

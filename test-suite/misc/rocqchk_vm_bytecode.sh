@@ -36,10 +36,11 @@ rocq c -noinit -R "$d/d1" "" "$d/d1/Defs.v"
 rocq c -noinit -R "$d/d2" "" "$d/d2/Defs.v"
 
 # Splice: library from d1 (body says true), vmlibrary from d2 (bytecode says
-# false), keeping d1's opaques/summary. All per-segment MD5s and the summary
-# offsets are recomputed so the container is well formed.
+# false), keeping d1's opaques/summary. Each segment keeps the digest its
+# file stored and the summary offsets are recomputed, so the container is
+# well formed.
 python3 - "$d" <<'PY'
-import sys, hashlib, struct
+import sys, struct
 d = sys.argv[1]
 MAGIC = 0x436F7121  # "Coq!"; all ints big-endian, layout per lib/objFile.ml
 def parse(p):
@@ -56,8 +57,12 @@ def parse(p):
         pos, ln = struct.unpack_from(">QQ", b, off); off += 16
         h = b[off:off+16]; off += 16
         data = b[pos:pos+ln]
-        assert hashlib.md5(data).digest() == h, name + ": bad segment MD5"
-        segs[name] = data
+        # A segment's digest is stored twice, in the table and after the
+        # data, and readers only compare the two copies. The library
+        # segment's is a label, not the MD5 of its bytes, so it is carried
+        # over as stored.
+        assert b[pos+ln:pos+ln+16] == h, name + ": digest copies differ"
+        segs[name] = (data, h)
     return ver, segs
 def write(p, ver, by):
     out = bytearray()
@@ -65,8 +70,7 @@ def write(p, ver, by):
     out += struct.pack(">Q", 0)              # summary position placeholder
     summ = []
     for name in sorted(by):                  # CString.Map.iter order
-        data = by[name]; pos = len(out); out += data
-        h = hashlib.md5(data).digest(); out += h
+        data, h = by[name]; pos = len(out); out += data; out += h
         summ.append((name, pos, len(data), h))
     sp = len(out)
     out += struct.pack(">I", len(summ))

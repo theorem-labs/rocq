@@ -29,6 +29,8 @@
    (package rocq-core)
    (package coqide-server) ; For fake_ide
    (package rocq-devtools) ; For bench-render
+   ; For misc/library-label.sh and misc/library-label-attempts.sh
+   tools/library_label.exe
    (source_tree .))
    ; Finer-grained dependencies would look like this and be generated
    ; by coqdep; that would allow tests to be run incrementally.

@@ -1,3 +1,31 @@
 (executable
  (name coq_config_to_make)
+ (modules coq_config_to_make)
  (libraries rocq-runtime.config))
+
+; Test oracle of the location-free library label (vernac/libkeyObjects.ml).
+; Every plugin is linked in so that every object kind is registered.
+(executable
+ (name library_label)
+ (modules library_label)
+ (link_flags -linkall)
+ (libraries
+  rocq-runtime.vernac
+  rocq-runtime.plugins.ltac
+  rocq-runtime.plugins.tauto
+  rocq-runtime.plugins.ltac2
+  rocq-runtime.plugins.ltac2_ltac1
+  rocq-runtime.plugins.ssrmatching
+  rocq-runtime.plugins.ssreflect
+  rocq-runtime.plugins.btauto
+  rocq-runtime.plugins.cc
+  rocq-runtime.plugins.derive
+  rocq-runtime.plugins.extraction
+  rocq-runtime.plugins.firstorder
+  rocq-runtime.plugins.funind
+  rocq-runtime.plugins.micromega
+  rocq-runtime.plugins.zify
+  rocq-runtime.plugins.nsatz
+  rocq-runtime.plugins.ring
+  rocq-runtime.plugins.rtauto
+  rocq-runtime.plugins.number_string_notation))

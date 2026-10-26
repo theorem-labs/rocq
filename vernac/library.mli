@@ -75,6 +75,15 @@ val save_library_to :
     [require_library_syntax_from_dirpath] *)
 val save_library : DirPath.t -> library_t
 
+val set_location_free_label : bool -> unit
+(** [-location-free-label]: when [true], a saved library stores as the
+    digest of its [library] segment the location-free label
+    ([LibkeyObjects.label]) instead of the MD5 of the segment's bytes, and
+    stores the attempted resolutions nothing else records ([Attempts]).
+    Default [false]: the file is what a stock [coqc] writes. A stock [coqc]
+    cannot load a library that holds an [ATTEMPTS] object (it does not know
+    the object kind). *)
+
 (** {6 Interrogate the status of libraries } *)
 
   (** - Tell if a library is loaded *)
