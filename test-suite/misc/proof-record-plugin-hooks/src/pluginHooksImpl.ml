@@ -52,6 +52,9 @@ let set_closures () =
   Ind_tables.set_declare_definition_scheme (fun ~univs:_ ~role:_ ~name:_ ~effs:_ _ ->
       CErrors.anomaly (Pp.str "probe"));
   Ind_tables.set_register_definition_scheme (fun ~internal:_ ~name:_ ~const:_ ~univs:_ ?loc:_ () -> ());
+  Declare.Obls.set_default_tactic (Proofview.tclUNIT ());
+  Proof_bullet.register_behavior
+    { Proof_bullet.name = "proof-record-probe"; put = (fun p _ -> p); suggest = (fun _ -> Pp.mt ()) };
   (* The first registration is a new name; only the overwrite replaces one. *)
   Ltac_plugin.Tacenv.register_ml_tactic probe_tactic [| fun _ _ -> Proofview.tclUNIT () |];
   Ltac_plugin.Tacenv.register_ml_tactic ~overwrite:true probe_tactic [| fun _ _ -> Proofview.tclUNIT () |]
