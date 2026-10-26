@@ -1,0 +1,6 @@
+# P1 of the Claude gate at 0f8d815732 (finding 3). B.v makes foo a keyword
+# after t is defined. fresh "foo" then gives foo0, clear foo fails, and the
+# proof is fun _ => 0 instead of fun _ => 1. The string literal is not
+# reparsed, so the sentences are equal: the record must hold fresh's
+# keyword test.
+refuse-by-read lfresh keyword

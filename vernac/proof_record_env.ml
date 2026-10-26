@@ -134,22 +134,14 @@ let position () =
 (* A value of the global state that no proof changes in place, digested again
    only when it is a different value: the universe graph is one value from
    one declaration to the next, so most proofs reuse the last digest. *)
-let slot () = ref None
+let universes_slot = Proof_recorder.slot ()
+let qualities_slot = Proof_recorder.slot ()
+let named_slot = Proof_recorder.slot ()
+let flags_slot = Proof_recorder.slot ()
+let generalizable_slot = Proof_recorder.slot ()
+let template_slot = Proof_recorder.slot ()
 
-let cached slot what v =
-  match !slot with
-  | Some (o, d) when o == Obj.repr v -> d
-  | Some _ | None ->
-    let d = Proof_recorder.digest ~what v in
-    slot := Some (Obj.repr v, d);
-    d
-
-let universes_slot = slot ()
-let qualities_slot = slot ()
-let named_slot = slot ()
-let flags_slot = slot ()
-let generalizable_slot = slot ()
-let template_slot = slot ()
+let cached slot what v = Proof_recorder.digest_slot slot ~what v
 
 (* Reads taken once, at each proof's start, for the channels that have no
    single read point (BET-84, census rows 2, 3, 4, 13, M3, M7). They are

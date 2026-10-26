@@ -208,11 +208,21 @@ let fence_primitive { mltac_plugin; mltac_tactic } =
 
 let primitive_map = ref MLMap.empty
 
+(* BET-84: a second definition of a primitive replaces its closure under an
+   unchanged name, possibly an audited plugin's, which [fence_primitive]
+   trusts by name, and row 10 records the source definitions only. Rocq
+   defines each primitive once, so a redefinition makes every later proof of
+   the process ineligible (Proof_recorder.closure_setter; Claude review of
+   beb759fef3, finding 1). *)
+let primitive_redefined =
+  Proof_recorder.closure_setter ~what:"Tac2env.define_primitive" ~stock:0
+
 let define_primitive name f =
   let f = match f with
     | ValCls f -> ValCls (annotate_closure (FrPrim name) f)
     | _ -> f
   in
+  if MLMap.mem name !primitive_map then primitive_redefined ();
   primitive_map := MLMap.add name f !primitive_map
 let interp_primitive name =
   fence_primitive name;
@@ -343,7 +353,13 @@ module MLType = Tac2dyn.ArgMap(MLTypeObj)
 
 let ml_object_table = ref MLType.empty
 
+(* BET-84: as for [define_primitive]: the ML object behind a quotation is
+   defined once per tag by Rocq. *)
+let ml_object_redefined =
+  Proof_recorder.closure_setter ~what:"Tac2env.define_ml_object" ~stock:0
+
 let define_ml_object t tpe =
+  if MLType.mem t !ml_object_table then ml_object_redefined ();
   ml_object_table := MLType.add t (MLType.Pack tpe) !ml_object_table
 
 let interp_ml_object t =

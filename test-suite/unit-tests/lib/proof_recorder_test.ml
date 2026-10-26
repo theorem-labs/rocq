@@ -292,8 +292,49 @@ let writes =
      && w.R.warnings_raised = [ ("deprecated-reference", "gone") ]
      && w.R.counters = [ ("evar", 5) ])
 
+(* A slot digests a value once and gives the same digest back while the
+   value is the same one (by address); a different value is digested again.
+   The test changes [a] in place between the two reads, which no global value
+   a slot holds ever does: a slot that digested again would return the digest
+   of the changed contents, so the reuse is seen. *)
+let slot_reuse =
+  start ();
+  let s = Rec.slot () in
+  let a = Sys.opaque_identity [| 1; 2; 3 |] and b = Sys.opaque_identity [| 4 |] in
+  open_proof ();
+  let d1 = Rec.digest_slot s ~what:"probe" a in
+  a.(0) <- 9;
+  let d2 = Rec.digest_slot s ~what:"probe" a in
+  let d3 = Rec.digest_slot s ~what:"probe" b in
+  close_proof ();
+  let p = List.hd (the_file ()).R.proofs in
+  mk_bool_test "recorder-slot-reuse"
+    "a slot returns the kept digest for the same value and digests a new one"
+    (d2 = d1 && d2 <> R.digest_value a && d3 = R.digest_value b && p.R.ineligible = [])
+
+(* "unhashable" is one stand-in for every value that cannot be digested, so
+   every proof that reuses a kept "unhashable" must be marked, not only the
+   first: the second proof's read would otherwise match a replay where the
+   value changed (Claude gate at 0f8d815732, finding 6). *)
+let slot_unhashable =
+  start ();
+  let s = Rec.slot () in
+  let v = Sys.opaque_identity (fun x -> x + 1) in
+  open_proof ~name:"Top.File.first" ();
+  let d1 = Rec.digest_slot s ~what:"probe" v in
+  close_proof ();
+  open_proof ~name:"Top.File.second" ();
+  let d2 = Rec.digest_slot s ~what:"probe" v in
+  close_proof ();
+  let reasons p = List.map (fun i -> i.R.reason) p.R.ineligible in
+  let f = the_file () in
+  mk_bool_test "recorder-slot-unhashable"
+    "a kept \"unhashable\" marks every proof that reuses it"
+    (d1 = "unhashable" && d2 = "unhashable"
+     && List.map reasons f.R.proofs = [ [ "unhashable" ]; [ "unhashable" ] ])
+
 let tests =
   [ inert; one_proof; outside; dedup; first_value; read_by; ineligible_reasons; admitted; nested;
-    start_tables; dropped; renamed; sentences; writes ]
+    start_tables; dropped; renamed; sentences; writes; slot_reuse; slot_unhashable ]
 
 let _ = run_tests __FILE__ log_out_ch tests

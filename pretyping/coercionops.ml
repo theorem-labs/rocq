@@ -378,7 +378,12 @@ let path_comparator :
   (Environ.env -> Evd.evar_map -> cl_typ -> inheritance_path -> inheritance_path -> bool) ref =
   ref (fun _ _ _ _ _ -> false)
 
-let install_path_comparator f = path_comparator := f
+(* BET-84: pretyping/pretyping.ml installs Rocq's own once, when it loads; a
+   later one is a plugin's (Proof_recorder.closure_setter). *)
+let path_comparator_set =
+  Proof_recorder.closure_setter ~what:"Coercionops.install_path_comparator" ~stock:1
+
+let install_path_comparator f = path_comparator_set (); path_comparator := f
 
 let compare_path env sigma cl p q = !path_comparator env sigma cl p q
 

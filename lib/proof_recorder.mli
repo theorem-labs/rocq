@@ -55,6 +55,17 @@ val register_fence_check : (unit -> unit) -> unit
     and in {!fence_tripped}, while {!tracking} is true, and calls
     {!trip_fence} when the state its cache holds has changed. *)
 
+val closure_setter : what:string -> stock:int -> unit -> unit
+(** [closure_setter ~what ~stock] is for a setter that installs a
+    process-wide closure (the unifier behind [Evarconv.set_evar_conv], the
+    typeclass resolution behind [Typeclasses.set_solve_all_instances]).
+    Rocq's own modules call that setter [stock] times when they load, before
+    any plugin can; the setter calls the function returned at each call.
+    Once it has been called more than [stock] times, a plugin's closure is
+    installed, which can read plugin state that no read sees, and a fence
+    check trips the fence with reason ["plugin_hook"] and detail [what]: the
+    open proof and every later one in the process is ineligible. *)
+
 val current_name : unit -> string option
 (** The name of the open proof, if any. *)
 
@@ -229,6 +240,20 @@ val digest_cached : what:string -> 'a -> string
     value for every proof that reads it, so it is digested once per file,
     not once per proof. Never call it on a value that is rebuilt at each
     read: that fills the cache and digests every copy. *)
+
+type slot
+(** The last value of one start-of-proof read and its digest. *)
+
+val slot : unit -> slot
+(** A new empty slot. {!stop} and {!write} empty every slot. *)
+
+val digest_slot : slot -> what:string -> 'a -> string
+(** {!digest} of a value of the global state that no proof changes in place
+    and that the next proofs meet again, the universe graph for one: it is
+    digested again only when it is not the slot's value (by address). Like
+    {!digest_cached}, a kept ["unhashable"] marks the open proof ineligible
+    on every reuse. Unlike it, the slot holds one value, so a value that each
+    declaration replaces is not kept for the whole compile. *)
 
 val without_recording : (unit -> 'a) -> 'a
 (** Runs [f] with reads dropped, and restores the previous state, also when
