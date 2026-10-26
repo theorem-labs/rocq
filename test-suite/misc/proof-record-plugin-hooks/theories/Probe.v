@@ -1,5 +1,5 @@
 (* misc/proof-record-plugin-hooks.sh compiles this file with -proof-record
-   as it is, and once with the TestHookActivate and TestSetUnifier lines
+   as it is, and once with the TestHookActivate and TestSetClosures lines
    commented out. Each of the first three proofs reaches one of the three
    choke points that ask the active hooks of a registry. *)
 
@@ -34,9 +34,9 @@ Proof. try exact (S tt). exact I. Qed.
 Lemma uses_canonical : True.
 Proof. try exact (eq_refl : unwrap _ = 0). exact I. Qed.
 
-(* A plugin's unifier is process-wide state that no read sees: after it is
-   installed, every proof of the process must store no term. *)
-TestSetUnifier.
+(* A closure a plugin installs is process-wide state that no read sees: after
+   it is installed, every proof of the process must store no term. *)
+TestSetClosures.
 
-Lemma after_unifier : True.
+Lemma after_closures : True.
 Proof. exact I. Qed.

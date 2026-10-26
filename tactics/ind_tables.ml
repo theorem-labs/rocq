@@ -103,6 +103,19 @@ let declare_definition_scheme = ref (fun ~univs ~role ~name ~effs c ->
 let register_definition_scheme = ref (fun ~internal ~name ~const ~univs ?loc () ->
   CErrors.anomaly (Pp.str "scheme registering not registered"))
 
+(* BET-84: vernac/declare.ml installs Rocq's own of each once, when it
+   loads; a later one is a plugin's (Proof_recorder.closure_setter). The
+   refs are not exported, so these setters are the only way in. *)
+let declare_definition_scheme_set =
+  Proof_recorder.closure_setter ~what:"Ind_tables.set_declare_definition_scheme" ~stock:1
+
+let set_declare_definition_scheme f = declare_definition_scheme_set (); declare_definition_scheme := f
+
+let register_definition_scheme_set =
+  Proof_recorder.closure_setter ~what:"Ind_tables.set_register_definition_scheme" ~stock:1
+
+let set_register_definition_scheme f = register_definition_scheme_set (); register_definition_scheme := f
+
 let lookup_scheme kind ind =
   try Some (DeclareScheme.lookup_scheme kind ind) with Not_found -> None
 
