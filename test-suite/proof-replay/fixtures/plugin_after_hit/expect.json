@@ -8,7 +8,7 @@
       "hits": 0,
       "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
       "refused": "rebind",
-      "refused_detail": "Declare ML Module at line 6",
+      "refused_detail": "Declare at line 6",
       "killed": false,
       "fence": null
     }

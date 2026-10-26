@@ -23,21 +23,49 @@ open Names
    read a constant that this compile deleted still replays, where
    [Unknown] would have refused it.
 
-   Not while a section is open: there the nametab binds a constant or
-   inductive declared in the section under a path that holds the section
-   ([Top.File.S.c]), while its kernel name, which the record prints, does
-   not ([Top.File.c]). The printed name then finds nothing although the
-   kernel holds the object, so [Absent] would match a recorded [null] (a
-   private constant the registration's proof looked up, Evd.lookup_constant)
-   against an object that now exists. Inside a section an unbound name is
-   [Unreadable]: the proof misses. Outside one, a kernel name and a nametab
-   path print the same. *)
+   While a section is open, the nametab binds a constant or inductive
+   declared in it under a path that holds the section ([Top.File.S.c]),
+   while its kernel name, which the record prints, does not ([Top.File.c]).
+   So when the printed name finds nothing and sections are open, the label
+   is looked up again under each open section's path, innermost first: an
+   object whose kernel name is [<current module>.<label>] is declared either
+   at the module's top, which the first lookup finds, or in one of the open
+   sections (no module can be opened inside a section, so every open section
+   belongs to the current module). Only when none binds it is it [Absent].
+   Without this, [Absent] would match a recorded [null] (a private constant
+   the registration's proof looked up, Evd.lookup_constant) against an
+   object that now exists. The callers still require the result to print
+   back as the recorded name. *)
 type 'a parsed = Found of 'a | Absent | Unreadable
+
+let rec section_lookup ~label cwd ~stop =
+  if List.length (DirPath.repr cwd) <= stop then Absent
+  else
+    let path = Libnames.make_path cwd (Id.of_string label) in
+    match Nametab.global_of_path path with
+    | g -> Found g
+    | exception Not_found ->
+      (match DirPath.repr cwd with
+       | _ :: outer -> section_lookup ~label (DirPath.make outer) ~stop
+       | [] -> Absent)
 
 let global_of_string s =
   match Nametab.global_of_path (Libnames.path_of_string s) with
   | g -> Found g
-  | exception Not_found -> if Lib.sections_are_opened () then Unreadable else Absent
+  | exception Not_found ->
+    if not (Lib.sections_are_opened ()) then Absent
+    else begin
+      let mp = Lib.current_mp () in
+      match String.rindex_opt s '.' with
+      | Some i when String.equal (String.sub s 0 i) (ModPath.to_string mp) ->
+        let label = String.sub s (i + 1) (String.length s - i - 1) in
+        let stop = List.length (DirPath.repr (Lib.current_dirpath false)) in
+        (match section_lookup ~label (Lib.current_dirpath true) ~stop with
+         | r -> r
+         | exception _ -> Unreadable)
+      | Some _ -> Absent
+      | None -> Unreadable
+    end
   | exception _ -> Unreadable
 
 let constant_of_string s =
