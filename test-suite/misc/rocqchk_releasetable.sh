@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
-# This fork's table of opaque proofs holds a boolean beside each proof
-# (-skip-qed-typecheck: whether coqc typed it), so an entry is
-# ((proof, private universes), bool), and checker/values.ml validates that
-# shape. rocqchk -j N reads the table in the process that needs it
-# (CheckLibrary.read_opaque_table), and at -j 1 where it interns the
-# library, and both reads come out of Obj.obj: a reader that validates this
-# shape but takes an entry as the shape without the boolean still compiles,
-# and hands the checker a pair where it expects a proof.
+# A library's table of opaque proofs holds, for each proof, its term and
+# its private universes, and on a build that carries the qed-skip member a
+# boolean beside them (-skip-qed-typecheck: whether coqc typed the proof),
+# so an entry is ((proof, private universes), bool) there and (proof,
+# private universes) elsewhere; checker/values.ml validates the shape of
+# the build it belongs to. rocqchk -j N reads the table in the process that
+# needs it (CheckLibrary.read_opaque_table), and at -j 1 where it interns
+# the library, and both reads come out of Obj.obj: a reader that validates
+# one shape but takes an entry as the other still compiles, and hands the
+# checker a pair where it expects a proof. That is the defect this test
+# exists to catch, and it is why it must run on every base this checker is
+# carried to, not only on the release.
 #
-# Libraries compiled by the release's rocq, with monomorphic and
-# universe-polymorphic opaque proofs, with and without
+# Libraries with monomorphic and universe-polymorphic opaque proofs, and,
+# where the build's rocq has the flag, with and without
 # -skip-qed-typecheck, so that both values of the boolean and both kinds of
 # private universes are in the tables, are checked at -j 1 and -j 2:
-#  (a) this build accepts them at both, as the release's own rocqchk does;
-#  (b) its -o output, standard output and error together, is the release's
+#  (a) this build accepts them at both, as the reference rocqchk does;
+#  (b) its -o output, standard output and error together, is the reference
 #      rocqchk's at -j 1, but for the version in the first line, which
 #      names each build (a build in a git checkout adds its revision).
 #
-# ROCQ_STOCK names the release's rocq, and ROCQCHK_STOCK the release's
-# rocqchk. Without them, the libraries are compiled by this build's rocq,
-# whose writer of the table is the release's, and (b) compares -j 2 with
-# this build's -j 1.
+# ROCQ_STOCK names the reference rocq, and ROCQCHK_STOCK the reference
+# rocqchk, both of this build's own series. Without them, the libraries are
+# compiled by this build's rocq, whose writer of the table is the one this
+# build reads, and (b) compares -j 2 with this build's -j 1.
 set -eu
 : "${BIN:=$(dirname "$(command -v rocq)")/}"
 export PATH="$BIN:$PATH"
@@ -36,9 +40,11 @@ fail() { >&2 echo "FAILURE: $*"; exit 1; }
 
 # Mono's proofs are monomorphic: the table stores their private universes
 # as PrivateMonomorphic. Poly's are polymorphic, and p2 adds a private
-# universe: PrivatePolymorphic. MonoS and PolyS are the same files compiled
-# with -skip-qed-typecheck, so that the boolean of their entries is true.
-# Use reads them through definitions and an opaque proof of its own.
+# universe: PrivatePolymorphic. MonoS and PolyS are the same files, and
+# where the reference rocq has -skip-qed-typecheck they are compiled with
+# it, so that the boolean of their entries is true; where it does not, they
+# are a second pair of ordinary libraries, and the table has no boolean to
+# read. Use reads them through definitions and an opaque proof of its own.
 cat > "$d/lib/Mono.v" <<'EOF'
 Inductive T : Prop := I | J.
 Definition U := T.
@@ -68,9 +74,13 @@ Definition u1 := Mono.dm.
 Definition u2 := MonoS.dm.
 Lemma u3 : MonoS.U. Proof. exact (MonoS.m2 MonoS.m1). Qed.
 EOF
+skipqed=
+if "$ROCQ" c --help 2>&1 | grep -q -- -skip-qed-typecheck; then
+  skipqed=-skip-qed-typecheck
+fi
 for v in Mono Poly; do
   "$ROCQ" c -q -native-compiler no -R "$d/lib" "" "$d/lib/$v.v"
-  "$ROCQ" c -q -native-compiler no -skip-qed-typecheck -R "$d/lib" "" "$d/lib/${v}S.v"
+  "$ROCQ" c -q -native-compiler no $skipqed -R "$d/lib" "" "$d/lib/${v}S.v"
 done
 "$ROCQ" c -q -native-compiler no -R "$d/lib" "" "$d/lib/Use.v"
 

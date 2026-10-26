@@ -803,8 +803,17 @@ PY
 ELIBS="E1 E2 E3 E4 E5 E6 E7 E8 E9 E10 E11 E12 Partial Q1 Q2
   P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 P13 P14 P15 P16 P17 P18 P19 P20
   P21 P22 P23 P24 P25 P26 P27 P28 P29 P30 P31 P32 P33"
+# coqc reads a literal as nested constructors and recurses once per
+# constructor, so a 3000-bit positive or a unary 3000 nests 3000 deep, and
+# that overflows an 8 MiB stack in coqc itself, with or without the BINNUM
+# instructions (a file holding only such a literal overflows on the release
+# too). (g) needs that depth: a minor heap cannot be smaller than 4096 words,
+# and a chain of xI/xO nodes is 2 words a bit, so only a result of more than
+# 2048 bits spans more than one minor heap. So the compile step, and only
+# it, runs with a 64 MiB stack; rocqchk runs with the stack it is given.
 for lib in Diff Copy Bad $ELIBS Big BigShare; do
-  rocq c -native-compiler no -R "$d" "" "$d/$lib.v"
+  ( ulimit -S -s 65536 2>/dev/null || ulimit -S -s unlimited 2>/dev/null
+    exec rocq c -native-compiler no -R "$d" "" "$d/$lib.v" )
 done
 
 fail() { >&2 echo "FAILURE: $*"; exit 1; }
