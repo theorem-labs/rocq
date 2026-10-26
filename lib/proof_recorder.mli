@@ -205,6 +205,20 @@ val digest_cached : what:string -> 'a -> string
     not once per proof. Never call it on a value that is rebuilt at each
     read: that fills the cache and digests every copy. *)
 
+type slot
+(** The last value of one start-of-proof read and its digest. *)
+
+val slot : unit -> slot
+(** A new empty slot. {!stop} and {!write} empty every slot. *)
+
+val digest_slot : slot -> what:string -> 'a -> string
+(** {!digest} of a value of the global state that no proof changes in place
+    and that the next proofs meet again, the universe graph for one: it is
+    digested again only when it is not the slot's value (by address). Like
+    {!digest_cached}, a kept ["unhashable"] marks the open proof ineligible
+    on every reuse. Unlike it, the slot holds one value, so a value that each
+    declaration replaces is not kept for the whole compile. *)
+
 val without_recording : (unit -> 'a) -> 'a
 (** Runs [f] with reads dropped, and restores the previous state, also when
     [f] raises. The [Qed] kernel check runs inside this, so the read set of

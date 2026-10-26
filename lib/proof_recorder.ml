@@ -167,7 +167,17 @@ module Addr = Hashtbl.Make (struct
    rest of the state, so a compile without the option holds nothing. *)
 let digest_cache : string Addr.t = Addr.create 1024
 
-let stop () = state := None; recording := false; Addr.reset digest_cache; R.reset_memo ()
+(* The last value of one start read and its digest (see [digest_slot]). Every
+   slot is emptied with the rest of the state. *)
+type slot = (Obj.t * string) option ref
+
+let slots : slot list ref = ref []
+
+let slot () = let s = ref None in slots := s :: !slots; s
+
+let stop () =
+  state := None; recording := false; Addr.reset digest_cache; R.reset_memo ();
+  List.iter (fun s -> s := None) !slots
 
 let write path =
   match !state with
@@ -419,6 +429,20 @@ let digest_cached ~what v =
   | None ->
     let d = digest ~what v in
     Addr.add digest_cache o d;
+    d
+
+(* A cached "unhashable" is a stand-in shared by every value that cannot be
+   digested, so each proof that reuses it is marked, not only the first one
+   (Claude gate at 0f8d815732, finding 6). *)
+let digest_slot s ~what v =
+  let o = Obj.repr v in
+  match !s with
+  | Some (o0, d) when o0 == o ->
+    if d = "unhashable" then ineligible ~reason:"unhashable" ~detail:what;
+    d
+  | Some _ | None ->
+    let d = digest ~what v in
+    s := Some (o, d);
     d
 
 let without_recording f =
