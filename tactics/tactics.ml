@@ -2120,7 +2120,12 @@ let (forward_subst_one, subst_one) = Hook.make ()
 
 let intro_decomp_eq_function = ref (fun _ -> failwith "Not implemented")
 
-let declare_intro_decomp_eq f = intro_decomp_eq_function := f
+(* BET-84: tactics/equality.ml installs Rocq's own once, when it loads; a
+   later one is a plugin's (Proof_recorder.closure_setter). *)
+let intro_decomp_eq_set =
+  Proof_recorder.closure_setter ~what:"Tactics.declare_intro_decomp_eq" ~stock:1
+
+let declare_intro_decomp_eq f = intro_decomp_eq_set (); intro_decomp_eq_function := f
 
 let my_find_eq_data_decompose env sigma t =
   try Some (find_eq_data_decompose env sigma t)

@@ -16,18 +16,21 @@
 #
 # The plugin in misc/proof-record-plugin-hooks/src registers one probe in each
 # registry, each of which always declines, and TestHookActivate activates
-# them. Its TestSetUnifier installs a unifier with Evarconv.set_evar_conv, as
-# unicoq's Set Use Unicoq does: process-wide plugin state that no read sees
-# (Claude review of 467292ce69, finding 1), so every proof after it must store
-# no term. Two compiles of theories/Probe.v, each with -proof-record, each in
-# a new process and its own directory:
-# - off: the TestHookActivate and TestSetUnifier lines commented out. Each
+# them. Its TestSetClosures calls ONCE each process-wide closure setter that
+# the recorder fences (Evarconv.set_evar_conv, which unicoq's Set Use Unicoq
+# calls, and the others): process-wide plugin state that no read sees (Claude
+# reviews of 467292ce69 and beb759fef3), so every proof after it must store no
+# term. One call each is one more than Rocq's own modules make, so a stock
+# count set too high shows as a missing detail. Two compiles of
+# theories/Probe.v, each with -proof-record, each in a new process and its own
+# directory:
+# - off: the TestHookActivate and TestSetClosures lines commented out. Each
 #        probe proof must be ELIGIBLE and hold its channel's read, and so must
-#        after_unifier, or the test below proves nothing;
+#        after_closures, or the test below proves nothing;
 # - on:  the file as it is. Each probe proof must carry reason plugin_hook
 #        with a detail that names its channel, and its read must differ from
-#        the one of "off"; after_unifier must carry plugin_hook with detail
-#        Evarconv.set_evar_conv.
+#        the one of "off"; after_closures must carry plugin_hook with the
+#        detail of EVERY fenced setter.
 
 set -e
 
@@ -46,11 +49,11 @@ rm -rf out
 mkdir -p out/off out/on
 cp theories/Probe.v out/on/Probe.v
 sed -e 's/^TestHookActivate\.$/(* TestHookActivate. *)/' \
-    -e 's/^TestSetUnifier\.$/(* TestSetUnifier. *)/' theories/Probe.v > out/off/Probe.v
+    -e 's/^TestSetClosures\.$/(* TestSetClosures. *)/' theories/Probe.v > out/off/Probe.v
 grep -q '^TestHookActivate\.$' out/on/Probe.v
-grep -q '^TestSetUnifier\.$' out/on/Probe.v
+grep -q '^TestSetClosures\.$' out/on/Probe.v
 grep -q '^(\* TestHookActivate\. \*)$' out/off/Probe.v
-grep -q '^(\* TestSetUnifier\. \*)$' out/off/Probe.v
+grep -q '^(\* TestSetClosures\. \*)$' out/off/Probe.v
 
 for d in off on; do
   rocq c -I src -R "out/$d" PluginHooks -proof-record "out/$d/Probe.v"
@@ -104,23 +107,37 @@ for name, channel, _, _ in CHANNELS:
               file=sys.stderr)
         failed = True
 
-def after_unifier(path):
+# Every setter that Proof_recorder.closure_setter fences, called once by
+# TestSetClosures (Tac2env.define_primitive and define_ml_object are fenced
+# too, but the plugin does not load Ltac2).
+SETTERS = [
+    "Evarconv.set_evar_conv", "Evarconv.set_solve_evars",
+    "Typeclasses.set_solve_all_instances", "Typeclasses.set_solve_one_instance",
+    "Namegen.set_reserved_typed_name", "CClosure.set_conv",
+    "Coercionops.install_path_comparator", "Tactics.declare_intro_decomp_eq",
+    "Equality.set_eq_dec_scheme_kind", "Ind_tables.set_declare_definition_scheme",
+    "Ind_tables.set_register_definition_scheme", "Tacenv.register_ml_tactic ~overwrite",
+]
+
+def after_closures(path):
     with open(path, encoding="utf-8") as f:
         entries = [l for l in map(json.loads, f)
-                   if l["kind"] == "proof" and l["name"].endswith(".after_unifier")]
+                   if l["kind"] == "proof" and l["name"].endswith(".after_closures")]
     if len(entries) != 1:
-        sys.exit("%s: expected one proof after_unifier, found %d" % (path, len(entries)))
+        sys.exit("%s: expected one proof after_closures, found %d" % (path, len(entries)))
     return entries[0]["ineligible"]
 
-off_u, on_u = (after_unifier(p) for p in sys.argv[1:3])
-print("after_unifier    off %s" % off_u)
-print("after_unifier    on  %s" % on_u)
-if off_u:
-    print("FAIL: after_unifier is ineligible with no plugin unifier", file=sys.stderr)
+off_c, on_c = (after_closures(p) for p in sys.argv[1:3])
+print("after_closures   off %s" % off_c)
+print("after_closures   on  %s" % sorted(i["detail"] for i in on_c if i["reason"] == "plugin_hook"))
+if off_c:
+    print("FAIL: after_closures is ineligible with no plugin closure", file=sys.stderr)
     failed = True
-if not any(i["reason"] == "plugin_hook" and i["detail"] == "Evarconv.set_evar_conv" for i in on_u):
-    print("FAIL: after_unifier follows a plugin unifier and carries no plugin_hook reason",
-          file=sys.stderr)
-    failed = True
+seen = {i["detail"] for i in on_c if i["reason"] == "plugin_hook"}
+for s in SETTERS:
+    if s not in seen:
+        print("FAIL: after_closures follows a call of %s and carries no plugin_hook for it" % s,
+              file=sys.stderr)
+        failed = True
 sys.exit(1 if failed else 0)
 PY

@@ -1350,7 +1350,12 @@ let build_injector env sigma dflt c cpath =
     sigma, (injcode,resty)
 
 let eq_dec_scheme_kind_name = ref (fun _ -> failwith "eq_dec_scheme undefined")
-let set_eq_dec_scheme_kind k = eq_dec_scheme_kind_name := (fun _ -> k)
+(* BET-84: vernac/auto_ind_decl.ml sets Rocq's own once, when it loads; a
+   later one is a plugin's (Proof_recorder.closure_setter). *)
+let eq_dec_scheme_kind_set =
+  Proof_recorder.closure_setter ~what:"Equality.set_eq_dec_scheme_kind" ~stock:1
+
+let set_eq_dec_scheme_kind k = eq_dec_scheme_kind_set (); eq_dec_scheme_kind_name := (fun _ -> k)
 
 let warn_inject_no_eqdep_dec =
   CWarnings.create ~name:"injection-missing-eqdep-dec" ~category:CWarnings.CoreCategories.tactics
