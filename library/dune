@@ -3,6 +3,10 @@
  (synopsis "Rocq's Loadable Libraries (vo) Support")
  (public_name rocq-runtime.library)
  (wrapped false)
+ (foreign_stubs
+  (language c)
+  (names rocq_libkey)
+  (flags :standard (:include %{project_root}/config/dune.c_flags)))
  (libraries kernel))
 
 (deprecated_library_name
