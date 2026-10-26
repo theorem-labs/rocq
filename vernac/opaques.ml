@@ -62,22 +62,6 @@ struct
     in
     Opaqueproof.HandleMap.iter iter !state
 
-  let inline ?(except=Future.UUIDSet.empty) () =
-    let () = join ~except () in
-    let map _ pf = match pf with
-    | OpaqueValue _ -> pf
-    | OpaqueCertif cert ->
-      if Future.UUIDSet.mem (Future.uuid cert) except then pf
-      else
-        let (c, ctx), unchecked = repr_proof (Option.get (Future.peek_val cert)) in
-        let ctx = match ctx with
-        | Opaqueproof.PrivateMonomorphic _ -> Opaqueproof.PrivateMonomorphic ()
-        | Opaqueproof.PrivatePolymorphic _ as ctx -> ctx
-        in
-        OpaqueValue ((c, ctx), unchecked)
-    in
-    state := Opaqueproof.HandleMap.mapi map !state
-
 end
 
 (** Each entry holds a proof and whether the kernel did not type it. *)

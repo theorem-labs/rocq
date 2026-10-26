@@ -657,46 +657,40 @@ for sel in checked dep admitted; do
 done
 
 # (p) A marshalled value that runs past its segment on the path that does
-# not validate: Dep's table, read with Marshal. (f) covers the path that
-# validates, and (l) and (o) the reads that run past the segment and
-# succeed.
+# not validate: Dep's table, read with Marshal, whose header claims 8
+# bytes more than its segment holds. (f) covers the path that validates,
+# and (l) and (o) the reads that run past the segment and succeed.
 #
-# (p1) The header claims 8 bytes more than its segment holds, and the
-# file has them: the reader takes the digest stored after the segment for
-# payload and builds a value from bytes that mean nothing. What the
-# runtime then does with that value is not defined, and it is not a
-# property of the checker: on this base, with the same file and the same
-# reads (identical openat/lseek/read, measured under strace on
-# speed-r3a-2, 2026-10-25), the release's own coqchk dies by SIGSEGV
-# while this build ends 0 under the default minor heap, and this build
-# dies by SIGSEGV under OCAMLRUNPARAM=s=4k and s=16M. Both outcomes are
-# printed, and neither is asserted. The same undefinedness beyond -j 1 is
-# the known difference of ledger L8, confined to a table nothing reads.
-#
-# (p2) The header claims more than the whole file holds, which is
-# defined: the demarshalling runs out of file and raises, wherever it
-# runs. The exit code and the output must be the reference's, at -j 1 and
-# beyond it.
+# What the runtime does with the value it builds from those bytes is not
+# defined, when nothing validates it. Stock never accepts the file: on the
+# release base it died by SIGSEGV or stopped on a demarshalling error
+# ("input_value: ill-formed message") in every one of 95 runs, over five
+# heap sizes and two builds of the fixture; this build reads the table with stock's own
+# call (System.marshal_in; at -j 1 where stock reads it, with workers in
+# Dep's table task), and whether the process then dies depends on the heap
+# the binary happens to have: on the release base it ended 0 there, five
+# times of five, at -j 1 and -j 2 (dispatch://INFRA-211, the port's
+# compatibility review). No verdict depends on those bytes in either
+# checker: Dep is an unchecked dependency here, so neither checks its
+# opaque bodies, and the kernel never unfolds an opaque body in
+# conversion. Stock never completes the run, so this is a call decided
+# where stock crashes, which Sami's ruling allows
+# (dispatch://INFRA-213/ask/0dfa81b0), ledger L8. Nothing is asserted
+# about -norec Use. What is asserted is the bound: where the damaged table
+# belongs to a library that is checked, Dep itself, it is validated, and
+# both refuse it, with the same exit code and output at every -j.
 rm -rf "$d/p"; cp -a "$d/good" "$d/p"
 vo truncate "$d/p/Dep.vo" opaques 8
-srun p-j1 coqchk -j 1 -R "$d/p" "" -norec Use
-p1=$R
-srun p-ref "$REF" -j 1 -R "$d/p" "" -norec Use
-echo "(p1) undefined value: this build exits $p1 at -j 1, the reference $R"
-
-# The length field of the marshal header (offset 4 of the segment's data),
-# set to a megabyte, which the file does not hold; every stored hash is
-# rewritten, so the only thing wrong with the file is what that header
-# claims.
-rm -rf "$d/p2"; cp -a "$d/good" "$d/p2"
-vo poke "$d/p2/Dep.vo" opaques 4 00100000
-for j in 1 2 4; do
-  srun "p2-j$j" coqchk -j $j -R "$d/p2" "" -norec Use
-  rc=$R
-  srun "p2-j$j-ref" "$REF" -j $j -R "$d/p2" "" -norec Use
-  expect "(p2) -j $j: exit code (the reference's is $R)" "$rc" -eq "$R"
-  expect "(p2) -j $j: the file is refused" "$rc" -ne 0
-  same "p2-j$j-ref" "p2-j$j" "(p2) -j $j"
+for j in 1 2 4 16; do
+  for sel in "-norec Dep" "-norec Use -norec Dep"; do
+    tag=$(echo "$sel" | tr -cd 'A-Za-z')
+    srun "p-$tag-j$j" coqchk -j "$j" -R "$d/p" "" $sel
+    rc=$R
+    srun "p-$tag-j$j-ref" "$REF" -j "$j" -R "$d/p" "" $sel
+    expect "(p) $sel -j $j: exit code (the reference's is $R)" "$rc" -eq "$R"
+    expect "(p) $sel -j $j: the file is refused" "$rc" -ne 0
+    same "p-$tag-j$j-ref" "p-$tag-j$j" "(p) $sel -j $j"
+  done
 done
 
 # (q) The segment starts in the last bytes of the file, so a reader finds

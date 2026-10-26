@@ -224,8 +224,17 @@ PY
 . "$d/counts"
 
 LIBS="Conv Stuck Pow Bound Copy"
+# coqc reads a literal as nested constructors and recurses once per
+# constructor, so the 4096-bit literals of (d) nest 4096 deep, and that
+# overflows an 8 MiB stack in coqc itself, with or without the BINNUM
+# instructions (a file holding only such a literal overflows on the release
+# too). (d) needs that depth: Z.pow's routine computes results of up to
+# BINNUM_POW_BITS = 4096 bits and refuses larger ones, and the boundary is
+# tested on both sides of it. So the compile step, and only it, runs with a
+# 64 MiB stack; rocqchk runs with the stack it is given.
 for lib in $LIBS; do
-  rocq c -native-compiler no -R "$d" "" "$d/$lib.v"
+  ( ulimit -S -s 65536 2>/dev/null || ulimit -S -s unlimited 2>/dev/null
+    exec rocq c -native-compiler no -R "$d" "" "$d/$lib.v" )
 done
 
 fail() { >&2 echo "FAILURE: $*"; exit 1; }
