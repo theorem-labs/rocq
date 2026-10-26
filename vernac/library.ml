@@ -222,7 +222,10 @@ let access_opaque_table o =
   match stored_opaque o with
   | None -> None
   | Some (c, ctx) ->
-    let (c, ctx) = Discharge.cook_opaque_proofterm ci (c, ctx) in
+    (* The cooked term keeps the sharing of the stored one: cooking costs
+       about the stored term's size, not its tree unfolding, and a caller that
+       walks it, such as Print Assumptions, visits each shared subterm once. *)
+    let (c, ctx) = Discharge.cook_opaque_proofterm_shared ci (c, ctx) in
     let c = Mod_subst.subst_mps_list sub c in
     Some (c, ctx)
 
