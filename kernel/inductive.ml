@@ -1954,7 +1954,7 @@ let rec codomain_is_coind ?evars env c =
 let check_one_cofix cache ?evars env nbfix def deftype =
   let rec check_rec_call env alreadygrd n tree vlra t =
     if not (noccur_with_meta n nbfix t) then
-      let () = check_erased env alreadygrd n tree vlra t in
+      let () = check_erased env n t in
       let c,args = decompose_app_list (whd_all ?evars env t) in
       match kind c with
         | Rel p when  n <= p && p < n+nbfix ->
@@ -1968,6 +1968,17 @@ let check_one_cofix cache ?evars env nbfix def deftype =
             let lra = vlra.(i-1) in
             let mI = inductive_of_constructor cstr_kn in
             let (mib,_mip) = lookup_mind_specif env mI in
+            (* The parameters are evaluated too (cbv evaluates every
+               constructor argument) and no position below measures them, so
+               a recursive occurrence there is refused like one in a
+               non-recursive argument (test-suite/failure/
+               guard_cofix_ctor_param.v). This branch's parent, and the 9.2
+               base ca856abb5b, take the List.skipn below and never look at
+               the parameters. *)
+            let () = List.iteri (fun j a ->
+                if j < mib.mind_nparams && not (noccur_with_meta n nbfix a) then
+                  raise (CoFixGuardError (env, RecCallInNonRecArgOfConstructor a)))
+                args in
             let realargs = List.skipn mib.mind_nparams args in
             let rec process_args_of_constr = function
               | (t::lr), (rar::lrar) ->
@@ -2034,51 +2045,145 @@ let check_one_cofix cache ?evars env nbfix def deftype =
           | Array _ ->
            raise (CoFixGuardError (env,NotGuardedForm t))
 
-  (* The analysis above runs on [whd_all t] while the kernel stores [t] as
-     written, so every position that head reduction ERASES is checked by
-     nothing and is still evaluated later — the co-recursive form of the
-     binder-prefix defect in [check_one_fix]. Walk the same head-reduction
-     path and submit each erased position to the ordinary analysis, so that
-     a definition is refused exactly when the erased material would have
-     been refused had the reduction kept it. Three positions are erased:
-     the value of a [let] whose binder the body does not read, the argument
-     of a beta redex whose binder the body does not read (the head may need
-     a delta step before the abstraction shows), and the branches a match
-     on a known constructor does not select. A [Cast]'s type is not a
-     position: it is erased as a TYPE, which no evaluation turns into a
-     recursive call. *)
-  and check_erased env alreadygrd n tree vlra t =
-    match kind t with
-    | Cast (c, _, _) -> check_erased env alreadygrd n tree vlra c
-    | LetIn (_, v, _, b) ->
-      let () = if noccurn 1 b then check_rec_call env alreadygrd n tree vlra v in
-      check_erased env alreadygrd n tree vlra (subst1 v b)
-    | App (f, args) ->
-      let f = whd_all ?evars env f in
-      (match kind f with
-       | Lambda _ -> check_erased_beta env alreadygrd n tree vlra f (Array.to_list args)
-       | _ -> ())
-    | Case (ci, u, pms, p, iv, tm, br) ->
-      let (ci, _, _iv, tm, brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
-      let hd, cargs = decompose_app_list (whd_all ?evars env tm) in
-      (match kind hd with
-       | Construct (((_, i), _) as cstr) ->
-         let () = Array.iteri (fun j b ->
-             if not (Int.equal j (i-1)) then check_rec_call env alreadygrd n tree vlra b)
-             brs in
-         check_erased env alreadygrd n tree vlra (apply_branch cstr cargs ci brs)
-       | _ -> ())
-    | _ -> ()
+  (* The analysis above dispatches on [whd_all t], while the kernel stores
+     [t] as written, so whatever head reduction DROPS on the way to that
+     normal form is checked by nothing and is still evaluated later: a dead
+     let value, a dead beta argument, the branches a match on a known
+     constructor does not select and the constructor arguments the selected
+     branch does not read, the fields a projection of a known record does not
+     select, and the same material inside the head or the scrutinee while
+     they are reduced. A recursive call hidden there makes the kernel accept
+     a cofixpoint whose evaluation does not terminate
+     (test-suite/failure/guard_cofix_dead_*.v).
 
-  and check_erased_beta env alreadygrd n tree vlra f args =
-    match args with
-    | [] -> check_erased env alreadygrd n tree vlra f
-    | a :: rest ->
-      match kind f with
-      | Lambda (_, _, b) ->
-        let () = if noccurn 1 b then check_rec_call env alreadygrd n tree vlra a in
-        check_erased_beta env alreadygrd n tree vlra (subst1 a b) rest
-      | _ -> () in
+     [check_erased] walks the head-reduction path of [t] itself and refuses
+     the definition, with an ordinary guard error, when anything that path
+     drops mentions a function of the block. Dropped types (a cast's type, a
+     let's annotation, the domain of a reduced abstraction, a return
+     predicate) are held to the same rule. Nothing is looked up in the
+     recursion tree, so a dropped term of any type is safe to check: the
+     rule this replaces submitted dropped terms to [check_rec_call] with the
+     codomain's tree, and died with an out-of-bounds anomaly on a dropped
+     term of another inductive type
+     (test-suite/failure/guard_cofix_dead_other_type.v).
+
+     The walk follows the reductions [whd_all] performs at the head: beta,
+     zeta, delta of local and global definitions, iota of a match and of a
+     projection on a constructor or on a cofixpoint, and iota of a fixpoint
+     whose recursive argument reduces to a constructor. Three reductions it
+     does not take apart: a primitive at the head, a rewrite rule at the
+     head, and the case inversion of a match whose scrutinee stays stuck
+     (which drops that scrutinee). For each of the three the term as a whole
+     must not mention the block; when it does not, nothing that [whd_all]
+     drops from it can, and the walk continues from [whd_all] of it.
+
+     One reduction escapes that rule, deliberately: a rewrite rule whose
+     left side fires only UNDER a match or a projection. The walk reduces
+     the scrutinee, the rule does not fire there, and the stuck match is
+     returned without the application ever being the head, so what the rule
+     drops is unchecked. A proof that uses rewrite rules names the symbol in
+     [Print Assumptions], which is where this is caught. *)
+  and check_erased env n t =
+    let _ : constr = whd_erasing env n t in ()
+
+  and erased env n c =
+    if not (noccur_with_meta n nbfix c) then
+      raise (CoFixGuardError (env, UnguardedRecursiveCall c))
+
+  and whd_erasing env n t =
+    match kind t with
+    | Cast (c, _, ty) ->
+      let () = erased env n ty in
+      whd_erasing env n c
+    | LetIn (_, v, ty, b) ->
+      let () = erased env n ty in
+      let () = if noccurn 1 b then erased env n v in
+      whd_erasing env n (subst1 v b)
+    | App (f, args) ->
+      let hd, fargs = decompose_app_list (whd_erasing env n f) in
+      whd_erasing_app env n hd (fargs @ Array.to_list args)
+    | Case (ci, u, pms, p, iv, tm, br) ->
+      let (ci', (p', _), _, tm', brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
+      let tmr = whd_erasing env n tm' in
+      let hd, cargs = decompose_app_list tmr in
+      begin match kind hd with
+      | Construct ((_, i), _ as cstr) ->
+        let () = erased env n p' in
+        let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then erased env n b) brs in
+        let () = List.iteri (fun j a -> if j < ci'.ci_npar then erased env n a) cargs in
+        (* The constructor arguments whose binder the selected branch does
+           not read are dropped by the substitution. *)
+        let ctx, body = Term.decompose_lambda_n_decls ci'.ci_cstr_ndecls.(i - 1) brs.(i - 1) in
+        let nd = List.length ctx in
+        let rec unread k decls args = match decls, args with
+          | [], _ | _, [] -> ()
+          | LocalDef _ :: decls, args -> unread (k + 1) decls args
+          | LocalAssum _ :: decls, a :: args ->
+            let () = if noccurn (nd - k) body then erased env n a in
+            unread (k + 1) decls args
+        in
+        let () = unread 0 (List.rev ctx) (List.skipn_at_best ci'.ci_npar cargs) in
+        whd_erasing env n (apply_branch cstr cargs ci' brs)
+      | CoFix cofix ->
+        whd_erasing env n
+          (mkCase (ci, u, pms, p, iv, mkApp (contract_cofix cofix, Array.of_list cargs), br))
+      | _ ->
+        begin match iv with
+        | CaseInvert _ -> let () = erased env n t in whd_all ?evars env t
+        | NoInvert -> mkCase (ci, u, pms, p, iv, tmr, br)
+        end
+      end
+    | Proj (pr, r, c) ->
+      let cr = whd_erasing env n c in
+      let hd, args = decompose_app_list cr in
+      begin match kind hd with
+      | Construct _ ->
+        let k = Projection.npars pr + Projection.arg pr in
+        let () = List.iteri (fun j a -> if not (Int.equal j k) then erased env n a) args in
+        whd_erasing env n (List.nth args k)
+      | CoFix cofix ->
+        whd_erasing env n (mkProj (pr, r, mkApp (contract_cofix cofix, Array.of_list args)))
+      | _ -> mkProj (pr, r, cr)
+      end
+    | Rel k ->
+      begin match lookup_rel k env with
+      | LocalDef (_, b, _) -> whd_erasing env n (lift k b)
+      | LocalAssum _ -> t
+      end
+    | Var id ->
+      let open! Context.Named.Declaration in
+      begin match lookup_named id env with
+      | LocalDef (_, b, _) -> whd_erasing env n b
+      | LocalAssum _ -> t
+      end
+    | Const (c, _ as cu) ->
+      if evaluable_constant c env then whd_erasing env n (constant_value_in env cu)
+      else if Environ.is_primitive env c || Environ.is_symbol env c then whd_all ?evars env t
+      else t
+    | Lambda _ | Prod _ | Sort _ | Construct _ | Ind _ | CoFix _ | Fix _
+    | Evar _ | Meta _ | Int _ | Float _ | String _ | Array _ -> t
+
+  and whd_erasing_app env n hd args =
+    match kind hd, args with
+    | _, [] -> hd
+    | Lambda (_, ty, b), a :: rest ->
+      let () = erased env n ty in
+      let () = if noccurn 1 b then erased env n a in
+      let hd', args' = decompose_app_list (whd_erasing env n (subst1 a b)) in
+      whd_erasing_app env n hd' (args' @ rest)
+    | Fix ((recindxs, i), _ as fix), _ when List.length args > recindxs.(i) ->
+      let k = recindxs.(i) in
+      let ra = whd_erasing env n (List.nth args k) in
+      let args = List.mapi (fun j a -> if Int.equal j k then ra else a) args in
+      if isConstruct (fst (decompose_app ra)) then
+        let hd', args' = decompose_app_list (whd_erasing env n (contract_fix fix)) in
+        whd_erasing_app env n hd' (args' @ args)
+      else Term.applist (hd, args)
+    | Const (c, _), _ when Environ.is_primitive env c || Environ.is_symbol env c ->
+      let t = Term.applist (hd, args) in
+      let () = erased env n t in
+      whd_all ?evars env t
+    | _ -> Term.applist (hd, args) in
 
   let ((mind, _),_) = codomain_is_coind ?evars env deftype in
   let vlra = lookup_subterms env mind in
