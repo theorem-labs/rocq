@@ -330,18 +330,26 @@ let rewtab =
 
 let raw_find_base bas = String.Map.find bas !rewtab
 
+(* BET-84 census row 15: each rewrite base a proof looks up, with the digest
+   of the base, or absent. Every lookup a tactic makes goes through here:
+   autorewrite, and the [hints] strategy of rewrite_strat through
+   [find_matches] (Claude gate at 0f8d815732, finding 2). An absent base is
+   recorded before the error, so that a proof that tried the base and caught
+   the error sees it created. *)
 let find_base bas =
-  try raw_find_base bas
-  with Not_found ->
+  let db = String.Map.find_opt bas !rewtab in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"autorewrite" ~key:(fun () -> bas)
+      ~value:(fun () ->
+          Option.map (fun db -> Proof_recorder.digest_cached ~what:"autorewrite" db) db);
+  match db with
+  | Some db -> db
+  | None ->
     user_err
       (str "Rewriting base " ++ str bas ++ str " does not exist.")
 
-(* BET-84 census row 15: each rewrite base the proof reads, with its digest. *)
 let find_rewrites bas =
   let db = find_base bas in
-  if Proof_recorder.active () then
-    Proof_recorder.read ~row:"15" ~channel:"autorewrite" ~key:(fun () -> bas)
-      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"autorewrite" db));
   let sort r1 r2 = Int.compare (KerName.Map.find r2.rew_id db.rdb_order) (KerName.Map.find r1.rew_id db.rdb_order) in
   List.sort sort (HintDN.find_all db.rdb_hintdn)
 

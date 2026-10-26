@@ -1,0 +1,7 @@
+# P0-2 (b) of the Claude gate at 0f8d815732. A.v has no rewrite base db, so
+# autorewrite fails and the proof is false; B.v creates db empty, so
+# autorewrite succeeds and the proof is true. Create Rewrite HintDb moves no
+# counter. The record of A must hold the absence of db, so that a replay in B
+# sees it. (Booleans, not numerals: a numeral's recorded interpretation holds
+# its source position, which the added line moves.)
+refuse-by-read labsent autorewrite
