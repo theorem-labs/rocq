@@ -18,9 +18,16 @@
 
 type 'a const_entry_body = 'a Entries.proof_output Future.computation
 
+let skip_qed_typecheck = ref false
+
+(** The proof of a certificate, and whether the kernel did not type it. *)
+let repr_proof cert =
+  Safe_typing.repr_certificate cert, not (Safe_typing.is_checked_certificate cert)
+
 type opaque_result =
 | OpaqueCertif of Safe_typing.opaque_certificate Future.computation
-| OpaqueValue of Opaqueproof.opaque_proofterm
+| OpaqueValue of Opaqueproof.opaque_proofterm * bool
+(** The boolean is [true] when the kernel did not type the proof. *)
 
 (** Current table of opaque terms *)
 
@@ -52,19 +59,19 @@ struct
     | OpaqueCertif cert ->
       if Future.UUIDSet.mem (Future.uuid cert) except then pf
       else
-        let cert = Option.get (Future.peek_val cert) in
-        let c, ctx = Safe_typing.repr_certificate cert in
+        let (c, ctx), unchecked = repr_proof (Option.get (Future.peek_val cert)) in
         let ctx = match ctx with
         | Opaqueproof.PrivateMonomorphic _ -> Opaqueproof.PrivateMonomorphic ()
         | Opaqueproof.PrivatePolymorphic _ as ctx -> ctx
         in
-        OpaqueValue (c, ctx)
+        OpaqueValue ((c, ctx), unchecked)
     in
     state := Opaqueproof.HandleMap.mapi map !state
 
 end
 
-type opaque_disk = Opaqueproof.opaque_proofterm option array
+(** Each entry holds a proof and whether the kernel did not type it. *)
+type opaque_disk = (Opaqueproof.opaque_proofterm * bool) option array
 
 let get_opaque_disk i t =
   let i = Opaqueproof.repr_handle i in
@@ -76,7 +83,7 @@ let set_opaque_disk i (c, priv) t =
   let () = assert (0 <= i && i < Array.length t) in
   let () = assert (Option.is_empty t.(i)) in
   let _, c = Constr.hcons c in
-  t.(i) <- Some (c, priv)
+  t.(i) <- Some ((c, priv), false)
 
 let current_opaques = Summary.state
 
@@ -86,7 +93,8 @@ let declare_defined_opaque ?feedback_id i (body : Safe_typing.private_constants 
      not matter because the former must be an extension of the latter or
      otherwise the call to Safe_typing would throw an anomaly. *)
   let proof = Future.chain body begin fun (body, eff) ->
-      let cert = Safe_typing.check_opaque (Global.safe_env ()) i (body, eff) in
+      let check = if !skip_qed_typecheck then Safe_typing.admit_opaque else Safe_typing.check_opaque in
+      let cert = check (Global.safe_env ()) i (body, eff) in
       let () = Option.iter (fun id -> Feedback.feedback ~id Feedback.Complete) feedback_id in
       cert
     end
@@ -103,7 +111,7 @@ let declare_defined_opaque ?feedback_id i (body : Safe_typing.private_constants 
 let declare_private_opaque opaque =
   let (i, pf) = Safe_typing.repr_exported_opaque opaque in
   (* Joining was already done at private declaration time *)
-  let proof = OpaqueValue pf in
+  let proof = OpaqueValue (pf, false) in
   let () = assert (not @@ Opaqueproof.HandleMap.mem i !current_opaques) in
   current_opaques := Opaqueproof.HandleMap.add i proof !current_opaques
 
@@ -111,14 +119,14 @@ let get_current_opaque i =
   try
     let pf = Opaqueproof.HandleMap.find i !current_opaques in
     match pf with
-    | OpaqueValue pf -> Some pf
+    | OpaqueValue (pf, unchecked) -> Some (pf, unchecked)
     | OpaqueCertif cert ->
-      let c, ctx = Safe_typing.repr_certificate (Future.force cert) in
+      let (c, ctx), unchecked = repr_proof (Future.force cert) in
       let ctx = match ctx with
       | Opaqueproof.PrivateMonomorphic _ -> Opaqueproof.PrivateMonomorphic ()
       | Opaqueproof.PrivatePolymorphic _ as ctx -> ctx
       in
-      Some (c, ctx)
+      Some ((c, ctx), unchecked)
   with Not_found -> None
 
 let get_current_constraints i =
@@ -127,7 +135,7 @@ let get_current_constraints i =
     match pf with
     | OpaqueValue _ -> None
     | OpaqueCertif cert ->
-      let _, ctx = Safe_typing.repr_certificate (Future.force cert) in
+      let (_, ctx), _ = repr_proof (Future.force cert) in
       let ctx = match ctx with
       | Opaqueproof.PrivateMonomorphic ctx -> ctx
       | Opaqueproof.PrivatePolymorphic _ -> Univ.ContextSet.empty
@@ -142,9 +150,9 @@ let dump ?(except=Future.UUIDSet.empty) () =
   in
   let opaque_table = Array.make n None in
   let fold h cu f2t_map = match cu with
-  | OpaqueValue p ->
+  | OpaqueValue (p, unchecked) ->
     let i = Opaqueproof.repr_handle h in
-    let () = opaque_table.(i) <- Some p in
+    let () = opaque_table.(i) <- Some (p, unchecked) in
     f2t_map
   | OpaqueCertif cert ->
     let i = Opaqueproof.repr_handle h in
@@ -161,12 +169,12 @@ let dump ?(except=Future.UUIDSet.empty) () =
     let c = match proof with
     | None -> None
     | Some cert ->
-      let (c, priv) = Safe_typing.repr_certificate cert in
+      let (c, priv), unchecked = repr_proof cert in
       let priv = match priv with
       | Opaqueproof.PrivateMonomorphic _ -> Opaqueproof.PrivateMonomorphic ()
       | Opaqueproof.PrivatePolymorphic _ as p -> p
       in
-      Some (c, priv)
+      Some ((c, priv), unchecked)
     in
     let () = opaque_table.(i) <- c in
     f2t_map
