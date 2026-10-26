@@ -108,8 +108,9 @@ for name, channel, _, _ in CHANNELS:
         failed = True
 
 # Every setter that Proof_recorder.closure_setter fences, called once by
-# TestSetClosures (Tac2env.define_primitive and define_ml_object are fenced
-# too, but the plugin does not load Ltac2).
+# TestSetClosures (Tac2env.define_primitive, Tac2env.define_ml_object and
+# Ssrcommon.set_ssrautoprop_tac are fenced too, but the plugin does not load
+# Ltac2 or ssreflect).
 SETTERS = [
     "Evarconv.set_evar_conv", "Evarconv.set_solve_evars",
     "Typeclasses.set_solve_all_instances", "Typeclasses.set_solve_one_instance",
@@ -117,6 +118,7 @@ SETTERS = [
     "Coercionops.install_path_comparator", "Tactics.declare_intro_decomp_eq",
     "Equality.set_eq_dec_scheme_kind", "Ind_tables.set_declare_definition_scheme",
     "Ind_tables.set_register_definition_scheme", "Tacenv.register_ml_tactic ~overwrite",
+    "Declare.Obls.set_default_tactic", "Proof_bullet.register_behavior",
 ]
 
 def after_closures(path):
