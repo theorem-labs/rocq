@@ -67,7 +67,7 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `stack_kb` | the stack limit every compile of this fixture runs under (default 8192, the limit a grade runs under; lane R1 measured that this changes `.vo` bytes, so stock and replay must share it). `prlimit` is required |
 | `record_layout` | `dotted`, `slashed` or `both`: which name the record is published under |
 | `records` | per file, per proof: `ineligible` reasons it must carry, `eligible`, `writes_nonempty`, `stores_no_term` |
-| `summaries` | per file: `proofs`, `hits`, `misses`, `refused`, `killed`, `outcomes` |
+| `summaries` | per file: `proofs`, `hits`, `misses`, `refused`, `killed`, `fence`, `outcomes` |
 | `compile_fails` | files whose compile must fail in both runs; no later file is compiled |
 | `compare_stdout`, `compare_stderr` | files whose output must be identical in the two runs |
 | `stdout_contains`, `stderr_contains` | substrings the replay run must print |
@@ -130,6 +130,29 @@ than 2^25 distinct blocks.  Both fixtures' `.v` files carry the measurement
 and the control behind them, and `expect.json` still supports
 `trigger_optional` for a class whose trigger is lost to a later change: the
 runner then prints SKIP with that text instead of passing silently.
+
+**The recorder's fix round** (`9.2/proof-replay` `a1210789cf..23b37e36fb`).
+`channels_unchanged`: one proof per channel the round added or changed —
+`keyword` (fresh's keyword test), `autorewrite` with the base found and with
+it absent, `typeclass_solver`, `coercion_hooks` — and nothing they read
+changes, so every proof must replay; a channel without an evaluator makes its
+proof miss.  `keyword_added` (a `Reserved Notation` makes fresh's string a
+keyword), `rewrite_base_created` (a base the registration found absent is
+created) and `rewrite_hints_changed` (a hint of the base turns around, read
+through `rewrite_strat`'s `hints` and through `autorewrite`) must miss on that
+channel's read: in each, the stored term is not the term stock makes.
+`ineligible_par`: `par:` runs its tactic in a worker process, so the proof is
+ineligible and is not replayed though the tactic it ran changed.  The plugin
+hooks and the process-wide fence need a plugin, so their test is
+`test-suite/misc/proof-replay-plugin-hooks.sh`.  The `canonical_hooks`
+evaluator has no hit test: a proof asks those hooks only after a
+`canonical_structure` lookup, which replay does not evaluate yet, so such a
+proof misses there first.
+
+A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
+fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
+one trips, no later proof of the process is replayed, and each is counted as
+`ineligible`.
 
 **The closer.**  `closer_admitted`: a registered `tac. Qed.` against an edited
 `tac. Admitted.` must miss.
