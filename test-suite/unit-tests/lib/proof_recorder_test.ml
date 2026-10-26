@@ -333,8 +333,31 @@ let slot_unhashable =
     (d1 = "unhashable" && d2 = "unhashable"
      && List.map reasons f.R.proofs = [ [ "unhashable" ]; [ "unhashable" ] ])
 
+(* A closure setter called [stock] times trips nothing; one more call trips
+   the process-wide fence, and the proof open during that call must carry it
+   when it closes, not only the proofs opened after it (P3 review of the
+   replayer: close_proof ran no fence check). The fence is never cleared in a
+   process, so this test must stay the LAST one evaluated in this file. *)
+let closure_fence =
+  let s = Rec.closure_setter ~what:"probe-setter" ~stock:1 in
+  start ();
+  s ();
+  open_proof ~name:"Top.File.before" ();
+  close_proof ();
+  open_proof ~name:"Top.File.during" ();
+  s ();
+  close_proof ();
+  open_proof ~name:"Top.File.after" ();
+  close_proof ();
+  let marks p = List.map (fun i -> (i.R.reason, i.R.detail)) p.R.ineligible in
+  let f = the_file () in
+  mk_bool_test "recorder-closure-fence"
+    "a setter call beyond the stock count marks the open proof at its close and every later proof"
+    (List.map marks f.R.proofs
+     = [ []; [ ("plugin_hook", "probe-setter") ]; [ ("plugin_hook", "probe-setter") ] ])
+
 let tests =
   [ inert; one_proof; outside; dedup; first_value; read_by; ineligible_reasons; admitted; nested;
-    start_tables; dropped; renamed; sentences; writes; slot_reuse; slot_unhashable ]
+    start_tables; dropped; renamed; sentences; writes; slot_reuse; slot_unhashable; closure_fence ]
 
 let _ = run_tests __FILE__ log_out_ch tests

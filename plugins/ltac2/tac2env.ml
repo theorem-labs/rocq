@@ -109,8 +109,17 @@ let record_global kn =
   if Proof_recorder.active () then
     record "ltac2_global" kn (KerName.Map.find_opt kn ltac_state.contents.ltac_tactics)
 
+(* BET-84: [Tac2interp.eval_global] runs the closure stored here in place of
+   the global's definition, and row 10 records the definition only. Nothing
+   in this tree calls this, so every entry is a plugin's closure, and the
+   first one makes every later proof of the process ineligible
+   (Proof_recorder.closure_setter; Claude review of e16e9d2ae4, finding 1). *)
+let compiled_global_set =
+  Proof_recorder.closure_setter ~what:"Tac2env.set_compiled_global" ~stock:0
+
 let set_compiled_global kn info v =
   assert (not (interp_global kn).gdata_mutable);
+  compiled_global_set ();
   compiled_tacs := KerName.Map.add kn (info,v) !compiled_tacs
 
 let get_compiled_global kn = KerName.Map.find_opt kn !compiled_tacs

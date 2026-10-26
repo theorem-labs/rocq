@@ -16,21 +16,28 @@
 #
 # The plugin in misc/proof-record-plugin-hooks/src registers one probe in each
 # registry, each of which always declines, and TestHookActivate activates
-# them. Its TestSetClosures calls ONCE each process-wide closure setter that
-# the recorder fences (Evarconv.set_evar_conv, which unicoq's Set Use Unicoq
-# calls, and the others): process-wide plugin state that no read sees (Claude
-# reviews of 467292ce69 and beb759fef3), so every proof after it must store no
-# term. One call each is one more than Rocq's own modules make, so a stock
-# count set too high shows as a missing detail. Two compiles of
-# theories/Probe.v, each with -proof-record, each in a new process and its own
-# directory:
+# them. Its TestSetClosures calls ONCE each process-wide closure setter of
+# Rocq's core that the recorder fences (Evarconv.set_evar_conv, which unicoq's
+# Set Use Unicoq calls, and the others): process-wide plugin state that no
+# read sees (Claude reviews of 467292ce69 and beb759fef3), so every proof
+# after it must store no term. One call each is one more than Rocq's own
+# modules make, so a stock count set too high shows as a missing detail. Two
+# compiles of theories/Probe.v, each with -proof-record, each in a new process
+# and its own directory:
 # - off: the TestHookActivate and TestSetClosures lines commented out. Each
 #        probe proof must be ELIGIBLE and hold its channel's read, and so must
 #        after_closures, or the test below proves nothing;
 # - on:  the file as it is. Each probe proof must carry reason plugin_hook
 #        with a detail that names its channel, and its read must differ from
 #        the one of "off"; after_closures must carry plugin_hook with the
-#        detail of EVERY fenced setter.
+#        detail of each of those setters.
+#
+# The second plugin, library_closures, does the same for the fenced setters
+# that belong to Ltac2 and ssreflect (Claude review of e16e9d2ae4), in
+# theories/Library.v, which loads both. Off (TestSetLibraryClosures commented
+# out): after_library must be eligible, so loading Ltac2 and ssreflect trips
+# nothing (no stock count too low). On: after_library must carry the detail
+# of each of their setters (no stock count too high).
 
 set -e
 
@@ -43,7 +50,8 @@ rocq makefile -f _CoqProject -o Makefile
 
 make clean
 
-make src/plugin_hooks_plugin.cmxs
+make CAMLPKGS="-package rocq-runtime.plugins.ltac2,rocq-runtime.plugins.ssreflect" \
+  src/plugin_hooks_plugin.cmxs src/library_closures_plugin.cmxs
 
 rm -rf out
 mkdir -p out/off out/on
@@ -59,7 +67,8 @@ for d in off on; do
   rocq c -I src -R "out/$d" PluginHooks -proof-record "out/$d/Probe.v"
 done
 
-python3 - out/off/Probe.proof-record.jsonl out/on/Probe.proof-record.jsonl <<'PY'
+status=0
+python3 - out/off/Probe.proof-record.jsonl out/on/Probe.proof-record.jsonl <<'PY' || status=1
 import json, sys
 
 # (proof, channel, row, key): the proof of Probe.v that reaches that choke
@@ -107,10 +116,8 @@ for name, channel, _, _ in CHANNELS:
               file=sys.stderr)
         failed = True
 
-# Every setter that Proof_recorder.closure_setter fences, called once by
-# TestSetClosures (Tac2env.define_primitive, Tac2env.define_ml_object and
-# Ssrcommon.set_ssrautoprop_tac are fenced too, but the plugin does not load
-# Ltac2 or ssreflect).
+# Every setter of Rocq's core that Proof_recorder.closure_setter fences,
+# called once by TestSetClosures (those of Ltac2 and ssreflect are below).
 SETTERS = [
     "Evarconv.set_evar_conv", "Evarconv.set_solve_evars",
     "Typeclasses.set_solve_all_instances", "Typeclasses.set_solve_one_instance",
@@ -143,3 +150,58 @@ for s in SETTERS:
         failed = True
 sys.exit(1 if failed else 0)
 PY
+
+mkdir -p out/liboff out/libon
+cp theories/Library.v out/libon/Library.v
+sed -e 's/^TestSetLibraryClosures\.$/(* TestSetLibraryClosures. *)/' theories/Library.v \
+  > out/liboff/Library.v
+grep -q '^TestSetLibraryClosures\.$' out/libon/Library.v
+grep -q '^(\* TestSetLibraryClosures\. \*)$' out/liboff/Library.v
+
+for d in liboff libon; do
+  rocq c -I src -R "out/$d" PluginHooks -proof-record "out/$d/Library.v"
+done
+
+python3 - out/liboff/Library.proof-record.jsonl out/libon/Library.proof-record.jsonl <<'PY' || status=1
+import json, sys
+
+# Every setter of Ltac2 and ssreflect that Proof_recorder.closure_setter
+# fences, called once by TestSetLibraryClosures.
+SETTERS = [
+    "Ssrcommon.set_ssrautoprop_tac", "Tac2env.define_primitive",
+    "Tac2env.define_ml_object", "Tac2env.set_compiled_global",
+]
+
+def marks(path):
+    with open(path, encoding="utf-8") as f:
+        entries = {l["name"].rsplit(".", 1)[-1]: l["ineligible"]
+                   for l in map(json.loads, f) if l["kind"] == "proof"}
+    for name in ("before_library", "after_library"):
+        if name not in entries:
+            sys.exit("%s: no proof %s" % (path, name))
+    return entries
+
+off, on = (marks(p) for p in sys.argv[1:3])
+failed = False
+for name in ("before_library", "after_library"):
+    print("%-15s off %s" % (name, off[name]))
+for name in ("before_library", "after_library"):
+    print("%-15s on  %s" % (name, sorted(i["detail"] for i in on[name])))
+for name in ("before_library", "after_library"):
+    if off[name]:
+        print("FAIL: %s is ineligible in a file that only loads Ltac2 and ssreflect" % name,
+              file=sys.stderr)
+        failed = True
+if on["before_library"]:
+    print("FAIL: before_library is ineligible before any extra setter call", file=sys.stderr)
+    failed = True
+seen = {i["detail"] for i in on["after_library"] if i["reason"] == "plugin_hook"}
+for s in SETTERS:
+    if s not in seen:
+        print("FAIL: after_library follows a call of %s and carries no plugin_hook for it" % s,
+              file=sys.stderr)
+        failed = True
+sys.exit(1 if failed else 0)
+PY
+
+exit $status

@@ -1,11 +1,21 @@
 package "plugin_hooks" (
     directory = "."
     version = "dev"
-    description = "A test plugin that registers a typeclass solver, a coercion hook and a canonical-solution hook, and activates them on request"
+    description = "A test plugin that registers a typeclass solver, a coercion hook and a canonical-solution hook, activates them on request, and calls the fenced closure setters of Rocq's core once each"
     requires = "rocq-runtime.plugins.ltac"
     archive(byte) = "plugin_hooks_plugin.cma"
     archive(native) = "plugin_hooks_plugin.cmxa"
     plugin(byte) = "plugin_hooks_plugin.cma"
     plugin(native) = "plugin_hooks_plugin.cmxs"
+)
+package "library_closures" (
+    directory = "."
+    version = "dev"
+    description = "A test plugin that calls the fenced closure setters of Ltac2 and ssreflect once each"
+    requires = "rocq-runtime.plugins.ltac2 rocq-runtime.plugins.ssreflect"
+    archive(byte) = "library_closures_plugin.cma"
+    archive(native) = "library_closures_plugin.cmxa"
+    plugin(byte) = "library_closures_plugin.cma"
+    plugin(native) = "library_closures_plugin.cmxs"
 )
 directory = "."
