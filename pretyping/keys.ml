@@ -80,10 +80,23 @@ let add_keys k v =
 
 (* BET-84 census row 15: the Keys table, as one digest, when a proof
    compares two keys. *)
+(* BET-84: ONE value for the keys channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_keys () =
+  Some (Proof_recorder.digest_cached ~what:"keys" !keys)
+
+let () =
+  Proof_replay.register_evaluator "keys" (fun _key ->
+      match recorded_keys () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let equiv_keys k k' =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"15" ~channel:"keys" ~key:(fun () -> "")
-      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"keys" !keys));
+      ~value:recorded_keys;
   k == k' || KeyOrdered.equal k k' ||
     try Keyset.mem k' (Keymap.find k !keys)
     with Not_found -> false

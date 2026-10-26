@@ -1,0 +1,6 @@
+{
+  "doc": "removing a necessary hint makes the stock script fail; replay must also fail instead of reusing its term",
+  "files": ["A.v"],
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}

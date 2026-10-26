@@ -32,6 +32,13 @@ rocq compile specific options:\
 \n  -vok                   process the file by loading .vos instead of .vo files for\
 \n                         dependencies, and produce an empty .vok file on success\
 \n  -proof-record          write a per-proof record of reads and writes beside each .vo\
+\n  -proof-replay FILE     replay a proof's stored term from that record file\
+\n  -proof-replay-dir DIR  the same, from the record of this library in DIR\
+\n  -proof-replay-ratio R  the grade-to-registration ratio of per-file wall time,\
+\n                         at the top of its spread (required with -proof-replay)\
+\n  -proof-replay-budget S the per-file wall budget the charged clock runs against\
+\n  -proof-replay-peak-limit-kb K\
+\n                         no replay in a file whose registered peak was above K\
 \n"
 }
 

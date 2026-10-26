@@ -145,14 +145,14 @@ let cached slot what v = Proof_recorder.digest_slot slot ~what v
 
 (* Reads taken once, at each proof's start, for the channels that have no
    single read point (BET-84, census rows 2, 3, 4, 13, M3, M7). They are
-   recorded as ordinary reads, so the matcher treats them like the rest. *)
-let read_at_start () =
-  if Proof_recorder.active () then begin
-    let env = Global.env () in
-    let one row channel value =
-      Proof_recorder.read ~row ~channel ~key:(fun () -> "") ~value:(fun () -> Some (value ()))
-    in
-    let named = Environ.named_context env in
+   recorded as ordinary reads, so the matcher treats them like the rest.
+   Replay evaluates the same list at the proof it is about to replay
+   (`Proof_replay_env`), so the two sides can never drift apart. *)
+let start_reads () =
+  let env = Global.env () in
+  let one row channel value = Proof_record.{ row; channel; key = ""; value = Some (value ()) } in
+  let named = Environ.named_context env in
+  [
     one "2" "universe_graph" (fun () -> cached universes_slot "universes" (Environ.universes env));
     one "2" "quality_graph" (fun () -> cached qualities_slot "qualities" (Environ.qualities env));
     one "3" "named_context" (fun () -> cached named_slot "named_context" named);
@@ -166,5 +166,12 @@ let read_at_start () =
     one "M3" "generalizable" (fun () ->
         cached generalizable_slot "generalizable" (Implicit_quantifiers.generalizable_idents ()));
     one "M7" "template_default_univs" (fun () ->
-        cached template_slot "template_default_univs" (UState.template_default_univs ()))
-  end
+        cached template_slot "template_default_univs" (UState.template_default_univs ()));
+  ]
+
+let read_at_start () =
+  if Proof_recorder.active () then
+    List.iter
+      (fun Proof_record.{ row; channel; key; value } ->
+         Proof_recorder.read ~row ~channel ~key:(fun () -> key) ~value:(fun () -> value))
+      (start_reads ())

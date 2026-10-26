@@ -1,0 +1,9 @@
+{
+  "doc": "psatz reaches CSDP; a fallback completes the goal, but the record is external_prover-ineligible",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.control": {"eligible": true},
+                       "PR.A.external_proof": {"ineligible": ["external_prover"], "stores_no_term": true}}},
+  "summaries": {"A.v": {"proofs": 2, "hits": 1,
+    "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0}, "refused": null, "killed": false,
+    "outcomes": [["PR.A.control", "hit"], ["PR.A.external_proof", "ineligible"]]}}
+}
