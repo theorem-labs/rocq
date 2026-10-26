@@ -1,4 +1,7 @@
-(* Red on the release-7 rule: compiled with coqchk 0, Eval cbv overflows the stack (cbv computes x although only a type reads it). A let annotation is now a position of the prefix walk. dispatch://BET-214 *)
+(* Red on the release-7 rule: compiled with coqchk 0, and Eval cbv overflows the
+   stack (cbv computes x although only a type reads it). The prefix walk now
+   erases let annotations, so x is dead and its value is checked.
+   dispatch://BET-214 *)
 (* Top-level fixpoint. The call's let is read only in the TYPE annotation
    of a later let, which raw_prefix_escapes never inspects. *)
 Definition top_annot : nat -> nat.
