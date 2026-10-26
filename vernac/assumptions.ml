@@ -224,14 +224,14 @@ let fold_with_full_binders g f n acc c =
     [ax2ty], and the empty-match branch marks the axiom visited without
     walking its type, so what the walk adds depends on the order the query
     visits objects in. The second reads the opaque table
-    ([Library.access_opaque_table]), state outside the key below; no input is
-    known where caching such a walk would change the output, so excluding it
-    is a precaution that only costs reuse. A member of a mutual block is
-    recorded only together with its whole block. An object is also recorded
-    only once each of its edges has an entry, and only while no entry has its
-    user name ([user_name_unrecorded]). Entries are never replaced, so every
-    edge of every entry keeps an entry until the entries are cleared, and a
-    replay can miss only at the object it starts from.
+    ([Library.access_opaque_table]); no input is known where caching such a
+    walk would change the output, so excluding it is a precaution that only
+    costs reuse. A member of a mutual block is recorded only together with its
+    whole block. An object is also recorded only once each of its edges has an
+    entry, and only while no entry has its user name ([user_name_unrecorded]).
+    Entries are never replaced, so every edge of every entry keeps an entry
+    until the entries are cleared, and a replay can miss only at the object it
+    starts from.
 
     Replaying [o] writes [o]'s value into the query's [data], then replays
     each edge, stopping at objects already in [data] as the walk does. A
@@ -246,8 +246,13 @@ let fold_with_full_binders g f n acc c =
 
     Entries hold for one environment, compared by physical equality of
     [Global.env ()], plus the current module path (it decides how constants of
-    sealed modules are looked up, see [lookup_module_in_impl]) and the
-    opaque-proof accessor. Any difference clears every entry.
+    sealed modules are looked up, see [lookup_module_in_impl]), the
+    opaque-proof accessor, and the generation of the opaque tables of loaded
+    libraries ([Library.opaque_tables_generation]). Those tables are not part
+    of the environment: a Require that fails, because the file it finds holds
+    another library, replaces the opaque proofs of that library when it is
+    loaded, and leaves [Global.env ()] as it was. Any difference clears every
+    entry.
 
     The entries are also cleared, at the start of a query, when they weigh
     more than [memo_factor] times the heaviest query so far in the
@@ -302,7 +307,7 @@ type memo_entry = {
   memo_edges : memo_edges;
 }
 
-let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor) option ref = ref None
+let memo_key : (Environ.env * ModPath.t * Global.indirect_accessor * int) option ref = ref None
 
 let memo_factor = 2
 
@@ -364,8 +369,10 @@ let inductive_marks = ref ([] : int list)
 let sync_memo access =
   let env = Global.env () in
   let mp = Global.current_modpath () in
+  let opaques = Library.opaque_tables_generation () in
   match !memo_key with
-  | Some (env', mp', access') when env' == env && ModPath.equal mp' mp && access' == access ->
+  | Some (env', mp', access', opaques') when
+      env' == env && ModPath.equal mp' mp && access' == access && Int.equal opaques' opaques ->
     memo_heaviest := max !memo_heaviest !query_weight;
     query_weight := 0;
     if !memo.weight > memo_factor * !memo_heaviest then begin
@@ -376,7 +383,7 @@ let sync_memo access =
     memo := fresh_memo ();
     memo_heaviest := 0;
     query_weight := 0;
-    memo_key := Some (env, mp, access)
+    memo_key := Some (env, mp, access, opaques)
 
 (* [Map_env] compares user names only: the entry is [obj]'s when the
    canonical names agree too, since the value the walk gives a constant with

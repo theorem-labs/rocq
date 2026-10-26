@@ -65,6 +65,24 @@ let inductive_nonrec_rec_paramdecls (mib,u) =
 let instantiate_inductive_constraints mib u =
   UVars.AbstractContext.instantiate u (Declareops.inductive_polymorphic_context mib)
 
+(** Splits a fixpoint body between the context until the [recindx+1]-th
+    assumption, and the rest of the body. Inlines local definitions,
+    which is necessary for the computation of uniform arguments,
+    and incidentally allows local definitions in the prefix to circumvent
+    restrictions if their inlining passes them. *)
+let split_struct_arg ?evars env recindx =
+  let rec decrec env n ctx c =
+    if Int.equal n 0 then ctx, c
+    else
+    let rc = whd_all ?evars env c in
+    match kind rc with
+    | Lambda (na, ty, bd) ->
+        let d = LocalAssum (na, ty) in
+        decrec (push_rel d env) (n-1) (Context.Rel.add d ctx) bd
+    | _ -> invalid_arg "split_struct_arg"
+  in
+  decrec env (recindx + 1) Context.Rel.empty
+
 (************************************************************************)
 
 let instantiate_params t u args sign =
@@ -751,6 +769,105 @@ let push_fix_renv renv (_,v,_ as recdef) =
     rel_min = renv.rel_min+n;
     genv = iterate (fun ge -> lazy Not_subterm::ge) n renv.genv }
 
+(* The chain of abstractions that [raw_prefix_escapes] and
+   [check_erased_prefix] follow, with each let's annotation and each cast's
+   type taken out. Nothing evaluates those types, so a mention of a
+   recursive function there is harmless, and a binder read only there is a
+   DEAD binder: its value is then reported, because call-by-value evaluation
+   computes it all the same. Only the chain the walks follow is erased (the
+   [needed] abstractions, the lets and casts between them, and the bodies of
+   the beta redexes they reduce); a type that reaches the walks another way
+   is still a position. A lambda's domain is kept: it stays in the context
+   [split_struct_arg] returns. *)
+let rec erase_chain_types needed c =
+  if Int.equal needed 0 then c
+  else match kind c with
+    | Lambda (na, ty, bd) -> mkLambda (na, ty, erase_chain_types (needed-1) bd)
+    | LetIn (na, v, _, bd) -> mkLetIn (na, v, mkProp, erase_chain_types needed bd)
+    | Cast (c, _, _) -> erase_chain_types needed c
+    | App (f, args) when isLambda f ->
+      mkApp (erase_beta_types needed f (Array.length args), args)
+    | _ -> c
+and erase_beta_types needed f nargs =
+  if Int.equal nargs 0 then erase_chain_types needed f
+  else match kind f with
+    | Lambda (na, ty, bd) -> mkLambda (na, ty, erase_beta_types needed bd (nargs-1))
+    | _ -> f
+
+(* The guard analysis measures a fixpoint body after [split_struct_arg] has
+   reduced its binder prefix away, but the kernel stores the body as
+   WRITTEN, so an occurrence of a recursive function that the reduction
+   ERASES is checked by nothing and is still evaluated. Walk the chain of
+   abstractions the stripping consumes, with its types erased
+   ([erase_chain_types]), and report whether [mentions k c] holds in a
+   position the reduction erases:
+
+   - the value of a [let] whose binder the body does not use;
+   - the argument of a beta redex whose binder the body does not use;
+   - a lambda's domain, which stays in the context [split_struct_arg]
+     returns: leaving it to [check_nested_fix_body] reaches a kernel anomaly
+     on breaka/D5.v, and one that reaches the block through a let reaches
+     the anomaly "Bad occurrence of recursive call" in [inductive_of_mutfix];
+   - a let's annotation or a cast's type that the erasure did not take out;
+   - everything that is left when the abstractions are not written out at
+     all, such as a match in the prefix (with the branches it does not
+     select) or an application whose head is not an abstraction: those the
+     reduction may erase in ways this walk does not model, and they are
+     refused as a whole.
+
+   A [let] (or a beta redex) whose binder the body does use is not a
+   position: the reduction substitutes its value. But the value then sits
+   wherever the binder is read, so a read in one of the positions above
+   carries the value there: a chain [let x := f 1 in let y := x in ...] puts
+   the call where the dead [y] is. Hence [reaches k lets c]: [c] mentions
+   the block, or reads a binder of [lets] whose value [reaches] in turn. Each
+   value is examined once ([memo]), so the cost stays linear in the prefix
+   even when a binder is read many times; substituting would copy the value
+   at each read. *)
+(* A used [let] or beta binder of the prefix: the walk met it at depth
+   [pl_level], so at depth [k] its variable is [Rel (k - pl_level)], and its
+   value [pl_value] lives at [pl_level] with [pl_outer] in scope. *)
+type prefix_let = { pl_level : int; pl_value : constr; pl_outer : prefix_let list }
+
+let raw_prefix_escapes mentions recindx body =
+  let memo = ref Int.Map.empty in
+  let rec reaches k lets c =
+    mentions k c
+    || List.exists (fun pl ->
+        not (noccurn (k - pl.pl_level) c) && value_reaches pl) lets
+  and value_reaches pl =
+    match Int.Map.find_opt pl.pl_level !memo with
+    | Some b -> b
+    | None ->
+      let b = reaches pl.pl_level pl.pl_outer pl.pl_value in
+      memo := Int.Map.add pl.pl_level b !memo; b
+  in
+  let rec walk k lets needed c =
+    if Int.equal needed 0 then false
+    else match kind c with
+      | Lambda (_, ty, bd) -> reaches k lets ty || walk (k+1) lets (needed-1) bd
+      | LetIn (_, v, ty, bd) ->
+        reaches k lets ty
+        || (if noccurn 1 bd then reaches k lets v || walk (k+1) lets needed bd
+            else walk (k+1) ({ pl_level = k; pl_value = v; pl_outer = lets } :: lets) needed bd)
+      | Cast (c, _, t) -> reaches k lets t || walk k lets needed c
+      | App (f, args) when isLambda f -> beta k lets needed f (Array.to_list args)
+      | _ -> reaches k lets c
+  and beta k lets needed f args =
+    match args with
+    | [] -> walk k lets needed f
+    | a :: rest ->
+      match kind f with
+      | Lambda (_, ty, bd) ->
+        reaches k lets ty
+        || (if noccurn 1 bd then reaches k lets a
+                                 || beta k lets needed (subst1 a bd) rest
+            else beta (k+1) ({ pl_level = k; pl_value = a; pl_outer = lets } :: lets)
+                   needed bd (List.map (lift 1) rest))
+      | _ -> reaches k lets (Term.applist (f, args))
+  in
+  walk 1 [] (recindx + 1) (erase_chain_types (recindx + 1) body)
+
 type fix_check_result =
   | NeedReduce of env * fix_guard_error
   | NoNeedReduce
@@ -1153,13 +1270,18 @@ let rec subterm_specif cache ?evars renv stack t =
           (nbfix-i, lazy (Subterm(Int.Set.empty,Strict,recargs))) in
         let decrArg = recindxs.(i) in
         let theBody = bodies.(i)   in
-        let nbOfAbst = decrArg+1 in
-        let sign,strippedBody = whd_decompose_lambda_n_assum ?evars renv.env nbOfAbst theBody in
+        (* Reduce in [renv'.env], where the body's own declarations are, for
+           the reason given at the call of [find_uniform_parameters]. A body
+           with too few abstractions gives no subterm information rather than
+           an anomaly: the guard condition then refuses what depends on it. *)
+        match split_struct_arg ?evars renv'.env decrArg theBody with
+        | exception Invalid_argument _ -> Not_subterm
+        | sign, strippedBody ->
                    (* pushing the fix parameters *)
         let stack' = push_stack_closures renv l stack in
         let renv'' = push_ctxt_renv renv' sign in
         let renv'' =
-          if List.length stack' < nbOfAbst then renv''
+          if List.length stack' < decrArg + 1 then renv''
           else
             let decrArg = List.nth stack' decrArg in
             let arg_spec = stack_element_specif cache ?evars decrArg in
@@ -1285,16 +1407,28 @@ let check_is_subterm x tree =
   | Not_subterm | Subterm (_,Large,_) -> InvalidSubterm
   | Internally_bound_subterm l -> NeedReduceSubterm l
 
-let find_uniform_parameters recindx nargs bodies =
+let find_uniform_parameters recindx nargs stripped =
+  let bodies = stripped in
   let nbodies = Array.length bodies in
   (* Ensure that the structural argument is not uniform,
      so that it stays in [non_absorbed_stack] *)
   let min_indx = Array.fold_left min nargs recindx in
-  (* We work only on the i-th body but are in the context of n bodies *)
-  let rec aux i k nuniformparams c =
+  let rec aux k nuniformparams c =
     let f, l = decompose_app_list c in
     match kind f with
     | Rel n ->
+      let fold accu c = match kind c with
+        | Rel m when m > k && m <= k + nbodies ->
+          (* An argument that is a bare occurrence of one of the mutual
+             fixpoints: it is applied to nothing, so no prefix of arguments can
+             be extruded from it, and [drop_uniform_parameters] must not be
+             asked to drop one. [fold_constr_with_binders] would miss it,
+             because it visits the immediate children of the argument and a
+             [Rel] has none. *)
+          0
+        | _ -> fold_constr_with_binders succ aux k accu c
+      in
+      let nuniformparams = List.fold_left fold nuniformparams l in
       (* A recursive reference to any one of the mutual fixpoints *)
       if n > k && n <= k + nbodies then
         List.fold_left_until (fun j arg ->
@@ -1309,9 +1443,14 @@ let find_uniform_parameters recindx nargs bodies =
           ) 0 l
       else
         nuniformparams
-    | _ -> fold_constr_with_binders succ (aux i) k nuniformparams c
+    | _ -> fold_constr_with_binders succ aux k nuniformparams c
   in
-  Array.fold_left_i (fun i -> aux i 0) min_indx bodies
+  (* [stripped] holds the bodies with their [recindx+1] leading abstractions
+     removed and reduced, which is the form the rewriting below also sees, so
+     the two passes measure one term. *)
+  Array.fold_left2_i (fun _k nuniformparams recindx c ->
+    aux (recindx + 1) nuniformparams c)
+    min_indx recindx stripped
 
 (** Given a fixpoint [fix f x y z n {struct n} := phi(f x y u t, ..., f x y u' t')]
     with [z] not uniform we build in context [x:A, y:B(x), z:C(x,y)] a term
@@ -1319,21 +1458,29 @@ let find_uniform_parameters recindx nargs bodies =
     [forall (z:C(x,y)) (n:I(x,y,z)), T(x,y,z,n)], so that
     [fun x y z => psi z] is of same type as the original term *)
 
-let drop_uniform_parameters nuniformparams bodies =
-  let nbodies = Array.length bodies in
-  let rec aux i k c =
+(* Rewrites the SAME stripped bodies that [find_uniform_parameters] measured,
+   at the same de Bruijn depth: each one sits under its own [recindx+1]
+   abstractions. Starting at 0 instead would make the test below select the
+   innermost stripped binders rather than the block's own variables, so
+   arguments would be deleted from an unrelated application and a recursive
+   call placed in one of them would never reach the guard condition. That
+   admits a closed proof of False; the shape is
+   test-suite/failure/guard_prefix_depth.v. *)
+let drop_uniform_parameters nuniformparams recindx stripped =
+  let nbodies = Array.length stripped in
+  let rec aux k c =
     let f, l = decompose_app_list c in
     match kind f with
     | Rel n ->
-      (* A recursive reference to the i-th body *)
-      if Int.equal n (nbodies + k - i) then
+      let l = List.map (fun c -> aux k c) l in
+      (* A recursive reference to any one of the mutual fixpoints *)
+      if n > k && n <= k + nbodies then
         let new_args = List.skipn_at_best nuniformparams l in
         Term.applist (f, new_args)
-      else
-        c
-    | _ -> map_with_binders succ (aux i) k c
+      else Term.applist (f, l)
+    | _ -> map_with_binders succ aux k c
   in
-  Array.mapi (fun i -> aux i 0) bodies
+  Array.map2 (fun recindx c -> aux (recindx + 1) c) recindx stripped
 
 let filter_fix_stack_domain cache ?evars nr decrarg stack nuniformparams =
   let rec aux i nuniformparams stack =
@@ -1468,20 +1615,117 @@ let check_one_fix cache ?evars renv recpos trees def =
             let nbodies = Array.length bodies in
             let rs' = Array.fold_left (check_inert_subterm_rec_call renv) (NoNeedReduce::rs) typarray in
             let renv' = push_fix_renv renv recdef in
-            let nuniformparams = find_uniform_parameters recindxs (List.length stack) bodies in
-            let bodies = drop_uniform_parameters nuniformparams bodies in
+            let illformed k =
+              error_ill_formed_rec_body renv.env (Type_errors.FixGuardError (NotEnoughAbstractionInFixBody recindxs.(k)))
+                (pi1 recdef) k (push_rec_types recdef renv.env)
+                (judgment_of_fixpoint recdef)
+            in
+            (* Split every body once, in [renv'.env], the environment that
+               holds the block's own declarations and in which the kernel
+               checks the bodies. With [renv.env], which is short by
+               [nbodies] declarations and is what upstream passes, every
+               lookup that [split_struct_arg]'s reduction makes is shifted,
+               and a body whose head resolves to a different local definition
+               is analysed in place of the real one. That admits closed proofs
+               of False: test-suite/failure/guard_envshift_x03.v.
+
+               The analysis and the rewriting then work on the SAME stripped
+               bodies, and the abstractions are put back afterwards. Upstream
+               analyses the stripped body and rewrites the raw one, so an
+               occurrence living in the binder prefix is invisible to the
+               analysis and visible to the rewriting: the prefix it computed
+               is then not justified for that occurrence, and [List.skipn]
+               raises inside the kernel. Measuring one term removes the
+               disagreement rather than reporting it. *)
+            (* The analysis measures each body after [split_struct_arg] has
+               reduced its binder prefix away, but the kernel stores the body
+               as WRITTEN, so an occurrence of a recursive function that the
+               reduction ERASES is checked by nothing and is still evaluated.
+               A fully applied call hidden there makes the kernel accept a
+               definition whose evaluation does not terminate; upstream Rocq
+               accepts those too (9.3.0 and master), and stock 9.2.0, which
+               lacks rocq-prover/rocq#22384, does not.
+
+               Submit every erased position to the ordinary analysis, in the
+               environment where it occurs, so that a body is refused exactly
+               when the erased material would have been refused had the
+               reduction kept it: a legitimate call in a dead [let] stays
+               legitimate, a call on a bigger argument is a guard error
+               wherever it sits. The walk runs on the chain with its types
+               erased ([erase_chain_types]) and its positions are those of
+               [raw_prefix_escapes]: the value of a [let] whose binder the
+               body does not use (a binder read only in an erased type is
+               not used), the argument of a beta redex whose binder the body
+               does not use, a lambda's domain, a type the erasure did not
+               take out, and, for any other head, the whole term — the
+               reduction can erase inside it in ways this walk does not
+               model. A [let] whose binder IS used is substituted, as the
+               reduction does, so that its value is checked wherever the
+               binder sits: a chain [let x := outer (S n) in let y := x in
+               ...] does not hide the call behind the variable [x].
+
+               What this reaches that nothing else does is a call to a
+               function of an ENCLOSING block: the functions of this block
+               are covered by [check_fix] on the block itself, which applies
+               the same rule to its own prefix. *)
+            let rec check_erased_prefix renv needed c rs =
+              if Int.equal needed 0 then rs
+              else match kind c with
+                | Lambda (x, ty, bd) ->
+                  let rs = check_inert_subterm_rec_call renv rs ty in
+                  check_erased_prefix
+                    (push_var_renv renv (redex_level rs) (x,ty)) (needed-1) bd rs
+                | LetIn (x, v, ty, bd) ->
+                  let rs = check_inert_subterm_rec_call renv rs ty in
+                  if noccurn 1 bd then
+                    let rs = check_inert_subterm_rec_call renv rs v in
+                    check_erased_prefix renv needed (subst1 v bd) rs
+                  else if noccur_with_meta renv.rel_min nfi v then
+                    (* The value carries no call of this block, so putting it
+                       where its binder is read can change no verdict: keep
+                       the binder, which costs one declaration instead of a
+                       copy of the value at every read. *)
+                    let spec = lazy_subterm_specif cache ?evars renv [] v in
+                    check_erased_prefix (push_let renv (x,v,ty,spec)) needed bd rs
+                  else check_erased_prefix renv needed (subst1 v bd) rs
+                | Cast (c, _, t) ->
+                  let rs = check_inert_subterm_rec_call renv rs t in
+                  check_erased_prefix renv needed c rs
+                | App (f, args) when isLambda f ->
+                  check_erased_beta renv needed f (Array.to_list args) rs
+                | _ -> check_inert_subterm_rec_call renv rs c
+            and check_erased_beta renv needed f args rs =
+              match args with
+              | [] -> check_erased_prefix renv needed f rs
+              | a :: rest ->
+                match kind f with
+                | Lambda (_, ty, bd) ->
+                  let rs = check_inert_subterm_rec_call renv rs ty in
+                  let rs = if noccurn 1 bd then check_inert_subterm_rec_call renv rs a else rs in
+                  check_erased_beta renv needed (subst1 a bd) rest rs
+                | _ -> check_inert_subterm_rec_call renv rs (Term.applist (f, args))
+            in
+            let rs' = Array.fold_left2_i (fun _k rs' recindx body ->
+                check_erased_prefix renv' (recindx+1)
+                  (erase_chain_types (recindx+1) body) rs')
+                rs' recindxs bodies in
+            let split = Array.map2_i (fun k recindx body ->
+                try split_struct_arg ?evars renv'.env recindx body
+                with Invalid_argument _ -> illformed k)
+                recindxs bodies in
+            let stripped = Array.map snd split in
+            let nuniformparams = find_uniform_parameters recindxs (List.length stack) stripped in
+            let stripped = drop_uniform_parameters nuniformparams recindxs stripped in
+            let bodies = Array.map2 (fun (sign, _) body ->
+                Term.it_mkLambda_or_LetIn body sign) split stripped in
             let fix_stack = filter_fix_stack_domain cache ?evars (redex_level rs) decrArg stack nuniformparams in
             let fix_stack = if List.length stack > decrArg then List.firstn (decrArg+1) fix_stack else fix_stack in
             let stack_this = lift_stack nbodies fix_stack in
             let stack_others = lift_stack nbodies (List.firstn nuniformparams fix_stack) in
             (* Check guard in the expanded fix *)
-            let illformed () =
-              error_ill_formed_rec_body renv.env (Type_errors.FixGuardError (NotEnoughAbstractionInFixBody recindxs.(i)))
-                (pi1 recdef) i (push_rec_types recdef renv.env)
-                (judgment_of_fixpoint recdef) in
             let rs' = Array.fold_left2_i (fun j rs' recindx body ->
                 let fix_stack = if Int.equal i j then stack_this else stack_others in
-                check_nested_fix_body illformed renv' (recindx+1) fix_stack rs' body) rs' recindxs bodies in
+                check_nested_fix_body renv' (recindx+1) fix_stack rs' body) rs' recindxs bodies in
             let needreduce_fix, rs = List.sep_first rs' in
             let absorbed_stack, non_absorbed_stack = List.chop nuniformparams stack in
             check_rec_call_state renv needreduce_fix non_absorbed_stack rs (fun () ->
@@ -1596,23 +1840,24 @@ let check_one_fix cache ?evars renv recpos trees def =
         | (Evar _ | Meta _) ->
             rs
 
-  and check_nested_fix_body illformed renv decr stack rs body =
+  and check_nested_fix_body renv decr stack rs body =
     if Int.equal decr 0 then
       check_inert_subterm_rec_call renv rs body
     else
       match kind (whd_all ?evars renv.env body) with
         | Lambda (x,a,body) ->
           begin
+            let rs = check_inert_subterm_rec_call renv rs a in
             match stack with
             | elt :: stack ->
-              let rs = check_inert_subterm_rec_call renv rs a in
               let renv', stack', body' = pop_argument cache NoNeedReduce renv elt stack x a body in
-              check_nested_fix_body illformed renv' (decr-1) stack' rs body'
+              check_nested_fix_body renv' (decr-1) stack' rs body'
             | [] ->
               let renv' = push_var_renv renv (redex_level rs) (x,a) in
-              check_nested_fix_body illformed renv' (decr-1) [] rs body
+              check_nested_fix_body renv' (decr-1) [] rs body
           end
-        | _ -> illformed ()
+        | _ -> assert false
+        (* We know from find_uniform_parameters that they are wellformed *)
 
   and check_rec_call_state renv needreduce_of_head stack rs expand_head =
     (* Test if either the head or the stack of a state
@@ -1713,8 +1958,35 @@ let inductive_of_mutfix ?evars ?elim_to env ((nvect,bodynum),(names,types,bodies
 
 let check_fix ?evars ?elim_to env ((nvect,_),(names,_,bodies as recdef) as fix) =
   let cache = Cache.create () in
-  let (minds, rdef) = inductive_of_mutfix ?evars ?elim_to env fix in
   let flags = Environ.typing_flags env in
+  let nbfix = Array.length bodies in
+  (* The same raw-prefix rule for the block the kernel is checking here, not
+     only for the blocks nested inside its bodies: [check_occur] in
+     [inductive_of_mutfix] reduces this prefix away too, so a call to one of
+     these functions hidden in it reaches no check either, and a dead one is
+     accepted by every 9.2 we have (test-suite/failure/
+     guard_prefix_toplevel_let.v). Only this block's own functions are in
+     question: anything enclosing it is covered by the enclosing block's own
+     check, where this fix is a nested one. The rule runs BEFORE
+     [inductive_of_mutfix], because that function raises the kernel anomaly
+     "Bad occurrence of recursive call" on a prefix binder whose TYPE
+     mentions the block (breaka/D5.v), and a guard refusal is the honest
+     answer there. *)
+  let () =
+    if flags.check_guarded
+       && Int.equal (Array.length nvect) nbfix
+       && Int.equal (Array.length names) nbfix
+    then
+      let fixenv = push_rec_types recdef env in
+      Array.iteri (fun i body ->
+          if raw_prefix_escapes
+               (fun k c -> not (noccur_with_meta k nbfix c)) nvect.(i) body
+          then
+            error_ill_formed_rec_body fixenv
+              (Type_errors.FixGuardError (NotEnoughAbstractionInFixBody nvect.(i)))
+              names i fixenv (judgment_of_fixpoint recdef))
+        bodies in
+  let (minds, rdef) = inductive_of_mutfix ?evars ?elim_to env fix in
   if flags.check_guarded then
     let get_tree (kn,i) =
       let mib = Environ.lookup_mind kn env in
@@ -1750,9 +2022,10 @@ let rec codomain_is_coind ?evars env c =
         with Not_found ->
           raise (CoFixGuardError (env, CodomainNotInductiveType b)))
 
-let check_one_cofix cache ?evars env nbfix def deftype =
+let check_one_cofix cache ?evars env nbfix def vlra =
   let rec check_rec_call env alreadygrd n tree vlra t =
     if not (noccur_with_meta n nbfix t) then
+      let () = check_erased env n t in
       let c,args = decompose_app_list (whd_all ?evars env t) in
       match kind c with
         | Rel p when  n <= p && p < n+nbfix ->
@@ -1766,6 +2039,17 @@ let check_one_cofix cache ?evars env nbfix def deftype =
             let lra = vlra.(i-1) in
             let mI = inductive_of_constructor cstr_kn in
             let (mib,_mip) = lookup_mind_specif env mI in
+            (* The parameters are evaluated too (cbv evaluates every
+               constructor argument) and no position below measures them, so
+               a recursive occurrence there is refused like one in a
+               non-recursive argument (test-suite/failure/
+               guard_cofix_ctor_param.v). This branch's parent, and the 9.2
+               base ca856abb5b, take the List.skipn below and never look at
+               the parameters. *)
+            let () = List.iteri (fun j a ->
+                if j < mib.mind_nparams && not (noccur_with_meta n nbfix a) then
+                  raise (CoFixGuardError (env, RecCallInNonRecArgOfConstructor a)))
+                args in
             let realargs = List.skipn mib.mind_nparams args in
             let rec process_args_of_constr = function
               | (t::lr), (rar::lrar) ->
@@ -1790,18 +2074,19 @@ let check_one_cofix cache ?evars env nbfix def deftype =
             else
               raise (CoFixGuardError (env,RecCallInTypeOfAbstraction a))
 
-        | CoFix (_j,(_,varit,vdefs as recdef)) ->
-            if List.for_all (noccur_with_meta n nbfix) args
-            then
-              if Array.for_all (noccur_with_meta n nbfix) varit then
-                let nbfix = Array.length vdefs in
-                let env' = push_rec_types recdef env in
-                (Array.iter (check_rec_call env' alreadygrd (n+nbfix) tree vlra) vdefs;
-                 List.iter (check_rec_call env alreadygrd n tree vlra) args)
-              else
-                raise (CoFixGuardError (env,RecCallInTypeOfDef c))
-            else
-              raise (CoFixGuardError (env,UnguardedRecursiveCall c))
+        | CoFix (i, (_, varit, vdefs as recdef)) ->
+          let () = if not (List.for_all (noccur_with_meta n nbfix) args) then
+            raise (CoFixGuardError (env, UnguardedRecursiveCall c))
+          in
+          let () = if not (Array.for_all (noccur_with_meta n nbfix) varit) then
+            raise (CoFixGuardError (env, RecCallInTypeOfDef c))
+          in
+          let nbfixinner = Array.length vdefs in
+          let env' = push_rec_types recdef env in
+          let () = if not (Array.for_all_i (fun j c -> Int.equal i j || noccur_with_meta (n + nbfixinner) nbfix c) 0 vdefs) then
+            raise (CoFixGuardError (env, RecCallInNonMainMutual c))
+          in
+          check_rec_call env' alreadygrd (n + nbfixinner) tree vlra vdefs.(i)
 
         | Case (ci, u, pms, p, iv, tm, br) -> (* iv ignored: just a cache *)
           begin
@@ -1830,10 +2115,148 @@ let check_one_cofix cache ?evars env nbfix def deftype =
         | Rel _ | Var _ | Sort _ | Cast _ | Prod _ | LetIn _ | App _ | Const _
           | Ind _ | Fix _ | Proj _ | Int _ | Float _ | String _
           | Array _ ->
-           raise (CoFixGuardError (env,NotGuardedForm t)) in
+           raise (CoFixGuardError (env,NotGuardedForm t))
 
-  let ((mind, _),_) = codomain_is_coind ?evars env deftype in
-  let vlra = lookup_subterms env mind in
+  (* The analysis above dispatches on [whd_all t], while the kernel stores
+     [t] as written, so whatever head reduction DROPS on the way to that
+     normal form is checked by nothing and is still evaluated later: a dead
+     let value, a dead beta argument, the branches a match on a known
+     constructor does not select and the constructor arguments the selected
+     branch does not read, the fields a projection of a known record does not
+     select, and the same material inside the head or the scrutinee while
+     they are reduced. A recursive call hidden there makes the kernel accept
+     a cofixpoint whose evaluation does not terminate
+     (test-suite/failure/guard_cofix_dead_*.v).
+
+     [check_erased] walks the head-reduction path of [t] itself and refuses
+     the definition, with an ordinary guard error, when anything that path
+     drops mentions a function of the block. Dropped types (a cast's type, a
+     let's annotation, the domain of a reduced abstraction, a return
+     predicate) are held to the same rule. Nothing is looked up in the
+     recursion tree, so a dropped term of any type is safe to check: the
+     rule this replaces submitted dropped terms to [check_rec_call] with the
+     codomain's tree, and died with an out-of-bounds anomaly on a dropped
+     term of another inductive type
+     (test-suite/failure/guard_cofix_dead_other_type.v).
+
+     The walk follows the reductions [whd_all] performs at the head: beta,
+     zeta, delta of local and global definitions, iota of a match and of a
+     projection on a constructor or on a cofixpoint, and iota of a fixpoint
+     whose recursive argument reduces to a constructor. Three reductions it
+     does not take apart: a primitive at the head, a rewrite rule at the
+     head, and the case inversion of a match whose scrutinee stays stuck
+     (which drops that scrutinee). For each of the three the term as a whole
+     must not mention the block; when it does not, nothing that [whd_all]
+     drops from it can, and the walk continues from [whd_all] of it.
+
+     One reduction escapes that rule, deliberately: a rewrite rule whose
+     left side fires only UNDER a match or a projection. The walk reduces
+     the scrutinee, the rule does not fire there, and the stuck match is
+     returned without the application ever being the head, so what the rule
+     drops is unchecked. A proof that uses rewrite rules names the symbol in
+     [Print Assumptions], which is where this is caught. *)
+  and check_erased env n t =
+    let _ : constr = whd_erasing env n t in ()
+
+  and erased env n c =
+    if not (noccur_with_meta n nbfix c) then
+      raise (CoFixGuardError (env, UnguardedRecursiveCall c))
+
+  and whd_erasing env n t =
+    match kind t with
+    | Cast (c, _, ty) ->
+      let () = erased env n ty in
+      whd_erasing env n c
+    | LetIn (_, v, ty, b) ->
+      let () = erased env n ty in
+      let () = if noccurn 1 b then erased env n v in
+      whd_erasing env n (subst1 v b)
+    | App (f, args) ->
+      let hd, fargs = decompose_app_list (whd_erasing env n f) in
+      whd_erasing_app env n hd (fargs @ Array.to_list args)
+    | Case (ci, u, pms, p, iv, tm, br) ->
+      let (ci', (p', _), _, tm', brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
+      let tmr = whd_erasing env n tm' in
+      let hd, cargs = decompose_app_list tmr in
+      begin match kind hd with
+      | Construct ((_, i), _ as cstr) ->
+        let () = erased env n p' in
+        let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then erased env n b) brs in
+        let () = List.iteri (fun j a -> if j < ci'.ci_npar then erased env n a) cargs in
+        (* The constructor arguments whose binder the selected branch does
+           not read are dropped by the substitution. *)
+        let ctx, body = Term.decompose_lambda_n_decls ci'.ci_cstr_ndecls.(i - 1) brs.(i - 1) in
+        let nd = List.length ctx in
+        let rec unread k decls args = match decls, args with
+          | [], _ | _, [] -> ()
+          | LocalDef _ :: decls, args -> unread (k + 1) decls args
+          | LocalAssum _ :: decls, a :: args ->
+            let () = if noccurn (nd - k) body then erased env n a in
+            unread (k + 1) decls args
+        in
+        let () = unread 0 (List.rev ctx) (List.skipn_at_best ci'.ci_npar cargs) in
+        whd_erasing env n (apply_branch cstr cargs ci' brs)
+      | CoFix cofix ->
+        whd_erasing env n
+          (mkCase (ci, u, pms, p, iv, mkApp (contract_cofix cofix, Array.of_list cargs), br))
+      | _ ->
+        begin match iv with
+        | CaseInvert _ -> let () = erased env n t in whd_all ?evars env t
+        | NoInvert -> mkCase (ci, u, pms, p, iv, tmr, br)
+        end
+      end
+    | Proj (pr, r, c) ->
+      let cr = whd_erasing env n c in
+      let hd, args = decompose_app_list cr in
+      begin match kind hd with
+      | Construct _ ->
+        let k = Projection.npars pr + Projection.arg pr in
+        let () = List.iteri (fun j a -> if not (Int.equal j k) then erased env n a) args in
+        whd_erasing env n (List.nth args k)
+      | CoFix cofix ->
+        whd_erasing env n (mkProj (pr, r, mkApp (contract_cofix cofix, Array.of_list args)))
+      | _ -> mkProj (pr, r, cr)
+      end
+    | Rel k ->
+      begin match lookup_rel k env with
+      | LocalDef (_, b, _) -> whd_erasing env n (lift k b)
+      | LocalAssum _ -> t
+      end
+    | Var id ->
+      let open! Context.Named.Declaration in
+      begin match lookup_named id env with
+      | LocalDef (_, b, _) -> whd_erasing env n b
+      | LocalAssum _ -> t
+      end
+    | Const (c, _ as cu) ->
+      if evaluable_constant c env then whd_erasing env n (constant_value_in env cu)
+      else if Environ.is_primitive env c || Environ.is_symbol env c then whd_all ?evars env t
+      else t
+    | Lambda _ | Prod _ | Sort _ | Construct _ | Ind _ | CoFix _ | Fix _
+    | Evar _ | Meta _ | Int _ | Float _ | String _ | Array _ -> t
+
+  and whd_erasing_app env n hd args =
+    match kind hd, args with
+    | _, [] -> hd
+    | Lambda (_, ty, b), a :: rest ->
+      let () = erased env n ty in
+      let () = if noccurn 1 b then erased env n a in
+      let hd', args' = decompose_app_list (whd_erasing env n (subst1 a b)) in
+      whd_erasing_app env n hd' (args' @ rest)
+    | Fix ((recindxs, i), _ as fix), _ when List.length args > recindxs.(i) ->
+      let k = recindxs.(i) in
+      let ra = whd_erasing env n (List.nth args k) in
+      let args = List.mapi (fun j a -> if Int.equal j k then ra else a) args in
+      if isConstruct (fst (decompose_app ra)) then
+        let hd', args' = decompose_app_list (whd_erasing env n (contract_fix fix)) in
+        whd_erasing_app env n hd' (args' @ args)
+      else Term.applist (hd, args)
+    | Const (c, _), _ when Environ.is_primitive env c || Environ.is_symbol env c ->
+      let t = Term.applist (hd, args) in
+      let () = erased env n t in
+      whd_all ?evars env t
+    | _ -> Term.applist (hd, args) in
+
   check_rec_call env false 1 vlra (dest_subterms vlra) def
 
 (* The  function which checks that the whole block of definitions
@@ -1846,7 +2269,10 @@ let check_cofix ?evars env (_bodynum,(names,types,bodies as recdef)) =
     let nbfix = Array.length bodies in
     for i = 0 to nbfix-1 do
       let fixenv = push_rec_types recdef env in
-      try check_one_cofix cache ?evars fixenv nbfix bodies.(i) types.(i)
+      try
+        let ((mind, _),_) = codomain_is_coind ?evars env types.(i) in
+        let vlra = lookup_subterms env mind in
+        check_one_cofix cache ?evars fixenv nbfix bodies.(i) vlra
       with CoFixGuardError (errenv,err) ->
         error_ill_formed_rec_body errenv (Type_errors.CoFixGuardError err) names i
           fixenv (judgment_of_fixpoint recdef)
