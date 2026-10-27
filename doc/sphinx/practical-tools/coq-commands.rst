@@ -482,7 +482,9 @@ and ``rocq repl``, unless stated otherwise:
 
   .. warning:: This makes the logic inconsistent.
 :-skip-qed-typecheck: Do not let the kernel typecheck the proof of an opaque
-  constant (one closed with :cmd:`Qed`) when it is declared. The proof term,
+  constant (one closed with :cmd:`Qed`) when it is declared, as if the
+  :flag:`Skip Qed Typecheck` flag were on for every proof of the file:
+  ``Unset Skip Qed Typecheck`` does not turn this option off. The proof term,
   its universe constraints and its section variables are computed and stored
   exactly as without this option, so libraries that depend on this one see
   the same library; only the table of opaque proofs records which proofs were

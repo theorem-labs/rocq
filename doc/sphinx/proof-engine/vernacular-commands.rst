@@ -443,7 +443,8 @@ Requests to the environment
    definitions have no dependencies.
 
    An opaque constant whose proof was not typechecked by the kernel, because
-   its library was compiled with ``-skip-qed-typecheck``, is reported under
+   :flag:`Skip Qed Typecheck` was on when it was declared or its library was
+   compiled with ``-skip-qed-typecheck``, is reported under
    "Axioms" as :n:`@qualid has an opaque proof not checked by the kernel.`
 
 .. flag:: Printing All Assumptions
