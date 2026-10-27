@@ -88,3 +88,9 @@ val (@-->) :
     given [s] does not produce a "pure" tactic, that is, something that can be
     turned into an Ltac2 value (i.e., a closure, or a pure value). *)
 val define : Tac2expr.ml_tactic_name -> (_, 'f) spec -> 'f -> unit
+
+(** [define_direct tac s f d] is [define tac s f] for a function spec [s], with the direct
+    implementation [d] ([Tac2val.direct]), which must agree with [f] as [Tac2val.direct] says and
+    take as many arguments as [s]: for a primitive in the proof monad whose value is pure for some
+    arguments ([Tac2val.DirectCheck]) or that reads the evar map only ([Tac2val.DirectEnv]). *)
+val define_direct : Tac2expr.ml_tactic_name -> (_, 'f) spec -> 'f -> Tac2val.direct -> unit

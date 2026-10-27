@@ -181,6 +181,8 @@ open Tac2externals
 
 let define ?plugin s = define (pname ?plugin s)
 
+let define_direct ?plugin s = define_direct (pname ?plugin s)
+
 (** Printing *)
 
 let () = define "print" (pp @-> ret unit) Feedback.msg_notice
@@ -356,9 +358,19 @@ let () =
   define "array_set" (block @-> int @-> valexpr @-> tac unit) @@ fun (_, v) n x ->
   try Array.set v n x; return () with Invalid_argument _ -> throw Tac2ffi.err_outofbounds
 
+(* The direct implementation: the same conversions, then the same read, whose value is the
+   primitive's ([return] of it) when it is in bounds (Tac2val.DirectCheck). *)
 let () =
-  define "array_get" (block @-> int @-> tac valexpr) @@ fun (_, v) n ->
-  try return (Array.get v n) with Invalid_argument _ -> throw Tac2ffi.err_outofbounds
+  let check = function
+  | [b; n] ->
+    let (_, v) = repr_to block b in
+    let n = repr_to int n in
+    (match Array.get v n with x -> Some x | exception Invalid_argument _ -> None)
+  | _ -> assert false
+  in
+  define_direct "array_get" (block @-> int @-> tac valexpr) (fun (_, v) n ->
+  try return (Array.get v n) with Invalid_argument _ -> throw Tac2ffi.err_outofbounds)
+    (DirectCheck (2, check))
 
 let () =
   define "array_blit"
@@ -477,9 +489,19 @@ let () =
   pf_apply ~catch_exceptions:true get_type
 
 (** constr -> constr *)
+(* The direct implementation (Tac2val.DirectEnv): the same conversions, then the same comparison
+   in the evar map, whose result is the primitive's; reading the environment first has no effect. *)
 let () =
-  define "constr_equal" (constr @-> constr @-> tac bool) @@ fun c1 c2 ->
-  Proofview.tclEVARMAP >>= fun sigma -> return (EConstr.eq_constr sigma c1 c2)
+  let direct = function
+  | [c1; c2] ->
+    let c1 = repr_to constr c1 in
+    let c2 = repr_to constr c2 in
+    fun _ sigma -> repr_of bool (EConstr.eq_constr sigma c1 c2)
+  | _ -> assert false
+  in
+  define_direct "constr_equal" (constr @-> constr @-> tac bool) (fun c1 c2 ->
+  Proofview.tclEVARMAP >>= fun sigma -> return (EConstr.eq_constr sigma c1 c2))
+    (DirectEnv (2, direct))
 
 let () =
   define "constr_kind" (constr @-> eret valexpr) @@ fun c env sigma ->
