@@ -366,6 +366,16 @@ let unreplayable_steps = ref 0
     such frame, so stack use per level would grow. *)
 let inductive_marks = ref ([] : int list)
 
+(** Clears what the entries shared with other processes keep in this one, so
+    that sharing does not raise what a process holds past the bound the
+    entries above keep. It is set by {!Shared}, which comes after this and
+    uses what it defines. *)
+let forget_shared = ref (fun () -> ())
+
+let fresh_entries () =
+  memo := fresh_memo ();
+  !forget_shared ()
+
 let sync_memo access =
   let env = Global.env () in
   let mp = Global.current_modpath () in
@@ -376,11 +386,11 @@ let sync_memo access =
     memo_heaviest := max !memo_heaviest !query_weight;
     query_weight := 0;
     if !memo.weight > memo_factor * !memo_heaviest then begin
-      memo := fresh_memo ();
+      fresh_entries ();
       if debug_memo then Printf.eprintf "[assumptions-memo] cleared\n%!"
     end
   | _ ->
-    memo := fresh_memo ();
+    fresh_entries ();
     memo_heaviest := 0;
     query_weight := 0;
     memo_key := Some (env, mp, access, opaques)
@@ -1156,11 +1166,22 @@ module Shared = struct
     r_refs : GlobRef.t list;
   }
 
-  (** The first line of every entry file. A reader skips a file that another
-      build of Rocq wrote, since it reads the entry with [Marshal]. *)
+  (** The first line of every entry file. It names the binary that wrote the
+      entry, not only its version: a reader reads the entry with [Marshal],
+      so an entry whose [record] has another shape is bytes read at the wrong
+      type rather than a miss, and two builds of one Rocq version can differ
+      in that shape. The file of the running binary stands for it: its device,
+      inode, size and modification time, which an installed Rocq keeps and a
+      rebuild changes. *)
   let magic =
-    Printf.sprintf "rocq-assumptions-shared 1 %s %s %d\n"
-      Coq_config.version Coq_config.caml_version Sys.word_size
+    let build = match Unix.stat Sys.executable_name with
+      | st ->
+        Printf.sprintf "%d:%d:%d:%.0f"
+          st.Unix.st_dev st.Unix.st_ino st.Unix.st_size st.Unix.st_mtime
+      | exception Unix.Unix_error _ -> Sys.executable_name
+    in
+    Printf.sprintf "rocq-assumptions-shared 2 %s %s %d %s\n"
+      Coq_config.version Coq_config.caml_version Sys.word_size build
 
   let magic_length = String.length magic
 
@@ -1203,8 +1224,14 @@ module Shared = struct
 
   type found = { f_kind : kind; f_replayable : bool; f_refs : GlobRef.t list }
 
-  (** Entries this process read or wrote, by key. *)
+  (** Entries this process read or wrote, by key. Cleared with the entries of
+      the query cache ([forget], called from [sync_memo] through
+      [forget_shared], since this module comes after it), so that a process
+      that shares keeps no more of them than one that does not: what it drops
+      it reads again from the directory. *)
   let index : (string, found) Hashtbl.t = Hashtbl.create 1024
+
+  let forget () = Hashtbl.reset index
 
   type claim =
     | Mine of Unix.file_descr
@@ -1225,18 +1252,19 @@ module Shared = struct
       | exception Unix.Unix_error (Unix.EEXIST, _, _) -> Taken
       | exception (Unix.Unix_error _ as e) -> disable "a claim" e; Off
 
-  (** The claim of [key], when the process that held it ended without writing
-      the entry: its lock is free. A lock taken in the moment between the
-      claimant's creating the claim and locking it makes two processes walk
-      the object, which write equal entries. *)
+  (** The claim of [key] when the process that held it ended without writing
+      the entry, so that its lock is free; [Taken] while a process holds it. A
+      lock taken in the moment between the claimant's creating the claim and
+      locking it makes two processes walk the object, which write equal
+      entries. *)
   let take_over key =
-    if not !usable then Some Off
+    if not !usable then Off
     else
       match Unix.openfile (claim_of key) [Unix.O_WRONLY; Unix.O_CLOEXEC] 0 with
-      | exception (Unix.Unix_error _ as e) -> disable "a claim" e; Some Off
+      | exception (Unix.Unix_error _ as e) -> disable "a claim" e; Off
       | fd ->
-        if lock fd then Some (Mine fd)
-        else begin Unix.close fd; None end
+        if lock fd then Mine fd
+        else begin (try Unix.close fd with Unix.Unix_error _ -> ()); Taken end
 
   (** Keeps the entry of [key], and writes it to the directory when this
       process holds the claim, which it then releases. *)
@@ -1264,7 +1292,7 @@ module Shared = struct
                  file that writes 7,000-14,000 entries. *)
               Unix.rename tmp file
             end)
-      with Unix.Unix_error _ as e -> disable "a write" e
+      with (Unix.Unix_error _ | Fun.Finally_raised _) as e -> disable "a write" e
 
   (** Releases the claim of an object whose walk raised. *)
   let abandon = function
@@ -1304,17 +1332,25 @@ module Shared = struct
           Some f
         end
 
+  (** Where the entry of [key] came from, for the counters the debug line
+      reports and the test reads: the directory, or this process's own index
+      (an entry it wrote, or read before). *)
+  type source = From_directory | From_index
+
   (** The entry of [key], read once from the directory. A file that is not a
       whole entry of [key] (another build, a damaged file, a key whose MD5
       collides) counts as absent. *)
   let find key =
     match Hashtbl.find_opt index key with
-    | Some _ as f -> f
+    | Some f -> Some (From_index, f)
     | None ->
       if not !usable then None
       else
-        try read key
-        with (Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _ | End_of_file) as e ->
+        match read key with
+        | Some f -> Some (From_directory, f)
+        | None -> None
+        | exception ((Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _
+                     | End_of_file | Fun.Finally_raised _) as e) ->
           disable "a read" e; None
 
   let started = ref false
@@ -1380,6 +1416,8 @@ module Shared = struct
 
 end
 
+let () = forget_shared := Shared.forget
+
 type phase1_result =
   | P_object of { value : GlobRef.Set_env.t option; edges : GlobRef.Set_env.t; replayable : bool }
   | P_block of { contents : GlobRef.Set_env.t; replayable : bool }
@@ -1444,32 +1482,40 @@ let to_shared = function
   | P_object _ | P_failed -> (Shared.Failed, false, [])
 
 (* The elements of a set, added back in their order, give the same set: a set
-   holds one reference per user name. *)
+   holds one reference per user name. The kind must be the kind of [node],
+   whose key the entry was found under: an entry of another kind would give a
+   block's member an entry of its own and break the invariant that a block's
+   members are entered together. A file of the wrong kind under a key needs a
+   write to the directory, which the build does not allow, so this only costs
+   a walk. *)
 let of_shared access node (f : Shared.found) =
-  let set = List.fold_left (fun s r -> GlobRef.Set_env.add r s) GlobRef.Set_env.empty f.f_refs in
-  match f.f_kind with
-  | Shared.No_body -> P_object { value = None; edges = set; replayable = f.f_replayable }
-  | Shared.Body -> P_object { value = Some set; edges = set; replayable = f.f_replayable }
-  | Shared.Block -> P_block { contents = set; replayable = f.f_replayable }
-  | Shared.Failed -> shallow_walk access node
+  let set () = List.fold_left (fun s r -> GlobRef.Set_env.add r s) GlobRef.Set_env.empty f.f_refs in
+  match f.f_kind, node with
+  | Shared.No_body, (GlobRef.ConstRef _ | GlobRef.VarRef _) ->
+    P_object { value = None; edges = set (); replayable = f.f_replayable }
+  | Shared.Body, (GlobRef.ConstRef _ | GlobRef.VarRef _) ->
+    let s = set () in
+    P_object { value = Some s; edges = s; replayable = f.f_replayable }
+  | Shared.Block, (GlobRef.IndRef _ | GlobRef.ConstructRef _) ->
+    P_block { contents = set (); replayable = f.f_replayable }
+  | (Shared.Failed | Shared.No_body | Shared.Body | Shared.Block), _ -> shallow_walk access node
+
+(** How long the first phase waits for the entries of objects other processes
+    claimed before it walks them itself. A claimant that ends frees its lock,
+    so this bounds only the wait for one that lives and does not publish: a
+    walk much longer than this one's, a stopped process, or a filesystem whose
+    locks do not work. Two processes then walk the object, which the design
+    allows anyway (see [Shared.take_over]). *)
+let wait_limit = 30.
 
 type phase1_stats = {
   mutable walked : int;
-  mutable read : int;
+  mutable read : int;  (** entries read from the directory *)
+  mutable known : int;  (** entries this process had already *)
   mutable put_aside : int;
   mutable taken_over : int;
   mutable waited : float;
-  mutable walk_s : float;
-  mutable read_s : float;
-  mutable claim_s : float;
-  mutable publish_s : float;
 }
-
-let timed add f =
-  let t = Unix.gettimeofday () in
-  let r = f () in
-  add (Unix.gettimeofday () -. t);
-  r
 
 (** The first phase of a shared query: the result of each object the query
     can reach that has no entry yet, by the object that stands for it
@@ -1477,8 +1523,8 @@ let timed add f =
 let phase1 access grs stats =
   let digests = Library.content_digests () in
   let results = ref Shared.EMap.empty in
-  let aside = ref Shared.EMap.empty in
-  let waiting = ref [] in
+  (* the objects another process claimed, with their keys *)
+  let waiting = ref Shared.EMap.empty in
   let stack = ref grs in
   let finish node r =
     results := Shared.EMap.add node r !results;
@@ -1490,9 +1536,16 @@ let phase1 access grs stats =
   in
   let walk node =
     stats.walked <- stats.walked + 1;
-    timed (fun t -> stats.walk_s <- stats.walk_s +. t) (fun () -> shallow_walk access node)
+    shallow_walk access node
   in
-  let find key = timed (fun t -> stats.read_s <- stats.read_s +. t) (fun () -> Shared.find key) in
+  let find key = match Shared.find key with
+    | None -> None
+    | Some (source, f) ->
+      (match source with
+       | Shared.From_directory -> stats.read <- stats.read + 1
+       | Shared.From_index -> stats.known <- stats.known + 1);
+      Some f
+  in
   let walk_and_publish claim node key =
     let r = match walk node with
       | r -> r
@@ -1502,59 +1555,60 @@ let phase1 access grs stats =
         Exninfo.iraise e
     in
     let kind, replayable, refs = to_shared r in
-    timed (fun t -> stats.publish_s <- stats.publish_s +. t)
-      (fun () -> Shared.publish claim key kind replayable refs);
+    Shared.publish claim key kind replayable refs;
     r
   in
   let process obj =
     let node = node_of obj in
-    if Shared.EMap.mem node !results || Shared.EMap.mem node !aside || has_entry node then ()
+    if Shared.EMap.mem node !results || Shared.EMap.mem node !waiting || has_entry node then ()
     else match Shared.key digests node with
       | None -> finish node (walk node)
       | Some key ->
         match find key with
-        | Some f ->
-          stats.read <- stats.read + 1;
-          finish node (of_shared access node f)
+        | Some f -> finish node (of_shared access node f)
         | None ->
-          match timed (fun t -> stats.claim_s <- stats.claim_s +. t) (fun () -> Shared.claim key) with
+          match Shared.claim key with
           | Shared.Mine _ | Shared.Off as claim -> finish node (walk_and_publish claim node key)
           | Shared.Taken ->
             stats.put_aside <- stats.put_aside + 1;
-            aside := Shared.EMap.add node () !aside;
-            waiting := (node, key) :: !waiting
+            waiting := Shared.EMap.add node key !waiting
+  in
+  (* A claimed object is taken from [waiting] when its entry arrives, or when
+     its claimant ends without writing it (the system frees the lock), or
+     after [wait_limit] without either, where it is walked here. *)
+  let resume node key claim =
+    waiting := Shared.EMap.remove node !waiting;
+    match if claim == Shared.Taken then None else find key with
+    | Some f -> Shared.abandon claim; finish node (of_shared access node f)
+    | None -> finish node (walk_and_publish claim node key)
   in
   let rec loop () =
     match !stack with
     | obj :: rest -> stack := rest; process obj; loop ()
-    | [] when List.is_empty !waiting -> ()
+    | [] when Shared.EMap.is_empty !waiting -> ()
     | [] ->
       let now = Unix.gettimeofday () in
       let progress = ref false in
-      let resume node r =
-        aside := Shared.EMap.remove node !aside;
-        progress := true;
-        finish node r
-      in
-      let still = List.filter (fun (node, key) ->
+      Shared.EMap.iter (fun node key ->
           match find key with
           | Some f ->
-            stats.read <- stats.read + 1;
-            resume node (of_shared access node f);
-            false
+            progress := true;
+            waiting := Shared.EMap.remove node !waiting;
+            finish node (of_shared access node f)
           | None ->
             match Shared.take_over key with
-            | Some claim ->
+            | Shared.Taken -> ()
+            | claim ->
               stats.taken_over <- stats.taken_over + 1;
-              resume node (walk_and_publish claim node key);
-              false
-            | None -> true)
-          !waiting
-      in
-      waiting := still;
+              progress := true;
+              resume node key claim)
+        !waiting;
       if not !progress then begin
         Unix.sleepf 0.0005;
-        stats.waited <- stats.waited +. (Unix.gettimeofday () -. now)
+        stats.waited <- stats.waited +. (Unix.gettimeofday () -. now);
+        if stats.waited > wait_limit then
+          (* the claimants live and do not publish: walk the rest here *)
+          Shared.EMap.iter (fun node key -> resume node key Shared.Taken) !waiting
       end;
       loop ()
   in
@@ -1647,20 +1701,15 @@ let install results =
   M.fold (fun _ ok n -> if ok then n + 1 else n) !complete 0
 
 let share access grs =
-  let t0 = Unix.gettimeofday () in
-  let stats = { walked = 0; read = 0; put_aside = 0; taken_over = 0; waited = 0.;
-                walk_s = 0.; read_s = 0.; claim_s = 0.; publish_s = 0. } in
+  let stats = { walked = 0; read = 0; known = 0; put_aside = 0; taken_over = 0; waited = 0. } in
   Shared.start ();
   let results = phase1 access grs stats in
-  let t1 = Unix.gettimeofday () in
   let added = install results in
   if Shared.debug then
-    Printf.eprintf "[assumptions-shared] objects %d: walked %d (%.3f s), read %d (%.3f s), \
-                    claims %.3f s, writes %.3f s, put aside %d (%d taken over), waited %.3f s, \
-                    first phase %.3f s, %d added in %.3f s%s\n%!"
-      (Shared.EMap.cardinal results) stats.walked stats.walk_s stats.read stats.read_s
-      stats.claim_s stats.publish_s stats.put_aside stats.taken_over stats.waited
-      (t1 -. t0) added (Unix.gettimeofday () -. t1)
+    Printf.eprintf "[assumptions-shared] objects %d: walked %d, read %d, known %d, \
+                    put-aside %d, taken-over %d, waited %.3f s, added %d%s\n%!"
+      (Shared.EMap.cardinal results) stats.walked stats.read stats.known
+      stats.put_aside stats.taken_over stats.waited added
       (if !Shared.usable then "" else ", sharing off")
 
 let traverse access grs =
@@ -1673,15 +1722,10 @@ let traverse access grs =
   let env = Global.env () in
   match
     if !Shared.usable then share access grs;
-    let t = Unix.gettimeofday () in
-    let ans = List.fold_left (fun accu gr ->
-        let t, _ = UnivGen.fresh_global_instance env gr in
-        traverse access (fresh_gen ()) Id.Set.empty no_cooking gr Context.Rel.empty accu t
-      ) (GlobRef.Set_env.empty, GlobRef.Map_env.empty, GlobRef.Map_env.empty) grs
-    in
-    if Shared.debug then
-      Printf.eprintf "[assumptions-shared] second phase %.3f s\n%!" (Unix.gettimeofday () -. t);
-    ans
+    List.fold_left (fun accu gr ->
+      let t, _ = UnivGen.fresh_global_instance env gr in
+      traverse access (fresh_gen ()) Id.Set.empty no_cooking gr Context.Rel.empty accu t
+    ) (GlobRef.Set_env.empty, GlobRef.Map_env.empty, GlobRef.Map_env.empty) grs
   with
   | ans -> cache_clear (); ans
   | exception e ->

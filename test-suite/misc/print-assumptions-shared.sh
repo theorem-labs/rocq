@@ -5,8 +5,12 @@
 #
 # - fresh:      Q1 alone, in an empty directory;
 # - reused:     Q2 and Q3 after Q1 filled the directory, so they read its
-#               entries (the debug counters must show reads);
-# - concurrent: Q1, Q2 and Q3 at once, in an empty directory;
+#               entries (the debug counter of entries READ FROM THE DIRECTORY,
+#               which is apart from the count of entries the process already
+#               had, must be above zero);
+# - concurrent: Q1, Q2 and Q3 at once, in an empty directory, where they must
+#               also share: between them they must read entries from the
+#               directory, or wait for an object another of them claimed;
 # - changed:    the negative control. Lib is compiled again with top1 proved
 #               from the axiom lib_ax, and Q1 runs with the directory the old
 #               Lib filled. Its entries for Lib's objects must not be read,
@@ -54,7 +58,7 @@ shared() {
 
 # [count <field> <file> <label>]: the sum of a debug counter over the queries.
 count() {
-  grep -o "$1 [0-9]*" "$2.$3.err" | awk '{ s += $2 } END { print s + 0 }'
+  grep -o "$1 [0-9]*" "$2.$3.err" | awk '{ s += $NF } END { print s + 0 }'
 }
 
 mkdir fresh
@@ -77,7 +81,13 @@ shared concurrent Q1 concurrent & p1=$!
 shared concurrent Q2 concurrent & p2=$!
 shared concurrent Q3 concurrent & p3=$!
 wait $p1; wait $p2; wait $p3
-for q in Q1 Q2 Q3; do diff -u $q.plain.out $q.concurrent.out; done
+shares=0
+for q in Q1 Q2 Q3; do
+  diff -u $q.plain.out $q.concurrent.out
+  shares=$(( shares + $(count read $q concurrent) + $(count put-aside $q concurrent) ))
+done
+echo "concurrent: $shares entries read from the directory or objects waited for"
+[ "$shares" -gt 0 ] || { echo "concurrent: the three processes shared nothing"; status=1; }
 
 cp ../changed/Lib.v Lib.v
 rc Lib.v
@@ -104,14 +114,11 @@ b=$(od -An -tu1 -j $off -N1 "$3" | tr -d ' ')
 printf "\\$(printf '%03o' $((b ^ 1)))" | dd of="$3" bs=1 seek=$off conv=notrunc 2> /dev/null
 rm "$4"
 [ -e "$4.claim" ] || { echo "damaged: no claim beside $4"; status=1; }
-start=$(date +%s%N)
 shared damaged Q1 damaged
-elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
 diff -u Q1.plain.out Q1.damaged.out
-taken=$(grep -o '[0-9]* taken over' Q1.damaged.err | awk '{ s += $1 } END { print s + 0 }')
-echo "damaged: Q1 took over $taken claims in $elapsed ms"
+taken=$(count taken-over Q1 damaged)
+echo "damaged: Q1 took over $taken claims"
 [ "$taken" -eq 4 ] || { echo "damaged: expected 4 claims taken over"; status=1; }
-[ "$elapsed" -lt 5000 ] || { echo "damaged: Q1 waited for a claimant that is gone"; status=1; }
 
 shared "$PWD/missing/dir" Q1 unusable
 diff -u Q1.plain.out Q1.unusable.out

@@ -36,7 +36,6 @@ sig
 type 'a delayed
 val in_delayed : string -> ObjFile.in_handle -> segment:'a ObjFile.id -> 'a delayed * Digest.t
 val fetch_delayed : 'a delayed -> 'a
-val delayed_digest : 'a delayed -> Digest.t
 
 end =
 struct
@@ -51,8 +50,6 @@ let in_delayed f ch ~segment =
   let seg = ObjFile.get_segment ch ~segment in
   let digest = seg.ObjFile.hash in
   { del_file = f; del_digest = digest; del_off = seg.ObjFile.pos; }, digest
-
-let delayed_digest del = del.del_digest
 
 (** Fetching a table of opaque terms at position [pos] in file [f],
     expecting to find first a copy of [digest]. *)
@@ -201,18 +198,15 @@ let opaque_tables =
    returns. *)
 let opaque_generation = ref 0
 
-(* The digest of the segment each table in [opaque_tables] was or will be read
-   from, as the file records it: what [Library.content_digests] covers of a
-   library's opaque proofs. Written with the table, so a Require that replaces
-   the table of a loaded library replaces it too. *)
+(* The digest of the segment each table in [opaque_tables] was read from, as
+   the file records it: what [content_digests] covers of a library's opaque
+   proofs. Written with the table, so a Require that replaces the table of a
+   loaded library replaces it too. *)
 let opaque_digests = ref (DirPath.Map.empty : Digest.t DirPath.Map.t)
 
-let add_opaque_table dp st =
+let add_opaque_table dp digest st =
   incr opaque_generation;
-  let () = match st with
-    | ToFetch del -> opaque_digests := DirPath.Map.add dp (delayed_digest del) !opaque_digests
-    | Fetched _ -> opaque_digests := DirPath.Map.remove dp !opaque_digests
-  in
+  opaque_digests := DirPath.Map.add dp digest !opaque_digests;
   opaque_tables := DirPath.Map.add dp st !opaque_tables
 
 let opaque_tables_generation () = !opaque_generation
@@ -238,17 +232,17 @@ let content_digests () =
         | Some (_, lib), Some opaque ->
           let Safe_typing.Dvo_or_vi library = lib.library_digests in
           let deps = List.sort DirPath.compare (Array.to_list (Array.map fst lib.library_deps)) in
-          let deps = List.map digest deps in
-          if List.exists Option.is_empty deps then None
-          else begin
-            let b = Buffer.create 256 in
-            add_dirpath b dp;
-            Buffer.add_string b library;
-            Buffer.add_string b opaque;
-            List.iter (fun d -> Buffer.add_string b (Option.get d)) deps;
-            Some (Digest.string (Buffer.contents b))
-          end
-        | _ -> None
+          (* a dependency with no digest leaves the library without one *)
+          (match Option.List.map digest deps with
+           | None -> None
+           | Some deps ->
+             let b = Buffer.create 256 in
+             add_dirpath b dp;
+             Buffer.add_string b library;
+             Buffer.add_string b opaque;
+             List.iter (Buffer.add_string b) deps;
+             Some (Digest.string (Buffer.contents b)))
+        | (None, _) | (_, None) -> None
       in
       memo := DirPath.Map.add dp d !memo;
       d
@@ -371,8 +365,8 @@ let mk_library sd md digests vm =
     library_vm = vm;
   }
 
-let mk_intern_library sum lib digest_lib proofs vm =
-  add_opaque_table sum.md_name (ToFetch proofs);
+let mk_intern_library sum lib digest_lib proofs digest_proofs vm =
+  add_opaque_table sum.md_name digest_proofs (ToFetch proofs);
   let open Safe_typing in
   mk_library sum lib (Dvo_or_vi digest_lib) vm
 
@@ -395,13 +389,13 @@ let intern_from_file file =
   let ch = raw_intern_library file in
   let lsd, digest_lsd = ObjFile.marshal_in_segment ch ~segment:summary_seg in
   let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
-  let del_opaque, _ = in_delayed file ch ~segment:opaques_seg in
+  let del_opaque, digest_opaque = in_delayed file ch ~segment:opaques_seg in
   let vmlib = Vmlibrary.load lsd.md_name ~file ch in
   ObjFile.close_in ch;
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
   register_library_filename lsd.md_name file;
   Library_info.warn_library_info ~transitive:true lsd.md_name lsd.md_info;
-  mk_intern_library lsd lmd digest_lmd del_opaque vmlib
+  mk_intern_library lsd lmd digest_lmd del_opaque digest_opaque vmlib
 
 let intern_from_file file =
   let provenance = ("file", file) in
