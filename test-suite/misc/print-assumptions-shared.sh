@@ -24,6 +24,13 @@
 #               none of them, take over each claim at once (the system freed
 #               the claimants' locks) instead of waiting, and walk the four
 #               objects itself;
+# - replaced:   a Require that fails because the file it finds holds another
+#               library replaces that library's opaque proofs. A process that
+#               filled the directory before the replacement must not answer
+#               the later query from its entries: a replaced table's proofs
+#               come from a file whose own dependencies the loaded library
+#               does not record, so no object of such a library is shared.
+#               Both arms must print what Rocq without the directory prints.
 # - unusable:   a directory that cannot be created turns sharing off.
 #
 # Q3 also queries objects of the file being compiled, inside and outside a
@@ -119,6 +126,28 @@ diff -u Q1.plain.out Q1.damaged.out
 taken=$(count taken-over Q1 damaged)
 echo "damaged: Q1 took over $taken claims"
 [ "$taken" -eq 4 ] || { echo "damaged: expected 4 claims taken over"; status=1; }
+
+(
+  mkdir -p replaced && cd replaced
+  cp -r ../../replaced/first ../../replaced/second ../../replaced/Main.v .
+  cp Main.v first/
+  rocq c -q -native-compiler no -Q first "" first/Y.v
+  rocq c -q -native-compiler no -Q second "" second/Y.v
+  cp second/Y.vo first/X.vo
+  rocq c -q -native-compiler no -Q first "" first/Main.v > Main.plain.out 2> Main.plain.err
+  diff -u /dev/null Main.plain.err
+  mkdir -p D
+  # a process that queries Y before any replacement fills the directory
+  printf 'Require Y.\nPrint Assumptions Y.c.\n' > first/Fill.v
+  ROCQ_ASSUMPTIONS_SHARED_DIR="$PWD/D" \
+    rocq c -q -native-compiler no -Q first "" first/Fill.v > Fill.out 2> Fill.err
+  ROCQ_DEBUG_ASSUMPTIONS_SHARED=1 ROCQ_ASSUMPTIONS_SHARED_DIR="$PWD/D" \
+    rocq c -q -native-compiler no -Q first "" first/Main.v > Main.shared.out 2> Main.shared.err
+  diff -u Main.plain.out Main.shared.out
+  grep -v '^\[assumptions-shared\] ' Main.shared.err > Main.shared.other.err || true
+  diff -u /dev/null Main.shared.other.err
+  echo "replaced: the query answered the same with a directory filled before the replacement"
+) || status=1
 
 shared "$PWD/missing/dir" Q1 unusable
 diff -u Q1.plain.out Q1.unusable.out
