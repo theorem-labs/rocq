@@ -34,5 +34,8 @@ val recheck_library : safe_environment ->
 
 val indirect_accessor : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm
 (** The body of an opaque constant of a loaded library, from that library's
-    table of opaque proofs. The table is read, and kept, the first time this
-    process needs it, so this serves the main process as well as a worker. *)
+    table of opaque proofs. The table is read the first time this process
+    needs it, so this serves the main process as well as a worker. A worker
+    keeps it until it exits; without workers, a table read for a library's
+    checks is kept until that library's checks end, and one read after the
+    walk until the process exits. *)

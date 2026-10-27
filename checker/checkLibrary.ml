@@ -97,10 +97,12 @@ let register_loaded_library m =
    proofs, 846 MB of the whole r160 tree against 252 MB of library
    content, stay out of the main process's heap, and no fork copies them,
    except a table that the main process reads itself: for a sealed
-   module's constant it cooks ([Mod_checking]), or for a batch it checks
-   because it could not fork ([CheckWorkers.spawn]). Where no worker can
-   ([-j 1]), the table is parsed when the library is interned, where
-   stock parses it, and nothing is hashed: see [intern_opaques].
+   module's constant it cooks ([Mod_checking]), for a batch it checks
+   because it could not fork ([CheckWorkers.spawn]), or for any other
+   caller of [indirect_accessor] in the main process. Without workers
+   ([-j 1]) the table is also parsed at intern, where stock parses it, so
+   every rejection is stock's; then it is dropped and its bytes hashed the
+   same way, and the checks read it again from them: see [intern_opaques].
 
    The range is the segment and its trailing digest as the table of
    segments declares them, [pos, pos + len + 16), cut at the end of the
@@ -118,17 +120,22 @@ type opaque_source = {
 }
 
 (* What the main process did with the table when it interned the library:
-   hashed its bytes, for the process that will read it, or -- where no
-   other process can read it, and where there is nothing to hash --
-   parsed it itself, then and there, as stock does. *)
+   hashed its bytes, for the process that will read it; or -- where no
+   other process can read it -- parsed it then and there, as stock does,
+   dropped it, and hashed its bytes for the checks that will read it; or,
+   where there is nothing to hash, parsed it and kept it. *)
 type opaque_read =
 | Hashed of opaque_source
+| Dropped of opaque_source
 | Parsed of seg_proofs
 
 let opaque_sources : opaque_source LibraryMap.t ref = ref LibraryMap.empty
 
 (* The tables this process has read. A worker reads the tables of the
-   libraries its batch needs, and keeps them until it exits. *)
+   libraries its batch needs, and keeps them until it exits. Without
+   workers, a table read while [check_one_lib] checks a library is kept
+   until that library's checks end (see [check_one_lib]); one read after
+   the walk is kept until the process exits. *)
 let opaque_cache : seg_proofs LibraryMap.t ref = ref LibraryMap.empty
 
 (* The bytes hashed when the library was interned are no longer there, or
@@ -190,12 +197,13 @@ let opaque_test_at point dp =
     | _ -> ()
 
 (* Reads one library's table, in two passes over one channel. The first
-   reads the range the main process hashed, sequentially, in a fixed
-   buffer, and compares its MD5 with the one the main process recorded:
-   a file that changed between the two processes' reads is refused. The
-   second is stock's own read of the table, [marshal_in_at] at the
-   segment's position, so every verdict of the parse, its message and its
-   exit code are stock's, and no string of the table's size is ever held.
+   reads the range the main process hashed when it interned the library,
+   sequentially, in a fixed buffer, and compares its MD5 with the one the
+   main process recorded: a file that changed between the two reads is
+   refused. The second is stock's own read of the table, [marshal_in_at]
+   at the segment's position, so every verdict of the parse, its message
+   and its exit code are stock's, and no string of the table's size is
+   ever held.
    The comparison does not see a file that changes between the two passes
    of this process; nothing of stock's sees a change at all.
 
@@ -222,7 +230,7 @@ let read_opaque_table dp src =
       let () = CheckWorkers.note_table_read ~bytes:src.src_snap in
       t)
 
-(* The table of [dp], read on first use and kept for this process. *)
+(* The table of [dp], read on first use and kept in [opaque_cache]. *)
 let opaque_table dp =
   match LibraryMap.find_opt dp !opaque_cache with
   | Some t -> t
@@ -269,38 +277,65 @@ let hashed_tables : (DirPath.t * opaque_source) list ref = ref []
    order, each recorded table that no process has already read without
    error, and the first that fails is the error, with stock's words.
    Without workers every table is parsed where stock parses it, and
-   nothing is recorded. *)
+   nothing is recorded here: the sources of the tables, which the checks
+   read again, are in [opaque_sources], and a failure to read one again
+   is the file changing during the run, which stock cannot report. *)
 let raise_first_table_error () =
   List.iter (fun (dp, src) ->
       if not (LibraryMap.mem dp !opaque_cache || CheckWorkers.table_checked dp)
       then ignore (read_opaque_table dp src))
     (List.rev !hashed_tables)
 
+(* Without workers, the checks of a library, deferred ones included, run
+   inside this call, so the tables they read -- the library's own, and
+   any other library's whose constants it cooks (a functor instance or an
+   [Include] keeps the defining library's name, so its constants open
+   that library's table) -- are dropped from [opaque_cache] when it
+   returns, or raises. A later library that needs one reads it again,
+   through the MD5 that its interning recorded. With workers the main
+   process reads few tables itself, and keeps them, as before. *)
 let check_one_lib admit senv (dir,m) =
   let md = m.library_compiled in
   let dig = m.library_digest in
-  (* Stock parses the table of opaque proofs of every library it interns,
-     so a malformed table fails coqchk even when no check reads it. With
-     workers, the worker of [CheckWorkers.validate_tables] reads every
-     hashed table before the walk, and this only opens the library's group;
-     otherwise one deferred task reads the table the same way, queued just
-     before the library's own checks, or alone when it has none. *)
-  let () = CheckWorkers.defer_table dir (fun () -> ignore (opaque_table dir)) in
-  (* Look up if the library is to be admitted correct. We could
-     also check if it carries a validation certificate (yet to
-     be implemented). *)
-  let senv =
-    if LibrarySet.mem dir admit then
-      (Flags.if_verbose Feedback.msg_notice
-         (str "Admitting library: " ++ pr_dirpath dir);
-       Safe_checking.unsafe_import (fst senv) md dig),
-      (snd senv)
-    else
-      (Flags.if_verbose Feedback.msg_notice
-         (str "Checking library: " ++ pr_dirpath dir);
-       Safe_checking.import (fst senv) (snd senv) md dig)
-  in
+  let check () =
+    (* Stock parses the table of opaque proofs of every library it interns,
+       so a malformed table fails coqchk even when no check reads it. With
+       workers, the worker of [CheckWorkers.validate_tables] reads every
+       hashed table before the walk, and this only opens the library's
+       group; otherwise one deferred task reads the table the same way,
+       queued just before the library's own checks, or alone when it has
+       none. Without workers every table was already parsed when it was
+       interned, where stock parses it, so the task reads nothing. *)
+    let read =
+      if CheckWorkers.parallel () then fun () -> ignore (opaque_table dir)
+      else fun () -> ()
+    in
+    let () = CheckWorkers.defer_table dir read in
+    (* Look up if the library is to be admitted correct. We could
+       also check if it carries a validation certificate (yet to
+       be implemented). *)
+    let senv =
+      if LibrarySet.mem dir admit then
+        (Flags.if_verbose Feedback.msg_notice
+           (str "Admitting library: " ++ pr_dirpath dir);
+         Safe_checking.unsafe_import (fst senv) md dig),
+        (snd senv)
+      else
+        (Flags.if_verbose Feedback.msg_notice
+           (str "Checking library: " ++ pr_dirpath dir);
+         Safe_checking.import (fst senv) (snd senv) md dig)
+    in
     register_loaded_library m; senv
+  in
+  if CheckWorkers.parallel () then check ()
+  else
+    let kept = !opaque_cache in
+    match check () with
+    | senv -> opaque_cache := kept; senv
+    | exception e ->
+      let e = Exninfo.capture e in
+      opaque_cache := kept;
+      Exninfo.iraise e
 
 (*************************************************************************)
 (*s Load path. Mapping from physical to logical paths etc.*)
@@ -497,23 +532,25 @@ let marshal_in_segment (type a) ~validate ~value ~(segment : a ObjFile.segment) 
    so it raises nothing, and its length fits in an [int] on every build,
    whatever [len] the table of segments declares (see [opaque_source]).
 
-   [Parsed]: nothing is hashed when no other process will read the table
-   ([-j 1], and [-j N] where workers are unavailable), nor when the
-   segment does not start in the file, where a read of it must do what
-   stock's seek and parse do, on this channel, which is where stock's is.
-   In both cases this process is the only reader, and it reads the table
-   here, with stock's own [marshal_in_segment]: the run then rejects what
-   stock rejects, where stock rejects it, down to the message. *)
+   [Dropped]: where no other process will read the table ([-j 1], and
+   [-j N] where workers are unavailable), this process reads it here
+   first, with stock's own [marshal_in_segment]: the run then rejects
+   what stock rejects, where stock rejects it, down to the message. Then
+   it drops the parsed table, which no check may ever need, and hashes the
+   same range as [Hashed] does, so that the checks that need the table
+   read it again ([opaque_table]) and refuse it if it changed meanwhile.
+   A process that checks a few libraries of a large closure so never
+   keeps the tables of the dependencies whose bodies it does not open.
+
+   [Parsed]: nothing is hashed when the segment does not start in the
+   file, where a read of it must do what stock's seek and parse do, on
+   this channel, which is where stock's is. This process reads the table
+   here, with stock's own [marshal_in_segment], and keeps it. *)
 let intern_opaques ~validate ~(segment : seg_proofs ObjFile.segment) f ch =
   NewProfile.profile "intern_opaques" (fun () ->
   let pos = segment.ObjFile.pos and len = segment.ObjFile.len in
   let size = LargeFile.in_channel_length ch in
-  if not (CheckWorkers.parallel ())
-     || Int64.compare pos 0L < 0 || Int64.compare pos size > 0 then begin
-    let t = marshal_in_segment ~validate ~value:Values.v_opaquetable ~segment f ch in
-    let () = CheckWorkers.note_table_read ~bytes:(bytes_from ch pos) in
-    Parsed t
-  end else begin
+  let hash () =
     let () = LargeFile.seek_in ch pos in
     let want =
       if Int64.compare len 0L < 0 then 16L
@@ -524,10 +561,20 @@ let intern_opaques ~validate ~(segment : seg_proofs ObjFile.segment) f ch =
     let n = Int64.to_int (min want (min left (Int64.of_int max_int))) in
     (* Shorter only if the file shrank since its length was read. *)
     let md5 = try Digest.channel ch n with End_of_file -> error_changed f in
-    Hashed { src_file = f; src_pos = pos; src_snap = n;
-             src_hash = segment.ObjFile.hash; src_md5 = md5;
-             src_validate = validate }
-  end)
+    { src_file = f; src_pos = pos; src_snap = n;
+      src_hash = segment.ObjFile.hash; src_md5 = md5;
+      src_validate = validate }
+  in
+  let parse () =
+    let t = marshal_in_segment ~validate ~value:Values.v_opaquetable ~segment f ch in
+    let () = CheckWorkers.note_table_read ~bytes:(bytes_from ch pos) in
+    t
+  in
+  if Int64.compare pos 0L < 0 || Int64.compare pos size > 0 then Parsed (parse ())
+  else if CheckWorkers.parallel () then Hashed (hash ())
+  else
+    let (_ : seg_proofs) = parse () in
+    Dropped (hash ()))
     ()
 
 let summary_seg : summary_disk ObjFile.id = ObjFile.make_id "summary"
@@ -563,12 +610,13 @@ let intern_from_file ~intern_mode ~validated (dir, f) =
          ([Mod_checking], [Check_stat]); the worker of
          [CheckWorkers.validate_tables] keeps the rejections of a table
          nothing reads.
-         Without workers there is nothing to gain by waiting, and [-j 1]
-         is stock to the byte: see [intern_opaques]. *)
+         Without workers the table is parsed here, as stock parses it, so
+         that [-j 1] rejects what stock rejects to the byte, and is then
+         dropped and hashed: see [intern_opaques]. *)
       let src = intern_opaques ~validate ~segment:seg_opaque f ch in
       let () = match src with
         | Hashed s -> hashed_tables := (dir, s) :: !hashed_tables
-        | Parsed _ -> ()
+        | Dropped _ | Parsed _ -> ()
       in
       (* Verification of the final checksum *)
       let () = close_in ch in
@@ -583,7 +631,8 @@ let intern_from_file ~intern_mode ~validated (dir, f) =
     with e -> Flags.if_verbose chk_pp (str" failed!]" ++ fnl ()); raise e in
   depgraph := LibraryMap.add sd.md_name sd.md_deps !depgraph;
   let () = match src with
-    | Hashed src -> opaque_sources := LibraryMap.add sd.md_name src !opaque_sources
+    | Hashed src | Dropped src ->
+      opaque_sources := LibraryMap.add sd.md_name src !opaque_sources
     | Parsed t -> opaque_cache := LibraryMap.add sd.md_name t !opaque_cache
   in
   mk_library sd md f digest

@@ -7,11 +7,14 @@
 # process reads the same range again and compares its MD5 with the one
 # the main process recorded, then reads the table with stock's own code.
 # At -j 1 no other process can read it, so the table is parsed where
-# stock parses it, when the library is interned.
+# stock parses it, when the library is interned, and then dropped and
+# hashed the same way; the checks that need it read it again, compare
+# the MD5, and keep it until the checks of the library that read it end.
 #
 # Stock parses every interned library's table when it interns it, so a
-# malformed table fails coqchk even when nothing reads it. One deferred
-# task reads each table the same way, so the verdicts stay stock's.
+# malformed table fails coqchk even when nothing reads it. With workers,
+# one deferred task reads each table the same way, so the verdicts stay
+# stock's; at -j 1 the parse at intern already gives them.
 #
 #  (a) the verdict, the exit code and the -o output of -j 2, 4 and 16 are
 #      the ones of -j 1, and the main process parses no table at all;
@@ -32,7 +35,7 @@
 #  (i) two workers that read one segment at the same time;
 #  (j) the bytes of a table changed, after the main process read them, to
 #      another table that is just as long and just as correct: the MD5
-#      comparison fails and coqchk fails;
+#      comparison fails and coqchk fails, at -j 2 and at -j 1;
 #  (l) only the opaques length in the table of segments is wrong (past the
 #      end of the file, zero, negative), the payload and its digests
 #      intact: stock never reads that length and accepts the file, and so
@@ -58,9 +61,17 @@
 #      address-space limit;
 #  (w) a damaged table together with something else that is wrong, found
 #      in the same file, later in the walk, or in another library: the
-#      error stock reports, which is the first table it could not read.
+#      error stock reports, which is the first table it could not read;
+#  (x) at -j 1, the table of another library, which the checks of a
+#      library read through a functor instance and a sealed module,
+#      changed before that read: the MD5 comparison fails and coqchk
+#      fails;
+#  (y) against stock: a library whose constants are cooked from the table
+#      of a library checked before it, after that library's checks ended
+#      and its table was dropped (-j 1), at every -j; and at -j 1 the same
+#      with an ill-typed body in that table.
 #
-# (i) and (j) open their window with ROCQCHK_OPAQUE_AT=before:lib:dir,
+# (i), (j) and (x) open their window with ROCQCHK_OPAQUE_AT=before:lib:dir,
 # which stops a process before it reads the table of [lib] until the test
 # lets it go, so that they need no timing.
 set -eu
@@ -131,6 +142,32 @@ swap() {
 }
 swap I J > "$d/src/Swap.v"
 swap J I > "$d/src/swapj/Swap.v"
+# Cook, and a second Cook whose proofs are exchanged as Swap's are, for
+# (x) and (y). CookB's opaque constants FN.s1, FN.s2 and H.s1 have their
+# bodies in Cook.vo's table: an instance of Cook.F keeps the name of the
+# library that defines F, and H, sealed by a signature that declares s1
+# without a body, has its body cooked where the module is checked.
+mkdir "$d/src/swapc"
+cook() {
+  echo 'Inductive T : Prop := I | J.'
+  echo 'Module Type P. Parameter m : nat. End P.'
+  echo 'Module F (X : P).'
+  echo "  Lemma s1 : T. Proof. exact $1. Qed."
+  echo "  Lemma s2 : T. Proof. exact $2. Qed."
+  echo 'End F.'
+  echo 'Module M. Definition m := 0. End M.'
+  echo 'Module FM := F M.'
+}
+cook I J > "$d/src/Cook.v"
+cook J I > "$d/src/swapc/Cook.v"
+{
+  echo 'Require Import Cook.'
+  echo 'Module N. Definition m := 1. End N.'
+  echo 'Module FN := Cook.F N.'
+  echo 'Module Type S1. Parameter s1 : Cook.T. End S1.'
+  echo 'Module H : S1. Include Cook.F Cook.M. End H.'
+  echo 'Lemma b_own : Cook.T. Proof. exact FN.s2. Qed.'
+} > "$d/src/CookB.v"
 # Wide has a table larger than a channel's buffer (64 KB), for (o): three
 # proofs of 3000 nested lets each, with different binder names, so that
 # nothing is shared between them.
@@ -145,10 +182,11 @@ swap J I > "$d/src/swapj/Swap.v"
 # Op, for (w).
 echo 'Require Import NoOp. Definition z := NoOp.x.' > "$d/src/UseNoOp.v"
 echo 'Require Import Op. Definition z := Op.d2.' > "$d/src/UseOp.v"
-for v in Op Big NoOp UseNoOp UseOp Dep Use Swap Wide $(seq -f 'M%.0f' 1 12); do
+for v in Op Big NoOp UseNoOp UseOp Dep Use Swap Wide Cook CookB $(seq -f 'M%.0f' 1 12); do
   rocq c -native-compiler no -R "$d/src" "" "$d/src/$v.v"
 done
 rocq c -native-compiler no -R "$d/src/swapj" "" "$d/src/swapj/Swap.v"
+rocq c -native-compiler no -R "$d/src/swapc" "" "$d/src/swapc/Cook.v"
 mkdir "$d/src/bad"
 sed 's/^Definition d1 := l1\.$/Definition d1 := l1 I./' "$d/src/OpBad.v" > "$d/src/bad/Op.v"
 rocq c -native-compiler no -R "$d/src/bad" "" "$d/src/bad/Op.v"
@@ -595,6 +633,37 @@ grep -q "changed while it was being checked" "$d/j.raw" \
 run j2 -j 2 -worker-budget 60 -R "$d/j" "" -norec Swap
 expect "(j) exit code of the changed file" "$R" -eq 0
 
+# At -j 1 the main process parses the table when it interns Swap, drops
+# it, and reads it again for Swap's checks: the same window, at that read.
+rm -rf "$d/j1"; cp -a "$d/good" "$d/j1"
+window_start j1 "before:Swap:$w" -j 1 -R "$d/j1" "" -norec Swap
+window_open 1 j1
+vo replace "$d/j1/Swap.vo" "$d/src/swapj/Swap.vo" opaques
+window_go
+expect "(j) -j 1 exit code" "$(cat "$w/rc")" -eq 1
+grep -q "changed while it was being checked" "$d/j1.raw" \
+  || { cat "$d/j1.raw" >&2; fail "(j) -j 1: the changed table was not reported"; }
+run j3 -j 1 -R "$d/j1" "" -norec Swap
+expect "(j) -j 1 exit code of the changed file" "$R" -eq 0
+
+# (x) At -j 1, the table of another library. Cook is admitted, so nothing
+# reads its table after its interning but the checks of CookB, which open
+# it for FN.s1, FN.s2 and the sealed H.s1. It changes to the other Cook's
+# before that read, and the MD5 comparison refuses it.
+rm -rf "$d/x"; cp -a "$d/good" "$d/x"
+run x0 -j 1 -R "$d/x" "" -norec CookB
+expect "(x) exit code before the change" "$R" -eq 0
+window_start x "before:Cook:$w" -j 1 -R "$d/x" "" -norec CookB
+window_open 1 x
+vo replace "$d/x/Cook.vo" "$d/src/swapc/Cook.vo" opaques
+window_go
+expect "(x) exit code" "$(cat "$w/rc")" -eq 1
+{ grep -q "changed while it was being checked" "$d/x.raw" \
+    && grep -q "/x/Cook.vo" "$d/x.raw"; } \
+  || { cat "$d/x.raw" >&2; fail "(x) the changed table of Cook was not reported"; }
+run x2 -j 1 -R "$d/x" "" -norec CookB
+expect "(x) exit code of the changed file" "$R" -eq 0
+
 # (o) Every file above, against stock (ROCQCHK_STOCK), at every -j: the
 # exit code must be stock's, and the output too wherever nothing failed,
 # and always at -j 1, where this build parses the table where stock
@@ -654,6 +723,32 @@ for sel in checked dep admitted; do
   for mut in pasteof zero negative; do
     ocmp "length-$sel-$mut" -R "$d/l-$sel-$mut" "" "${oargs[@]}"
   done
+done
+
+# (y) Constants cooked from the table of a library checked before: at
+# -j 1 Cook's checks read its table and drop it when they end, and
+# CookB's checks read it again, for an instance of Cook.F and for the
+# sealed H; at every -j, the output is stock's. The same at -j 1 with an
+# ill-typed body in Cook's table (the opaques segment of a Cook whose s1
+# is proved by a nat): checked, Cook fails first; admitted, CookB's checks
+# find it. With workers several constants with that body can fail, and
+# which of them a run reports depends on the schedule, in stock too.
+ocmp cook -R "$d/good" "" -norec Cook -norec CookB
+mkdir -p "$d/src/badc"
+sed 's/^  Lemma s1 : T\. Proof\. exact I\. Qed\.$/  Lemma s1 : nat. Proof. exact 0. Qed./' \
+  "$d/src/Cook.v" > "$d/src/badc/Cook.v"
+rocq c -native-compiler no -R "$d/src/badc" "" "$d/src/badc/Cook.v"
+rm -rf "$d/y"; cp -a "$d/good" "$d/y"
+vo splice "$d/good/Cook.vo" "$d/src/badc/Cook.vo" "$d/y/Cook.vo"
+for mix in "-norec Cook -norec CookB" "-norec CookB"; do
+  tag=$(echo "$mix" | tr -cd 'A-Za-z')
+  srun "y-$tag" coqchk -j 1 -R "$d/y" "" $mix
+  rc=$R
+  expect "(y) ill-typed, $mix: exit code" "$rc" -eq 129
+  srun "y-$tag-ref" "$REF" -j 1 -R "$d/y" "" $mix
+  expect "(y) ill-typed, $mix: exit code (the reference's is $R)" "$rc" -eq "$R"
+  diff -u "$d/y-$tag-ref.out" "$d/y-$tag.out" > "$d/y-$tag.diff" \
+    || { cat "$d/y-$tag.diff" >&2; fail "(y) ill-typed, $mix: the output differs from the reference's"; }
 done
 
 # (p) A marshalled value that runs past its segment on the path that does
