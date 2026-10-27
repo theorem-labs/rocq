@@ -1526,13 +1526,21 @@ let phase1 access grs stats =
   (* the objects another process claimed, with their keys *)
   let waiting = ref Shared.EMap.empty in
   let stack = ref grs in
+  (* The references of an object whose walk cannot be replayed are not
+     followed. [install] refuses such an object, and so refuses every object
+     that reaches it, so an entry reached only through it serves nothing.
+     This also keeps the phase from walking what the query never walks: the
+     walk of a match on an empty type marks its axiom without walking its
+     type, and makes the object unreplayable, so the axiom's own closure is
+     reached here only where the query reaches it another way, where it is
+     pushed from that object. *)
   let finish node r =
     results := Shared.EMap.add node r !results;
     let push s = stack := GlobRef.Set_env.fold (fun r l -> r :: l) s !stack in
     match r with
-    | P_object { edges; _ } -> push edges
-    | P_block { contents; _ } -> push contents
-    | P_failed -> ()
+    | P_object { edges; replayable = true; _ } -> push edges
+    | P_block { contents; replayable = true; _ } -> push contents
+    | P_object _ | P_block _ | P_failed -> ()
   in
   let walk node =
     stats.walked <- stats.walked + 1;
