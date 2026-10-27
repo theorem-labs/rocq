@@ -255,6 +255,9 @@ val module_of_library : compiled_library -> Mod_declarations.module_body
 val replace_module_of_library : compiled_library -> Mod_declarations.module_body -> compiled_library
 (** Used by the checker, which recompiles the VM bytecode of every constant
     instead of trusting the one serialized in the file. *)
+val deps_of_library : compiled_library -> (DirPath.t * vodigest) array
+(** Used by the checker, which refuses a library whose dependencies have a
+    name that is not made of identifiers. *)
 val univs_of_library : compiled_library -> Sorts.QContextSet.t * Univ.ContextSet.t
 val check_flags_for_library : compiled_library -> safe_transformer0
 

@@ -1,0 +1,47 @@
+Axioms:
+ax1 : nat
+Axioms:
+ax1 : nat
+Axioms:
+ax1 : nat
+Axioms:
+ax1 : nat
+Axioms:
+ax1 : nat
+Axioms:
+M.p : nat
+Axioms:
+M.p : nat
+Axioms:
+ax1 : nat
+Axioms:
+ax2 : nat
+Axioms:
+ax2 : nat
+Axioms:
+ax2 : nat
+Axioms:
+ax2 : nat
+Section Variables:
+v
+: nat
+Axioms:
+ax1 : nat
+Section Variables:
+v
+: nat
+Axioms:
+ax2 : nat
+ax1 : nat
+Section Variables:
+v
+: nat
+Axioms:
+ax1 : nat
+Axioms:
+ax1 : nat
+Axioms:
+ax2 : nat
+ax1 : nat
+Axioms:
+ax1 : nat
