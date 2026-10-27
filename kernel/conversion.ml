@@ -295,6 +295,9 @@ let esubst_of_context ctx args e =
   in
   aux 0 e args (List.rev ctx)
 
+let annots_of_context ctx nas =
+  Array.filter_with (List.rev_map (fun d -> not (Option.has_some d)) ctx) nas
+
 let irr_flex infos = function
   | ConstKey (con,u) -> is_irrelevant infos @@ UVars.subst_instance_relevance u @@ Environ.constant_relevance con (info_env infos)
   | VarKey x -> is_irrelevant infos @@ Context.Named.Declaration.get_relevance (Environ.lookup_named x (info_env infos))
@@ -740,11 +743,11 @@ and eqwhnf cv_pb l2r infos (lft1, (hd1, v1) as appr1) (lft2, (hd2, v2) as appr2)
       (** FIXME: cache the presence of let-bindings in the case_info *)
       let mind = Environ.lookup_mind (fst ci1.ci_ind) (info_env infos.cnv_inf) in
       let mip = mind.Declarations.mind_packets.(snd ci1.ci_ind) in
+      let u1 = CClosure.usubst_instance e1 u1 in
+      let u2 = CClosure.usubst_instance e2 u2 in
       let cuniv =
         let ind = (mind,snd ci1.ci_ind) in
         let nargs = inductive_cumulativity_arguments ind in
-        let u1 = CClosure.usubst_instance e1 u1 in
-        let u2 = CClosure.usubst_instance e2 u2 in
         fail_check infos @@ convert_inductives CONV ind nargs u1 u2 cuniv
       in
       let pms1 = mk_clos_vect e1 pms1 in
@@ -836,12 +839,12 @@ and convert_stacks ?(mask = [||]) l2r infos lft1 lft2 stk1 stk2 cuniv =
                 (** FIXME: cache the presence of let-bindings in the case_info *)
                 let mind = Environ.lookup_mind (fst ci1.ci_ind) (info_env infos.cnv_inf) in
                 let mip = mind.Declarations.mind_packets.(snd ci1.ci_ind) in
+                let u1 = CClosure.usubst_instance e1 u1 in
+                let u2 = CClosure.usubst_instance e2 u2 in
                 let cu =
                   if UVars.Instance.is_empty u1 || UVars.Instance.is_empty u2 then
                     convert_instances ~flex:false u1 u2 cu
                   else
-                    let u1 = CClosure.usubst_instance e1 u1 in
-                    let u2 = CClosure.usubst_instance e2 u2 in
                     match mind.Declarations.mind_variance with
                     | None -> convert_instances ~flex:false u1 u2 cu
                     | Some variances -> convert_instances_cumul CONV variances u1 u2 cu
@@ -881,20 +884,22 @@ and convert_vect l2r infos lft1 lft2 v1 v2 cuniv =
 and convert_under_context l2r infos e1 e2 lft1 lft2 ctx (nas1, c1) (nas2, c2) cu =
   let n = Array.length nas1 in
   let () = assert (Int.equal n (Array.length nas2)) in
-  let n, e1, e2 = match ctx with
+  let nas, n, e1, e2 = match ctx with
   | None -> (* nolet *)
     let e1 = usubs_liftn n e1 in
     let e2 = usubs_liftn n e2 in
-    (n, e1, e2)
+    (nas1, n, e1, e2)
   | Some (ctx, args1, args2) ->
+    let nas = annots_of_context ctx nas1 in
     let n1, e1 = esubst_of_context ctx args1 e1 in
     let n2, e2 = esubst_of_context ctx args2 e2 in
     let () = assert (Int.equal n1 n2) in
-    n1, e1, e2
+    let () = assert (Int.equal n1 (Array.length nas)) in
+    nas, n1, e1, e2
   in
   let lft1 = el_liftn n lft1 in
   let lft2 = el_liftn n lft2 in
-  let infos = push_relevances infos (Array.map (usubst_binder e1) nas1) in
+  let infos = push_relevances infos (Array.map (usubst_binder e1) nas) in
   ccnv CONV l2r infos lft1 lft2 (mk_clos e1 c1) (mk_clos e2 c2) cu
 
 and convert_return_clause mib mip l2r infos e1 e2 l1 l2 u1 u2 pms1 pms2 p1 p2 cu =

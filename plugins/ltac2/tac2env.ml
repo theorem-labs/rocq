@@ -91,6 +91,8 @@ let set_compiled_global kn info v =
 
 let get_compiled_global kn = KerName.Map.find_opt kn !compiled_tacs
 
+let compiled_globals () = !compiled_tacs
+
 let globals () = (!ltac_state).ltac_tactics
 
 let define_constructor kn t =
@@ -129,26 +131,32 @@ let define_notation kn tac =
 
 let interp_notation kn = KerName.Map.find kn !ltac_notations
 
-module ML =
-struct
+(** The table of ML primitives. It is looked up on every [GTacPrm] node the
+    interpreter evaluates, so it is a hash table rather than a map ordered by
+    string comparison. Nothing iterates over it. *)
+module MLTbl = Hashtbl.Make(struct
   type t = ml_tactic_name
-  let compare n1 n2 =
-    let c = String.compare n1.mltac_plugin n2.mltac_plugin in
-    if Int.equal c 0 then String.compare n1.mltac_tactic n2.mltac_tactic
-    else c
-end
+  let equal n1 n2 =
+    String.equal n1.mltac_tactic n2.mltac_tactic &&
+    String.equal n1.mltac_plugin n2.mltac_plugin
+  let hash (n : t) = Hashtbl.hash n
+end)
 
-module MLMap = Map.Make(ML)
+let primitive_table : valexpr MLTbl.t = MLTbl.create 1024
 
-let primitive_map = ref MLMap.empty
+(** Counts the definitions of a primitive. A reader of [interp_primitive] that keeps what it read
+    compares this count to tell a table it has not read since from one it has. *)
+let primitive_defs = ref 0
 
 let define_primitive name f =
   let f = match f with
     | ValCls f -> ValCls (annotate_closure (FrPrim name) f)
     | _ -> f
   in
-  primitive_map := MLMap.add name f !primitive_map
-let interp_primitive name = MLMap.find name !primitive_map
+  incr primitive_defs;
+  MLTbl.replace primitive_table name f
+let interp_primitive name = MLTbl.find primitive_table name
+let primitive_definitions () = !primitive_defs
 
 (** Name management *)
 
@@ -252,8 +260,71 @@ type 'a or_glb_tacexpr =
 | GlbVal of 'a
 | GlbTacexpr of glb_tacexpr
 
+(** The interpreter's environment. It holds the binders that lexically enclose the expression
+    being run, which are usually few, so the newest bindings sit in a chain, newest first, where
+    a binding costs one allocation and a lookup is a few pointer tests (identifiers are
+    hashconsed). The chain holds at most [bound] bindings; the older ones sit in an [Id.Map]
+    under it, so a lookup is never worse than [bound] tests plus the [Id.Map] lookup, and
+    shadowed bindings are dropped as [Id.Map.add] drops them. A binding shadows every older one
+    of the same name, in the chain and in the map, so each lookup returns what [Id.Map] would. *)
+module IdMap =
+struct
+  type key = Id.t
+  type 'a t =
+  | Base of 'a Id.Map.t
+  | Bind of { id : key; v : 'a; depth : int; next : 'a t; mutable merged : 'a Id.Map.t option }
+  (** [depth] counts the [Bind] nodes from this one down to the [Base]. [merged] memoizes the map
+      of every binding of the node, so that extending one full chain many times (a closure whose
+      environment is full, called many times) merges it once. *)
+
+  let bound = 16
+
+  let empty = Base Id.Map.empty
+
+  let rec find id = function
+  | Base m -> Id.Map.find id m
+  | Bind b -> if id == b.id || Id.equal id b.id then b.v else find id b.next
+
+  let rec find_opt id = function
+  | Base m -> Id.Map.find_opt id m
+  | Bind b -> if id == b.id || Id.equal id b.id then Some b.v else find_opt id b.next
+
+  let rec mem id = function
+  | Base m -> Id.Map.mem id m
+  | Bind b -> id == b.id || Id.equal id b.id || mem id b.next
+
+  let rec get id = function
+  | Base m -> Id.Map.get id m
+  | Bind b -> if id == b.id || Id.equal id b.id then b.v else get id b.next
+
+  (* The map of every binding of a chain, the newest winning. *)
+  let rec merge = function
+  | Base m -> m
+  | Bind b -> Id.Map.add b.id b.v (merge b.next)
+
+  let add id v t = match t with
+  | Base _ -> Bind { id; v; depth = 1; next = t; merged = None }
+  | Bind b ->
+    if b.depth < bound then Bind { id; v; depth = b.depth + 1; next = t; merged = None }
+    else
+      let m = match b.merged with
+      | Some m -> m
+      | None -> let m = merge t in b.merged <- Some m; m
+      in
+      Bind { id; v; depth = 1; next = Base m; merged = None }
+
+  (** [push id v t] binds [id] to [v] as [add] does, without merging the chain into a map: the
+      chain then grows with each binding. Compiled Ltac2 code ([Tac2interp]) binds with it: its
+      lookups read a known position of the chain ([Tac2interp.compile_simple]), and its chains
+      are as long as the binders that lexically enclose an expression, which the program text
+      bounds. *)
+  let[@inline] push id v t =
+    let depth = match t with Base _ -> 1 | Bind b -> b.depth + 1 in
+    Bind { id; v; depth; next = t; merged = None }
+end
+
 type environment = {
-  env_ist : valexpr Id.Map.t;
+  env_ist : valexpr IdMap.t;
 }
 
 type ('a, 'b, 'r) intern_fun = Genintern.glob_sign -> 'a -> 'b * 'r glb_typexpr

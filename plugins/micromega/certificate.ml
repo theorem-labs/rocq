@@ -87,6 +87,64 @@ let dev_form n_spec p =
   in
   dev_form p
 
+(** {2 Memo of [dev_form z_spec]}
+
+    [dev_form z_spec e] is a function of [e] alone. It builds a [Poly.t], an immutable map from
+    the monomials of [e] (over its own variables) to their coefficients, with [Poly]'s operations
+    and [z_spec.number_to_num]; none of them reads or changes any state. In particular it does not
+    touch the monomial table [LinPoly.MonT]: [develop_constraints] registers the monomials after
+    it, with [LinPoly.linpol_of_pol]. The clauses of a goal's CNF repeat most of their constraints
+    (on the fast set, consecutive [lia] problems differ in one constraint of about 60), so [lia]
+    and [nlia] keep [dev_form z_spec e] for each [e] they develop and answer [e] again from the
+    memo: the same map that a new call would build. The key is [e] itself, built of constructors
+    only, compared by structural equality; [hash_pexpr] reads all of it. A call that raises stores
+    nothing. Past [dev_memo_capacity] entries the memo starts again empty. *)
+let hash_pexpr (e : Mc.z Mc.pExpr) =
+  let mix h k = (h * 31) + k in
+  let rec pos h = function
+    | Mc.XH -> mix h 1
+    | Mc.XO p -> pos (mix h 2) p
+    | Mc.XI p -> pos (mix h 3) p
+  in
+  let z h = function
+    | Mc.Z0 -> mix h 4
+    | Mc.Zpos p -> pos (mix h 5) p
+    | Mc.Zneg p -> pos (mix h 6) p
+  in
+  let rec go h = function
+    | Mc.PEc c -> z (mix h 7) c
+    | Mc.PEX v -> pos (mix h 8) v
+    | Mc.PEadd (a, b) -> go (go (mix h 9) a) b
+    | Mc.PEsub (a, b) -> go (go (mix h 10) a) b
+    | Mc.PEmul (a, b) -> go (go (mix h 11) a) b
+    | Mc.PEopp a -> go (mix h 12) a
+    | Mc.PEpow (a, Mc.N0) -> go (mix h 13) a
+    | Mc.PEpow (a, Mc.Npos p) -> go (pos (mix h 14) p) a
+  in
+  go 0 e land max_int
+
+module PExprZ = Hashtbl.Make (struct
+  type t = Mc.z Mc.pExpr
+
+  let equal = ( = )
+  let hash = hash_pexpr
+end)
+
+let dev_memo_capacity = 1 lsl 16
+let dev_memo : Poly.t PExprZ.t = PExprZ.create 1024
+
+let dev_memo_size () = PExprZ.length dev_memo
+let dev_memo_clear () = PExprZ.reset dev_memo
+
+let dev_form_z e =
+  match PExprZ.find_opt dev_memo e with
+  | Some p -> p
+  | None ->
+    let p = dev_form z_spec e in
+    if PExprZ.length dev_memo >= dev_memo_capacity then PExprZ.reset dev_memo;
+    PExprZ.add dev_memo e p;
+    p
+
 let rec fixpoint f x =
   let y' = f x in
   if y' = x then y' else fixpoint f y'
@@ -275,8 +333,8 @@ let compute_max_nb_cstr l d =
   let len = List.length l in
   max len (max d (len * d))
 
-let develop_constraint z_spec (e, k) =
-  ( dev_form z_spec e
+let develop_constraint dev (e, k) =
+  ( dev e
   , match k with
     | Mc.NonStrict -> Ge
     | Mc.Equal -> Eq
@@ -417,7 +475,18 @@ let elim_redundant sys =
 
 let elim_redundant sys = tr_sys "elim_redundant" elim_redundant sys
 
+(** On a system whose monomials all have degree at most 1, stock's [bound_monomials] returns [[]]:
+    [bound_one_monomial] returns [[]] for each monomial of the system. The values it computes
+    before (the bounds, their monomials and the equations [eqn], with [Linsolve.make_mon] and
+    [Linsolve.merge]) read and change no state, and raise nothing: a bound's variable is a monomial
+    of the system, and [merge] adds two equations only for distinct bounds, so [Eqn.add] finds no
+    duplicate to print. So [bound_monomials] returns [[]] at once on such a system. It reads the
+    entry of each monomial as stock does ([LinPoly.is_linear] is [Monomial.degree <= 1] of the
+    monomial at each index, from [MonT.entry], which raises [Not_found] where stock's
+    [MonT.retrieve] would). *)
 let bound_monomials (sys : WithProof.t list) =
+  if List.for_all (fun wp -> LinPoly.is_linear (WithProof.polynomial wp)) sys then []
+  else
   let (all_bounds,_) = extract_all BoundWithProof.make sys in
   let mon = List.mapi (fun i b ->
       let v = (BoundWithProof.bound b).Vect.Bound.var in
@@ -490,12 +559,19 @@ let bound_monomials (sys : WithProof.t list) =
 
 let bound_monomials sys= tr_sys "bound_monomials" bound_monomials sys
 
-let develop_constraints prfdepth n_spec sys =
+let develop_constraints_with dev prfdepth sys =
   LinPoly.MonT.clear ();
   max_nb_cstr := compute_max_nb_cstr sys prfdepth;
-  let sys = List.map (develop_constraint n_spec) sys in
+  let sys = List.map (develop_constraint dev) sys in
   let sys = List.mapi (fun i (p, o) -> WithProof.mkhyp (LinPoly.linpol_of_pol p) o i) sys in
   ProofFormat.Env.make (List.length sys), sys
+
+let develop_constraints prfdepth n_spec sys = develop_constraints_with (dev_form n_spec) prfdepth sys
+
+(** [develop_constraints prfdepth z_spec], with [dev_form z_spec] answered from its memo *)
+let develop_z prfdepth sys = develop_constraints_with dev_form_z prfdepth sys
+
+let develop_z_constraints prfdepth sys = snd (develop_z prfdepth sys)
 
 let square_of_var i =
   let x = LinPoly.var i in
@@ -884,7 +960,7 @@ let gen_bench (tac, prover)  prfdepth sys =
   | None -> ()
   | Some file ->
     let o = open_out (Filename.temp_file ~temp_dir:(Sys.getcwd ()) file ".v") in
-    let _, sys = develop_constraints prfdepth z_spec sys in
+    let _, sys = develop_z prfdepth sys in
     Printf.fprintf o "Require Import ZArith Lia. Open Scope Z_scope.\n";
     Printf.fprintf o "Goal %a.\n" (LinPoly.pp_goal "Z") (List.map (fun wp -> fst @@ WithProof.repr wp) sys);
     begin
@@ -916,13 +992,7 @@ let normalise = tr_sys "normalise" normalise
     When there are several variables, we hope to eliminate all the variables.
     A necessary condition is to take the variable with the smallest coefficient *)
 
-let try_pivot qx wp wp' =
-  match WithProof.simple_pivot qx wp wp' with
-  | None -> None
-  | Some wp2 ->
-    match WithProof.cutting_plane wp2 with
-    | Some wp2 -> Some wp2
-    | None -> None
+let try_pivot qx wp wp' = WithProof.simple_pivot_cut qx wp wp'
 
 let fourier_small (sys : WithProof.t list) =
   let module WPset = Set.Make(WithProof) in
@@ -970,7 +1040,7 @@ let pre_process sys =
   sys
 
 let lia (prfdepth : int) sys =
-  let env, sys = develop_constraints prfdepth z_spec sys in
+  let env, sys = develop_z prfdepth sys in
   if debug then begin
     Printf.fprintf stdout "Input problem\n";
     List.iter (fun s -> Printf.fprintf stdout "%a\n" WithProof.output s) sys;
@@ -987,7 +1057,7 @@ let lia (prfdepth : int) sys =
   xlia env sys
 
 let nlia prfdepth sys =
-  let env, sys = develop_constraints prfdepth z_spec sys in
+  let env, sys = develop_z prfdepth sys in
   let is_linear = List.for_all (fun wp -> LinPoly.is_linear @@ WithProof.polynomial wp) sys in
   if debug then begin
     Printf.fprintf stdout "Input problem\n";
@@ -1012,8 +1082,79 @@ let nlia prfdepth sys =
 
 (* For regression testing, if bench = true generate a Rocq goal *)
 
-let lia  prfdepth sys = gen_bench ("lia", lia)  prfdepth sys
-let nlia  prfdepth sys = gen_bench ("nia", nlia)  prfdepth sys
+(** {2 Memo of the searches}
+
+    [lia] and [nlia] (each [gen_bench] of the search above) keep the result of each problem they
+    solve, under its prover, depth and problem, and answer that problem again from the memo. A
+    search is a function of its depth and its problem: it starts with [develop_constraints], which
+    clears the monomial table [LinPoly.MonT] and sets [max_nb_cstr] from the depth and the
+    problem; [Simplex.integer_solver] resets its pivot counter; [debug] is a constant; and no other
+    state, option or clock is read on the way ([dump_file] is read by [gen_bench] after the
+    search, below), but two memos that do not change what a search computes: [dev_memo] (above,
+    "Memo of [dev_form z_spec]") and [WithProof.subst]'s record of its previous call
+    (polynomial.ml, "[subst] from the previous call"). Its effects other than its result:
+    - the monomial table and [max_nb_cstr], which nothing reads before the next search, or the
+      next [nlinear_prover], [linear_prover_with_cert] or [develop_z_constraints] (in
+      [ModelSearch]), sets them anew: the other modules use [LinPoly] only within these;
+    - the entries [Simplex.integer_solver] adds to the profile ([Show Lia Profile]), which the
+      memo keeps with the result and adds again on each answer ([Simplex.traced], [replay]);
+    - with [Dump Arith] set, the file [gen_bench] writes for each call: then the memo is not
+      used.
+    A call that raises (an interrupt, a timeout) stores nothing. So an answer from the memo is
+    the result, the profile and the state that the search would give again.
+
+    The memo holds a problem as the string [Marshal.to_string (prover, depth, sys)
+    [No_sharing]]. The problem is built of constructors and integers only ([Mc.pExpr] over
+    [Mc.z], [Mc.op1]): no closure, custom block, float, object or mutable field. Without sharing,
+    the encoding is a walk of the tree, from which [Marshal.from_string] rebuilds it, so two
+    problems have the same string exactly when they are equal. The result is kept marshalled
+    too, and each answer unmarshals a copy of it, equal to it. Strings hold no pointers, so the
+    memo costs the collector no scanning. The budget counts the bytes of the key and value
+    strings (not the profile traces or the table itself, which [memo_capacity] bounds). A
+    problem whose strings exceed [memo_budget / 16] is not stored (it is searched again when
+    asked again, as stock does); past [memo_capacity] problems or [memo_budget] bytes, the memo
+    starts again empty. *)
+module Memo = Hashtbl.Make (struct
+  type t = string
+
+  let equal = String.equal
+  let hash = Hashtbl.hash
+end)
+
+let memo_capacity = 1 lsl 16
+let memo_budget = 1 lsl 27
+let memo : (string * Simplex.profile_trace) Memo.t = Memo.create 1024
+let memo_bytes = ref 0
+let hits = ref 0
+let memo_hits () = !hits
+let memo_size () = Memo.length memo
+
+let memoised tag prover prfdepth sys =
+  match dump_file () with
+  | Some _ -> prover prfdepth sys
+  | None -> (
+    let key = Marshal.to_string (tag, prfdepth, sys) [Marshal.No_sharing] in
+    match Memo.find_opt memo key with
+    | Some (res, trace) ->
+      incr hits;
+      Simplex.replay trace;
+      (Marshal.from_string res 0 : zres)
+    | None ->
+      let res, trace = Simplex.traced (fun () -> prover prfdepth sys) in
+      let v = Marshal.to_string res [] in
+      let bytes = String.length key + String.length v in
+      if bytes <= memo_budget / 16 then begin
+        if Memo.length memo >= memo_capacity || !memo_bytes + bytes > memo_budget then begin
+          Memo.reset memo;
+          memo_bytes := 0
+        end;
+        Memo.add memo key (v, trace);
+        memo_bytes := !memo_bytes + bytes
+      end;
+      res )
+
+let lia prfdepth sys = memoised 0 (gen_bench ("lia", lia)) prfdepth sys
+let nlia prfdepth sys = memoised 1 (gen_bench ("nia", nlia)) prfdepth sys
 
 (* Local Variables: *)
 (* coding: utf-8 *)

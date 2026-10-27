@@ -592,6 +592,9 @@ let explain_ill_formed_cofix_body env sigma = function
   | RecCallInTypeOfDef c ->
       str "Recursive call forbidden in the type of a recursive definition" ++
       spc () ++ pr_leconstr_env env sigma c
+  | RecCallInNonMainMutual c ->
+    str "Recursive call forbidden in non-main cofix in nested mutual cofixpoints" ++
+    spc () ++ pr_leconstr_env env sigma c
   | RecCallInCaseFun c ->
       str "Invalid recursive call in a branch of" ++
       spc () ++ pr_leconstr_env env sigma c
@@ -1266,10 +1269,11 @@ let explain_not_match_error = function
     str "number of inductive types differs:" ++ spc () ++
     str "expected" ++ spc () ++ int expected ++ spc () ++
     str "but found" ++ spc () ++ int got
-  | InductiveParamsNumberField { got; expected } ->
-    str "number of parameters differs:" ++ spc () ++
-    str "expected" ++ spc () ++ int expected ++ spc () ++
-    str "but found" ++ spc () ++ int got
+  | InductiveParams { env; got; expected } ->
+    let sigma = Evd.from_env env in
+    str "parameters differs:" ++ spc () ++
+    str "expected" ++ spc () ++ pr_rel_context env sigma expected ++ spc () ++
+    str "but found" ++ spc () ++ pr_rel_context env sigma got
   | RecordFieldExpected isrecord ->
     str "type is expected " ++ str (if isrecord then "" else "not ") ++
     str "to be a record"
