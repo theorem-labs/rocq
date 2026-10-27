@@ -497,6 +497,8 @@ let develop_constraints prfdepth n_spec sys =
   let sys = List.mapi (fun i (p, o) -> WithProof.mkhyp (LinPoly.linpol_of_pol p) o i) sys in
   ProofFormat.Env.make (List.length sys), sys
 
+let develop_z_constraints prfdepth sys = snd (develop_constraints prfdepth z_spec sys)
+
 let square_of_var i =
   let x = LinPoly.var i in
   WithProof.square (LinPoly.product x x) x
@@ -1012,8 +1014,77 @@ let nlia prfdepth sys =
 
 (* For regression testing, if bench = true generate a Rocq goal *)
 
-let lia  prfdepth sys = gen_bench ("lia", lia)  prfdepth sys
-let nlia  prfdepth sys = gen_bench ("nia", nlia)  prfdepth sys
+(** {2 Memo of the searches}
+
+    [lia] and [nlia] (each [gen_bench] of the search above) keep the result of each problem they
+    solve, under its prover, depth and problem, and answer that problem again from the memo. A
+    search is a function of its depth and its problem: it starts with [develop_constraints], which
+    clears the monomial table [LinPoly.MonT] and sets [max_nb_cstr] from the depth and the
+    problem; [Simplex.integer_solver] resets its pivot counter; [debug] is a constant; and no other
+    state, option or clock is read on the way ([dump_file] is read by [gen_bench] after the
+    search, below). Its effects other than its result:
+    - the monomial table and [max_nb_cstr], which nothing reads before the next search, or the
+      next [nlinear_prover], [linear_prover_with_cert] or [develop_z_constraints] (in
+      [ModelSearch]), sets them anew: the other modules use [LinPoly] only within these;
+    - the entries [Simplex.integer_solver] adds to the profile ([Show Lia Profile]), which the
+      memo keeps with the result and adds again on each answer ([Simplex.traced], [replay]);
+    - with [Dump Arith] set, the file [gen_bench] writes for each call: then the memo is not
+      used.
+    A call that raises (an interrupt, a timeout) stores nothing. So an answer from the memo is
+    the result, the profile and the state that the search would give again.
+
+    The memo holds a problem as the string [Marshal.to_string (prover, depth, sys)
+    [No_sharing]]. The problem is built of constructors and integers only ([Mc.pExpr] over
+    [Mc.z], [Mc.op1]): no closure, custom block, float, object or mutable field. Without sharing,
+    the encoding is a walk of the tree, from which [Marshal.from_string] rebuilds it, so two
+    problems have the same string exactly when they are equal. The result is kept marshalled
+    too, and each answer unmarshals a copy of it, equal to it. Strings hold no pointers, so the
+    memo costs the collector no scanning. The budget counts the bytes of the key and value
+    strings (not the profile traces or the table itself, which [memo_capacity] bounds). A
+    problem whose strings exceed [memo_budget / 16] is not stored (it is searched again when
+    asked again, as stock does); past [memo_capacity] problems or [memo_budget] bytes, the memo
+    starts again empty. *)
+module Memo = Hashtbl.Make (struct
+  type t = string
+
+  let equal = String.equal
+  let hash = Hashtbl.hash
+end)
+
+let memo_capacity = 1 lsl 16
+let memo_budget = 1 lsl 27
+let memo : (string * Simplex.profile_trace) Memo.t = Memo.create 1024
+let memo_bytes = ref 0
+let hits = ref 0
+let memo_hits () = !hits
+let memo_size () = Memo.length memo
+
+let memoised tag prover prfdepth sys =
+  match dump_file () with
+  | Some _ -> prover prfdepth sys
+  | None -> (
+    let key = Marshal.to_string (tag, prfdepth, sys) [Marshal.No_sharing] in
+    match Memo.find_opt memo key with
+    | Some (res, trace) ->
+      incr hits;
+      Simplex.replay trace;
+      (Marshal.from_string res 0 : zres)
+    | None ->
+      let res, trace = Simplex.traced (fun () -> prover prfdepth sys) in
+      let v = Marshal.to_string res [] in
+      let bytes = String.length key + String.length v in
+      if bytes <= memo_budget / 16 then begin
+        if Memo.length memo >= memo_capacity || !memo_bytes + bytes > memo_budget then begin
+          Memo.reset memo;
+          memo_bytes := 0
+        end;
+        Memo.add memo key (v, trace);
+        memo_bytes := !memo_bytes + bytes
+      end;
+      res )
+
+let lia prfdepth sys = memoised 0 (gen_bench ("lia", lia)) prfdepth sys
+let nlia prfdepth sys = memoised 1 (gen_bench ("nia", nlia)) prfdepth sys
 
 (* Local Variables: *)
 (* coding: utf-8 *)

@@ -172,11 +172,12 @@ module LinPoly : sig
       i.e can be written c*x+r where c is a constant and r is independent from x *)
   val is_linear_for : var -> t -> bool
 
-  (** [factorise x p]
-      @return [(a, b)] such that [p = x * a + b] and [b] is independent of [x].
-      For a vector all of whose monomials are of degree <= 1 this takes a
-      single pass; otherwise it goes through the monomial map. *)
-  val factorise : var -> t -> t * t
+  (** [quotient x p]
+      @return the polynomial [a] such that [p = x * a + b] and [x] does not
+      occur in [b]. It registers the monomials of [a] that are new, in the
+      order in which [linpol_of_pol] registers them.
+      @raise Not_found if an index of [p] is not registered *)
+  val quotient : var -> t -> t
 
   (** [constant c]
       @return the constant polynomial c
@@ -251,6 +252,10 @@ module ProofFormat : sig
   val add_proof : prf_rule -> prf_rule -> prf_rule
   val mul_cst_proof : Q.t -> prf_rule -> prf_rule
   val mul_proof : prf_rule -> prf_rule -> prf_rule
+
+  (** [simplify_prf_rule p] develops [p] into a sum of scaled proof steps. It is idempotent, and
+      applied to one of its values it registers no monomial. *)
+  val simplify_prf_rule : prf_rule -> prf_rule
 
   module Env: sig
     type t

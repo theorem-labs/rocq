@@ -39,6 +39,11 @@ val get_compiled_global : ltac_constant -> (compile_info * valexpr) option
 
 val globals : unit -> global_data KerName.Map.t
 
+val compiled_globals : unit -> (compile_info * valexpr) KerName.Map.t
+(** The whole table [get_compiled_global] reads. A reader that keeps a value it computed from the
+    table tells a table it has not read since from one it has by physical equality: every write
+    replaces the table (see [set_compiled_global]), and a summary unfreeze restores one. *)
+
 (** {5 Toplevel definition of types} *)
 
 val define_type : type_constant -> glb_quant_typedef -> unit
@@ -142,6 +147,11 @@ val shortest_qualid_of_projection : ltac_projection -> qualid
 val define_primitive : ml_tactic_name -> valexpr -> unit
 val interp_primitive : ml_tactic_name -> valexpr
 
+val primitive_definitions : unit -> int
+(** How many times [define_primitive] was called. A reader that keeps a value it computed from the
+    primitive table tells a table it has not read since from one it has by this count: the table is
+    a hash table written in place, and loading a plugin defines its primitives again. *)
+
 (** {5 ML primitive types} *)
 
 type 'a or_glb_tacexpr =
@@ -150,8 +160,32 @@ type 'a or_glb_tacexpr =
 
 type ('a, 'b, 'r) intern_fun = Genintern.glob_sign -> 'a -> 'b * 'r glb_typexpr
 
+(** The bindings of the interpreter's environment. The newest ones, at most a few, sit in a
+    chain where [add] is one allocation and a lookup is a few pointer tests (identifiers are
+    hashconsed); older ones sit in an [Id.Map]. A binding shadows an older one of the same
+    name, as [Id.Map.add] replaces it. [get] fails an assertion where [find] raises
+    [Not_found], as [Id.Map.get] does. *)
+module IdMap :
+sig
+  type key = Id.t
+  type 'a t
+  val empty : 'a t
+  val mem : key -> 'a t -> bool
+  val add : key -> 'a -> 'a t -> 'a t
+  val find : key -> 'a t -> 'a
+  val find_opt : key -> 'a t -> 'a option
+  val get : key -> 'a t -> 'a
+  val push : key -> 'a -> 'a t -> 'a t
+  (** [add] without merging; see tac2env.ml. *)
+  val find_at : int -> key -> 'a t -> 'a
+  (** [find_at i id t] returns the [i]-th newest binding of [t] (from 0) if it binds an identifier
+      physically equal to [id], and [find id t] otherwise. It is [find id t] provided that no
+      binding of [id] is newer than the [i]-th: identifiers are hashconsed, so the check compares
+      names, not binders, and the caller must know the binders above position [i]. *)
+end
+
 type environment = {
-  env_ist : valexpr Id.Map.t;
+  env_ist : valexpr IdMap.t;
 }
 
 type ('a, 'b) ml_object = {

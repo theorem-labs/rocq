@@ -38,6 +38,9 @@ module Monomial : sig
   val prod : t -> t -> t
   val factor : t -> var -> t option
   val compare : t -> t -> int
+  val equal : t -> t -> bool
+  val hash : t -> int
+  val mem : var -> t -> bool
   val pp : out_channel -> t -> unit
   val fold : (var -> int -> 'a -> 'a) -> t -> 'a -> 'a
   val sqrt : t -> t option
@@ -177,6 +180,34 @@ struct
 
   let compare (m1 : t) (m2 : t) = CArray.compare Int.compare m1 m2
 
+  let equal (m1 : t) (m2 : t) =
+    let len = Array.length m1 in
+    Int.equal len (Array.length m2)
+    &&
+    let rec loop i =
+      i < 0
+      || (Int.equal (Array.unsafe_get m1 i) (Array.unsafe_get m2 i)
+         && loop (i - 1))
+    in
+    loop (len - 1)
+
+  let hash (m : t) =
+    let h = ref 0 in
+    for i = 0 to Array.length m - 1 do
+      h := (!h * 65599) + Array.unsafe_get m i
+    done;
+    !h land max_int
+
+  let rec mem_from x (m : t) len cur i =
+    i < len
+    &&
+    let cur = cur + m.(i) in
+    if cur < x then mem_from x m len cur (i + 2) else Int.equal cur x
+
+  (* [mem x m] holds if the variable [x] occurs in [m]: it walks [m] as
+     [factor] does, and holds exactly when [factor m x] is not [None]. *)
+  let mem (x : var) (m : t) = mem_from x m (Array.length m) 0 1
+
   let sqrt (m : t) = match m with
   | [|_|] -> Some const
   | _ ->
@@ -262,7 +293,6 @@ sig
   val addition : t -> t -> t
   val uminus : t -> t
   val fold : (Monomial.t -> Q.t -> 'a -> 'a) -> t -> 'a -> 'a
-  val factorise : var -> t -> t * t
 end = struct
   (*normalisation bug : 0*x ... *)
   module P = Map.Make (Monomial)
@@ -312,16 +342,6 @@ end = struct
 
   let uminus : t -> t = fun p -> map (fun v -> Q.neg v) p
   let fold = P.fold
-
-  let factorise x p =
-    P.fold
-      (fun m v (px, cx) ->
-        match Monomial.factor m x with
-        | None -> (px, add m v cx)
-        | Some mx ->
-          (add mx v px, cx))
-      p
-      (constant Q.zero, constant Q.zero)
 end
 
 type vector = Vect.t
@@ -363,19 +383,64 @@ module LinPoly = struct
   type t = Vect.t
 
   module MonT = struct
-    module MonoMap = Map.Make (Monomial)
-    module IntMap = Map.Make (Int)
+    (** The monomial table. Each monomial the layer has seen has one [entry];
+        the monomial is registered once its entry has an index. [quotient]
+        and [product] return entries, registered or not, from caches: the
+        callers register a monomial when, and in the order in which,
+        [linpol_of_pol] would register it. An entry caches only what stock
+        computes from its monomial, with stock's own predicates. *)
+    type entry =
+      { mon : Monomial.t
+      ; linear : bool  (** [Monomial.is_var mon || Monomial.is_const mon] *)
+      ; var : var option  (** [Monomial.get_var mon] *)
+      ; mutable index : int  (** [-1] while [mon] is not registered *)
+      ; mutable quotients : (var * entry) list
+            (** [(x, q)]: [Monomial.factor mon x = Some q.mon] *)
+      ; mutable row : int  (** the [sum_products] row that last produced it *)
+      ; mutable stamp : int  (** the [sum_terms] call that last set [sum] *)
+      ; mutable sum : Q.t }
 
-    (** A hash table might be preferable but requires a hash function. *)
-    let (index_of_monomial : int MonoMap.t ref) = ref MonoMap.empty
+    module MonH = Hashtbl.Make (Monomial)
 
-    let (monomial_of_index : Monomial.t IntMap.t ref) = ref IntMap.empty
+    module IntH = Hashtbl.Make (struct
+      type t = int
 
-    (** [linear_of_index] records, per registered index, whether its monomial
-        has degree <= 1 (the constant or a single variable). It lets
-        [LinPoly.factorise] recognise a linear vector without retrieving and
-        inspecting every monomial. *)
-    let (linear_of_index : bool IntMap.t ref) = ref IntMap.empty
+      let equal = Int.equal
+
+      let hash k =
+        let h = k * 0x2545F4914F6CDD1D in
+        (h lxor (h lsr 32)) land max_int
+    end)
+
+    let new_entry m =
+      { mon = m
+      ; linear = Monomial.is_var m || Monomial.is_const m
+      ; var = Monomial.get_var m
+      ; index = -1
+      ; quotients = []
+      ; row = 0
+      ; stamp = 0
+      ; sum = Q.zero }
+
+    let entries : entry MonH.t = MonH.create 256
+
+    (** [products] maps [(i lsl 30) lor j], for the indexes [i <= j] of two
+        registered monomials, to the entry of their product. *)
+    let products : entry IntH.t = IntH.create 256
+
+    (** Small indexes stay in the growable dense table; [safe_reserve] can
+        leave arbitrarily large gaps, so entries beyond this bound live in a
+        sparse table. *)
+    let max_dense_entries = 1 lsl 20
+
+    (** [!by_index.(i)] is the entry registered at a small index [i], or
+        [no_entry] when no monomial is registered at [i].  Entries at large
+        indexes are in [large_by_index].  [get_fresh] and [safe_reserve] skip
+        indexes, and every registered index is below [!fresh]. *)
+    let no_entry = new_entry Monomial.const
+
+    let by_index = ref (Array.make 256 no_entry)
+    let large_by_index : entry IntH.t = IntH.create 16
     let fresh = ref 0
 
     let reserve vr =
@@ -388,35 +453,153 @@ module LinPoly = struct
       let vr = !fresh in
       incr fresh; vr
 
-    let register m =
-      try MonoMap.find m !index_of_monomial
+    let intern m =
+      try MonH.find entries m
       with Not_found ->
+        let e = new_entry m in
+        MonH.add entries m e; e
+
+    let register_entry e =
+      if e.index < 0 then begin
         let res = !fresh in
-        index_of_monomial := MonoMap.add m res !index_of_monomial;
-        monomial_of_index := IntMap.add res m !monomial_of_index;
-        linear_of_index := IntMap.add res (Monomial.degree m <= 1) !linear_of_index;
-        incr fresh;
-        res
+        if res < max_dense_entries then begin
+          let len = Array.length !by_index in
+          if res >= len then begin
+            let new_len = min max_dense_entries (max (2 * len) (res + 1)) in
+            let tbl = Array.make new_len no_entry in
+            Array.blit !by_index 0 tbl 0 len;
+            by_index := tbl
+          end;
+          !by_index.(res) <- e
+        end
+        else
+          IntH.add large_by_index res e;
+        e.index <- res;
+        incr fresh
+      end
 
-    let retrieve i = IntMap.find i !monomial_of_index
+    let register m =
+      let e = intern m in
+      register_entry e; e.index
 
-    (** [is_linear_index i] is [true] when the monomial registered at index [i]
-        has degree <= 1. An unregistered index is reported non-linear, which
-        only sends [factorise] to its general path. *)
-    let is_linear_index i =
-      try IntMap.find i !linear_of_index with Not_found -> false
+    let entry i =
+      if i < 0 then raise Not_found
+      else
+        let tbl = !by_index in
+        if i < Array.length tbl then begin
+          let e = Array.unsafe_get tbl i in
+          if e == no_entry then raise Not_found else e
+        end
+        else if i < max_dense_entries then raise Not_found
+        else IntH.find large_by_index i
 
-    (** [index_of_var x] is the index of the monomial [x^1], if registered. *)
-    let index_of_var x = MonoMap.find_opt (Monomial.var x) !index_of_monomial
+    let retrieve i = (entry i).mon
+
+    (** [occurs x e] holds if [Monomial.factor e.mon x] is not [None] *)
+    let occurs x e =
+      match e.var with
+      | Some y -> Int.equal x y
+      | None -> Monomial.mem x e.mon
+
+    (** [quotient e x] is the entry of [m] where [Monomial.factor e.mon x] is
+        [Some m]; [x] must occur in [e.mon] *)
+    let quotient e x =
+      let rec find = function
+        | (y, q) :: l -> if Int.equal x y then q else find l
+        | [] ->
+          let q =
+            match Monomial.factor e.mon x with
+            | Some m -> intern m
+            | None -> assert false
+          in
+          e.quotients <- (x, q) :: e.quotients;
+          q
+      in
+      find e.quotients
+
+    (** [product e1 e2] is the entry of [e1.mon * e2.mon], for registered
+        [e1] and [e2] *)
+    let product e1 e2 =
+      let i1 = e1.index and i2 = e2.index in
+      let i, j = if i1 <= i2 then (i1, i2) else (i2, i1) in
+      if j >= 1 lsl 30 then intern (Monomial.prod e1.mon e2.mon)
+      else
+        let key = (i lsl 30) lor j in
+        try IntH.find products key
+        with Not_found ->
+          let e = intern (Monomial.prod e1.mon e2.mon) in
+          IntH.add products key e; e
+
+    (** The last stamp used by [sum_terms] and [sum_products]. It is never
+        reset: a stamp names one call, or one row. *)
+    let stamp = ref 0
+
+    (** [sum_terms iter] is the sum of the terms [iter] gives to its argument
+        [add]: the distinct entries of the terms with their summed
+        coefficients, when these are not zero. Like [Poly.add], it sums the
+        coefficients of one monomial and drops a zero sum. *)
+    let sum_terms iter =
+      incr stamp;
+      let s = !stamp in
+      let touched = ref [] in
+      iter (fun e c ->
+          if Int.equal e.stamp s then e.sum <- e.sum +/ c
+          else begin
+            e.stamp <- s;
+            e.sum <- c;
+            touched := e :: !touched
+          end);
+      List.fold_left
+        (fun acc e ->
+          if Int.equal (Q.sign e.sum) 0 then acc else (e, e.sum) :: acc)
+        [] !touched
+
+    exception Collision
+
+    (** [sum_products l1 l2] is [Poly.product] of the polynomials [l1] and
+        [l2], lists of distinct registered entries with non-zero
+        coefficients: the distinct entries of the product with their
+        non-zero coefficients.
+        @raise Collision if two monomials of [l2] have the same product by a
+        monomial of [l1]. [Poly.product] then keeps one of the two
+        coefficients ([Poly.mult] overwrites), not their sum. *)
+    let sum_products l1 l2 =
+      sum_terms (fun add ->
+          List.iter
+            (fun (e1, c1) ->
+              incr stamp;
+              let r = !stamp in
+              List.iter
+                (fun (e2, c2) ->
+                  let e = product e1 e2 in
+                  if Int.equal e.row r then raise_notrace Collision;
+                  e.row <- r;
+                  add e (c1 */ c2))
+                l2)
+            l1)
+
+    (** [register_all l] registers the entries of [l] that are not registered,
+        in ascending [Monomial.compare] order: the order in which
+        [linpol_of_pol] registers the monomials of a polynomial. *)
+    let register_all l =
+      if List.exists (fun (e, _) -> e.index < 0) l then
+        List.iter
+          (fun (e, _) -> register_entry e)
+          (List.sort
+             (fun (e1, _) (e2, _) -> Monomial.compare e1.mon e2.mon)
+             (List.filter (fun (e, _) -> e.index < 0) l))
+
+    let init () = ignore (register Monomial.const)
 
     let clear () =
-      index_of_monomial := MonoMap.empty;
-      monomial_of_index := IntMap.empty;
-      linear_of_index := IntMap.empty;
+      MonH.reset entries;
+      IntH.reset products;
+      IntH.reset large_by_index;
+      Array.fill !by_index 0 (Array.length !by_index) no_entry;
       fresh := 0;
-      ignore (register Monomial.const)
+      init ()
 
-    let _ = register Monomial.const
+    let () = init ()
   end
 
   let var v = Vect.set (MonT.register (Monomial.var v)) Q.one Vect.null
@@ -459,102 +642,102 @@ module LinPoly = struct
   let pp o p = Vect.pp_gen pp_var o p
   let constant c = if Q.sign c = 0 then Vect.null else Vect.set 0 c Vect.null
 
-  let is_linear p =
-    Vect.for_all
-      (fun v _ ->
-        let mn = MonT.retrieve v in
-        Monomial.is_var mn || Monomial.is_const mn)
-      p
+  (** [is_linear] reads every entry, zero coefficients included, as stock *)
+  let is_linear p = Vect.for_all (fun v _ -> (MonT.entry v).MonT.linear) p
 
   let is_variable p =
     let (x, v), r = Vect.decomp_fst p in
     if Vect.is_null r && v >/ Q.zero then Monomial.get_var (MonT.retrieve x)
     else None
 
-  let factorise_slow x p =
-    let px, cx = Poly.factorise x (pol_of_linpol p) in
-    (linpol_of_pol px, linpol_of_pol cx)
+  (** [of_desc l] is the vector of [l], a list of entries of registered
+      monomials in descending index order, with non-zero coefficients *)
+  let of_desc l =
+    List.fold_left (fun v (e, c) -> Vect.set e.MonT.index c v) Vect.null l
 
-  (* Fast path. When every monomial of [p] has degree <= 1, the only monomial
-     that mentions the variable [x] is [x^1] itself, so factoring by [x] moves
-     the [x^1] entry out as the constant quotient [a] and drops it from the
-     remainder [b], in a single pass over the sparse vector. This returns
-     exactly the vectors [factorise_slow] would: the quotient is
-     [constant (Vect.get ix p)] (the coefficient of [x^1], laid out at index 0
-     as [linpol_of_pol] of the singleton quotient polynomial would), and the
-     remainder is [p] with the [x^1] entry removed, which is index-sorted just
-     like the general path's rebuild. If [x^1] was never registered it does not
-     occur in [p], so [a] is null and [b] is [p]. *)
-  let factorise_linear x p =
-    match MonT.index_of_var x with
-    | None -> (Vect.null, p)
-    | Some ix -> (constant (Vect.get ix p), Vect.set ix Q.zero p)
+  (** [of_entries l] is [linpol_of_pol] of the polynomial [l], a list of
+      distinct entries with non-zero coefficients: it registers the monomials
+      of [l] as [linpol_of_pol] does, and returns their vector. *)
+  let of_entries l =
+    MonT.register_all l;
+    match l with
+    | [] -> Vect.null
+    | [(e, c)] -> Vect.set e.MonT.index c Vect.null
+    | _ ->
+      of_desc
+        (List.sort
+           (fun (e1, _) (e2, _) -> Int.compare e2.MonT.index e1.MonT.index)
+           l)
 
-  let all_linear p = Vect.for_all (fun v _ -> MonT.is_linear_index v) p
+  (** [entries p] is the polynomial [pol_of_linpol p]: the entries of the
+      monomials of [p] with their non-zero coefficients, in descending index
+      order. Like [pol_of_linpol], it reads the entry of every index of [p],
+      and drops a zero coefficient ([Vect.mul_add] can leave one).
+      @raise Not_found if an index of [p] is not registered *)
+  let entries p =
+    Vect.fold
+      (fun acc i c ->
+        let e = MonT.entry i in
+        if Int.equal (Q.sign c) 0 then acc else (e, c) :: acc)
+      [] p
 
-  (* Equivalence instrumentation, inert unless MICROMEGA_FACTORISE_CHECK is set.
-     When on, every linear-eligible call computes both the fast and the general
-     result and aborts on any difference, and the per-process call counts are
-     written to $MICROMEGA_FACTORISE_LOG/<unique>.json at exit. It never changes
-     the value [factorise] returns. *)
-  let factorise_check =
-    match Sys.getenv_opt "MICROMEGA_FACTORISE_CHECK" with
-    | None | Some ("" | "0") -> false
-    | Some _ -> true
+  (** [quotient_entries x p] is the polynomial [a] of [Poly.factorise x
+      (pol_of_linpol p) = (a, b)]: the entries of its monomials with their
+      summed non-zero coefficients. Like [pol_of_linpol], it reads the entry
+      of every index of [p] and skips a zero coefficient.
+      @raise Not_found if an index of [p] is not registered *)
+  let quotient_entries x p =
+    MonT.sum_terms (fun add ->
+        Vect.fold
+          (fun () i c ->
+            let e = MonT.entry i in
+            if (not (Int.equal (Q.sign c) 0)) && MonT.occurs x e then
+              add (MonT.quotient e x) c)
+          () p)
 
-  let factorise_calls = ref 0
-  let factorise_linear_calls = ref 0
-  let factorise_mismatches = ref 0
+  (** [quotient x p] is the polynomial [a] such that [p = a.x + b] and [x]
+      does not occur in [b]. It changes [MonT] as stock [factorise], that is
+      [linpol_of_pol] of [a] and of [b], does: the monomials of [b] are
+      monomials of [p], so only those of [a] can be new.
+      @raise Not_found if an index of [p] is not registered, before it
+      registers any monomial *)
+  let quotient x p = of_entries (quotient_entries x p)
 
-  let () =
-    if factorise_check then
-      at_exit (fun () ->
-          match Sys.getenv_opt "MICROMEGA_FACTORISE_LOG" with
-          | None -> ()
-          | Some dir -> (
-            try
-              let fn = Filename.temp_file ~temp_dir:dir "factorise-" ".json" in
-              let oc = open_out fn in
-              Printf.fprintf oc
-                "{\"calls\": %d, \"linear_calls\": %d, \"mismatches\": %d}\n"
-                !factorise_calls !factorise_linear_calls !factorise_mismatches;
-              close_out oc
-            with _ -> ()))
+  (** [has_quotient x p] is [not (Vect.is_null (quotient x p))], computed without the quotient,
+      and changes nothing. Monomials are distinct and division by [x] is injective on the
+      monomials [x] occurs in, so [quotient_entries x p] has one entry per index of [p] with a
+      non-zero coefficient and a monomial in which [x] occurs, with that coefficient; [of_entries]
+      of a non-empty list of non-zero coefficients is not null, and of [[]] is [Vect.null]. It
+      reads the entry of each index of [p] in [quotient_entries]'s order ([Vect.for_all] and
+      [Vect.fold] both go down the list), each before looking at its coefficient, and stops after
+      the first index with a non-zero coefficient and a monomial in which [x] occurs. If an index
+      before that one is not registered, it raises [Not_found] there, as [quotient_entries]
+      does, before any registration. If it finds one, the caller computes [quotient x p], which
+      reads the same indexes again and raises [Not_found] at the same index if a later one is
+      not registered. Either way the same exception comes at the same point, with nothing
+      registered before it. [quotient x p] with a null result registers no monomial (those of
+      [[]]) and only takes a new [MonT.sum_terms] stamp, which names that call alone and is
+      never read again. *)
+  let has_quotient x p =
+    not
+      (Vect.for_all
+         (fun i c ->
+           let e = MonT.entry i in
+           not ((not (Int.equal (Q.sign c) 0)) && MonT.occurs x e))
+         p)
 
-  let eq_pair (a1, b1) (a2, b2) = Vect.equal a1 a2 && Vect.equal b1 b2
-
-  let factorise x p =
-    if all_linear p then
-      if factorise_check then begin
-        incr factorise_calls;
-        incr factorise_linear_calls;
-        let fast = factorise_linear x p in
-        let slow = factorise_slow x p in
-        if not (eq_pair fast slow) then begin
-          incr factorise_mismatches;
-          Printf.eprintf
-            "micromega factorise MISMATCH: x=%i p=%a\n  fast a=%a b=%a\n  slow a=%a b=%a\n%!"
-            x pp p pp (fst fast) pp (snd fast) pp (fst slow) pp (snd slow);
-          failwith "micromega factorise fast/slow mismatch"
-        end;
-        fast
-      end
-      else factorise_linear x p
-    else begin
-      if factorise_check then incr factorise_calls;
-      factorise_slow x p
-    end
-
+  (** [is_linear_for x p] is [Vect.is_constant (quotient x p)]: the quotient
+      has no monomial, or only the constant, registered at index 0. *)
   let is_linear_for x p =
-    let a, b = factorise x p in
-    Vect.is_constant a
+    let l = quotient_entries x p in
+    MonT.register_all l;
+    List.for_all (fun (e, _) -> Int.equal e.MonT.index 0) l
 
   let search_all_linear p l =
     Vect.fold
       (fun acc x v ->
         if p v then
-          let x' = MonT.retrieve x in
-          match Monomial.get_var x' with
+          match (MonT.entry x).MonT.var with
           | None -> acc
           | Some x -> if is_linear_for x l then x :: acc else acc
         else acc)
@@ -567,8 +750,25 @@ module LinPoly = struct
 
   let mul_cst c p = Vect.mul c p
 
+  (** [product p1 p2] registers the monomials of the product as
+      [linpol_of_pol] does.
+      @raise Not_found if an index of [p1] or [p2] is not registered, before
+      it registers any monomial *)
   let product p1 p2 =
-    linpol_of_pol (Poly.product (pol_of_linpol p1) (pol_of_linpol p2))
+    let l1 = entries p1 in
+    let l2 = entries p2 in
+    match (l1, l2) with
+    (* [Monomial.prod Monomial.const m] and [Monomial.prod m Monomial.const]
+       are [m], so [Poly.product] scales the other polynomial. *)
+    | [(e, c)], _ when Monomial.is_const e.MonT.mon ->
+      of_desc (List.map (fun (e, c') -> (e, c */ c')) l2)
+    | _, [(e, c)] when Monomial.is_const e.MonT.mon ->
+      of_desc (List.map (fun (e, c') -> (e, c */ c')) l1)
+    | _ -> (
+      match MonT.sum_products l1 l2 with
+      | l -> of_entries l
+      | exception MonT.Collision ->
+        linpol_of_pol (Poly.product (pol_of_linpol p1) (pol_of_linpol p2)))
 
   let addition p1 p2 = Vect.add p1 p2
 
@@ -885,6 +1085,26 @@ module ProofFormat = struct
       let p2'' = prf_rule_of_map p2' in
       PrfRuleMap.singleton (LetPrf (p1'', p2'')) (LinPoly.constant Q.one)
 
+  (** [simplify_prf_rule p] is [prf_rule_of_map (dev_prf_rule p)]. It is idempotent, and applied
+      to one of its values it registers no monomial. Write [S], [D], [M] for these three functions
+      and [1] for [LinPoly.constant Q.one].
+      - The values of [D p] have no zero coefficient: [1], [LinPoly.product] (its [entries] and
+        [MonT.sum_terms] drop zeros), [LinPoly.addition] ([Vect.add] drops zero sums) and
+        [Vect.mul c] ([] when [c] is 0).
+      - The keys of [D p] are atoms ([Hyp], [Def], [Ref], [Cst], [Zero], [Square]), [MulPrf (S
+        p1, S p2)] with [S p1] not a [Cst], [Gcd (c, S p1)], [CutPrf (S p1)] and [LetPrf (S p1, S
+        p2)], for subterms [p1], [p2] of [p]; by induction on [p], [D k = {k -> 1}] for each key
+        [k]: for [MulPrf], [D] computes [S (S p1) = S p1], not a [Cst], and [S (S p2) = S p2].
+      - For a key [k] and such a value [v], the term [t = sMulC v k] of [M] is [Zero] when [v] is
+        null, or is [1] with [k = Zero]; otherwise [D t = {k -> v}]: [MulC (v, k)] for [v] not
+        constant ([product v 1] is [v], scaled by 1), [k] for [v = 1], [MulPrf (Cst c, k)] for [v
+        = c > 0] ([D] scales [{k -> 1}] by [c]) and [MulC (c, k)] for [v = c < 0] ([product c 1 =
+        c]). These products take [LinPoly.product]'s cases for a constant factor, which register
+        nothing ([of_desc]).
+      - [M m] adds the terms that are not [Zero], in the order of the keys ([add_proof] drops a
+        [Zero]). [D] of that sum is [m] without the entries whose term is [Zero] (or [{Zero ->
+        1}] if all are, whose term is [Zero] again), and [M] of it adds the same terms in the
+        same order. So [S (S p) = S p]. *)
   let simplify_prf_rule p = prf_rule_of_map (dev_prf_rule p)
 
   (** [simplify_proof p] removes proof steps that are never re-used. *)
@@ -1226,11 +1446,14 @@ module WithProof = struct
   let mult_sign : bool -> t -> t =
    fun b ((p, o), prf) -> if b then ((p, o), prf) else ((Vect.uminus p, o), prf)
 
-  let rec linear_pivot sys ((lp1, op1), prf1) x ((lp2, op2), prf2) =
-    (* lp1 = a1.x + b1 *)
-    let a1, b1 = LinPoly.factorise x lp1 in
+  (** [pivot_by sys pc1 a1 x pc2], with [a1 = LinPoly.quotient x lp1], is stock's [linear_pivot
+      sys pc1 x pc2] before the simplification of its proof. Stock computed [a1] again at each
+      step of the recursion; once its monomials are registered (by the first computation),
+      [LinPoly.quotient x lp1] registers nothing (its entries are registered and [MonT.quotient]
+      caches its own result) and returns the same vector, so the steps reuse the first. *)
+  let rec pivot_by sys ((lp1, op1), prf1) a1 x ((lp2, op2), prf2) =
     (* lp2 = a2.x + b2 *)
-    let a2, b2 = LinPoly.factorise x lp2 in
+    let a2 = LinPoly.quotient x lp2 in
     if Vect.is_null a2 then (* We are done *)
       Some ((lp2, op2), prf2)
     else
@@ -1246,14 +1469,14 @@ module WithProof = struct
               (product sa1 ((lp2, op2), prf2))
               (mult sa2 ((lp1, op1), prf1))
           in
-          linear_pivot sys ((lp1, op1), prf1) x ((lp2, op2), prf2) )
+          pivot_by sys ((lp1, op1), prf1) a1 x ((lp2, op2), prf2) )
       | Eq, Eq ->
         let (lp2, op2), prf2 =
           addition
             (mult a1 ((lp2, op2), prf2))
             (mult (Vect.uminus a2) ((lp1, op1), prf1))
         in
-        linear_pivot sys ((lp1, op1), prf1) x ((lp2, op2), prf2)
+        pivot_by sys ((lp1, op1), prf1) a1 x ((lp2, op2), prf2)
       | (Ge | Gt), (Ge | Gt) -> (
         match (get_sign sys a1, get_sign sys a2) with
         | Some (b1, o1, p1), Some (b2, o2, p2) ->
@@ -1263,13 +1486,15 @@ module WithProof = struct
                 (product (mult_sign b1 ((a1, o1), p1)) ((lp2, op2), prf2))
                 (product (mult_sign b2 ((a2, o2), p2)) ((lp1, op1), prf1))
             in
-            linear_pivot sys ((lp1, op1), prf1) x ((lp2, op2), prf2)
+            pivot_by sys ((lp1, op1), prf1) a1 x ((lp2, op2), prf2)
           else None
         | _ -> None )
       | (Ge | Gt), Eq -> failwith "pivot: equality as second argument"
 
   let linear_pivot sys ((lp1, op1), prf1) x ((lp2, op2), prf2) =
-    match linear_pivot sys ((lp1, op1), prf1) x ((lp2, op2), prf2) with
+    (* lp1 = a1.x + b1 *)
+    let a1 = LinPoly.quotient x lp1 in
+    match pivot_by sys ((lp1, op1), prf1) a1 x ((lp2, op2), prf2) with
     | None -> None
     | Some (c, p) -> Some (c, ProofFormat.simplify_prf_rule p)
 
@@ -1293,14 +1518,52 @@ module WithProof = struct
     in
     List.sort cmp (List.rev_map (fun wp -> (size wp, wp)) sys)
 
+  (** Stock's [iterate_pivot p sys0] was, with [extract], [simplify] and [iterate_until_stable]
+      from Mutils:
+      {[
+        let elim sys =
+          match extract p sys with
+          | None, _ -> None
+          | Some (v, pc), sys' -> simplify (linear_pivot sys0 pc v) sys'
+        in
+        iterate_until_stable elim (List.map snd (sort sys0))
+      ]}
+      It is computed here on the same lists with the same functions, each constraint carrying a
+      flag [n]: its proof is a value of [ProofFormat.simplify_prf_rule], so that
+      [simplify_prf_rule] returns it unchanged (see [simplify_prf_rule]: it is idempotent, and on
+      such a proof it registers no monomial). Three steps of [linear_pivot sys0 pc v c] change:
+      - [a1 = LinPoly.quotient v lp1] is computed once per round, when the first constraint is
+        pivoted, where the first call computed it (see [pivot_by]); with no constraint to pivot
+        it is not computed, as stock.
+      - When [v] does not occur in [c] ([LinPoly.has_quotient], which raises where the quotient
+        would), stock returned [c] with [simplify_prf_rule] of its proof; this returns [c] itself
+        when [n] holds (the same constraint), and the simplified proof otherwise, as stock.
+      - Otherwise this is [linear_pivot]: [pivot_by] with the round's [a1].
+      Each result is [Some] exactly when stock's is, so [simplify] and [iterate_until_stable] stop
+      where they stopped, and the constraints come in stock's order with stock's polynomials,
+      operators and proofs; the monomials are registered in stock's order, at the same indexes. *)
   let iterate_pivot p sys0 =
     let elim sys =
-      let oeq, sys' = extract p sys in
+      let oeq, sys' = extract (fun (c, _) -> p c) sys in
       match oeq with
       | None -> None
-      | Some (v, pc) -> simplify (linear_pivot sys0 pc v) sys'
+      | Some (v, (pc, _)) ->
+        let ((lp1, _), _) = pc in
+        let a1 = lazy (LinPoly.quotient v lp1) in
+        simplify
+          (fun ((((lp2, op2), prf2) as c), n) ->
+            let a1 = Lazy.force a1 in
+            if not (LinPoly.has_quotient v lp2) then
+              if n then Some (c, true)
+              else Some (((lp2, op2), ProofFormat.simplify_prf_rule prf2), true)
+            else
+              match pivot_by sys0 pc a1 v c with
+              | None -> None
+              | Some (c, prf) -> Some ((c, ProofFormat.simplify_prf_rule prf), true))
+          sys'
     in
-    iterate_until_stable elim (List.map snd (sort sys0))
+    List.map fst
+      (iterate_until_stable elim (List.map (fun (_, c) -> (c, false)) (sort sys0)))
 
   let subst_constant is_int sys =
     let is_integer q = Q.(q =/ floor q) in
