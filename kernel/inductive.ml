@@ -947,6 +947,7 @@ let pt_binder_read t = match t.pt_read_ with
 type prefix_binding = {
   pb_value : prefix_closure option; (* [None] for an abstraction of the prefix *)
   mutable pb_reaches : bool option; (* whether the value reaches the block, once known *)
+  mutable pb_inert : prefix_inert option; (* its shape as a dropped term, once known *)
   pb_whnf : prefix_whnf;            (* its head normal form, once computed *)
 }
 (* A head normal form: a closure at an abstraction or a constructor, and
@@ -963,6 +964,14 @@ and prefix_whnf_state =
    [Rel 1] to [Rel nbfix] are the functions of the block. *)
 and prefix_closure = { pc_term : pterm; pc_env : prefix_env }
 and prefix_env = { pe_len : int; pe_map : prefix_binding Int.Map.t; pe_shift : int }
+(* The shape of a term that is DROPPED, as far as the block is concerned: a
+   function of the block applied to those arguments, each with the
+   environment it lives in; an abstraction whose body is inert unapplied;
+   or a term that may make a call. See [summary]. *)
+and prefix_inert =
+  | PIHead of int * prefix_closure list
+  | PIAbs
+  | PINot
 
 (* What the walk resumes once the scrutinee it is reducing is a constructor
    (a match, held as its term with its environment, or a projection), or
@@ -975,7 +984,8 @@ type prefix_frame =
 
 exception PrefixEscape
 
-let raw_prefix_escapes env nbfix recindx body =
+let raw_prefix_escapes env nvect recindx body =
+  let nbfix = Array.length nvect in
   let empty = { pe_len = 0; pe_map = Int.Map.empty; pe_shift = 0 } in
   (* The environment of a closed term (the value of a constant or of a
      section variable): it has no free variable, so nothing in it can
@@ -1043,18 +1053,108 @@ let raw_prefix_escapes env nbfix recindx body =
      closed environment cannot exist, and counts as reaching). *)
   let closure_reaches e d c =
     not (e.pe_shift < 0 && Int.equal e.pe_len 0) && rels_reach e d (pt_fv c) in
-  let drop e c = if closure_reaches e 0 c then raise_notrace PrefixEscape in
-  let drop_clos v = drop v.pc_env v.pc_term in
   let new_whnf () = { pw = PWUnknown } in
+  let assum e =
+    push e { pb_value = None; pb_reaches = Some false;
+             pb_inert = Some PINot; pb_whnf = new_whnf () } in
+  (* A term the reduction DROPS and that reaches the block is still let
+     through when it is INERT: a function of the block applied to at most
+     its own structural index of arguments, possibly under abstractions and
+     through reads of bound values, with nothing else in it reaching the
+     block. No reduction unfolds such a term, because fix-iota needs its
+     structural argument, and a dropped term is never at the head of an
+     application, so it is discarded without making a call.
+
+     [summary e t args] describes [t] in [e], applied to [args]. The summary
+     of a bound value is memoised ([pb_inert]), so an alias chain is
+     followed once and the arguments compose by concatenation.
+
+     Such an occurrence is in the body as WRITTEN and not in the body the
+     analysis measures, so the uniform-parameter count of the block must see
+     it: [bound] keeps, over all of them, the number of leading arguments
+     that are the binders crossed, in order, which is the count
+     [find_uniform_parameters] gives an occurrence and the count stock Rocq
+     gives it in the raw body. An argument in the environment of a
+     constant's body counts for nothing: it is no binder of this body. *)
+  let bound = ref max_int in
+  let rec summary e t args =
+    let sub = pt_sub t in
+    match kind t.pt with
+    | Lambda _ ->
+      if not (List.is_empty args) then PINot
+      else if closure_reaches e 0 sub.(0) then PINot
+      else if inert_at (assum e) sub.(1) then PIAbs else PINot
+    | App _ when not (Array.is_empty sub) ->
+      let n = Array.length sub - 1 in
+      let rec bad k = k <= n && (closure_reaches e 0 sub.(k) || bad (k + 1)) in
+      if bad 1 then PINot
+      else
+        let rec go k acc = if k < 1 then acc else go (k - 1) (clos e sub.(k) :: acc) in
+        summary e sub.(0) (go n args)
+    | Rel j when j <= e.pe_len ->
+      let b = binding e j in
+      begin match b.pb_value with
+      | None -> PINot
+      | Some w ->
+        let s = match b.pb_inert with
+          | Some s -> s
+          | None ->
+            let s = summary w.pc_env w.pc_term [] in
+            let () = b.pb_inert <- Some s in
+            s
+        in
+        begin match s with
+        | PIHead (i, l) -> PIHead (i, l @ args)
+        | PIAbs -> if List.is_empty args then PIAbs else PINot
+        | PINot -> PINot
+        end
+      end
+    | Rel j ->
+      let o = j - e.pe_len + e.pe_shift in
+      if e.pe_shift >= 0 && o >= 1 && o <= nbfix then PIHead (nbfix - o, args) else PINot
+    | _ -> PINot
+  (* [c] in [e] is inert; the count it allows is kept in [bound]. *)
+  and inert_at e c =
+    match summary e c [] with
+    | PIHead (i, l) ->
+      List.length l <= nvect.(i) && (bound := min !bound (uniform_count l); true)
+    | PIAbs -> true
+    | PINot -> false
+  and uniform_count args =
+    let rec go j = function
+      | a :: rest ->
+        begin match kind a.pc_term.pt with
+        | Rel m when Int.equal a.pc_env.pe_shift 0
+                     && Int.equal m (a.pc_env.pe_len - j) -> go (j + 1) rest
+        | _ -> j
+        end
+      | [] -> j
+    in
+    go 0 args
+  in
+  (* [c] in [e], under [d] binders of its own, is inert. *)
+  let inert e d c = inert_at (iterate assum d e) c in
+  let drop_under e d c =
+    if closure_reaches e d c && not (inert e d c) then raise_notrace PrefixEscape in
+  let drop e c = drop_under e 0 c in
+  let drop_clos v = drop v.pc_env v.pc_term in
   (* A binding of [v] to a binder; a binder that is not read drops [v] *)
   let binding_of v read =
-    if read then { pb_value = Some v; pb_reaches = None; pb_whnf = new_whnf () }
+    if read then
+      { pb_value = Some v; pb_reaches = None; pb_inert = None; pb_whnf = new_whnf () }
     else
       let () = drop_clos v in
-      { pb_value = Some v; pb_reaches = Some false; pb_whnf = new_whnf () }
+      (* Not [Some false]: [drop_clos] now lets an INERT value that reaches
+         the block through, so this binding may reach it. An unread binder
+         is read nowhere in the branch, but [branch_env] binds the match
+         parameters unread into the environment a constructor's let-in
+         values live in, and such a value can read it; recording [Some false]
+         would hide the occurrence from that value's own [drop]. Computed
+         lazily, as for a read binder. *)
+      { pb_value = Some v; pb_reaches = None;
+        pb_inert = None; pb_whnf = new_whnf () }
   in
   let bind e v read = push e (binding_of v read) in
-  let assum e = push e { pb_value = None; pb_reaches = Some false; pb_whnf = new_whnf () } in
   let push_args e sub stack =
     let rec go k s = if Int.equal k 0 then s else go (k - 1) (clos e sub.(k) :: s) in
     go (Array.length sub - 1) stack in
@@ -1269,7 +1369,18 @@ let raw_prefix_escapes env nbfix recindx body =
            || not (Int.equal (Array.length (fst br.(i - 1))) ci.ci_cstr_ndecls.(i - 1))
         then true (* ill-typed: cannot happen *)
         else
-          let () = if rels_reach ce 0 (case_drop_rels c i) then raise_notrace PrefixEscape in
+          (* What iota drops. The quick test is on the free variables of all
+             of it at once; when it fires, each part is held to the rule of
+             [drop], so an inert occurrence passes here too. *)
+          let () =
+            if rels_reach ce 0 (case_drop_rels c i) then begin
+              let (_, _, _, pnas, _, _, _) = case_parts c in
+              drop_under ce (Array.length pnas) (pt_sub c).(1);
+              for k = 2 to 1 + npms + nidx do drop_under ce 0 (pt_sub c).(k) done;
+              Array.iteri (fun j (nas, _) ->
+                  if not (Int.equal j (i - 1)) then
+                    drop_under ce (Array.length nas) (pt_sub c).(2 + npms + nidx + j)) br
+            end in
           let params, real = List.chop npar stack in
           let bbody = (pt_sub c).(2 + npms + nidx + i - 1) in
           run needed
@@ -1329,8 +1440,12 @@ let raw_prefix_escapes env nbfix recindx body =
   (* A body that mentions no function of the block has nothing to check;
      the test comes before the annotation, which the walk then builds only
      along the path it takes. *)
-  not (noccur_with_meta 1 nbfix body)
-  && (try run (recindx + 1) (clos empty (pterm_of body)) [] [] with PrefixEscape -> true)
+  if noccur_with_meta 1 nbfix body then false, max_int
+  else
+    let escaped =
+      try run (recindx + 1) (clos empty (pterm_of body)) [] []
+      with PrefixEscape -> true in
+    escaped, !bound
 
 type fix_check_result =
   | NeedReduce of env * fix_guard_error
@@ -2140,6 +2255,27 @@ let check_one_fix cache ?evars renv recpos trees def =
                function of an ENCLOSING block: the functions of this block
                are covered by [check_fix] on the block itself, which applies
                the same rule to its own prefix. *)
+            (* A dropped term whose only mention of THIS (enclosing) block
+               is the head of its application, a function applied to at most
+               its structural index of arguments, possibly under
+               abstractions, is discarded unapplied and makes no call: it
+               needs no check. Anything else is checked as an inert subterm,
+               as before. [m] is the [rel_min] of the block at that depth. *)
+            let rec dropped_inert m c =
+              match kind c with
+              | Lambda (_, ty, b) -> noccur_with_meta m nfi ty && dropped_inert (m + 1) b
+              | _ ->
+                let hd, args = decompose_app c in
+                match kind hd with
+                | Rel p when m <= p && p < m + nfi ->
+                  Array.length args <= recpos.(m + nfi - 1 - p)
+                  && Array.for_all (noccur_with_meta m nfi) args
+                | _ -> false
+            in
+            let check_dropped renv rs c =
+              if dropped_inert renv.rel_min c then rs
+              else check_inert_subterm_rec_call renv rs c
+            in
             let rec check_erased_prefix renv needed c rs =
               if Int.equal needed 0 then rs
               else match kind c with
@@ -2150,7 +2286,7 @@ let check_one_fix cache ?evars renv recpos trees def =
                 | LetIn (x, v, ty, bd) ->
                   let rs = check_inert_subterm_rec_call renv rs ty in
                   if noccurn 1 bd then
-                    let rs = check_inert_subterm_rec_call renv rs v in
+                    let rs = check_dropped renv rs v in
                     check_erased_prefix renv needed (subst1 v bd) rs
                   else if noccur_with_meta renv.rel_min nfi v then
                     (* The value carries no call of this block, so putting it
@@ -2173,7 +2309,7 @@ let check_one_fix cache ?evars renv recpos trees def =
                 match kind f with
                 | Lambda (_, ty, bd) ->
                   let rs = check_inert_subterm_rec_call renv rs ty in
-                  let rs = if noccurn 1 bd then check_inert_subterm_rec_call renv rs a else rs in
+                  let rs = if noccurn 1 bd then check_dropped renv rs a else rs in
                   check_erased_beta renv needed (subst1 a bd) rest rs
                 | _ -> check_inert_subterm_rec_call renv rs (Term.applist (f, args))
             in
@@ -2187,6 +2323,24 @@ let check_one_fix cache ?evars renv recpos trees def =
                 recindxs bodies in
             let stripped = Array.map snd split in
             let nuniformparams = find_uniform_parameters recindxs (List.length stack) stripped in
+            (* An occurrence of this block that the prefix reduction drops is
+               in the body as WRITTEN and not in [stripped], so the count
+               above does not see it, while the prefix walk now lets it
+               through instead of refusing the definition. The walk counts
+               those occurrences the way [find_uniform_parameters] counts the
+               ones it sees, and the smaller of the two counts is kept: no
+               prefix is extruded that the term as written does not justify.
+               The walk is skipped where it cannot lower the count. *)
+            let nuniformparams =
+              if Int.equal nuniformparams 0 then 0
+              else
+                Array.fold_left2 (fun n recindx body ->
+                    if n <= 0 || noccur_with_meta 1 nbodies body then n
+                    else
+                      match raw_prefix_escapes renv'.env recindxs recindx body with
+                      | true, _ -> 0
+                      | false, b -> min n b)
+                  nuniformparams recindxs bodies in
             let stripped = drop_uniform_parameters nuniformparams recindxs stripped in
             let bodies = Array.map2 (fun (sign, _) body ->
                 Term.it_mkLambda_or_LetIn body sign) split stripped in
@@ -2451,7 +2605,7 @@ let check_fix ?evars ?elim_to env ((nvect,_),(names,_,bodies as recdef) as fix) 
     then
       let fixenv = push_rec_types recdef env in
       Array.iteri (fun i body ->
-          if raw_prefix_escapes fixenv nbfix nvect.(i) body
+          if fst (raw_prefix_escapes fixenv nvect nvect.(i) body)
           then
             error_ill_formed_rec_body fixenv
               (Type_errors.FixGuardError (NotEnoughAbstractionInFixBody nvect.(i)))
