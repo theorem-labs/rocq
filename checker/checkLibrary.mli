@@ -31,3 +31,8 @@ val recheck_library : safe_environment ->
   norec:object_file list ->
   admit:object_file list ->
   check:object_file list -> safe_environment * Cset.t Cmap.t
+
+val indirect_accessor : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm
+(** The body of an opaque constant of a loaded library, from that library's
+    table of opaque proofs. The table is read, and kept, the first time this
+    process needs it, so this serves the main process as well as a worker. *)
