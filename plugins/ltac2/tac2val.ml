@@ -32,14 +32,37 @@ type valexpr =
 | ValExt : 'a Tac2dyn.Val.tag * 'a -> valexpr
   (** Arbitrary data *)
 
-and closure = MLTactic : (valexpr, 'v) arity0 * Tac2expr.frame option * 'v -> closure
+and closure = MLTactic : (valexpr, 'v) arity0 * Tac2expr.frame option * 'v * direct option -> closure
+
+(** The direct implementation of a pure primitive or of an Ltac2 closure: see the interface. *)
+and direct =
+| DirectPure of int * (valexpr list -> valexpr)
+| DirectEnv of int * (valexpr list -> Environ.env -> Evd.evar_map -> valexpr)
+| DirectRun of int * (valexpr list -> (valexpr -> valexpr Proofview.tactic) -> valexpr Proofview.tactic)
+    * (state -> int -> valexpr list -> valexpr)
+| DirectCheck of int * (valexpr list -> valexpr option)
+
+and state =
+| NoState
+| State of Environ.env * Evd.evar_map
+
+type cont = {
+  kv : valexpr -> valexpr Proofview.tactic;
+  ks : valexpr -> state -> valexpr Proofview.tactic;
+}
+
+exception Suspend of (cont -> valexpr Proofview.tactic)
+
+exception Tail of ((valexpr -> valexpr Proofview.tactic) -> valexpr Proofview.tactic)
 
 let arity_one = OneAty
 let arity_suc a = AddAty a
 
 type 'a arity = (valexpr, 'a) arity0
 
-let mk_closure arity f = MLTactic (arity, None, f)
+let mk_closure arity f = MLTactic (arity, None, f, None)
+
+let mk_closure_direct arity f d = MLTactic (arity, None, f, Some d)
 
 let mk_closure_val arity f = ValCls (mk_closure arity f)
 
@@ -80,9 +103,39 @@ let wrap fr tac = match fr with
   | None -> tac
   | Some fr -> Tac2bt.with_frame fr tac
 
-let rec apply : type a. a arity -> _ -> a -> valexpr list -> valexpr Proofview.tactic =
-  fun arity fr f args -> match args, arity with
-  | [], arity -> Proofview.tclUNIT (ValCls (MLTactic (arity, fr, f)))
+(* [wrap fr tac] is [tac] itself exactly when this is true when [wrap] runs: [Tac2bt.with_frame]
+   reads its two flags when it is called. *)
+let[@inline] wrap_is_identity fr = match fr with
+  | None -> true
+  | Some _ -> Tac2bt.with_frame_is_identity ()
+
+let[@inline] closure_direct v = match v with
+  | ValCls (MLTactic (_, fr, _, (Some _ as d))) -> if wrap_is_identity fr then d else None
+  | ValCls (MLTactic (_, _, _, None)) | ValInt _ | ValBlk _ | ValStr _ | ValOpn _ | ValExt _ -> None
+
+(** [partial_direct d given]: the direct implementation of the closure that [apply] returns when
+    a closure carrying [d] gets the arguments [given] (newest first), fewer than it takes. That
+    closure, applied to the [n - m] remaining arguments [rest], is [apply] of the first closure
+    to [given @ rest]: [apply] passes each argument to the curried function, so both end in [wrap
+    fr (f a1 ... an)] with the same frame [fr]. So [d], given [given @ rest], is its direct
+    implementation, as [direct] describes; [closure_direct] checks the same frame on it. *)
+let partial_direct d rgiven = match d with
+  | None -> None
+  | Some d ->
+    let given = List.rev rgiven in
+    let m = List.length given in
+    Some (match d with
+    | DirectPure (n, f) -> DirectPure (n - m, fun rest -> f (given @ rest))
+    | DirectEnv (n, f) -> DirectEnv (n - m, fun rest -> f (given @ rest))
+    | DirectRun (n, f, df) ->
+      DirectRun (n - m, (fun rest k -> f (given @ rest) k), (fun st fuel rest -> df st fuel (given @ rest)))
+    | DirectCheck (n, f) -> DirectCheck (n - m, fun rest -> f (given @ rest)))
+
+let partial_value arity fr f d given = ValCls (MLTactic (arity, fr, f, partial_direct d given))
+
+let rec apply : type a. a arity -> _ -> a -> direct option -> valexpr list -> valexpr list -> valexpr Proofview.tactic =
+  fun arity fr f d given args -> match args, arity with
+  | [], arity -> Proofview.tclUNIT (partial_value arity fr f d given)
   (* A few hardcoded cases for efficiency *)
   | [a0], OneAty -> wrap fr (f a0)
   | [a0; a1], AddAty OneAty -> wrap fr (f a0 a1)
@@ -91,14 +144,27 @@ let rec apply : type a. a arity -> _ -> a -> valexpr list -> valexpr Proofview.t
   (* Generic cases *)
   | a :: args, OneAty ->
     wrap fr (f a) >>= fun f ->
-    let MLTactic (arity, fr, f) = to_closure f in
-    apply arity fr f args
+    let MLTactic (arity, fr, f, d) = to_closure f in
+    apply arity fr f d [] args
   | a :: args, AddAty arity ->
-    apply arity fr (f a) args
+    apply arity fr (f a) d (a :: given) args
 
-let apply (MLTactic (arity, wrap, f)) args = apply arity wrap f args
+let apply (MLTactic (arity, wrap, f, d)) args = apply arity wrap f d [] args
 
 let apply_val v args = apply (to_closure v) args
+
+(* Fewer arguments than the closure takes reach [apply]'s first arm through its last one, once per
+   argument (the hardcoded arms take exactly as many arguments as the arity): [apply_partial] does
+   those steps and gives the value that [apply] returns in [tclUNIT]. *)
+let rec apply_partial : type a. a arity -> _ -> a -> direct option -> valexpr list -> valexpr list -> valexpr =
+  fun arity fr f d given args -> match args, arity with
+  | [], arity -> partial_value arity fr f d given
+  | a :: args, AddAty arity -> apply_partial arity fr (f a) d (a :: given) args
+  | _ :: _, OneAty -> invalid_arg "Tac2val.apply_partial"
+
+let apply_partial_val v args =
+  let MLTactic (arity, fr, f, d) = to_closure v in
+  apply_partial arity fr f d [] args
 
 type n_closure =
 | NClosure : 'a arity * (valexpr list -> 'a) -> n_closure
@@ -111,18 +177,22 @@ let rec abstract n f =
 
 let abstract n f =
   match n with
-  | 1 -> MLTactic (OneAty, None, fun a -> f [a])
-  | 2 -> MLTactic (AddAty OneAty, None, fun a b -> f [a;b])
-  | 3 -> MLTactic (AddAty (AddAty OneAty), None, fun a b c -> f [a;b;c])
-  | 4 -> MLTactic (AddAty (AddAty (AddAty OneAty)), None, fun a b c d -> f [a;b;c;d])
+  | 1 -> MLTactic (OneAty, None, (fun a -> f [a]), None)
+  | 2 -> MLTactic (AddAty OneAty, None, (fun a b -> f [a;b]), None)
+  | 3 -> MLTactic (AddAty (AddAty OneAty), None, (fun a b c -> f [a;b;c]), None)
+  | 4 -> MLTactic (AddAty (AddAty (AddAty OneAty)), None, (fun a b c d -> f [a;b;c;d]), None)
   | _ ->
     let () = assert (n > 0) in
     let NClosure (arity, f) = abstract n f in
-    MLTactic (arity, None, f [])
+    MLTactic (arity, None, f [], None)
 
-let annotate_closure fr (MLTactic (arity, fr0, f)) =
+let abstract_run n f run drun =
+  let MLTactic (arity, fr, f, _) = abstract n f in
+  MLTactic (arity, fr, f, Some (DirectRun (n, run, drun)))
+
+let annotate_closure fr (MLTactic (arity, fr0, f, d)) =
   assert (Option.is_empty fr0);
-  MLTactic (arity, Some fr, f)
+  MLTactic (arity, Some fr, f, d)
 
 let rec purify_closure : type a. a arity -> (unit -> a) -> a = fun arity f ->
   match arity with
