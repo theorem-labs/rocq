@@ -27,7 +27,7 @@
 #   changes only which dependencies the summary lists as safe (Astra review,
 #   section 3.1), and the note of the library's attribute): both refuse,
 #   with their "inconsistent assumptions" messages.
-# tools/library_label.exe --check confirms that every A.vo stores the label
+# rocq-library-label --check confirms that every A.vo stores the label
 # recomputed from its content ("label2" and the 32 bytes of the label, of
 # which the file stores the first 16), not the MD5 of its bytes; that
 # without the flag coqc stores the MD5 ("md5"), as stock does; and that a
@@ -44,11 +44,11 @@ export PATH=$BIN:$PATH
 LOAD=${STOCK_BIN:-$BIN}
 
 TOOL=${LIBRARY_LABEL:-}
-for t in "$PWD/tools/library_label.exe" "$PWD/../_build/default/test-suite/tools/library_label.exe"; do
+for t in "${BIN}rocq-library-label" "$PWD/../_build/default/checker/library_label.exe"; do
   if [ -z "$TOOL" ] && [ -x "$t" ]; then TOOL=$t; fi
 done
 if [ -z "$TOOL" ]; then
-  echo "library_label.exe not found: dune build test-suite/tools/library_label.exe, or set LIBRARY_LABEL"
+  echo "rocq-library-label not found: dune build checker/library_label.exe, or set LIBRARY_LABEL"
   exit 1
 fi
 

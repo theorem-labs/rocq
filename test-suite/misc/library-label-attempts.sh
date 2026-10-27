@@ -6,12 +6,12 @@
 # absent when A is compiled and present later), a Require under Succeed
 # (rolled back), a Load under Succeed, a plain Load, a Declare ML Module
 # under Fail (no such plugin) and one under Succeed. Each case checks that
-# A.vo records the attempt (tools/library_label.exe --attempts, and the same
+# A.vo records the attempt (rocq-library-label --attempts, and the same
 # records as JSON with --attempts-json, read by Python's json module and
 # checked against the schema documented in vernac/attempts.mli), and that
 # when what the attempt found changes, A compiled again is another library
 # or no longer compiles: its stored digest, the label, changes
-# (tools/library_label.exe --stored), and coqc and rocqchk -o refuse Test.B,
+# (rocq-library-label --stored), and coqc and rocqchk -o refuse Test.B,
 # compiled against the first A, over the new one. Compiling A twice in an
 # unchanged tree gives the same label, and a library with no such attempt
 # stores no record. With STOCK_BIN set to the bin directory of a stock build
@@ -25,11 +25,11 @@ export PATH=$BIN:$PATH
 LOAD=${STOCK_BIN:-$BIN}
 
 TOOL=${LIBRARY_LABEL:-}
-for t in "$PWD/tools/library_label.exe" "$PWD/../_build/default/test-suite/tools/library_label.exe"; do
+for t in "${BIN}rocq-library-label" "$PWD/../_build/default/checker/library_label.exe"; do
   if [ -z "$TOOL" ] && [ -x "$t" ]; then TOOL=$t; fi
 done
 if [ -z "$TOOL" ]; then
-  echo "library_label.exe not found: dune build test-suite/tools/library_label.exe, or set LIBRARY_LABEL"
+  echo "rocq-library-label not found: dune build checker/library_label.exe, or set LIBRARY_LABEL"
   exit 1
 fi
 
