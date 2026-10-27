@@ -686,12 +686,31 @@ let print_output (out, err) =
     if err <> "" then (output_string stderr err; flush stderr)
   end
 
+(* What the workers reaped while the main process was still walking the
+   libraries printed, oldest first.
+
+   A worker prints where the main process would not: a conversion that
+   falls back to the virtual machine warns, and the warning comes out of
+   whichever process ran that check. Before this slice every worker ran
+   in [finish], so its lines always followed the whole walk. A worker
+   that now runs during the walk would have them printed in the middle of
+   it, where stock never puts them. So they wait here, and
+   [flush_walk_output] prints them, in the order the workers were reaped,
+   once the walk is over: at the head of [finish], or before the error
+   block of a failure. *)
+let walk_output : (string * string) Queue.t = Queue.create ()
+
+let flush_walk_output () =
+  Queue.iter print_output walk_output;
+  Queue.clear walk_output
+
 (* The worker [w] failed: every worker is stopped, and what it printed
    kept. *)
 let fail w status =
   held_output := read_output w;
   close_output w;
   abort ();
+  flush_walk_output ();
   raise (WorkerFailed (w.pid, status, w.batch))
 
 let print_held_output () =
@@ -777,8 +796,12 @@ let rec take_releases w =
    as completed. The others are queued again: each check runs once, in the
    worker or later, and its result counts only if the process that ran it
    ended successfully. A worker that released a tail must complete exactly
-   the number of checks its release message named. *)
-let reaped pid status =
+   the number of checks its release message named.
+
+   [walk]: the main process is still walking the libraries, so what this
+   worker printed waits in [walk_output] instead of going out in the
+   middle of the walk. *)
+let reaped ~walk pid status =
   match List.find_opt (fun w -> w.pid = pid) !running with
   | None -> ()
   | Some w ->
@@ -793,8 +816,14 @@ let reaped pid status =
       (match w.released with
        | Some r when not (Int.equal r k) -> fail w status
        | Some _ | None -> ());
-      (* It ended successfully, so what it printed is printed now. *)
-      print_output (read_output w);
+      (* It ended successfully, so what it printed is printed now, or
+         held until the walk is over. *)
+      let printed = read_output w in
+      if walk then begin
+        if fst printed <> "" || snd printed <> "" then
+          Queue.push printed walk_output
+      end
+      else print_output printed;
       close_output w;
       note_done w.tasks k;
       match w.released with
@@ -813,11 +842,11 @@ let reaped pid status =
           push_front (Array.sub w.tasks k (w.batch.size - k))
         end
 
-let rec reap_finished () =
+let rec reap_finished ~walk =
   if not (CList.is_empty !running) then
     match waitpid_non_intr [Unix.WNOHANG] (-1) with
     | 0, _ -> ()
-    | pid, status -> reaped pid status; reap_finished ()
+    | pid, status -> reaped ~walk pid status; reap_finished ~walk
 
 let free_slots slots = slots - List.length !running
 
@@ -980,7 +1009,7 @@ let dispatch () =
   if deals_allowed () then begin
     (* A worker that has exited still holds a slot until it is reaped, so
        reaping comes before the count of free slots. *)
-    reap_finished ();
+    reap_finished ~walk:true;
     let n = Queue.length queue in
     (* No batch here is smaller than [min_batch], so below it there is
        nothing to deal and nothing to count. *)
@@ -1109,13 +1138,17 @@ let validate_tables tables =
 
 let finish () =
   if !max_workers > 0 then begin
+    (* The walk is over, so what the workers it forked printed goes out
+       now, before anything [finish] prints: that is where stock, which
+       forks every worker here, has it. *)
+    flush_walk_output ();
     (* The main process checks nothing from now on, so one more worker
        can run. *)
     let slots = !max_workers + 1 in
     (* A worker that stops early, or releases a tail, queues checks again,
        so the queue is only known to be empty when no worker is left. *)
     while not (Queue.is_empty queue) || not (CList.is_empty !running) do
-      reap_finished ();
+      reap_finished ~walk:false;
       if free_slots slots > 0 && not (Queue.is_empty queue) then
         deal 1 ((Queue.length queue + 2 * slots - 1) / (2 * slots))
       else if not (CList.is_empty !running) then begin
@@ -1123,7 +1156,7 @@ let finish () =
         (* A release message is read as soon as it is written, not only
            when its worker exits. *)
         wait_for_messages 0.05;
-        reap_finished ()
+        reap_finished ~walk:false
       end
     done;
     debug (fun () ->

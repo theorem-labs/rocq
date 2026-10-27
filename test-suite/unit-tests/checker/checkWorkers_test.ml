@@ -571,6 +571,58 @@ let () = add_test "workers that end together are all reaped" (fun () ->
     assert_exactly_once (2 * m) log;
     assert_main_checked_nothing log)
 
+(* What a worker printed goes out where stock puts it: after the whole
+   walk. coqchk's lines are the main process's, in walk order, and the
+   main process prints a worker's when it reaps it; a worker reaped while
+   the libraries are still walked would have its lines in the middle of
+   them. The two workers below have ended before the walk's last deferred
+   job, which reaps them, and what they printed must still come after the
+   "M" the walk prints last. *)
+let () = add_test "a worker reaped during the walk prints after the walk" (fun () ->
+    let out = Filename.temp_file "checkworkers" ".out" in
+    let saved = Unix.dup Unix.stdout in
+    let fd = Unix.openfile out [Unix.O_WRONLY; Unix.O_TRUNC] 0o600 in
+    let printed () =
+      let ic = open_in_bin out in
+      Fun.protect ~finally:(fun () -> close_in ic)
+        (fun () -> really_input_string ic (in_channel_length ic))
+    in
+    let before_finish read =
+      let log = wait_records read (2 * m) in
+      let pids = pids_of log in
+      assert_equal ~printer:string_of_int 2 (List.length pids);
+      let deadline = Unix.gettimeofday () +. 10. in
+      while not (List.for_all zombie pids) do
+        if Unix.gettimeofday () > deadline then assert_failure "a worker did not end";
+        Unix.sleepf 0.01
+      done;
+      (* One more deferred job, so the walk reaps both workers before it
+         prints its own last line. *)
+      CheckWorkers.allow_one_deal ();
+      CheckWorkers.defer (constant (2 * m)) (fun () -> ());
+      print_string "M"; flush stdout
+    in
+    Fun.protect
+      ~finally:(fun () ->
+          flush stdout;
+          Unix.dup2 saved Unix.stdout;
+          Unix.close saved; Unix.close fd; Sys.remove out)
+      (fun () ->
+         flush stdout;
+         Unix.dup2 fd Unix.stdout;
+         let result, log =
+           run ~jobs:3 ~windows:1 ~before_finish ~budget:CheckWorkers.default_budget
+             ~work:(fun _ -> print_string "W"; flush stdout) (2 * m) in
+         assert_no_exception result;
+         assert_exactly_once (2 * m) log;
+         assert_main_checked_nothing log;
+         flush stdout;
+         let s = printed () in
+         assert_bool "the workers printed" (String.contains s 'W');
+         assert_bool "the walk printed its last line" (String.contains s 'M');
+         assert_bool "a worker printed before the walk was over"
+           (String.index s 'W' > String.index s 'M')))
+
 (* The report is the one thing the main process believes about what a
    worker did not do: anything but a well-formed count in [1, size],
    together with a normal exit, fails the batch. *)
