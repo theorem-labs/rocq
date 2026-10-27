@@ -63,6 +63,26 @@ or only for reals by ``Require Import Lra``.
 
    This :term:`flag` (set by default) instructs :tacn:`nra` to cache its results in the file `.nra.cache`
 
+.. flag:: Micromega Reuse
+
+   This :term:`flag` (set by default) lets :tacn:`lia`, :tacn:`nia`, :tacn:`wlia` and :tacn:`wnia`
+   fail sooner on a goal that they cannot prove. The tactics split the goal into cases: a
+   hypothesis with a disjunction, for instance, gives two, and they search a certificate for each
+   case. Before they search a case, they try at most eight of the certificates found so far for
+   the goal. A certificate goes to the front of that list when a search finds it and when it
+   proves a case. A certificate is tried on a case that contains every hypothesis it uses, and is
+   accepted when the reflexive checker accepts it on that case. The tactics search only the cases
+   that no certificate is accepted on. If a search fails, the tactic fails, as it does without
+   the flag. If every case is proved, the tactics search the cases that a reused certificate
+   proved. So when the tactic succeeds, its proof is the proof without the flag, and so are the
+   hypotheses that the proof uses and the output of :flag:`Info Micromega`.
+   A goal that succeeds costs the searches without the flag plus the time of these tries, so the
+   flag never makes such a goal faster. A case tries certificates only while the tries of the
+   goal have taken at most 1/16 of the time of its searches, the searches that the cases proved
+   by reuse need included; otherwise the case is searched as it is without the flag. So reuse
+   adds about 6% at most to the time of a goal that succeeds; under :cmd:`Timeout`, a goal that
+   the tactic proves without the flag with a smaller margin can fail with it.
+
 .. flag:: Lia Depth
    :undocumented:
 
@@ -188,6 +208,27 @@ For each conjunct :math:`C_i`, the tactic calls an oracle which searches for
 
    This tactic solves linear goals over :g:`Z` by searching for *linear* refutations and cutting planes.
    :tacn:`lia` provides support for :g:`Z`, :g:`nat`, :g:`positive` and :g:`N` by pre-processing via the :tacn:`zify` tactic.
+
+   Beside its refutation search, :tacn:`lia` (and :tacn:`nia`) searches integer models of the clauses
+   of the goal, in the same order, ahead of the refutation search, within a budget: before it searches
+   the refutation of the :math:`(k+1)`-th clause, it may have searched models of the first
+   :math:`32 + 32k` clauses, and the call's processor time outside the refutation search and the
+   tries of :flag:`Micromega Reuse` stays near 5% of the refutation search's time in the call (it
+   predicts each step's time from the refutation searches so far and starts none whose prediction
+   would not fit, so it can exceed the share by one mispredicted step; a call with few clauses
+   searches none). For each clause it solves one rational linear program, tries its point and
+   roundings of it, and branches a little. The search checks a candidate model exactly. It gives up
+   on a clause with an exponent above :math:`2^{16}` or whose expansion would have more than
+   :math:`2^{20}` terms, and on a clause where
+   the check would compute an integer of more than :math:`2^{16}` bits. If the search finds an integer
+   model of a clause, no refutation exists for it, and the tactic fails at once. Otherwise the
+   refutations are searched as described below, so the search changes neither the proofs nor the
+   goals the tactics solve; the time budget decides only how early a
+   failing call fails. :cmd:`Show Lia Profile` counts only the refutation searches, and
+   :opt:`Dump Arith` records only them; when the search fails a call early, they show only the
+   refutation searches done until then. With :flag:`Lia Cache` or :flag:`Nia Cache`, the search reads
+   a failure that the cache holds for a clause as it reads a model, it skips a clause whose proof the
+   cache holds, and the cache records a clause with a found model as a failure.
 
 High level view of `lia`
 ~~~~~~~~~~~~~~~~~~~~~~~~

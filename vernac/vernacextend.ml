@@ -282,4 +282,7 @@ let vernac_argument_extend ~plugin ~name ~ignore_kw arg =
   let pr = arg.arg_printer in
   let pr x = Genprint.PrinterBasic (fun env sigma -> pr env sigma x) in
   let () = Genprint.register_vernac_print0 wit pr in
+  (* The glob level of a VERNAC ARGUMENT is [Util.Empty.t]: no value, so no
+     location (interface key, see Genstrip). *)
+  let () = Genstrip.register_strip0 wit (fun (x : Util.Empty.t) -> x) in
   (wit, entry)

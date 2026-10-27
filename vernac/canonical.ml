@@ -33,7 +33,10 @@ let inCanonStruc : Instance.t * bool -> obj =
                   cache_function = cache_canonical_structure;
                   subst_function = (fun (subst,(c,local)) -> Instance.subst subst c, local);
                   classify_function = (fun x -> Substitute);
-                  discharge_function = discharge_canonical_structure }
+                  discharge_function = discharge_canonical_structure;
+                  (* A global reference, an inductive and a flag: no
+                     source location. *)
+                  interface_key = Key_as_is }
 
 let add_canonical_structure x = Lib.add_leaf (inCanonStruc x)
 

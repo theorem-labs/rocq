@@ -112,13 +112,22 @@ let subst_abbreviation (subst,abbrev) =
 let classify_abbreviation abbrev =
   if abbrev.abbrev_local = Local then Dispose else Substitute
 
+(* The interface key reads an abbreviation without its source location
+   ([abbrev_src]) and with the locations of its pattern stripped. The
+   user warnings hold strings and global references only. *)
+let strip_abbreviation abbrev =
+  { abbrev with
+    abbrev_pattern = ConstrStrip.interpretation abbrev.abbrev_pattern;
+    abbrev_src = LocStrip.loc_opt abbrev.abbrev_src }
+
 let inAbbreviation : Id.t -> abbreviation -> obj =
   declare_named_object {(default_object "ABBREVIATION") with
     cache_function = cache_abbreviation;
     load_function = load_abbreviation;
     open_function = filtered_open open_abbreviation;
     subst_function = subst_abbreviation;
-    classify_function = classify_abbreviation }
+    classify_function = classify_abbreviation;
+    interface_key = Key_stripped strip_abbreviation }
 
 let declare ~local user_warns id ~onlyparsing pat =
   let abbrev = {
