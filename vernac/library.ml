@@ -201,11 +201,22 @@ let opaque_generation = ref 0
 (* The digest of the segment each table in [opaque_tables] was read from, as
    the file records it: what [content_digests] covers of a library's opaque
    proofs. Written with the table, so a Require that replaces the table of a
-   loaded library replaces it too. *)
+   loaded library replaces it too.
+
+   A library whose table was REPLACED gets no digest at all. Its proofs then
+   come from another file, which may read libraries that this library's own
+   recorded dependencies do not name, and a digest built from those
+   dependencies would not cover what a walk of its objects now reads
+   (AstraSoundness, 2026-10-27). Refusing a digest costs the sharing of that
+   library's objects, and of every library whose digest names it, and nothing
+   else. *)
 let opaque_digests = ref (DirPath.Map.empty : Digest.t DirPath.Map.t)
+let opaque_replaced = ref DirPath.Set.empty
 
 let add_opaque_table dp digest st =
   incr opaque_generation;
+  if DirPath.Map.mem dp !opaque_tables then
+    opaque_replaced := DirPath.Set.add dp !opaque_replaced;
   opaque_digests := DirPath.Map.add dp digest !opaque_digests;
   opaque_tables := DirPath.Map.add dp st !opaque_tables
 
@@ -229,7 +240,7 @@ let content_digests () =
     | Some d -> d
     | None ->
       let d = match find_library dp, DirPath.Map.find_opt dp !opaque_digests with
-        | Some (_, lib), Some opaque ->
+        | Some (_, lib), Some opaque when not (DirPath.Set.mem dp !opaque_replaced) ->
           let Safe_typing.Dvo_or_vi library = lib.library_digests in
           let deps = List.sort DirPath.compare (Array.to_list (Array.map fst lib.library_deps)) in
           (* a dependency with no digest leaves the library without one *)
@@ -242,7 +253,7 @@ let content_digests () =
              Buffer.add_string b opaque;
              List.iter (Buffer.add_string b) deps;
              Some (Digest.string (Buffer.contents b)))
-        | (None, _) | (_, None) -> None
+        | _ -> None
       in
       memo := DirPath.Map.add dp d !memo;
       d

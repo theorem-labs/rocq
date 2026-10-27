@@ -105,8 +105,10 @@ val opaque_tables_generation : unit -> int
     library that is not loaded, such as the one being compiled. Two processes
     that give a library the same digest have loaded the same declarations and
     opaque proofs for it and for everything it depends on, as far as the
-    digests the files record tell. The function memoizes: call it again after
-    a library or an opaque table is loaded. *)
+    digests the files record tell. A library whose opaque table was replaced
+    by a later, failing [Require] gets [None], since its proofs then come from
+    a file whose own dependencies this library does not record. The function
+    memoizes: call it again after a library or an opaque table is loaded. *)
 val content_digests : unit -> (DirPath.t -> Digest.t option)
 
 (** {6 Opaque accessors} *)

@@ -16,6 +16,19 @@
 open Names
 
 
+(** The directory, from [ROCQ_ASSUMPTIONS_SHARED_DIR].
+
+    Its precondition, besides holding only what the processes of one build
+    over one set of library files wrote: THE LIBRARY FILES THE BUILD READS
+    ARE IMMUTABLE FOR THE LENGTH OF THE BUILD. A key covers the digests a
+    file recorded when it was read, not that the file is still there and
+    whole. A library file damaged after a process required it therefore
+    answers from the entry written while its proofs could be read, where a
+    process without the directory reads the damaged file and reports the
+    lemma itself as an axiom. The same mutable file already decides the
+    answer without any directory: a library replaced by another build of
+    itself before the Require makes the query print the other build's
+    axioms. Give a build files nothing it runs can write. *)
 let dir = match Sys.getenv_opt "ROCQ_ASSUMPTIONS_SHARED_DIR" with
   | Some d when not (String.equal d "") -> Some d
   | _ -> None
@@ -49,12 +62,10 @@ module EMap = Map.Make (Exact)
 type kind = No_body | Body | Block | Failed
 
 (** One entry, as written to the directory. *)
-type record = {
-  r_key : string;
-  r_kind : kind;
-  r_replayable : bool;
-  r_refs : GlobRef.t list;
-}
+type found = { f_kind : kind; f_replayable : bool; f_refs : GlobRef.t list }
+
+(** One entry, as written to the directory. *)
+type record = { r_key : string; r_found : found }
 
 (** The first line of every entry file. It names the binary that wrote the
     entry, not only its version: a reader reads the entry with [Marshal],
@@ -112,8 +123,6 @@ let file_of key =
 
 let claim_of key = file_of key ^ ".claim"
 
-type found = { f_kind : kind; f_replayable : bool; f_refs : GlobRef.t list }
-
 (** Entries this process read or wrote, by key. Cleared with the entries of
     the query cache ([forget], called from [sync_memo] through
     [forget_shared], since this module comes after it), so that a process
@@ -158,8 +167,8 @@ let take_over key =
 
 (** Keeps the entry of [key], and writes it to the directory when this
     process holds the claim, which it then releases. *)
-let publish claim key kind replayable refs =
-  Hashtbl.replace index key { f_kind = kind; f_replayable = replayable; f_refs = refs };
+let publish claim key (found : found) =
+  Hashtbl.replace index key found;
   match claim with
   | Taken | Off -> ()
   | Mine claim_fd ->
@@ -168,7 +177,7 @@ let publish claim key kind replayable refs =
           if !usable then begin
             let file = file_of key in
             let tmp = Printf.sprintf "%s.%d.tmp" file (Unix.getpid ()) in
-            let n = contents { r_key = key; r_kind = kind; r_replayable = replayable; r_refs = refs } in
+            let n = contents { r_key = key; r_found = found } in
             let fd = Unix.openfile tmp [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_CLOEXEC] 0o600 in
             Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> write_all fd !out_buffer 0 n);
             (* No fsync before the rename, on purpose. The rename alone makes
@@ -217,9 +226,8 @@ let read key =
       let r : record = Marshal.from_bytes b start in
       if not (String.equal r.r_key key) then None
       else begin
-        let f = { f_kind = r.r_kind; f_replayable = r.r_replayable; f_refs = r.r_refs } in
-        Hashtbl.replace index key f;
-        Some f
+        Hashtbl.replace index key r.r_found;
+        Some r.r_found
       end
 
 (** Where the entry of [key] came from, for the counters the debug line

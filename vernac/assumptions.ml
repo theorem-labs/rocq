@@ -366,15 +366,12 @@ let unreplayable_steps = ref 0
     such frame, so stack use per level would grow. *)
 let inductive_marks = ref ([] : int list)
 
-(** Clears what the entries shared with other processes keep in this one, so
-    that sharing does not raise what a process holds past the bound the
-    entries above keep. It is set by {!Shared}, which comes after this and
-    uses what it defines. *)
-let forget_shared = ref (fun () -> ())
-
+(** A fresh set of entries, here and in what the processes share
+    ({!AssumptionsShared.forget}), so that sharing does not raise what a
+    process holds past the bound these entries keep. *)
 let fresh_entries () =
   memo := fresh_memo ();
-  !forget_shared ()
+  AssumptionsShared.forget ()
 
 let sync_memo access =
   let env = Global.env () in
@@ -433,9 +430,11 @@ let[@inline never] make_entry value edges obj =
 (* Inlined into [walk_object]: the call would add a frame at the bottom of the
    deepest walk, under [Map_env.add], and so shorten the longest chain that
    fits in the stack. *)
+let[@inline always] entry_weight e = 1 + edges_size e.memo_edges
+
 let[@inline always] add_entry value edges obj =
   let e = make_entry value edges obj in
-  let weight = 1 + edges_size e.memo_edges in
+  let weight = entry_weight e in
   query_weight := !query_weight + weight;
   let m = !memo in
   memo := { m with entries = GlobRef.Map_env.add obj e m.entries; weight = m.weight + weight }
@@ -490,12 +489,7 @@ let replay_weight = ref 0
     canonical name and another user name (a module alias, [Include], a
     functor application) must be queued too, and one with the same user name
     and another canonical name must still reach [find_entry] and miss. *)
-module Queued = Stdlib.Set.Make (struct
-    type t = GlobRef.t
-    let compare a b =
-      let c = GlobRef.UserOrd.compare a b in
-      if c <> 0 then c else GlobRef.CanOrd.compare a b
-  end)
+module Queued = Stdlib.Set.Make (AssumptionsShared.Exact)
 
 (* [data0] is the query's [data] before the replay. An object in it is
    skipped, as the walk skips it. Every other object reached needs an entry
@@ -776,19 +770,30 @@ let seen gen c =
     before deciding), so it is the set the full walk collects. *)
 let shallow = ref false
 
-type shallow_result =
-  | No_result
-  | Object_walked of { value : GlobRef.Set_env.t option; edges : GlobRef.Set_env.t; replayable : bool }
-  | Block_walked of { contents : GlobRef.Set_env.t; replayable : bool }
+(** What a walk of one object found: the kind of object it is, the references
+    it reached, and whether every step it took can be replayed. The value an
+    entry gives [data] follows from the kind: the set itself for an object
+    with a body, nothing for one without ([finish_body], [walk_axiom]). This
+    is the shape the directory keeps too ({!AssumptionsShared.found}). *)
+type walk_result =
+  { wr_kind : AssumptionsShared.kind;
+    wr_refs : GlobRef.Set_env.t;
+    wr_replayable : bool }
 
-let shallow_result = ref No_result
+(** The result of the walk in progress, [None] before it ends. *)
+let shallow_result = ref (None : walk_result option)
 
 (* The end of a walk of [obj]: its entry is recorded when no step the walk took
    is one that cannot be replayed, and every edge has an entry. Not inlined, so
    that the frames of the walks that call it are as they would be without it. *)
 let[@inline never] record mark value edges obj =
   if !shallow then
-    shallow_result := Object_walked { value; edges; replayable = Int.equal mark !unreplayable_steps }
+    let wr_kind = match value with
+      | None -> AssumptionsShared.No_body
+      | Some _ -> AssumptionsShared.Body
+    in
+    shallow_result :=
+      Some { wr_kind; wr_refs = edges; wr_replayable = Int.equal mark !unreplayable_steps }
   else if Int.equal mark !unreplayable_steps && user_name_unrecorded obj
      && edges_have_entries obj edges
   then add_entry value edges obj
@@ -1027,7 +1032,9 @@ and walk_inductive access curr data ax2ty mind obj =
   in
   let () =
     if !shallow then
-      shallow_result := Block_walked { contents; replayable = Int.equal mark !unreplayable_steps }
+      shallow_result :=
+        Some { wr_kind = AssumptionsShared.Block; wr_refs = contents;
+               wr_replayable = Int.equal mark !unreplayable_steps }
     else if Int.equal mark !unreplayable_steps then record_block mind mib contents
   in
   (curr, data, ax2ty)
@@ -1129,13 +1136,6 @@ and traverse_context access gen bound cooking current ctx accu ctxt =
     nothing the build does not trust may write to the directory. *)
 module Shared = AssumptionsShared
 
-let () = forget_shared := Shared.forget
-
-type phase1_result =
-  | P_object of { value : GlobRef.Set_env.t option; edges : GlobRef.Set_env.t; replayable : bool }
-  | P_block of { contents : GlobRef.Set_env.t; replayable : bool }
-  | P_failed
-
 (** The object that stands for its inductive block in the first phase. *)
 let node_of = function
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> GlobRef.IndRef (mind, 0)
@@ -1149,7 +1149,7 @@ let interruption e =
   CErrors.is_async e && not (match e with Out_of_memory | Stack_overflow -> true | _ -> false)
 
 (** The walk of [obj] alone (of its block, for an inductive or constructor),
-    with [shallow] set. [P_failed] when the walk raised anything but an
+    with [shallow] set. [None] when the walk raised anything but an
     interruption: see why in the comment of [Shared]. *)
 let shallow_walk access obj =
   let types = !type_stack and marks = !inductive_marks in
@@ -1166,36 +1166,27 @@ let shallow_walk access obj =
   in
   let reset () =
     shallow := false;
-    shallow_result := No_result
+    let r = !shallow_result in
+    shallow_result := None;
+    r
   in
   shallow := true;
-  shallow_result := No_result;
+  shallow_result := None;
   match walk () with
-  | () ->
-    let result = match !shallow_result with
-      | Object_walked { value; edges; replayable } -> P_object { value; edges; replayable }
-      | Block_walked { contents; replayable } -> P_block { contents; replayable }
-      | No_result -> P_failed
-    in
-    reset ();
-    result
+  | () -> reset ()
   | exception e ->
     let e = Exninfo.capture e in
-    reset ();
+    ignore (reset () : walk_result option);
     type_stack := types;
     inductive_marks := marks;
-    if interruption (fst e) then Exninfo.iraise e else P_failed
+    if interruption (fst e) then Exninfo.iraise e else None
 
-(** What is written to the directory for a result: a body's value is its
-    edge set ([finish_body]), so the kind and the references say it all. *)
+(** What is written to the directory for a result. *)
 let to_shared = function
-  | P_object { value = None; edges; replayable } ->
-    (Shared.No_body, replayable, GlobRef.Set_env.elements edges)
-  | P_object { value = Some v; edges; replayable } when v == edges ->
-    (Shared.Body, replayable, GlobRef.Set_env.elements edges)
-  | P_block { contents; replayable } ->
-    (Shared.Block, replayable, GlobRef.Set_env.elements contents)
-  | P_object _ | P_failed -> (Shared.Failed, false, [])
+  | Some r ->
+    { Shared.f_kind = r.wr_kind; f_replayable = r.wr_replayable;
+      f_refs = GlobRef.Set_env.elements r.wr_refs }
+  | None -> { Shared.f_kind = Shared.Failed; f_replayable = false; f_refs = [] }
 
 (* The elements of a set, added back in their order, give the same set: a set
    holds one reference per user name. The kind must be the kind of [node],
@@ -1205,15 +1196,14 @@ let to_shared = function
    write to the directory, which the build does not allow, so this only costs
    a walk. *)
 let of_shared access node (f : Shared.found) =
-  let set () = List.fold_left (fun s r -> GlobRef.Set_env.add r s) GlobRef.Set_env.empty f.f_refs in
-  match f.f_kind, node with
-  | Shared.No_body, (GlobRef.ConstRef _ | GlobRef.VarRef _) ->
-    P_object { value = None; edges = set (); replayable = f.f_replayable }
-  | Shared.Body, (GlobRef.ConstRef _ | GlobRef.VarRef _) ->
-    let s = set () in
-    P_object { value = Some s; edges = s; replayable = f.f_replayable }
-  | Shared.Block, (GlobRef.IndRef _ | GlobRef.ConstructRef _) ->
-    P_block { contents = set (); replayable = f.f_replayable }
+  let kept () =
+    Some { wr_kind = f.Shared.f_kind; wr_replayable = f.Shared.f_replayable;
+           wr_refs = List.fold_left (fun s r -> GlobRef.Set_env.add r s)
+               GlobRef.Set_env.empty f.Shared.f_refs }
+  in
+  match f.Shared.f_kind, node with
+  | (Shared.No_body | Shared.Body), (GlobRef.ConstRef _ | GlobRef.VarRef _) -> kept ()
+  | Shared.Block, (GlobRef.IndRef _ | GlobRef.ConstructRef _) -> kept ()
   | (Shared.Failed | Shared.No_body | Shared.Body | Shared.Block), _ -> shallow_walk access node
 
 (** How long the first phase waits for the entries of objects other processes
@@ -1254,9 +1244,8 @@ let phase1 access grs stats =
     results := Shared.EMap.add node r !results;
     let push s = stack := GlobRef.Set_env.fold (fun r l -> r :: l) s !stack in
     match r with
-    | P_object { edges; replayable = true; _ } -> push edges
-    | P_block { contents; replayable = true; _ } -> push contents
-    | P_object _ | P_block _ | P_failed -> ()
+    | Some { wr_refs; wr_replayable = true; _ } -> push wr_refs
+    | Some _ | None -> ()
   in
   let walk node =
     stats.walked <- stats.walked + 1;
@@ -1278,8 +1267,7 @@ let phase1 access grs stats =
         Shared.abandon claim;
         Exninfo.iraise e
     in
-    let kind, replayable, refs = to_shared r in
-    Shared.publish claim key kind replayable refs;
+    Shared.publish claim key (to_shared r);
     r
   in
   let process obj =
@@ -1352,9 +1340,9 @@ let install results =
   (* the results considered, with the members of each block *)
   let chosen = ref M.empty in
   M.iter (fun node r -> match r, node with
-      | P_object { replayable = true; _ }, _ ->
+      | Some { wr_kind = (Shared.No_body | Shared.Body); wr_replayable = true; _ }, _ ->
         if free node then begin take node; chosen := M.add node None !chosen end
-      | P_block { replayable = true; _ }, GlobRef.IndRef (mind, _) ->
+      | Some { wr_kind = Shared.Block; wr_replayable = true; _ }, GlobRef.IndRef (mind, _) ->
         let members = block_members mind (lookup_mind mind) in
         if GlobRef.Set_env.for_all free members then begin
           GlobRef.Set_env.iter take members;
@@ -1363,9 +1351,8 @@ let install results =
       | _ -> ())
     results;
   let edges_of node = match M.find node results with
-    | P_object { edges; _ } -> GlobRef.Set_env.elements edges
-    | P_block { contents; _ } -> GlobRef.Set_env.elements contents
-    | P_failed -> []
+    | Some { wr_refs; _ } -> GlobRef.Set_env.elements wr_refs
+    | None -> []
   in
   (* [true] once a node is known complete, [false] once known incomplete or
      while its edges are being checked: the graph of objects has no cycle
@@ -1411,10 +1398,11 @@ let install results =
   let entries, weight = M.fold (fun node members (entries, weight) ->
       if not (M.find node !complete) then (entries, weight)
       else match M.find node results, members with
-        | P_object { value; edges; _ }, None ->
-          let e = make_entry value edges node in
-          (GlobRef.Map_env.add node e entries, weight + 1 + edges_size e.memo_edges)
-        | P_block { contents; _ }, Some members ->
+        | Some { wr_kind; wr_refs; _ }, None ->
+          let value = match wr_kind with Shared.Body -> Some wr_refs | _ -> None in
+          let e = make_entry value wr_refs node in
+          (GlobRef.Map_env.add node e entries, weight + entry_weight e)
+        | Some { wr_refs = contents; _ }, Some members ->
           let entries, w = block_entries members contents entries in
           (entries, weight + w)
         | _ -> (entries, weight))
