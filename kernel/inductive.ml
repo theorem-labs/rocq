@@ -1952,6 +1952,15 @@ let rec codomain_is_coind ?evars env c =
           raise (CoFixGuardError (env, CodomainNotInductiveType b)))
 
 let check_one_cofix cache ?evars env nbfix def deftype =
+  (* [dropped]/[inert] re-reduce dropped material, so a term that duplicates a
+     sub-term per level (a dead branch nesting [match two s s with two a _ => c a])
+     would be examined 2^level times. [dropped_memo] records, per depth, the
+     dropped sub-terms already checked OK at that depth by PHYSICAL identity:
+     the duplicates [subst] leaves behind are the same value at the same depth, so
+     skipping a physical repeat changes no verdict (a repeat would check OK again)
+     and never skips a refusal (a refusal raises before it is recorded). It is
+     reset at each top-level [check_erased], so reuse stays inside one walk. *)
+  let dropped_memo = ref Int.Map.empty in
   let rec check_rec_call env alreadygrd n tree vlra t =
     if not (noccur_with_meta n nbfix t) then
       let () = check_erased env n t in
@@ -2084,11 +2093,97 @@ let check_one_cofix cache ?evars env nbfix def deftype =
      drops is unchecked. A proof that uses rewrite rules names the symbol in
      [Print Assumptions], which is where this is caught. *)
   and check_erased env n t =
+    let () = dropped_memo := Int.Map.empty in
     let _ : constr = whd_erasing env n t in ()
 
   and erased env n c =
     if not (noccur_with_meta n nbfix c) then
       raise (CoFixGuardError (env, UnguardedRecursiveCall c))
+
+  (* A position the head reduction DROPS carries a value the cofixpoint's
+     own value does not contain, so it does not have to be productive. It
+     still has to be strongly normalising, because strong reduction, [cbv]
+     and conversion normalise it all the same. There a function of the
+     block is a VALUE: it loops only when something FORCES it, that is when
+     a match or a projection lands on it. [dropped] accepts exactly the
+     terms in which no occurrence can be forced; a head it cannot follow is
+     refused only while a block occurrence survives under it, because a
+     [coqchk] that unfolds that head further must not reach a force [coqc]
+     did not, which would reopen the split the other way. A head under which
+     no occurrence survives is accepted: the reduction dropped the block.
+
+     It has to accept everything [check_rec_call] accepts, because one
+     position is both. In a functor body a match on a parameter is stuck,
+     so [check_rec_call] checks EVERY branch as live material; in the
+     instance the match selects, so the other branches are dropped. With a
+     stricter rule on dropped material [coqc] accepts the functor and
+     [coqchk] refuses the instance, which is the disagreement
+     test-suite/success/guard_cofix_dead_branch_instance.v pins. Hence the
+     TYPES stay with [erased]: a return predicate, an abstraction's domain
+     and a nested block's types are what [check_rec_call] refuses a mention
+     in, so only the positions that carry a value are relaxed. *)
+  and dropped env n t =
+    if not (noccur_with_meta n nbfix t) then begin
+      let seen = Option.default [] (Int.Map.find_opt n !dropped_memo) in
+      (* Structural equality rather than physical identity so that a dropped
+         term written as two source occurrences (not shared by [subst]) is
+         bounded too. [Constr.equal] is sound here for the same reason the
+         memo is: within one [check_erased] the walk extends the environment
+         only with stuck [LocalAssum] binders, so a structurally equal [t]
+         reaches the same verdict at the same depth. *)
+      if not (List.exists (Constr.equal t) seen) then begin
+        let () = inert env n t in
+        (* [inert]'s recursion may have added depth-[n] entries, so re-read
+           the bucket; using the pre-[inert] snapshot would clobber those. *)
+        let cur = Option.default [] (Int.Map.find_opt n !dropped_memo) in
+        dropped_memo := Int.Map.add n (t :: cur) !dropped_memo
+      end
+    end
+
+  and inert env n t =
+    let hd, args = decompose_app_list (whd_erasing env n t) in
+    match kind hd with
+    | Rel p when n <= p && p < n + nbfix ->
+      (* A function of the block, as a value. Its arguments are evaluated,
+         and no position below measures them, so they are held to the rule
+         [check_rec_call] holds a guarded call's arguments to. *)
+      List.iter (erased env n) args
+    | Construct _ ->
+      (* The parameters are held to [erased] where the return predicate
+         above already mentions them (expand_arity puts [pms] in [p']), so
+         this relaxes a dropped constructor argument, and a parameter only
+         where it is convertible-but-not-syntactic to the predicate's. *)
+      List.iter (dropped env n) args
+    | Lambda (x, a, b) when List.is_empty args ->
+      let () = erased env n a in
+      dropped (push_rel (LocalAssum (x, a)) env) (n + 1) b
+    | CoFix (_, (_, varit, vdefs as recdef)) ->
+      let () = List.iter (erased env n) args in
+      let () = Array.iter (erased env n) varit in
+      let env' = push_rec_types recdef env in
+      Array.iter (dropped env' (n + Array.length vdefs)) vdefs
+    | Case (ci, u, pms, p, iv, tm, br) ->
+      (* The scrutinee is forced. *)
+      let () = erased env n tm in
+      let () = List.iter (erased env n) args in
+      let (_, (p', _), _, _, brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
+      let () = Array.iter (erased env n) pms in
+      let () = erased env n p' in
+      Array.iter (dropped env n) brs
+    | Proj (_, _, c) ->
+      (* The record is forced. *)
+      let () = erased env n c in
+      List.iter (erased env n) args
+    | Meta _ -> ()
+    | Evar _ -> List.iter (dropped env n) args
+    | _ ->
+      (* A head the reduction leaves stuck (a non-block [Rel] or [Var], an
+         opaque or primitive [Const], a [Prod], a [Sort], an [Ind], a stuck
+         [Fix], a literal): refuse only while the block still occurs, so that
+         [check_rec_call]'s [Meta]/[Evar] acceptances carry over and a value
+         whose block occurrence the reduction already dropped is accepted. *)
+      if not (noccur_with_meta n nbfix (Term.applist (hd, args))) then
+        raise (CoFixGuardError (env, UnguardedRecursiveCall t))
 
   and whd_erasing env n t =
     match kind t with
@@ -2097,7 +2192,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
       whd_erasing env n c
     | LetIn (_, v, ty, b) ->
       let () = erased env n ty in
-      let () = if noccurn 1 b then erased env n v in
+      let () = if noccurn 1 b then dropped env n v in
       whd_erasing env n (subst1 v b)
     | App (f, args) ->
       let hd, fargs = decompose_app_list (whd_erasing env n f) in
@@ -2109,8 +2204,8 @@ let check_one_cofix cache ?evars env nbfix def deftype =
       begin match kind hd with
       | Construct ((_, i), _ as cstr) ->
         let () = erased env n p' in
-        let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then erased env n b) brs in
-        let () = List.iteri (fun j a -> if j < ci'.ci_npar then erased env n a) cargs in
+        let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then dropped env n b) brs in
+        let () = List.iteri (fun j a -> if j < ci'.ci_npar then dropped env n a) cargs in
         (* The constructor arguments whose binder the selected branch does
            not read are dropped by the substitution. *)
         let ctx, body = Term.decompose_lambda_n_decls ci'.ci_cstr_ndecls.(i - 1) brs.(i - 1) in
@@ -2119,7 +2214,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
           | [], _ | _, [] -> ()
           | LocalDef _ :: decls, args -> unread (k + 1) decls args
           | LocalAssum _ :: decls, a :: args ->
-            let () = if noccurn (nd - k) body then erased env n a in
+            let () = if noccurn (nd - k) body then dropped env n a in
             unread (k + 1) decls args
         in
         let () = unread 0 (List.rev ctx) (List.skipn_at_best ci'.ci_npar cargs) in
@@ -2139,7 +2234,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
       begin match kind hd with
       | Construct _ ->
         let k = Projection.npars pr + Projection.arg pr in
-        let () = List.iteri (fun j a -> if not (Int.equal j k) then erased env n a) args in
+        let () = List.iteri (fun j a -> if not (Int.equal j k) then dropped env n a) args in
         whd_erasing env n (List.nth args k)
       | CoFix cofix ->
         whd_erasing env n (mkProj (pr, r, mkApp (contract_cofix cofix, Array.of_list args)))
@@ -2168,7 +2263,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
     | _, [] -> hd
     | Lambda (_, ty, b), a :: rest ->
       let () = erased env n ty in
-      let () = if noccurn 1 b then erased env n a in
+      let () = if noccurn 1 b then dropped env n a in
       let hd', args' = decompose_app_list (whd_erasing env n (subst1 a b)) in
       whd_erasing_app env n hd' (args' @ rest)
     | Fix ((recindxs, i), _ as fix), _ when List.length args > recindxs.(i) ->
