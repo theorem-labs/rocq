@@ -2782,7 +2782,38 @@ let check_one_cofix cache ?evars env nbfix def deftype =
   and check_erased env n t =
     let _ : constr = whd_erasing env n t in ()
 
+  (* A dropped term whose only mention of the block is the HEAD of its
+     application, a function of the block applied to arguments that mention
+     no function of the block, possibly under abstractions whose domains
+     mention none either, is a VALUE that nothing forces: a cofixpoint is
+     unfolded only as the scrutinee of a match or the argument of a
+     projection, and a dropped term is never in either position, nor at the
+     head of an application. Evaluating it, by name or by value, builds the
+     cofixpoint or a partial application of it and discards it. The attacks
+     this rule exists for put a DESTRUCTION of the block there (the head is
+     then a constant whose body matches on it), so their head is not a
+     function of the block and they are refused as before
+     (test-suite/failure/guard_cofix_dead_{beta,let,match}.v). *)
+  and cofix_inert n c =
+    match kind c with
+    | Lambda (_, ty, b) -> noccur_with_meta n nbfix ty && cofix_inert (n + 1) b
+    | _ ->
+      let hd, args = decompose_app c in
+      match kind hd with
+      | Rel p when n <= p && p < n + nbfix ->
+        Array.for_all (noccur_with_meta n nbfix) args
+      | _ -> false
+
   and erased env n c =
+    if not (noccur_with_meta n nbfix c) && not (cofix_inert n c) then
+      raise (CoFixGuardError (env, UnguardedRecursiveCall c))
+
+  (* The rule before the exemption: any mention of the block is refused.
+     Used where a dropped position can still be read after all: the
+     parameters of a match, and the arguments of a constructor that has
+     let-ins, which a let-in value reads and call-by-value computes at iota
+     even when the selected branch does not read the argument. *)
+  and erased_strict env n c =
     if not (noccur_with_meta n nbfix c) then
       raise (CoFixGuardError (env, UnguardedRecursiveCall c))
 
@@ -2806,16 +2837,26 @@ let check_one_cofix cache ?evars env nbfix def deftype =
       | Construct ((_, i), _ as cstr) ->
         let () = erased env n p' in
         let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then erased env n b) brs in
-        let () = List.iteri (fun j a -> if j < ci'.ci_npar then erased env n a) cargs in
+        let () = List.iteri (fun j a -> if j < ci'.ci_npar then erased_strict env n a) cargs in
+        (* Iota also drops the case-inversion indices. They are not this
+           exemption's business, so they keep the strict rule. *)
+        let () = match iv with
+          | NoInvert -> ()
+          | CaseInvert { indices } -> Array.iter (erased_strict env n) indices in
         (* The constructor arguments whose binder the selected branch does
-           not read are dropped by the substitution. *)
+           not read are dropped by the substitution. When the constructor
+           has a let-in, its value may read such an argument and is computed
+           at iota, so the argument is held to the strict rule. *)
         let ctx, body = Term.decompose_lambda_n_decls ci'.ci_cstr_ndecls.(i - 1) brs.(i - 1) in
         let nd = List.length ctx in
+        let has_letin = List.exists (function LocalDef _ -> true | LocalAssum _ -> false) ctx in
         let rec unread k decls args = match decls, args with
           | [], _ | _, [] -> ()
           | LocalDef _ :: decls, args -> unread (k + 1) decls args
           | LocalAssum _ :: decls, a :: args ->
-            let () = if noccurn (nd - k) body then erased env n a in
+            let () =
+              if noccurn (nd - k) body then
+                (if has_letin then erased_strict env n a else erased env n a) in
             unread (k + 1) decls args
         in
         let () = unread 0 (List.rev ctx) (List.skipn_at_best ci'.ci_npar cargs) in
