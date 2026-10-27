@@ -286,6 +286,23 @@ let rec slot_for_getglobal env sigma kn envcache table =
     | BCconstant -> set_global (val_of_constant kn) table
     in
     rk := Some (CEphemeron.create pos);
+    (* The value of a constant is what the machine computes from its body. For a
+       constant whose definition [Vmznative] recognises, that value is replaced
+       by a wrapper that runs the operation natively; the wrapper's fallback is
+       the value just computed, which the line above has made the one
+       [Reloc_getglobal kn] resolves to, so an argument the native code cannot
+       read reduces through the constant's own code. A constant [Vmznative] does
+       not recognise, including one that only carries the name of a standard
+       operation, keeps the value computed above. *)
+    let pos = match Vmznative.pin_of_constant env kn with
+      | None -> pos
+      | Some op ->
+        let code = Vmbytegen.compile_znative_wrapper kn op in
+        let v = eval_to_patch env sigma code envcache table in
+        let pos = set_global v table in
+        rk := Some (CEphemeron.create pos);
+        pos
+    in
     pos
 
 and slot_for_fv env sigma fv envcache table =
