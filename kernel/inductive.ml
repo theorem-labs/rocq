@@ -2781,17 +2781,24 @@ let check_one_cofix cache ?evars env nbfix def deftype =
      [Print Assumptions], which is where this is caught. *)
   and check_erased env n t =
     (* [dropped]/[inert] walk a dropped VALUE position, re-reducing with
-       [whd_erasing], so a subst-shared sub-term would be examined once per
-       physical copy. The per-depth memo records sub-terms already checked OK
-       at a depth by physical identity ([List.memq]); the duplicates [subst]
-       leaves behind are the same value at the same depth, so a repeat accepts
-       again (verdict-preserving) and never skips a refusal (a refusal raises
-       before the record). The write re-reads the depth bucket after [inert],
-       so records [inert]'s descendants added at the same depth are not
-       clobbered by a pre-[inert] snapshot. One memo per top-level
-       [check_erased], threaded through the walk: nothing the walk calls
-       re-enters [check_erased] or [check_rec_call]. *)
-    let memo = ref Int.Map.empty in
+       [whd_erasing], so a sub-term the dropped term duplicates would be
+       examined once per copy. The memo records, per depth, the sub-terms
+       already checked OK there and skips a repeat: verdict-preserving (a
+       repeat accepts again) and never skipping a refusal (a refusal raises
+       before the record). A repeat is found two ways: by physical identity,
+       for the copies [subst] shares (scanned over the whole depth, each test
+       is [==]); and up to [memo_equal], for copies written twice in the
+       source, compared only against the few newest records whose bounded
+       structural hash matches and with a budget per comparison, so a long
+       run of similar terms (a tower, a list of literals) costs a constant per
+       record. [memo_equal] compares casts and case-inversion indices, which
+       the walk does not ignore. One memo per top-level [check_erased],
+       threaded through the walk: nothing the walk calls re-enters
+       [check_erased] or [check_rec_call]. The key needs no environment: the
+       walk extends the environment only with [LocalAssum] binders, which
+       [whd_erasing] never unfolds, so equal terms at one depth reach one
+       verdict. *)
+    let memo = (Hashtbl.create 17, Hashtbl.create 17) in
     let _ : constr = whd_erasing memo env n t in ()
 
   (* A dropped term whose only mention of the block is the HEAD of its
@@ -2829,6 +2836,36 @@ let check_one_cofix cache ?evars env nbfix def deftype =
     if not (noccur_with_meta n nbfix c) then
       raise (CoFixGuardError (env, UnguardedRecursiveCall c))
 
+  (* [memo]'s equality: structural, like [Constr.compare_head], but it
+     compares casts (the walk holds a cast's type to [erased] and routes a
+     binder read only by a cast type there, so two terms equal up to casts
+     can get different verdicts) and case-inversion indices (held to
+     [erased_strict] at iota). Physically equal sub-terms compare in one
+     step. [budget] counts the nodes visited; when it runs out the answer is
+     [false], which only costs the memo a skip. *)
+  and memo_equal budget nargs t u =
+    t == u ||
+    (decr budget; !budget > 0) &&
+    let eq_evar (e1, l1) (e2, l2) =
+      Evar.equal e1 e2 && SList.equal (memo_equal budget 0) l1 l2 in
+    match kind t, kind u with
+    | Cast (c1, k1, ty1), Cast (c2, k2, ty2) ->
+      k1 == k2 && memo_equal budget 0 c1 c2 && memo_equal budget 0 ty1 ty2
+    | Cast _, _ | _, Cast _ -> false
+    | App (f1, a1), App (f2, a2) ->
+      Int.equal (Array.length a1) (Array.length a2) &&
+      memo_equal budget (nargs + Array.length a1) f1 f2 &&
+      Array.equal (memo_equal budget 0) a1 a2
+    | App _, _ | _, App _ -> false
+    | Case (_, _, _, _, iv1, _, _), Case (_, _, _, _, iv2, _, _) ->
+      (match iv1, iv2 with
+       | NoInvert, NoInvert -> true
+       | CaseInvert { indices = i1 }, CaseInvert { indices = i2 } ->
+         Array.equal (memo_equal budget 0) i1 i2
+       | (NoInvert | CaseInvert _), _ -> false) &&
+      Constr.compare_head eq_evar (memo_equal budget) nargs t u
+    | _ -> Constr.compare_head eq_evar (memo_equal budget) nargs t u
+
   (* Dropped VALUE positions whose binder iota does not later REREAD and so
      call-by-value never forces: unselected match branches, plain unread
      constructor arguments (when the constructor has no let-in), dead let
@@ -2841,13 +2878,19 @@ let check_one_cofix cache ?evars env nbfix def deftype =
      reach a force [coqc] did not. Positions iota CAN still force (match
      parameters, case-inversion indices, constructor arguments when the
      constructor has a let-in) stay with [erased_strict] above. *)
-  and dropped memo env n t =
+  and dropped ((phys, strct) as memo) env n t =
     if not (noccur_with_meta n nbfix t) then begin
-      let seen = Option.default [] (Int.Map.find_opt n !memo) in
-      if not (List.memq t seen) then begin
+      let same = Option.default [] (Hashtbl.find_opt phys n) in
+      let key = (n, Hashtbl.hash_param 20 200 t) in
+      let rec equal_recent k = function
+        | [] -> false
+        | u :: l -> k > 0 && (memo_equal (ref 256) 0 t u || equal_recent (k - 1) l)
+      in
+      if not (List.memq t same || equal_recent 8 (Hashtbl.find_all strct key)) then begin
         let () = inert memo env n t in
-        let cur = Option.default [] (Int.Map.find_opt n !memo) in
-        memo := Int.Map.add n (t :: cur) !memo
+        let same = Option.default [] (Hashtbl.find_opt phys n) in
+        let () = Hashtbl.replace phys n (t :: same) in
+        Hashtbl.add strct key t
       end
     end
 
@@ -2866,15 +2909,22 @@ let check_one_cofix cache ?evars env nbfix def deftype =
       let env' = push_rec_types recdef env in
       Array.iter (dropped memo env' (n + Array.length vdefs)) vdefs
     | Case (ci, u, pms, p, iv, tm, br) ->
+      (* A stuck match, or a stuck projection below, is a redex in waiting:
+         once its scrutinee resolves (in an instance, under [cbv], in
+         [coqchk]'s own delta) the selected branch may destroy whatever it is
+         applied to. So its scrutinee AND its arguments are held to
+         [erased_strict]; [erased]'s [cofix_inert] exemption covers only a
+         position no destructor can reach. Its parameters keep the strict rule
+         the iota arm below gives the parameters of a matched constructor. *)
       let () = erased_strict env n tm in
-      let () = List.iter (erased env n) args in
+      let () = List.iter (erased_strict env n) args in
       let (_, (p', _), _, _, brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
-      let () = Array.iter (erased env n) pms in
+      let () = Array.iter (erased_strict env n) pms in
       let () = erased env n p' in
       Array.iter (dropped memo env n) brs
     | Proj (_, _, c) ->
       let () = erased_strict env n c in
-      List.iter (erased env n) args
+      List.iter (erased_strict env n) args
     | Meta _ -> ()
     | Evar _ -> List.iter (dropped memo env n) args
     | _ ->
