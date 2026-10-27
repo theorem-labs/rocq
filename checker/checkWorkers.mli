@@ -188,10 +188,12 @@ val min_batch : int
     checked, but for one whose lane ran short, of at least [min_batch / 2]:
     the expected batches of a test depend on it. *)
 
-val set_window : float -> unit
-(** [set_window w]: while the libraries are checked, [defer] deals at
-    most once every [w] seconds (1 by default). A test sets it to
-    [infinity], so that only [end_window] makes [defer] deal. *)
+val hold_deals : bool -> unit
+(** [hold_deals true] stops [defer] and [defer_table] from dealing
+    anything until [allow_one_deal] lets one call deal, so that what a
+    test's workers are given does not depend on how fast it runs. Outside
+    a test they deal whenever the queue holds a batch and a worker slot
+    is free. *)
 
-val end_window : unit -> unit
-(** The next [defer] or [defer_table] deals, as once a window has passed. *)
+val allow_one_deal : unit -> unit
+(** The next [defer] or [defer_table] deals, once. *)

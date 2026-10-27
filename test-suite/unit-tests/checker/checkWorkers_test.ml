@@ -51,10 +51,10 @@ let record fd i =
 
    No batch is dealt while the checks are deferred, unless [windows] is
    given: the checks are then cut into [windows] equal parts, and the
-   last check of each part is deferred once a window has passed
-   ([CheckWorkers.end_window]), so that deferring it deals batches as
-   while the libraries are checked. The window itself never passes, so
-   what is dealt does not depend on how fast the test runs. [before_finish]
+   last check of each part is deferred with one deal allowed
+   ([CheckWorkers.allow_one_deal]), so that deferring it deals batches as
+   while the libraries are checked. Nothing else deals, so what is dealt
+   does not depend on how fast the test runs. [before_finish]
    is given the log reader after the last [defer].
 
    With [libs], the list of the sizes of the libraries, the checks are
@@ -66,12 +66,12 @@ let run ?(jobs = 2) ?refuse ?(work = fun _ -> ()) ?(windows = 0) ?(libs = [])
   with_log (fun fd read ->
       CheckWorkers.set_jobs ~profiling:false jobs;
       CheckWorkers.set_budget budget;
-      CheckWorkers.set_window infinity;
+      CheckWorkers.hold_deals true;
       Fun.protect
         ~finally:(fun () ->
             CheckWorkers.set_jobs ~profiling:false 1;
             CheckWorkers.set_budget CheckWorkers.default_budget;
-            CheckWorkers.set_window 1.0)
+            CheckWorkers.hold_deals false)
         (fun () ->
            let part = if windows = 0 then 0 else n / windows in
            (* [starts.(i)] is the library that starts at check [i], if any. *)
@@ -80,7 +80,7 @@ let run ?(jobs = 2) ?refuse ?(work = fun _ -> ()) ?(windows = 0) ?(libs = [])
            let result =
              try
                for i = 0 to n - 1 do
-                 if part > 0 && i mod part = part - 1 then CheckWorkers.end_window ();
+                 if part > 0 && i mod part = part - 1 then CheckWorkers.allow_one_deal ();
                  let l = starts.(i) in
                  if l >= 0 then
                    CheckWorkers.defer_table (library l) (fun () -> record fd (- (l + 1)));

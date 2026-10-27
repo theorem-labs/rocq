@@ -100,10 +100,18 @@ let set_budget t =
    Forking is not free: the fork itself, and the copy-on-write faults
    that follow in the main process, cost time in proportion to the size
    of the heap. The faults are paid once per fork, or once for several
-   forks made together. So while the libraries are being checked,
-   deferred checks are handed out at most once every [window] seconds,
-   to all the free worker slots at once. The main process does not wait
-   for workers until it is done with the libraries.
+   forks made together. A worker slot left empty while the libraries are
+   being checked costs a whole core for as long as it is empty, and that
+   is the larger cost: measured on a production final grade at -j 16, 143
+   of the run's 339 idle core-seconds fall inside the walk, where 11.6
+   workers of 16 are busy on average while the checks that would fill the
+   others are already queued (the median check starts 11.0 s after its
+   library was walked, p90 38.4 s). So a batch is dealt, and its worker
+   forked, as soon as the queue holds one: [defer] deals on every call,
+   and not once per fixed window as it did. The batches that are ready at
+   the same time are still dealt, and forked, together, so their faults
+   are paid once. The main process does not wait for workers until it is
+   done with the libraries.
 
    The cost of a proof is not known in advance, it varies wildly, and
    costly proofs tend to be in the same library, hence deferred in a
@@ -131,11 +139,6 @@ let set_budget t =
    whenever a worker slot is free, it is given [1/(2N)] of what remains,
    and at least one check, so that all workers end at about the same
    time. *)
-let window = ref 1.0
-
-(* Test only: the unit tests open each window themselves ([end_window]),
-   so that what is dealt does not depend on how fast the test runs. *)
-let set_window w = window := w
 
 (* Below this, a batch is not worth a fork while the libraries are being
    checked. A fork copies the page tables of the main process, whose heap
@@ -153,10 +156,20 @@ let min_batch = 200
 
 (* Deferred jobs not yet given to a worker, oldest first. *)
 let queue : task Queue.t = Queue.create ()
-let last_dispatch = ref 0.
 
-(* Test only: the next [defer] deals, as once a window has passed. *)
-let end_window () = last_dispatch := neg_infinity
+(* Test only. A test holds the deals, then allows them one at a time
+   ([allow_one_deal]), so that what its workers are given does not depend
+   on how fast the test runs. *)
+let deals_held = ref false
+let hold_deals b = deals_held := b
+
+let deal_allowed = ref false
+let allow_one_deal () = deal_allowed := true
+
+(* Whether [dispatch] may deal now: always, unless a test holds the
+   deals, and then one allowance is used by one call. *)
+let deals_allowed () =
+  (not !deals_held) || (!deal_allowed && (deal_allowed := false; true))
 
 (* The library whose jobs are being deferred: [defer_table], which every
    library's walk calls before its own checks, opens the next group. *)
@@ -948,28 +961,53 @@ let deal ?(walk = false) k size =
         spawn (Array.of_list (if walk then b else List.rev b)))
     batches
 
-(* Hands out the batches a new job makes possible, at most once every
-   [window] seconds. *)
+(* What the last deal that dealt nothing saw: the length of the queue and
+   the number of free worker slots. A deal walks the whole queue to find
+   out what it can deal, and the stripe and the [min_batch / 2] floor can
+   leave a lane short, so a deal that dealt nothing with [q] jobs queued
+   and [f] slots free would walk the same queue again, for nothing, on
+   every job deferred after it. It is tried again once a slot frees or
+   [min_batch / 2] more jobs are queued, which is the smallest batch the
+   walk deals. Nothing waits for this: a job the floor holds back waits
+   for [finish], which has neither the stripe nor the floor. *)
+let barren_queue = ref 0
+let barren_slots = ref max_int
+
+(* Hands out every batch the queue can fill, and forks its worker, as
+   soon as it can fill one: called on every deferred job and on every
+   library walked, so a worker starts while the main process walks on. *)
 let dispatch () =
-  let now = Unix.gettimeofday () in
-  if now -. !last_dispatch >= !window then begin
-    last_dispatch := now;
+  if deals_allowed () then begin
+    (* A worker that has exited still holds a slot until it is reaped, so
+       reaping comes before the count of free slots. *)
     reap_finished ();
     let n = Queue.length queue in
-    let size = max min_batch ((n + !max_workers) / (!max_workers + 1)) in
-    let k = min (free_slots !max_workers) (n / size) in
-    (* While the libraries are checked, a worker runs its batch newest
-       first: costly proofs come late in a library, so one deferred last no
-       longer waits for the rest of its batch and is not the one given back
-       when the worker's budget runs out. The task that reads a library's
-       table, when there is one, is the oldest job of its group, so it runs
-       after the checks that already parsed the table. *)
-    if k > 0 then deal ~walk:true k size
-    (* No release is requested here: a request needs an empty queue,
-       which the walk rarely leaves, and the walk reads a release message
-       only when it reaps its worker, and deals only batches of at least
-       [min_batch / 2] jobs; so a released tail would wait here anyway.
-       [finish] asks, reads and deals at once. *)
+    (* No batch here is smaller than [min_batch], so below it there is
+       nothing to deal and nothing to count. *)
+    if n >= min_batch then begin
+      let free = free_slots !max_workers in
+      if free > !barren_slots || n >= !barren_queue + min_batch / 2 then begin
+        let size = max min_batch ((n + !max_workers) / (!max_workers + 1)) in
+        let k = min free (n / size) in
+        (* While the libraries are checked, a worker runs its batch newest
+           first: costly proofs come late in a library, so one deferred last no
+           longer waits for the rest of its batch and is not the one given back
+           when the worker's budget runs out. The task that reads a library's
+           table, when there is one, is the oldest job of its group, so it runs
+           after the checks that already parsed the table. *)
+        if k > 0 then deal ~walk:true k size;
+        if Queue.length queue < n then begin
+          barren_queue := 0; barren_slots := max_int
+        end else begin
+          barren_queue := n; barren_slots := free
+        end
+        (* No release is requested here: a request needs an empty queue,
+           which the walk rarely leaves, and the walk reads a release message
+           only when it reaps its worker, and deals only batches of at least
+           [min_batch / 2] jobs; so a released tail would wait here anyway.
+           [finish] asks, reads and deals at once. *)
+      end
+    end
   end
 
 let defer kn check =
@@ -1015,12 +1053,17 @@ let validator_progress () =
       tables_read := DirPath.Set.add tables.(i) !tables_read
     done
 
+(* Also the one place the walk calls between two libraries, so it deals
+   the jobs of the library just closed even when [validate_tables] left
+   no table task to queue. *)
 let defer_table dp read =
   incr current_group;
   if !max_workers = 0 then begin incr tables_deferred; read (); incr tables_done end
-  else if not !tables_validated then begin
-    incr tables_deferred;
-    Queue.push { job = Table dp; group = !current_group; run = read } queue;
+  else begin
+    if not !tables_validated then begin
+      incr tables_deferred;
+      Queue.push { job = Table dp; group = !current_group; run = read } queue
+    end;
     dispatch ()
   end
 
