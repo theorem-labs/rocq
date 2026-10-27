@@ -6,7 +6,9 @@
 # absent when A is compiled and present later), a Require under Succeed
 # (rolled back), a Load under Succeed, a plain Load, a Declare ML Module
 # under Fail (no such plugin) and one under Succeed. Each case checks that
-# A.vo records the attempt (tools/library_label.exe --attempts), and that
+# A.vo records the attempt (tools/library_label.exe --attempts, and the same
+# records as JSON with --attempts-json, read by Python's json module and
+# checked against the schema documented in vernac/attempts.mli), and that
 # when what the attempt found changes, A compiled again is another library
 # or no longer compiles: its stored digest, the label, changes
 # (tools/library_label.exe --stored), and coqc and rocqchk -o refuse Test.B,
@@ -61,17 +63,71 @@ refused() {
     ! "$LOAD"rocqchk -silent -o -R "_test/$1" Test -norec Test.A -norec Test.B > "_test/$1/chk.log" 2>&1 &&
     grep -q "Inconsistent assumptions over module Test.A" "_test/$1/chk.log"
 }
+# json WHAT DIR CONDITION: the --attempts-json document of DIR's A.vo
+# follows the schema of vernac/attempts.mli, and the Python CONDITION holds
+# of it (j: the document, r: its record, sha: the SHA-256 of a file, now).
+cat > _test/attempts_json.py <<'PY'
+import hashlib, json, re, sys
+def valid(j):
+    if set(j) != {"attempts_json_version", "record"} or j["attempts_json_version"] != 1:
+        return False
+    r = j["record"]
+    if r is None:
+        return True
+    if set(r) != {"attempts", "digests", "loadpaths"} or not r["attempts"]:
+        return False
+    for lp in r["loadpaths"]:
+        for e in lp:
+            if not isinstance(e.get("dir"), str) or type(e.get("recursive")) is not bool: return False
+            if not e["recursive"]:
+                if set(e) != {"dir", "recursive"}: return False
+            elif set(e) != {"dir", "recursive", "subdirs"}: return False
+            elif e["subdirs"] is not None and not all(isinstance(s, str) for s in e["subdirs"]): return False
+    for d in r["digests"]:
+        if set(d) != {"file", "sha256"} or not isinstance(d["file"], str): return False
+        if not re.fullmatch("[0-9a-f]{64}|unreadable", d["sha256"]): return False
+    files = {d["file"] for d in r["digests"]}
+    for a in r["attempts"]:
+        if set(a) != {"request", "probes", "library", "found", "loadpath"}: return False
+        q = a["request"]; k = q.get("kind")
+        if k == "require_qualified":
+            if set(q) != {"kind", "root", "name"} or not (q["root"] is None or isinstance(q["root"], str)): return False
+        elif k in ("require_absolute", "load", "ml_module"):
+            if set(q) != {"kind", "name"}: return False
+        else:
+            return False
+        if not isinstance(q["name"], str): return False
+        for p in a["probes"]:
+            if set(p) != {"dir", "file", "exists"} or not isinstance(p["exists"], bool): return False
+        if not (a["library"] is None or isinstance(a["library"], str)): return False
+        if not all(isinstance(f, str) and f in files for f in a["found"]): return False
+        l = a["loadpath"]
+        if type(l) is not int or (l == -1) != (k == "ml_module") or not (-1 <= l < len(r["loadpaths"])): return False
+    return True
+def sha(f):
+    with open(f, "rb") as h: return hashlib.sha256(h.read()).hexdigest()
+j = json.load(sys.stdin); r = j["record"]
+sys.exit(0 if valid(j) and eval(sys.argv[1]) else 1)
+PY
+json() { # json WHAT DIR CONDITION
+  local what=$1 dir=$2 cond=$3
+  if "$TOOL" --attempts-json "_test/$dir/A.vo" > "_test/$dir/attempts.json" &&
+     python3 _test/attempts_json.py "$cond" < "_test/$dir/attempts.json"; then echo "PASS $what"
+  else echo "FAIL $what: $(cat "_test/$dir/attempts.json")"; fail=1; fi
+}
 
 # 0. No attempt that nothing else records: no record, a stock file.
 setup none "Require Test.Y.\nDefinition a := Test.Y.y.\n"
 printf 'Definition y := 0.\n' > _test/none/Y.v
 comp none Y; comp none A
 check "a plain Require stores no record" test "$(attempts none)" = "no attempts"
+json "a plain Require: the JSON has no record" none 'r is None'
 
 # 0b. Without -location-free-label, an attempt is not recorded: a stock file.
 setup noflag "Fail Require Test.X.\nDefinition a := 0.\n"
 rocq c -q -R _test/noflag Test _test/noflag/A.v
 check "without the flag, no record" test "$(attempts noflag)" = "no attempts"
+json "without the flag: the JSON has no record" noflag 'r is None'
 
 # 1. Require under Fail of a library absent when A is compiled (#861).
 setup fail "Fail Require Test.X.\nDefinition a := 0.\n"
@@ -79,6 +135,10 @@ comp fail A
 r=$(attempts fail); echo "$r"
 check "Fail Require: the attempt is recorded" has "$r" "an attempted Require of Test.X"
 check "Fail Require: the record says X.vo was absent" has "$r" "fail/X.vo absent"
+json "Fail Require: the JSON has the request, X.vo absent, no library, nothing read" fail \
+  'any(a["request"]["kind"] in ("require_qualified", "require_absolute") and a["request"]["name"] == "Test.X"
+       and any(p["dir"].endswith("fail") and p["file"] == "X.vo" and p["exists"] is False for p in a["probes"])
+       and a["library"] is None and a["found"] == [] for a in r["attempts"])'
 printf 'Definition x := 0.\n' > _test/fail/X.v
 comp fail X
 check "Fail Require: once X exists, A no longer compiles" bash -c "! rocq c -q -R _test/fail Test _test/fail/A.v > /dev/null 2>&1"
@@ -89,6 +149,11 @@ printf 'Definition y := 0.\n' > _test/succeed/Y.v
 comp succeed Y; comp succeed A
 r=$(attempts succeed); echo "$r"
 check "Succeed Require: the attempt and the file it read are recorded" has "$r" "succeed/Y.vo sha256"
+json "Succeed Require: the JSON has the library, the file read and its SHA-256, the load path searched" succeed \
+  'any(a["library"] == "Test.Y" and len(a["found"]) == 1 and a["found"][0].endswith("succeed/Y.vo")
+       and any(d["file"] == a["found"][0] and d["sha256"] == sha(a["found"][0]) for d in r["digests"])
+       and any(e["dir"].endswith("succeed") for e in r["loadpaths"][a["loadpath"]])
+       and any(p["exists"] is True and p["file"] == "Y.vo" for p in a["probes"]) for a in r["attempts"])'
 d1=$(label succeed); comp succeed A; d2=$(label succeed)
 check "Succeed Require: compiled again, nothing changed: the same label" test "$d1" = "$d2"
 dependent succeed
@@ -103,6 +168,9 @@ printf 'Definition l := 0.\n' > _test/succeedload/L.v
 comp succeedload A
 r=$(attempts succeedload); echo "$r"
 check "Succeed Load: the attempt and the file it read are recorded" has "$r" "succeedload/L.v sha256"
+json "Succeed Load: the JSON has the Load and the file read" succeedload \
+  'any(a["request"] == {"kind": "load", "name": "L.v"} and len(a["found"]) == 1
+       and a["found"][0].endswith("succeedload/L.v") for a in r["attempts"])'
 d1=$(label succeedload)
 dependent succeedload
 printf 'Definition l := 1.\n' > _test/succeedload/L.v
@@ -141,6 +209,9 @@ check "Fail Declare ML Module: coqc and rocqchk refuse the dependent" refused fa
 setup succeedml "Succeed Declare ML Module \"zarith\".\nDefinition a := 0.\n"
 comp succeedml A
 check "Succeed Declare ML Module: the plugin's files are recorded" has "$(attempts succeedml)" "zarith.cmxs sha256"
+json "Succeed Declare ML Module: the JSON has the plugin, its files, no load path" succeedml \
+  'any(a["request"] == {"kind": "ml_module", "name": "zarith"} and a["loadpath"] == -1
+       and any(f.endswith("zarith.cmxs") for f in a["found"]) for a in r["attempts"])'
 d1=$(label succeedml)
 dependent succeedml
 zdir=$(ocamlfind query zarith)
@@ -151,5 +222,27 @@ for f in _test/zarith-changed/zarith/*.cmxs _test/zarith-changed/zarith/*.cma; d
 OCAMLPATH="$PWD/_test/zarith-changed${OCAMLPATH:+:$OCAMLPATH}" comp succeedml A
 check "Succeed Declare ML Module: the plugin's files changed: another label" test "$d1" != "$(label succeedml)"
 check "Succeed Declare ML Module: coqc and rocqchk refuse the dependent" refused succeedml
+
+# 7. The same source compiled three times, each time in a fresh directory at
+# the same path, gets the same label, whatever else the working directory
+# holds: the working directory is a load path entry that is not recursive
+# (a subdirectory of it never becomes an entry), so its other subdirectories
+# are no input. At 76d8b5da they were recorded, and a Fail Require library
+# compiled in an end-to-end run whose working directory held fewer variant
+# directories got another label (D18Mut's first run).
+det() { # det SUBDIR...: Test.A compiled in a fresh _test/det/cwd/lib, from _test/det/cwd that also holds SUBDIRs
+  rm -rf _test/det; mkdir -p _test/det/cwd/lib
+  local s; for s in "$@"; do mkdir -p "_test/det/cwd/$s"; done
+  printf 'Fail Require Test.Missing.\nDefinition a := 0.\n' > _test/det/cwd/lib/A.v
+  (cd _test/det/cwd && rocq c -q -location-free-label -R lib Test lib/A.v)
+  "$TOOL" --stored _test/det/cwd/lib/A.vo
+}
+l1=$(det); l2=$(det other); l3=$(det other more Third .hidden)
+check "three fresh compiles at one path, other directories beside: one label ($l1 $l2 $l3)" \
+  test "$l1" = "$l2" -a "$l2" = "$l3"
+json "the JSON marks the working directory not recursive and lists no subdirectory of it" det/cwd/lib \
+  '(any(e["dir"].endswith("det/cwd") and e["recursive"] is False for lp in r["loadpaths"] for e in lp)
+    and any(e["dir"].endswith("det/cwd/lib") and e["recursive"] is True and e["subdirs"] == []
+            for lp in r["loadpaths"] for e in lp))'
 
 exit $fail

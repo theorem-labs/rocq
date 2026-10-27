@@ -774,21 +774,34 @@ let save_library_struct ~output_native_objects dir =
     error_recursively_dependent_library dir;
   sd, md, vmlib, ast
 
+(* The summary as the label reads it. The pattern names every field of
+   [summary_disk], and warning 9 (a field left out of a record pattern) is an
+   error here: a field added to the summary stops the build until this says
+   whether the label covers it. [md_ocaml] is [Coq_config.caml_version]
+   (save_library_struct), which the label's header holds. *)
+let[@warning "@9"] label_summary
+    { md_name; md_deps; md_ocaml = _; md_info; md_safe_deps } : LibkeyObjects.summary =
+  { LibkeyObjects.name = md_name; deps = md_deps; safe_deps = md_safe_deps; info = md_info }
+
+(* The location-free label (LibkeyObjects, 32 bytes) of a library's summary
+   and [library] segment, or why it has none. *)
+let label_result (sd : summary_disk) (md : library_disk) =
+  LibkeyObjects.label_result ~summary:(label_summary sd) ~compiled:md.md_compiled
+    ~syntax:md.md_syntax_objects ~objects:md.md_objects
+
 (* The digest a library's file stores for its [library] segment, and that
-   its dependents record, under [-location-free-label]: the location-free
-   label (LibkeyObjects). [None] without the flag, or when the library has
-   no label: the MD5 of the segment's bytes, as stock writes it. Stock
+   its dependents record, under [-location-free-label]: the first 16 bytes
+   of the location-free label. [None] without the flag, or when the library
+   has no label: the MD5 of the segment's bytes, as stock writes it. Stock
    [coqc] and [rocqchk] only compare stored copies of this digest, so they
    read a file written either way. *)
-let library_label (md : library_disk) =
+let library_label sd md =
   if not !location_free_label then None
-  else
-    LibkeyObjects.label ~compiled:md.md_compiled ~syntax:md.md_syntax_objects
-      ~objects:md.md_objects
+  else Option.map Libkey.stored (Result.to_option (label_result sd md))
 
 let save_library dir : library_t =
   let sd, md, vmlib, _ast = save_library_struct ~output_native_objects:false dir in
-  let digest = match library_label md with
+  let digest = match library_label sd md with
     | Some label -> label
     | None -> Marshal.to_string md [] |> Digest.string
   in
@@ -813,11 +826,31 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   in
   let sd, md, vmlib, ast = save_library_struct ~output_native_objects dir in
   (* Writing vo payload *)
-  save_library_base f sd md ~label:(library_label md) opaque_table vmlib;
+  save_library_base f sd md ~label:(library_label sd md) opaque_table vmlib;
   (* Writing native code files *)
   if output_native_objects then
     let fn = Filename.dirname f ^"/"^ Nativecode.mod_uid_of_dirpath dir in
     Nativelib.compile_library ast fn
+
+type file_label = {
+  stored : string;
+  segment_md5 : string;
+  label : (string, string) result;
+  attempts : Attempts.t option;
+}
+
+let read_file_label f =
+  let ch = raw_intern_library f in
+  let sd, md, stored, seg = Fun.protect ~finally:(fun () -> ObjFile.close_in ch) (fun () ->
+      let sd, _ = ObjFile.marshal_in_segment ch ~segment:summary_seg in
+      let md, stored = ObjFile.marshal_in_segment ch ~segment:library_seg in
+      sd, md, stored, ObjFile.get_segment ch ~segment:library_seg)
+  in
+  let segment_md5 = In_channel.with_open_bin f (fun ic ->
+      In_channel.seek ic seg.ObjFile.pos;
+      Digest.channel ic (Int64.to_int seg.ObjFile.len))
+  in
+  { stored; segment_md5; label = label_result sd md; attempts = Attempts.find md.md_objects }
 
 let get_used_load_paths () =
   String.Set.elements

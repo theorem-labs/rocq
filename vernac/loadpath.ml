@@ -18,6 +18,7 @@ type t = {
   path_logical : DP.t;
   path_implicit : bool;  (* true for -R, false for -Q in command line *)
   path_installed : bool; (* true for automatically added paths (assumed installed), false for command line paths *)
+  path_recursive : bool; (* added by a recursive scan: a new subdirectory becomes an entry at the next start *)
 }
 
 let load_vos_libraries = ref false
@@ -26,6 +27,7 @@ let load_paths = Summary.ref ([] : t list) ~stage:Summary.Stage.Synterp ~name:"L
 
 let logical p = p.path_logical
 let physical p = p.path_physical
+let recursive p = p.path_recursive
 
 let pp p =
   let installed = Pp.str (if p.path_installed then "i" else " ") in
@@ -97,7 +99,7 @@ let warn_overriding_logical_loadpath =
                ; DP.print old_path; strbrk "; it is remapped to "
                ; DP.print rocq_path]))
 
-let add_load_path ~installed phys_path rocq_path ~implicit =
+let add_load_path ~installed ~recursive phys_path rocq_path ~implicit =
   let phys_path = CUnix.canonical_path_name phys_path in
   let filter p = String.equal p.path_physical phys_path in
   let binding = {
@@ -105,11 +107,12 @@ let add_load_path ~installed phys_path rocq_path ~implicit =
     path_physical = phys_path;
     path_implicit = implicit;
     path_installed = installed;
+    path_recursive = recursive;
   } in
   match List.filter filter !load_paths with
   | [] ->
     load_paths := binding :: !load_paths
-  | [{ path_logical = old_path; path_implicit = old_implicit }] ->
+  | [{ path_logical = old_path; path_implicit = old_implicit; path_recursive = old_recursive }] ->
     let replace =
       if DP.equal rocq_path old_path then
         implicit <> old_implicit
@@ -123,8 +126,11 @@ let add_load_path ~installed phys_path rocq_path ~implicit =
     if replace then
       begin
         remove_load_path phys_path;
-        load_paths := binding :: !load_paths;
+        load_paths := { binding with path_recursive = recursive || old_recursive } :: !load_paths;
       end
+    else if recursive && not old_recursive then
+      (* The binding stays; a recursive scan has now reached the directory. *)
+      load_paths := List.map (fun p -> if filter p then { p with path_recursive = true } else p) !load_paths
   | _ -> anomaly_too_many_paths phys_path
 
 let filter_path f =
@@ -361,10 +367,10 @@ let add_vo_path lp =
       with Exit -> None
     in
     let dirs = List.map_filter convert_dirs dirs in
-    let add (path, dir) = add_load_path ~installed path ~implicit dir in
+    let add (path, dir) = add_load_path ~installed ~recursive path ~implicit dir in
     (* deeper dirs registered first and thus be found last *)
     let dirs = List.rev dirs in
     let () = List.iter add dirs in
-    add_load_path ~installed unix_path ~implicit lp.coq_path
+    add_load_path ~installed ~recursive unix_path ~implicit lp.coq_path
   else
     warn_cannot_open_path unix_path

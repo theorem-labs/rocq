@@ -26,6 +26,11 @@ val logical : t -> DirPath.t
 val physical : t -> CUnix.physical_path
 (** Get the physical path of a loadpath *)
 
+val recursive : t -> bool
+(** Whether a recursive scan ([-R], [-Q], the installed libraries) added the
+    binding, so that a new subdirectory of its physical path becomes a
+    binding at the next start. The current directory's is not recursive. *)
+
 val pp : t -> Pp.t
 (** Print a load path *)
 

@@ -26,12 +26,21 @@ type attempt = {
   loadpath : int;                 (* index in [loadpaths], or -1 (a plugin) *)
 }
 
+(* What a load path entry's directory holds that the next start could turn
+   into entries. The constructors without argument come first, so that a
+   record written by 76d8b5da (where [string list option] stood here) reads
+   [None] as [Unreadable]. *)
+type scan =
+  | Unreadable                (* a recursive entry whose directory could not be read *)
+  | Not_recursive             (* the working directory: its subdirectories never become entries *)
+  | Subdirs of string list    (* a recursive entry: the subdirectories a scan makes entries *)
+
 type t = {
   attempts : attempt list;
   digests : (string * string) list;
   (* SHA-256 (hex) of every file in [found], when the library was saved *)
-  loadpaths : (string * string list option) list list;
-  (* per load path searched: each directory with its subdirectory names *)
+  loadpaths : (string * scan) list list;
+  (* per load path searched: each directory with its scan *)
 }
 
 let hex s =
@@ -53,15 +62,18 @@ let probe_exists dir file =
    [-Q] scan would turn into load path entries: not hidden, and named by a
    Rocq identifier (Loadpath.add_vo_path skips the others). A hidden one
    such as .coq-native, which a compile creates, is not listed, so that two
-   compiles of the same file in the same tree give the same record. *)
-let subdirs d =
+   compiles of the same file in the same tree give the same record. Only an
+   entry that a recursive scan made is listed: the working directory's
+   other subdirectories (other builds beside this one) are no input. *)
+let scan (d, recursive) =
   let entry n =
     n <> "" && n.[0] <> '.' && Sys.is_directory (Filename.concat d n) &&
     (match Id.of_string n with _ -> true | exception e when CErrors.noncritical e -> false)
   in
-  match Sys.readdir d with
-  | names -> Some (List.sort String.compare (List.filter entry (Array.to_list names)))
-  | exception Sys_error _ -> None
+  if not recursive then (d, Not_recursive)
+  else match Sys.readdir d with
+    | names -> (d, Subdirs (List.sort String.compare (List.filter entry (Array.to_list names))))
+    | exception Sys_error _ -> (d, Unreadable)
 
 (* Whether attempts are logged at all: only under -location-free-label
    ([Library.set_location_free_label]). Off, nothing is probed or hashed. *)
@@ -69,12 +81,14 @@ let enabled = ref false
 let set_enabled b = enabled := b
 
 (* The log of the library being compiled. Not a summary: a rollback does not
-   remove an attempt. Each entry keeps the load path searched. *)
-let log : (attempt * string list) list ref = ref []
+   remove an attempt. Each entry keeps the load path searched: each
+   directory, and whether a recursive scan made it an entry. *)
+let log : (attempt * (string * bool) list) list ref = ref []
 
 let reset () = log := []
 
-let load_path () = List.map Loadpath.physical (Loadpath.get_load_paths ())
+let load_path () =
+  List.map (fun p -> (Loadpath.physical p, Loadpath.recursive p)) (Loadpath.get_load_paths ())
 
 let record request ~probes ~library ~found =
   if !enabled then begin
@@ -123,7 +137,8 @@ let finish ~loaded ~loaded_plugin =
     let index dirs =
       let rec find i = function
         | [] -> snapshots := !snapshots @ [dirs]; i
-        | d :: l -> if List.equal String.equal d dirs then i else find (i + 1) l
+        | d :: l -> if List.equal (fun (d, r) (d', r') -> String.equal d d' && Bool.equal r r') d dirs
+          then i else find (i + 1) l
       in
       find 0 !snapshots
     in
@@ -132,7 +147,7 @@ let finish ~loaded ~loaded_plugin =
         | Ml_module _ -> a
         | _ -> { a with loadpath = index dirs }) kept
     in
-    let loadpaths = List.map (List.map (fun d -> (d, subdirs d))) !snapshots in
+    let loadpaths = List.map (List.map scan) !snapshots in
     let files = List.sort_uniq String.compare (List.concat_map (fun a -> a.found) attempts) in
     Some { attempts; digests = List.map (fun f -> (f, sha_file f)) files; loadpaths }
 
@@ -151,6 +166,74 @@ let describe t =
         (String.concat "; " (List.map (fun f ->
              f ^ " sha256 " ^ Option.default "?" (List.assoc_opt f t.digests)) a.found)))
     t.attempts
+
+let json_version = 1
+
+exception Not_utf_8 of string
+
+(* One JSON value is written into [b] by each function below; [fields]
+   writes an object from (key, writer) pairs, in that order. *)
+let to_json t =
+  let b = Buffer.create 1024 in
+  let str s =
+    if not (String.is_valid_utf_8 s) then raise (Not_utf_8 s);
+    Buffer.add_char b '"';
+    String.iter (function
+        | '"' -> Buffer.add_string b "\\\""
+        | '\\' -> Buffer.add_string b "\\\\"
+        | c when Char.code c < 0x20 -> Printf.bprintf b "\\u%04x" (Char.code c)
+        | c -> Buffer.add_char b c) s;
+    Buffer.add_char b '"'
+  in
+  let int n = Buffer.add_string b (string_of_int n) in
+  let bool x = Buffer.add_string b (if x then "true" else "false") in
+  let opt f = function None -> Buffer.add_string b "null" | Some x -> f x in
+  let list f l =
+    Buffer.add_char b '[';
+    List.iteri (fun i x -> if i > 0 then Buffer.add_char b ','; f x) l;
+    Buffer.add_char b ']'
+  in
+  let fields l =
+    Buffer.add_char b '{';
+    List.iteri (fun i (k, f) ->
+        if i > 0 then Buffer.add_char b ',';
+        str k; Buffer.add_char b ':'; f ()) l;
+    Buffer.add_char b '}'
+  in
+  let request = function
+    | Require_qualified { root; name } ->
+      fields [("kind", fun () -> str "require_qualified"); ("root", fun () -> opt str root);
+              ("name", fun () -> str name)]
+    | Require_absolute name -> fields [("kind", fun () -> str "require_absolute"); ("name", fun () -> str name)]
+    | Load name -> fields [("kind", fun () -> str "load"); ("name", fun () -> str name)]
+    | Ml_module p -> fields [("kind", fun () -> str "ml_module"); ("name", fun () -> str p)]
+  in
+  let probe { dir; file; exists } =
+    fields [("dir", fun () -> str dir); ("file", fun () -> str file); ("exists", fun () -> bool exists)]
+  in
+  let attempt a =
+    fields [("request", fun () -> request a.request);
+            ("probes", fun () -> list probe a.probes);
+            ("library", fun () -> opt (fun d -> str (DirPath.to_string d)) a.library);
+            ("found", fun () -> list str a.found);
+            ("loadpath", fun () -> int a.loadpath)]
+  in
+  let digest (file, sha) = fields [("file", fun () -> str file); ("sha256", fun () -> str sha)] in
+  let entry (dir, scan) =
+    let dir = ("dir", fun () -> str dir) in
+    match scan with
+    | Not_recursive -> fields [dir; ("recursive", fun () -> bool false)]
+    | Unreadable -> fields [dir; ("recursive", fun () -> bool true); ("subdirs", fun () -> Buffer.add_string b "null")]
+    | Subdirs l -> fields [dir; ("recursive", fun () -> bool true); ("subdirs", fun () -> list str l)]
+  in
+  let record t =
+    fields [("attempts", fun () -> list attempt t.attempts);
+            ("digests", fun () -> list digest t.digests);
+            ("loadpaths", fun () -> list (list entry) t.loadpaths)]
+  in
+  match fields [("attempts_json_version", fun () -> int json_version); ("record", fun () -> opt record t)] with
+  | () -> Ok (Buffer.contents b)
+  | exception Not_utf_8 s -> Error ("not valid UTF-8: " ^ String.escaped s)
 
 let tag : t Libobject.Dyn.tag =
   let open Libobject in

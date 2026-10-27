@@ -77,12 +77,31 @@ val save_library : DirPath.t -> library_t
 
 val set_location_free_label : bool -> unit
 (** [-location-free-label]: when [true], a saved library stores as the
-    digest of its [library] segment the location-free label
-    ([LibkeyObjects.label]) instead of the MD5 of the segment's bytes, and
-    stores the attempted resolutions nothing else records ([Attempts]).
-    Default [false]: the file is what a stock [coqc] writes. A stock [coqc]
-    cannot load a library that holds an [ATTEMPTS] object (it does not know
-    the object kind). *)
+    digest of its [library] segment the first 16 bytes of the location-free
+    label of its summary and [library] segment ([LibkeyObjects.label])
+    instead of the MD5 of the segment's bytes, and stores the attempted
+    resolutions nothing else records ([Attempts]). Default [false]: the
+    file is what a stock [coqc] writes. A stock [coqc] cannot load a
+    library that holds an [ATTEMPTS] object (it does not know the object
+    kind). *)
+
+(** What [rocq-library-label] reads in a [.vo] file. *)
+type file_label = {
+  stored : string;
+  (** The digest the file stores for its [library] segment: what its
+      dependents record. *)
+  segment_md5 : string;
+  (** The MD5 of that segment's bytes: what stock stores there. *)
+  label : (string, string) result;
+  (** The label (32 bytes) recomputed from the file's [summary] and
+      [library] segments ([LibkeyObjects.label_result]), or why the library
+      has none. *)
+  attempts : Attempts.t option;
+  (** The attempted-resolution records of its object segment. *)
+}
+
+val read_file_label : CUnix.physical_path -> file_label
+(** Raises an exception when the file cannot be read as a [.vo] file. *)
 
 (** {6 Interrogate the status of libraries } *)
 

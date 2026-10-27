@@ -68,30 +68,64 @@ let compiled name =
 
 let lib_a = compiled "LibkeyTest.A"
 
-let objects_exn ?(compiled = lib_a) (syntax, objects) =
-  match LibkeyObjects.label_result ~compiled ~syntax ~objects with
+(* A summary: the library's name, its direct dependencies in order with
+   their digests, the ones it only safe-required, and its attributes. *)
+let summary ?(name = "LibkeyTest.A") ?(deps = []) ?(safe = []) ?(info = UserWarn.empty) ()
+  : LibkeyObjects.summary =
+  { LibkeyObjects.name = dp name;
+    deps = Array.of_list (List.map (fun (n, d) -> (dp n, Safe_typing.Dvo_or_vi d)) deps);
+    safe_deps = List.fold_left (fun s n -> DirPath.Set.add (dp n) s) DirPath.Set.empty safe;
+    info }
+
+let info ?since ?note ?(warns = []) () =
+  { UserWarn.depr =
+      (if Option.has_some since || Option.has_some note then Some (Deprecation.make ?since ?note ())
+       else None);
+    warn = List.map (fun (note, cats) -> UserWarn.make_warn ~note ~cats ()) warns }
+
+let deps_a = [ "Corelib.Init.Prelude", String.make 16 'p'; "LibkeyTest.X", String.make 16 'x' ]
+
+(* The summary of the test vector: two dependencies, the second
+   safe-required, a deprecation and a warning. *)
+let sum_a =
+  summary ~deps:deps_a ~safe:["LibkeyTest.X"]
+    ~info:(info ~since:"9.2" ~note:"old" ~warns:["careful", "label-test"] ()) ()
+
+let objects_exn ?(compiled = lib_a) ?(summary = sum_a) (syntax, objects) =
+  match LibkeyObjects.label_result ~summary ~compiled ~syntax ~objects with
   | Ok b -> b
   | Error what -> failwith ("no label: " ^ what)
 
-(* Version 1 test vector: the label of [vector_input] over [lib_a]. It pins
-   the layout of LibkeyObjects (version, the compiled form, the segments'
-   tree) and of Libkey beneath it; a change of either must bump a version
-   and change this value. *)
-let vector = "7e9786986851210918c771d2a27c324e"
+(* Version 2 test vector: the label of [vector_input] over [lib_a] and
+   [sum_a]. It pins the layout of LibkeyObjects (version, the compiled form,
+   the segments' tree, the summary's view) and of Libkey beneath it; a
+   change of either must bump a version and change this value. *)
+let vector = "a3bb937031bf2573da81b875c89dbcff7950703ad0c9716cc7e55a59af5286bb"
+
+let () = add_test "layout version 2" (fun () ->
+    assert_equal ~printer:string_of_int 2 LibkeyObjects.version)
 
 let () = add_test "test vector" (fun () ->
     let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
-    assert_equal ~msg:"16 bytes" ~printer:string_of_int 16 (String.length label);
+    assert_equal ~msg:"32 bytes" ~printer:string_of_int 32 (String.length label);
     assert_equal ~msg:"label" ~printer:(fun s -> s) vector (hex label))
 
+(* The summary as the layout reads it, written out: the name, the
+   dependencies as a list in their order, the safe dependencies in
+   [DirPath.compare] order, and the attributes as strings. *)
+let summary_view (s : LibkeyObjects.summary) =
+  (s.name, Array.to_list s.deps, List.sort DirPath.compare (DirPath.Set.elements s.safe_deps),
+   (Option.map (fun { Deprecation.since; note } -> (since, note)) s.info.UserWarn.depr,
+    List.map (fun (w : UserWarn.warn) -> (w.note, w.cats)) s.info.UserWarn.warn))
+
 (* The reference reading of the layout: Libkey.label of the version, the
-   compiled form and the two segments as they would be with no location in
-   them. Independent of the pinned value above. *)
+   compiled form, the two segments as they would be with no location in
+   them, and the summary's view. Independent of the pinned value above. *)
 let () = add_test "layout" (fun () ->
     let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
     let syn, obj = vector_input None None in
     assert_equal ~printer:hex
-      (Libkey.label (Obj.repr (LibkeyObjects.version, lib_a, syn, obj))) label)
+      (Libkey.label (Obj.repr (2, lib_a, syn, obj, summary_view sum_a))) label)
 
 let () = add_test "the compiled form counts" (fun () ->
     let input = vector_input None None in
@@ -131,6 +165,53 @@ let () = add_test "every other field counts" (fun () ->
       (with_objs [Libobject.ModuleObject (Id.of_string "M", ([], Libobject.Objs []))])
       (with_objs [Libobject.ModuleObject (Id.of_string "N", ([], Libobject.Objs []))]))
 
+(* Each field of the summary counts (Astra review, section 3.1: the safe/full
+   modes of the dependencies change what a dependent's compile does). *)
+let () = add_test "every field of the summary counts" (fun () ->
+    let input = vector_input None None in
+    let summary_differs msg s1 s2 =
+      assert_bool msg (not (String.equal (objects_exn ~summary:s1 input) (objects_exn ~summary:s2 input))) in
+    summary_differs "a dependency safe-required (Require (safe)) instead of required"
+      (summary ~deps:deps_a ()) (summary ~deps:deps_a ~safe:["LibkeyTest.X"] ());
+    summary_differs "which dependency is safe-required"
+      (summary ~deps:deps_a ~safe:["LibkeyTest.X"] ())
+      (summary ~deps:deps_a ~safe:["Corelib.Init.Prelude"] ());
+    summary_differs "a dependency's digest"
+      (summary ~deps:deps_a ())
+      (summary ~deps:[ "Corelib.Init.Prelude", String.make 16 'p'; "LibkeyTest.X", String.make 16 'y' ] ());
+    summary_differs "the order of the dependencies"
+      (summary ~deps:deps_a ()) (summary ~deps:(List.rev deps_a) ());
+    summary_differs "one more dependency"
+      (summary ~deps:deps_a ()) (summary ~deps:(deps_a @ [ "LibkeyTest.Y", String.make 16 'y' ]) ());
+    summary_differs "the library's name"
+      (summary ~name:"LibkeyTest.A" ()) (summary ~name:"LibkeyTest.A2" ());
+    summary_differs "a deprecation" (summary ()) (summary ~info:(info ~since:"9.2" ()) ());
+    summary_differs "a deprecation's version"
+      (summary ~info:(info ~since:"9.2" ()) ()) (summary ~info:(info ~since:"9.3" ()) ());
+    summary_differs "a deprecation's note"
+      (summary ~info:(info ~note:"a" ()) ()) (summary ~info:(info ~note:"b" ()) ());
+    summary_differs "a deprecation's version against its note"
+      (summary ~info:(info ~since:"a" ()) ()) (summary ~info:(info ~note:"a" ()) ());
+    summary_differs "a warning" (summary ()) (summary ~info:(info ~warns:["n", "c"] ()) ());
+    summary_differs "a warning's note"
+      (summary ~info:(info ~warns:["n", "c"] ()) ()) (summary ~info:(info ~warns:["m", "c"] ()) ());
+    summary_differs "a warning's categories"
+      (summary ~info:(info ~warns:["n", "c"] ()) ()) (summary ~info:(info ~warns:["n", "d"] ()) ()))
+
+(* The safe dependencies are a set: the shape of the balanced tree that holds
+   it depends on the order of insertion, and must not count. *)
+let () = add_test "the safe dependencies are read as a set" (fun () ->
+    let names = List.init 9 (fun i -> Printf.sprintf "LibkeyTest.S%d" i) in
+    let deps = List.map (fun n -> (n, String.make 16 's')) names in
+    let input = vector_input None None in
+    let a = objects_exn ~summary:(summary ~deps ~safe:names ()) input in
+    let b = objects_exn ~summary:(summary ~deps ~safe:(List.rev names) ()) input in
+    let c = objects_exn ~summary:(summary ~deps
+                                    ~safe:(List.filteri (fun i _ -> i mod 2 = 0) names
+                                           @ List.filteri (fun i _ -> i mod 2 = 1) names) ()) input in
+    assert_equal ~printer:hex a b;
+    assert_equal ~printer:hex a c)
+
 let () = add_test "sharing does not count" (fun () ->
     let s = String.make 100 'a' in
     let shared = (segment [], segment [atomic (in_as_is (1, s)); atomic (in_as_is (1, s))]) in
@@ -145,9 +226,9 @@ let () = add_test "stored objects keep their locations" (fun () ->
 
 let no_key msg expected (syntax, objects) =
   assert_equal ~msg ~printer:(fun x -> x) "None"
-    (match LibkeyObjects.label ~compiled:lib_a ~syntax ~objects with
+    (match LibkeyObjects.label ~summary:sum_a ~compiled:lib_a ~syntax ~objects with
      | None -> "None" | Some _ -> "Some");
-  match LibkeyObjects.label_result ~compiled:lib_a ~syntax ~objects with
+  match LibkeyObjects.label_result ~summary:sum_a ~compiled:lib_a ~syntax ~objects with
   | Ok _ -> assert_failure msg
   | Error what -> assert_equal ~msg ~printer:(fun x -> x) expected what
 

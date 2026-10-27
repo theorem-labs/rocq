@@ -3,10 +3,15 @@
  (modules coq_config_to_make)
  (libraries rocq-runtime.config))
 
-; Test oracle of the location-free library label (vernac/libkeyObjects.ml).
-; Every plugin is linked in so that every object kind is registered.
+; rocq-library-label: the location-free library label of a .vo file
+; (vernac/libkeyObjects.ml), recomputed from its content, and its
+; attempted-resolution records; installed for graders, and the oracle of
+; misc/library-label*.sh. Every plugin is linked in so that every object
+; kind is registered.
 (executable
  (name library_label)
+ (public_name rocq-library-label)
+ (package rocq-core)
  (modules library_label)
  (link_flags -linkall)
  (libraries

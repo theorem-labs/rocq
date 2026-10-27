@@ -116,21 +116,42 @@ let samples : (string * Obj.t) list =
     "empty block", Obj.repr [||];
   ]
 
-let () = add_test "encoding follows the documented layout" (fun () ->
+(* A test that hashes long encodings, run once with the fastest compression
+   and once with the portable one, so that both SHA-256 implementations
+   produce the documented bytes. *)
+let add_test_both_sha name test =
+  add_test (name ^ ", fastest compression") test;
+  add_test (name ^ ", portable compression") (fun () ->
+      Libkey.force_portable_sha256 true;
+      Fun.protect ~finally:(fun () -> Libkey.force_portable_sha256 false) test)
+
+let () = add_test_both_sha "encoding follows the documented layout" (fun () ->
     List.iter (fun (name, v) ->
         assert_equal ~msg:name ~printer:String.escaped (ref_repr v) (Libkey.encode v))
       samples)
 
-let () = add_test "label is the first 16 bytes of the header's and encoding's digest" (fun () ->
-    let v = Obj.repr (List.init 50 string_of_int) in
-    let ocaml = Coq_config.caml_version in
-    let u32 n = let b = Bytes.create 4 in Bytes.set_int32_le b 0 (Int32.of_int n); Bytes.to_string b in
-    let header = "rocq-library-label\000" ^ u32 Libkey.version
-                 ^ u32 (Int32.to_int Coq_config.vo_version) ^ u32 Sys.word_size
-                 ^ u32 (String.length ocaml) ^ ocaml in
-    assert_equal ~printer:hex (String.sub (Libkey.sha256 (header ^ ref_repr v)) 0 16) (Libkey.label v))
+(* The header of layout version 2, written out. *)
+let header_v2 =
+  let ocaml = Coq_config.caml_version in
+  let u32 n = let b = Bytes.create 4 in Bytes.set_int32_le b 0 (Int32.of_int n); Bytes.to_string b in
+  "rocq-library-label\000" ^ u32 2
+  ^ u32 (Int32.to_int Coq_config.vo_version) ^ u32 Sys.word_size
+  ^ u32 (String.length ocaml) ^ ocaml
 
-let () = add_test "encoding ignores physical sharing" (fun () ->
+let () = add_test "layout version 2" (fun () ->
+    assert_equal ~printer:string_of_int 2 Libkey.version)
+
+let () = add_test_both_sha "label is the SHA-256 of the header and the encoding" (fun () ->
+    let v = Obj.repr (List.init 50 string_of_int) in
+    let label = Libkey.label v in
+    assert_equal ~msg:"32 bytes" ~printer:string_of_int 32 (String.length label);
+    assert_equal ~printer:hex (Libkey.sha256 (header_v2 ^ ref_repr v)) label)
+
+let () = add_test "a library stores the first 16 bytes of its label" (fun () ->
+    let label = Libkey.label (Obj.repr (List.init 50 string_of_int)) in
+    assert_equal ~printer:hex (String.sub label 0 16) (Libkey.stored label))
+
+let () = add_test_both_sha "encoding ignores physical sharing" (fun () ->
     let big () = List.init 100 (fun i -> String.make 10 (Char.chr (65 + i mod 26))) in
     let x = big () in
     assert_equal ~printer:hex (Libkey.encode (Obj.repr (x, x))) (Libkey.encode (Obj.repr (x, big ())));

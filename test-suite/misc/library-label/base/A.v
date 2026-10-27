@@ -1,8 +1,12 @@
 (* One object of each of the ten kinds the library label strips locations
    from (CONSTANT, INDUCTIVE, ABBREVIATION, NOTATION, TAC-DEFINITION,
    TAC-REDEFINITION, TacticGrammar and TacticSyntax, AUTOHINT with a Hint
-   Extern, TAC2-DEFINITION), a few it reads as they are, and a functor. Each
+   Extern, TAC2-DEFINITION), a few it reads as they are (a canonical
+   structure among them), a functor, and the parts of the library's summary:
+   an attribute of the library and a dependency, required at the end. Each
    variant of misc/library-label.sh changes one thing. *)
+
+Attributes warn(note="label fixture", cats="label-fixture").
 
 Inductive t := C1 | C2.
 
@@ -29,6 +33,11 @@ Tactic Notation "my_exact" constr(x) := exact x.
 
 #[global] Set Asymmetric Patterns.
 
+Structure cs := { cs_car : Type; cs_op : cs_car -> cs_car }.
+Definition cs_nat := {| cs_car := nat; cs_op := S |}.
+Definition cs_nat2 := {| cs_car := nat; cs_op := pred |}.
+Canonical Structure cs_nat.
+
 Module Type S. Parameter u : Type. End S.
 
 Module F (X : S). Definition d := X.u. End F.
@@ -38,3 +47,5 @@ Definition g := f.
 From Ltac2 Require Import Ltac2.
 
 Ltac2 l2 (n : int) := n.
+
+Require Corelib.Classes.CMorphisms.

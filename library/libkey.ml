@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-let version = 1
+let version = 2
 
 exception Unsupported of string
 
@@ -32,4 +32,6 @@ let header = lazy begin
   Buffer.contents b
 end
 
-let label v = String.sub (sha256 (Lazy.force header ^ encode v)) 0 16
+let label v = sha256 (Lazy.force header ^ encode v)
+
+let stored label = String.sub label 0 16

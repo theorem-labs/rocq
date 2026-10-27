@@ -8,9 +8,17 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
+open Names
 open Libobject
 
-let version = 1
+let version = 2
+
+type summary = {
+  name : DirPath.t;
+  deps : (DirPath.t * Safe_typing.vodigest) array;
+  safe_deps : DirPath.Set.t;
+  info : Library_info.t;
+}
 
 exception No_view of string
 
@@ -52,15 +60,30 @@ let strip_segment ((objs, { keep_objects }, { escape_objects }) : Declaremods.li
   | seg -> Ok (seg : Declaremods.library_objects)
   | exception No_view what -> Error what
 
-let label_result ~compiled ~syntax ~objects =
+(* The summary as the label reads it: names, digests and strings, so no
+   source location and no file path. The record patterns name every field,
+   and warning 9 (a field left out of a record pattern) is an error here:
+   a field added to [summary], [UserWarn.t], [Deprecation.t] or
+   [UserWarn.warn] stops the build until this view says how the label reads
+   it. [DirPath.Set.elements] lists the set in [DirPath.compare] order (the
+   set's own order), whatever the shape of its tree. *)
+let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr; warn } } =
+  let depr = Option.map (fun { Deprecation.since; note } -> (since, note)) depr in
+  let warn = List.map (fun ({ UserWarn.note; cats } : UserWarn.warn) -> (note, cats)) warn in
+  (name, Array.to_list deps, DirPath.Set.elements safe_deps, (depr, warn))
+
+let label_result ~summary ~compiled ~syntax ~objects =
   match strip_segment syntax with
   | Error what -> Error ("syntax segment: " ^ what)
   | Ok syntax ->
     match strip_segment objects with
     | Error what -> Error ("object segment: " ^ what)
     | Ok objects ->
-      match Libkey.label (Obj.repr (version, (compiled : Safe_typing.compiled_library), syntax, objects)) with
+      let input =
+        (version, (compiled : Safe_typing.compiled_library), syntax, objects, summary_view summary) in
+      match Libkey.label (Obj.repr input) with
       | label -> Ok label
       | exception Libkey.Unsupported what -> Error ("encoding: " ^ what)
 
-let label ~compiled ~syntax ~objects = Result.to_option (label_result ~compiled ~syntax ~objects)
+let label ~summary ~compiled ~syntax ~objects =
+  Result.to_option (label_result ~summary ~compiled ~syntax ~objects)

@@ -13,18 +13,25 @@
 # Dep.C (Require Dep.B) are compiled once, against the base. Then, against
 # each variant:
 # - KEEP (a rebuild elsewhere, a comment line in front, blank lines, extra
-#   spaces in a tactic, a proof-only edit that creates no universe): coqc
+#   spaces in a tactic, a proof-only edit that creates no universe, and
+#   spaces and line breaks in the library attribute and the Require): coqc
 #   compiles a client of Dep.C, and rocqchk -o accepts Test.A (the variant's
 #   own opaque proofs), Dep.B and Dep.C;
 # - CHANGE (a statement, a transparent body, an inductive, a new universe, a notation, an
 #   abbreviation, a hint, a Hint Extern, an Ltac body, an Ltac
 #   redefinition, a tactic notation, a Global option, an Ltac2 definition, a
-#   functor declared before F, which shifts F's bound-module counter, and a
+#   functor declared before F, which shifts F's bound-module counter, a
 #   functor declared under Succeed, which shifts it and leaves nothing
-#   else): both refuse, with their "inconsistent assumptions" messages.
+#   else, another canonical instance, Qed replaced by Admitted, and the two
+#   parts of the library's summary: the Require made Require (safe), which
+#   changes only which dependencies the summary lists as safe (Astra review,
+#   section 3.1), and the note of the library's attribute): both refuse,
+#   with their "inconsistent assumptions" messages.
 # tools/library_label.exe --check confirms that every A.vo stores the label
-# recomputed from its content, not the MD5 of its bytes, and that without the
-# flag coqc stores the MD5, as stock does.
+# recomputed from its content ("label2" and the 32 bytes of the label, of
+# which the file stores the first 16), not the MD5 of its bytes; that
+# without the flag coqc stores the MD5 ("md5"), as stock does; and that a
+# stored digest that is neither is "other".
 #
 # With STOCK_BIN set to the bin directory of a stock build of the same base
 # (its rocq able to find its own worker), that build's rocq compiles the
@@ -58,8 +65,8 @@ variant() {
   fi
 }
 
-KEEP="same comment blank spaces proof"
-CHANGE="stmt body inductive universe notation abbrev hint extern ltac redef tacnot option ltac2 functor counter"
+KEEP="same comment blank spaces proof attrs"
+CHANGE="stmt body inductive universe notation abbrev hint extern ltac redef tacnot option ltac2 functor counter canonical admitted safe info"
 
 mkdir -p _test/base
 cp base/A.v _test/base/A.v
@@ -87,6 +94,11 @@ variant option -e 's/Set Asymmetric Patterns/Unset Asymmetric Patterns/'
 variant ltac2 -e 's/Ltac2 l2 (n : int) := n\./Ltac2 l2 (n : int) := (n, n)./'
 variant functor -e 's/^Module F (X : S)/Module F0 (X0 : S). End F0.\nModule F (X : S)/'
 variant counter -e 's/^Module F (X : S)/Succeed Module F0 (X0 : S) := X0.\nModule F (X : S)/'
+variant attrs -e 's/^Attributes warn(note=/Attributes  warn(\n  note=/' -e 's/^Require Corelib/Require\n  Corelib/'
+variant canonical -e 's/^Canonical Structure cs_nat\./Canonical Structure cs_nat2./'
+variant admitted -e 's/^Proof\. intros n\. reflexivity\. Qed\./Proof. intros n. reflexivity. Admitted./'
+variant safe -e 's/^Require Corelib\.Classes\.CMorphisms\./Require (safe) Corelib.Classes.CMorphisms./'
+variant info -e 's/note="label fixture"/note="label fixture, changed"/'
 
 for v in base $KEEP $CHANGE; do
   rocq c -q -location-free-label -R "_test/$v" Test "_test/$v/A.v"
@@ -96,13 +108,16 @@ cp base/A.v _test/noflag/A.v
 rocq c -q -R _test/noflag Test _test/noflag/A.v
 
 fail=0
+labels=0
 for v in base $KEEP $CHANGE; do
   c=$("$TOOL" --check "_test/$v/A.vo")
-  case $c in
-    label\ *) ;;
-    *) echo "FAIL $v: A.vo does not store its label: $c"; fail=1;;
-  esac
+  s=$("$TOOL" --stored "_test/$v/A.vo")
+  if [[ $c =~ ^label2\ ([0-9a-f]{64})$ ]] && [ "${BASH_REMATCH[1]:0:32}" = "$s" ]; then labels=$((labels + 1))
+  else echo "FAIL $v: A.vo does not store the first 16 bytes of its label: $c (stored $s)"; fail=1; fi
 done
+if [ "$labels" = "$(wc -w <<< "base $KEEP $CHANGE")" ]; then
+  echo "PASS all $labels A.vo files compiled with the flag store the first 16 bytes of their label"
+fi
 # With a stock build: the same file at the same path, compiled by stock and
 # by this coqc without the flag, gives the same bytes.
 if [ -n "${STOCK_BIN:-}" ]; then
@@ -113,10 +128,30 @@ if [ -n "${STOCK_BIN:-}" ]; then
   else echo "FAIL without the flag, A.vo differs from stock's"; fail=1; fi
 fi
 c=$("$TOOL" --check _test/noflag/A.vo)
-case $c in
-  md5\ *) echo "PASS without the flag, A.vo stores the MD5 of its bytes";;
-  *) echo "FAIL without the flag, A.vo does not store the MD5 of its bytes: $c"; fail=1;;
-esac
+if [[ $c =~ ^md5\ [0-9a-f]{32}$ ]] && [ "$c" = "md5 $("$TOOL" --stored _test/noflag/A.vo)" ]; then
+  echo "PASS without the flag, A.vo stores the MD5 of its bytes"
+else echo "FAIL without the flag, A.vo does not store the MD5 of its bytes: $c"; fail=1; fi
+# A stored digest that is neither the label nor the MD5 (a label of another
+# layout version, say): both copies of the library segment's digest set to
+# 16 bytes 0xab (layout per lib/objFile.ml).
+python3 - _test/base/A.vo _test/other.vo <<'PY'
+import struct, sys
+b = bytearray(open(sys.argv[1], 'rb').read())
+(sp,) = struct.unpack_from(">Q", b, 8)
+(n,) = struct.unpack_from(">I", b, sp); off = sp + 4
+for _ in range(n):
+    (ln,) = struct.unpack_from(">I", b, off); off += 4
+    name = bytes(b[off:off+ln]); off += ln
+    pos, sz = struct.unpack_from(">QQ", b, off); off += 16
+    if name == b"library":
+        b[off:off+16] = b"\xab" * 16
+        b[pos+sz:pos+sz+16] = b"\xab" * 16
+    off += 16
+open(sys.argv[2], 'wb').write(b)
+PY
+c=$("$TOOL" --check _test/other.vo)
+if [ "$c" = "other $(printf 'ab%.0s' {1..16})" ]; then echo "PASS another stored digest is \"other\""
+else echo "FAIL another stored digest: $c"; fail=1; fi
 
 mkdir -p _test/dep
 printf 'Require Test.A.\nDefinition b := Test.A.g.\n' > _test/dep/B.v

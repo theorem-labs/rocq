@@ -29,9 +29,13 @@ open Names
     Each record holds what the attempt looked for and found: the request;
     every candidate file it could probe, with whether that file existed; the
     files it read, with the SHA-256 of each when the library was saved; and,
-    for a [Require] or a [Load], the load path it searched, with the
-    subdirectories of each directory that a recursive scan would make load
-    path entries (a new one can make a failed lookup succeed). For a
+    for a [Require] or a [Load], the load path it searched, with, for each
+    directory that a recursive scan made an entry ([-R], [-Q], the installed
+    libraries), its subdirectories that a scan would make entries (a new one
+    can make a failed lookup succeed). The working directory is an entry
+    that no scan made: its other subdirectories never become entries, so
+    they are not recorded, and the same file compiled at the same path gets
+    the same records whatever else the working directory holds. For a
     [Declare ML Module], the plugin's files as findlib resolved them.
 
     The object is in the library segment, so the library's label
@@ -93,3 +97,48 @@ val find : Declaremods.library_objects -> t option
 val describe : t -> string list
 (** One line per record: the request, each candidate with whether it was
     found, and each file read with its SHA-256. *)
+
+val json_version : int
+(** The version of the JSON schema below: 1. *)
+
+val to_json : t option -> (string, string) result
+(** The records as one JSON document (RFC 8259, one line, no insignificant
+    whitespace), for a reader that revalidates them without compiling the
+    library ([rocq-library-label --attempts-json]). [None]: the library has
+    no [ATTEMPTS] object. Schema, version {!json_version}:
+{v
+document  = { "attempts_json_version": 1, "record": null | record }
+record    = { "attempts": [attempt, ...],     (non-empty, in the order made)
+              "digests": [digest, ...],       (sorted by file, each file once)
+              "loadpaths": [[entry, ...], ...] }
+attempt   = { "request": request,
+              "probes": [probe, ...],         (every candidate, in order)
+              "library": string | null,       (a Require: the library it
+                                               resolved to, a.b.c)
+              "found": [string, ...],         (the files it read; each has a
+                                               digest)
+              "loadpath": int }               (index in "loadpaths", or -1
+                                               for an ml_module request)
+request   = { "kind": "require_qualified", "root": string | null, "name": string }
+          | { "kind": "require_absolute", "name": string }
+          | { "kind": "load", "name": string }       (the file name, with .v)
+          | { "kind": "ml_module", "name": string }  (the findlib name)
+probe     = { "dir": string, "file": string, "exists": bool }
+digest    = { "file": string, "sha256": string }     (64 lowercase hex
+                                     digits, or "unreadable" when the file
+                                     could not be read when the library was
+                                     saved)
+entry     = { "dir": string, "recursive": true, "subdirs": [string, ...] | null }
+                                    (a load path directory that a recursive
+                                     scan made an entry, and its
+                                     subdirectories that a scan makes
+                                     entries, sorted; null when it could not
+                                     be read)
+          | { "dir": string, "recursive": false }
+                                    (the working directory: its
+                                     subdirectories never become entries)
+v}
+    A probe's [exists] is as [Loadpath.select_vo_file] reads a candidate:
+    the file exists, and a [.vos] counts only when it is not empty. Paths
+    are as recorded. [Error] when a string is not valid UTF-8, which JSON
+    cannot carry as it is. *)

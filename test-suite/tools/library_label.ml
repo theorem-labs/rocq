@@ -8,56 +8,65 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(* Test oracle of the location-free library label (vernac/libkeyObjects.ml).
+(* rocq-library-label: the location-free library label of a .vo file
+   (vernac/libkeyObjects.ml), recomputed from the file's content.
+   - [--check FILE.vo]: one line. "label2 <64 hex>" when the digest the file
+     stores for its library segment is the first 16 bytes of the label
+     (layout version 2) recomputed from the file's summary and library
+     segments, followed by the whole 32-byte label; "md5 <32 hex>" when it
+     is the MD5 of the segment's bytes (stock's digest: a library compiled
+     without -location-free-label, or with no label), followed by it;
+     "other <hex>" otherwise (a label of another layout version, a tampered
+     file), followed by the stored digest.
    - [--stored FILE.vo]: the digest the file stores for its library segment,
      in hex, as its dependents record it.
-   - [--check FILE.vo]: "label" when that digest is the label recomputed from
-     the segment's content, "md5" when it is the MD5 of the segment's bytes
-     (a library with no label), "other" otherwise; then the stored digest.
-   - [--attempts FILE.vo]: the attempted-resolution records (Attempts).
+   - [--attempts FILE.vo]: the attempted-resolution records (Attempts), one
+     line each, or "no attempts".
+   - [--attempts-json FILE.vo]: the same records as one JSON document, in
+     the schema documented at [Attempts.to_json] (vernac/attempts.mli).
+   Exit 0; 1 when the file cannot be read as a .vo file; 2 on a usage error;
+   3 when --attempts-json meets a string that is not valid UTF-8.
    Every object kind of rocq's own plugins is linked in (-linkall), so the
    kinds a library uses are registered as they are in [rocq compile]. *)
-
-type library_disk = {
-  md_compiled : Safe_typing.compiled_library;
-  md_syntax_objects : Declaremods.library_objects;
-  md_objects : Declaremods.library_objects;
-}
-
-let library_seg : library_disk ObjFile.id = ObjFile.make_id "library"
 
 let hex s =
   String.concat "" (List.init (String.length s) (fun i -> Printf.sprintf "%02x" (Char.code s.[i])))
 
-let read_library file =
-  let ch = ObjFile.open_in ~file in
-  let md, digest = ObjFile.marshal_in_segment ch ~segment:library_seg in
-  let seg = ObjFile.get_segment ch ~segment:library_seg in
-  ObjFile.close_in ch;
-  md, digest, seg
+let usage () =
+  prerr_endline "usage: rocq-library-label (--check | --stored | --attempts | --attempts-json) FILE.vo";
+  exit 2
 
-let segment_md5 file (seg : _ ObjFile.segment) =
-  In_channel.with_open_bin file (fun ic ->
-      In_channel.seek ic seg.pos;
-      Digest.channel ic (Int64.to_int seg.len))
+let read f =
+  match Library.read_file_label f with
+  | l -> l
+  | exception e ->
+    prerr_endline ("rocq-library-label: cannot read " ^ f ^ ": " ^ Printexc.to_string e);
+    exit 1
 
 let () =
   match List.tl (Array.to_list Sys.argv) with
-  | ["--stored"; f] -> let _, d, _ = read_library f in print_endline (hex d)
-  | ["--check"; f] ->
-    let md, d, seg = read_library f in
-    let label = LibkeyObjects.label ~compiled:md.md_compiled ~syntax:md.md_syntax_objects
-        ~objects:md.md_objects in
-    let kind =
-      if Option.equal String.equal label (Some d) then "label"
-      else if String.equal (segment_md5 f seg) d then "md5"
-      else "other"
-    in
-    Printf.printf "%s %s\n" kind (hex d)
-  | ["--attempts"; f] ->
-    let md, _, _ = read_library f in
-    (match Attempts.find md.md_objects with
-     | None -> print_endline "no attempts"
-     | Some t -> List.iter print_endline (Attempts.describe t))
-  | _ ->
-    prerr_endline "usage: library_label (--stored | --check | --attempts) FILE.vo"; exit 2
+  | [mode; f] ->
+    begin match mode with
+    | "--check" ->
+      let l = read f in
+      begin match l.label with
+      | Ok label when String.equal (Libkey.stored label) l.stored ->
+        Printf.printf "label2 %s\n" (hex label)
+      | Ok _ | Error _ ->
+        if String.equal l.segment_md5 l.stored then Printf.printf "md5 %s\n" (hex l.stored)
+        else Printf.printf "other %s\n" (hex l.stored)
+      end
+    | "--stored" -> print_endline (hex (read f).stored)
+    | "--attempts" ->
+      begin match (read f).attempts with
+      | None -> print_endline "no attempts"
+      | Some t -> List.iter print_endline (Attempts.describe t)
+      end
+    | "--attempts-json" ->
+      begin match Attempts.to_json (read f).attempts with
+      | Ok j -> print_endline j
+      | Error what -> prerr_endline ("rocq-library-label: " ^ f ^ ": " ^ what); exit 3
+      end
+    | _ -> usage ()
+    end
+  | _ -> usage ()
