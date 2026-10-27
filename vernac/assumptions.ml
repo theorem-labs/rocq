@@ -1253,6 +1253,15 @@ module Shared = struct
               let n = contents { r_key = key; r_kind = kind; r_replayable = replayable; r_refs = refs } in
               let fd = Unix.openfile tmp [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_CLOEXEC] 0o600 in
               Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> write_all fd !out_buffer 0 n);
+              (* No fsync before the rename, on purpose. The rename alone makes
+                 the entry appear whole or not at all to the other processes of
+                 the build, which share this host's page cache. An fsync guards
+                 only against a crash or a power loss, after which nothing
+                 reads the directory: it serves one build and is made fresh for
+                 the next. A file a crash did leave truncated or stale fails the
+                 digest check in [read] and counts as a miss. An fsync costs
+                 about 1.7 ms per entry (against 23 us without), 12-24 s for a
+                 file that writes 7,000-14,000 entries. *)
               Unix.rename tmp file
             end)
       with Unix.Unix_error _ as e -> disable "a write" e
