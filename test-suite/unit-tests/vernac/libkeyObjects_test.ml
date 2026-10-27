@@ -96,16 +96,17 @@ let objects_exn ?(compiled = lib_a) ?(summary = sum_a) (syntax, objects) =
   | Ok b -> b
   | Error what -> failwith ("no label: " ^ what)
 
-(* Version 2 test vector: the label of [vector_input] over [lib_a] and
+(* Version 3 test vector: the label of [vector_input] over [lib_a] and
    [sum_a], without [Libkey]'s header, which holds the OCaml version and so
    differs between switches. It pins the layout of LibkeyObjects (version,
-   the compiled form, the segments' tree, the summary's view) and the
+   the blinded compiled form, the segments' tree, the summary's view) and the
    encoding beneath it; a change of either must bump a version and change
-   this value. *)
-let vector = "918b2608ee7efe3be1f57b331eedb2d3f2d7459f8c18ddec4e85873b39beebc4"
+   this value. [lib_a] is an empty library, so the axiom-or-opaque blinding
+   ([blind_compiled]) is the identity on it. *)
+let vector = "dd34e13f8c5a0d988f276832564586c6cb919849b5719fa7f9c9937849a7ffe2"
 
-let () = add_test "layout version 2" (fun () ->
-    assert_equal ~printer:string_of_int 2 LibkeyObjects.version)
+let () = add_test "layout version 3" (fun () ->
+    assert_equal ~printer:string_of_int 3 LibkeyObjects.version)
 
 (* The summary as the layout reads it, written out: the name, the
    dependencies as a list in their order, the safe dependencies in
@@ -120,7 +121,8 @@ let () = add_test "test vector" (fun () ->
     assert_equal ~msg:"32 bytes" ~printer:string_of_int 32 (String.length label);
     let syn, obj = vector_input None None in
     let headerless =
-      Libkey.sha256 (Libkey.encode (Obj.repr (2, lib_a, syn, obj, summary_view sum_a))) in
+      Libkey.sha256 (Libkey.encode (Obj.repr
+        (LibkeyObjects.version, LibkeyObjects.blind_compiled lib_a, syn, obj, summary_view sum_a))) in
     assert_equal ~msg:"label without the header" ~printer:(fun s -> s) vector (hex headerless))
 
 (* The reference reading of the layout: Libkey.label of the version, the
@@ -130,7 +132,8 @@ let () = add_test "layout" (fun () ->
     let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
     let syn, obj = vector_input None None in
     assert_equal ~printer:hex
-      (Libkey.label (Obj.repr (2, lib_a, syn, obj, summary_view sum_a))) label)
+      (Libkey.label (Obj.repr
+        (LibkeyObjects.version, LibkeyObjects.blind_compiled lib_a, syn, obj, summary_view sum_a))) label)
 
 let () = add_test "the compiled form counts" (fun () ->
     let input = vector_input None None in
@@ -268,5 +271,39 @@ let () = add_test "registered generic argument, in a list" (fun () ->
     assert_bool "locations stripped" (List.for_all (fun x -> Option.is_empty x.CAst.loc) l);
     assert_equal ~printer:(fun x -> x) "a b"
       (String.concat " " (List.map (fun x -> Id.to_string x.CAst.v) l)))
+
+(* The axiom-or-opaque-proof blinding (S1b): [Undef None] (an axiom) and
+   [OpaqueDef _] (an opaque proof) collapse to the canonical [Undef None], so
+   [Admitted <-> Qed] does not change the label; [Def] (a transparent body
+   conversion unfolds) and [Undef (Some _)] (an inlinable parameter) stay
+   distinct. Every other field is kept, which the fixture and the mutation
+   sweep exercise on real compiled forms. *)
+let () = add_test "blind_constant collapses axiom and opaque proof, keeps Def and inline" (fun () ->
+    let opaque, _ = Opaqueproof.create (dp "LibkeyTest.A") Opaqueproof.empty_opaquetab in
+    let base : Declarations.constant_body =
+      { Declarations.const_hyps = [];
+        const_univ_hyps = UVars.Instance.empty;
+        const_body = Declarations.Undef None;
+        const_type = Constr.mkRel 1;
+        const_relevance = Sorts.Relevant;
+        const_body_code = None;
+        const_universes = Declarations.Monomorphic;
+        const_inline_code = false;
+        const_typing_flags = Environ.typing_flags Environ.empty_env } in
+    let is_undef_none cb = match cb.Declarations.const_body with
+      | Declarations.Undef None -> true | _ -> false in
+    assert_bool "OpaqueDef collapses to Undef None"
+      (is_undef_none (LibkeyObjects.blind_constant { base with Declarations.const_body = Declarations.OpaqueDef opaque }));
+    assert_bool "Undef None stays Undef None"
+      (is_undef_none (LibkeyObjects.blind_constant base));
+    assert_bool "a transparent body is not blinded"
+      (match (LibkeyObjects.blind_constant
+                { base with Declarations.const_body = Declarations.Def (Constr.mkRel 1) }).Declarations.const_body with
+       | Declarations.Def _ -> true | _ -> false);
+    assert_bool "an inlinable parameter is not blinded"
+      (match (LibkeyObjects.blind_constant
+                { base with Declarations.const_body = Declarations.Undef (Some 1) }).Declarations.const_body with
+       | Declarations.Undef (Some 1) -> true | _ -> false))
+
 
 let _ = run_tests __FILE__ (open_log_out_ch __FILE__) (List.rev !tests)

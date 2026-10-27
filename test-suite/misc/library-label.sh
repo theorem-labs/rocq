@@ -13,8 +13,11 @@
 # Dep.C (Require Dep.B) are compiled once, against the base. Then, against
 # each variant:
 # - KEEP (a rebuild elsewhere, a comment line in front, blank lines, extra
-#   spaces in a tactic, a proof-only edit that creates no universe, and
-#   spaces and line breaks in the library attribute and the Require): coqc
+#   spaces in a tactic, a proof-only edit that creates no universe, spaces
+#   and line breaks in the library attribute and the Require, and -- new in
+#   label version 3, which blinds a constant's axiom-or-opaque-proof
+#   distinction -- an Admitted lemma made Qed (axqed) and a Qed lemma made
+#   Admitted (admitted), each of which a dependent cannot observe): coqc
 #   compiles a client of Dep.C, and rocqchk -o accepts Test.A (the variant's
 #   own opaque proofs), Dep.B and Dep.C;
 # - CHANGE (a statement, a transparent body, an inductive, a new universe, a notation, an
@@ -22,7 +25,10 @@
 #   redefinition, a tactic notation, a Global option, an Ltac2 definition, a
 #   functor declared before F, which shifts F's bound-module counter, a
 #   functor declared under Succeed, which shifts it and leaves nothing
-#   else, another canonical instance, Qed replaced by Admitted, and the two
+#   else, another canonical instance, an Admitted lemma made a transparent
+#   Definition (axdef, a transparent body which conversion unfolds, so it is
+#   NOT blinded), a Proof-using change that discharges one more section
+#   binder (secbind), and the two
 #   parts of the library's summary: the Require made Require (safe), which
 #   changes only which dependencies the summary lists as safe (Astra review,
 #   section 3.1), and the note of the library's attribute): both refuse,
@@ -65,8 +71,8 @@ variant() {
   fi
 }
 
-KEEP="same comment blank spaces proof attrs"
-CHANGE="stmt body inductive universe notation abbrev hint extern ltac redef tacnot option ltac2 functor counter canonical admitted safe info"
+KEEP="same comment blank spaces proof attrs admitted axqed"
+CHANGE="stmt body inductive universe notation abbrev hint extern ltac redef tacnot option ltac2 functor counter canonical axdef secbind safe info"
 
 mkdir -p _test/base
 cp base/A.v _test/base/A.v
@@ -97,6 +103,9 @@ variant counter -e 's/^Module F (X : S)/Succeed Module F0 (X0 : S) := X0.\nModul
 variant attrs -e 's/^Attributes warn(note=/Attributes  warn(\n  note=/' -e 's/^Require Corelib/Require\n  Corelib/'
 variant canonical -e 's/^Canonical Structure cs_nat\./Canonical Structure cs_nat2./'
 variant admitted -e 's/^Proof\. intros n\. reflexivity\. Qed\./Proof. intros n. reflexivity. Admitted./'
+variant axqed -e 's/^Admitted\.$/Proof. exact I. Qed./'
+variant axdef -e 's/^Lemma lax : True\.$/Definition lax := I./' -e '/^Admitted\.$/d'
+variant secbind -e 's/Proof using sv\./Proof using sv sw./'
 variant safe -e 's/^Require Corelib\.Classes\.CMorphisms\./Require (safe) Corelib.Classes.CMorphisms./'
 variant info -e 's/note="label fixture"/note="label fixture, changed"/'
 

@@ -833,10 +833,12 @@ let save_library_to todo_proofs ~output_native_objects dir f =
     Nativelib.compile_library ast fn
 
 type file_label = {
+  name : DirPath.t;
   stored : string;
   segment_md5 : string Lazy.t;
   label : (string, string) result Lazy.t;
   attempts : Attempts.t option;
+  axiom_report : LibkeyObjects.axiom_report Lazy.t;
 }
 
 let read_file_label f =
@@ -850,8 +852,9 @@ let read_file_label f =
       In_channel.seek ic seg.ObjFile.pos;
       Digest.channel ic (Int64.to_int seg.ObjFile.len)))
   in
-  { stored; segment_md5; label = lazy (label_result sd md);
-    attempts = Attempts.find md.md_objects }
+  { name = sd.md_name; stored; segment_md5; label = lazy (label_result sd md);
+    attempts = Attempts.find md.md_objects;
+    axiom_report = lazy (LibkeyObjects.axiom_report ~compiled:md.md_compiled) }
 
 let get_used_load_paths () =
   String.Set.elements

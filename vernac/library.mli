@@ -89,6 +89,8 @@ val set_location_free_label : bool -> unit
     computed when they are forced: a reader that only wants the records
     pays for neither. *)
 type file_label = {
+  name : DirPath.t;
+  (** The library's logical name, from its [summary] segment. *)
   stored : string;
   (** The digest the file stores for its [library] segment: what its
       dependents record. *)
@@ -100,6 +102,11 @@ type file_label = {
       has none. *)
   attempts : Attempts.t option;
   (** The attempted-resolution records of its object segment. *)
+  axiom_report : LibkeyObjects.axiom_report Lazy.t;
+  (** The constants the label blinded, with their current status, and the
+      libraries this one holds a foreign opaque reference into
+      ([LibkeyObjects.axiom_report]): what the keep rule reads beside the
+      label for its monotone axiom condition. *)
 }
 
 val read_file_label : CUnix.physical_path -> file_label

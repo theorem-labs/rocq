@@ -448,10 +448,25 @@ let discharge_constant obj = Some obj
 
 let classify_constant cst = Libobject.Substitute
 
-(* [cst_loc] is the source location of the declaration
-   ([Nametab.set_cci_src_loc]); the kind, the import status and the user
-   warnings (strings and global references) hold none. *)
-let strip_constant obj = { obj with cst_loc = LocStrip.loc_opt obj.cst_loc }
+(* The label view of a constant object (design D18; version 3 blinds the
+   axiom-or-opaque-proof distinction, dispatch://INFRA-361).
+   - [cst_loc] is the declaration's source location ([Nametab.set_cci_src_loc]):
+     stripped, like every location.
+   - [cst_kind] is the documentation kind ([Dumpglob.add_constant_kind]): an
+     [Axiom]/[Parameter] is [IsAssumption], a [Qed] lemma [IsProof], a
+     [Definition] [IsDefinition], and so on. No dependent observes it -- it
+     feeds the glob output, not a [.vo] a dependent loads -- and it is the one
+     place, besides the compiled body, where an [Admitted] axiom and a [Qed]
+     proof of the same statement differ (the body the label blinds in
+     [LibkeyObjects.blind_constant]). So the view reads a single canonical kind,
+     which is what makes [Admitted <-> Qed] keep the label. What distinguishes a
+     transparent definition from an opaque proof or an axiom is the compiled
+     body (its transparency class), which the label does read.
+   - [cst_locl] (whether the constant is exported) and [cst_warn] (its
+     deprecation, which a dependent's use replays as a warning) a dependent does
+     observe, so the view keeps them. *)
+let strip_constant obj =
+  { obj with cst_loc = LocStrip.loc_opt obj.cst_loc; cst_kind = Decls.(IsProof Theorem) }
 
 let (objConstant : (Id.t * constant_obj) Libobject.Dyn.tag) =
   let open Libobject in
