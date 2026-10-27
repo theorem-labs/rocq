@@ -41,6 +41,11 @@ type caml_prim =
 | CAML_Stringcat
 | CAML_Stringcompare
 
+type znative_op =
+| ZNadd
+| ZNpossub
+| ZNposadd
+
 type instruction =
   | Klabel of Label.t
   | Kacc of int
@@ -74,9 +79,12 @@ type instruction =
   | Ksequence of bytecodes
   | Kproj of int
   | Kensurestackcapacity of int
+  | Kbinnum of int * int
+  | Kbinnumcall of int * int * Label.t
   | Kbranch of Label.t                  (* jump to label *)
   | Kprim of CPrimitives.t * pconstant
   | Kcamlprim of caml_prim * Label.t
+  | Kznative of znative_op
 
 and bytecodes = instruction list
 
@@ -172,12 +180,22 @@ let rec pp_instr i =
 
   | Kensurestackcapacity size -> str "growstack " ++ int size
 
+  | Kbinnum (k, n) -> str "binnum " ++ int k ++ str ", " ++ int n
+
+  | Kbinnumcall (k, n, lbl) ->
+    str "binnumcall " ++ int k ++ str ", " ++ int n ++ str ", " ++ pp_lbl lbl
+
   | Kprim (op, id) -> str (CPrimitives.to_string op) ++ str " " ++
         (Constant.print (fst id))
 
   | Kcamlprim (op, lbl) ->
     str "camlcall " ++ str (CPrimitives.to_string (caml_prim_to_prim op)) ++ str ", branch " ++
     pp_lbl lbl ++ str " on accu"
+
+  | Kznative op ->
+    let name = match op with
+      | ZNadd -> "add" | ZNpossub -> "pos_sub" | ZNposadd -> "pos_add" in
+    str "znative " ++ str name
 
 and pp_bytecodes c =
   match c with

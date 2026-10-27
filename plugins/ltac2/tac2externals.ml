@@ -77,16 +77,109 @@ let rec arity_of : type v f. (v,f) spec -> v Tac2val.arity = fun (S ar) ->
   | F (_, ar) -> Tac2val.arity_suc (arity_of (S ar))
   | _ -> invalid_arg "Tac2def.arity_of: not a function spec"
 
+(* The direct implementations of a [ret] or [eret] primitive (Tac2val.direct). They convert the
+   arguments from left to right and pass each to [f] as soon as it is converted, as [interp_spec]
+   does, and finally convert the result. [interp_spec] does the same steps in the same order: for
+   [V tr] it gives [tclUNIT (tr f)], and for [E tr] it reads the environment and the evar map and
+   then gives [tclUNIT (tr (f e s))]. Both are only applied to as many arguments as the spec takes. *)
+let rec direct_pure : type v f r. (v, f, r) spec_aux -> f -> Tac2val.valexpr list -> Tac2val.valexpr =
+  fun ar f args -> match ar, args with
+  | V tr, [] -> tr f
+  | F (tr, ar), a :: args -> direct_pure ar (f (tr a)) args
+  | _ -> assert false
+
+let rec direct_env : type v f r. (v, f, r) spec_aux -> f -> Tac2val.valexpr list ->
+  Environ.env -> Evd.evar_map -> Tac2val.valexpr =
+  fun ar f args -> match ar, args with
+  | E tr, [] -> fun e s -> tr (f e s)
+  | F (tr, ar), a :: args -> direct_env ar (f (tr a)) args
+  | _ -> assert false
+
+let rec spec_args : type v f r. (v, f, r) spec_aux -> int = function
+  | F (_, ar) -> 1 + spec_args ar
+  | V _ | E _ | T _ | G _ -> 0
+
+let rec spec_result : type v f r. (v, f, r) spec_aux -> [ `Pure | `Env | `Monadic ] = function
+  | F (_, ar) -> spec_result ar
+  | V _ -> `Pure
+  | E _ -> `Env
+  | T _ | G _ -> `Monadic
+
+(* The direct implementation of the primitive [f] of spec [ar] (a function spec), if it has one. *)
+let direct_of : type v f r. (v, f, r) spec_aux -> f -> Tac2val.direct option = fun ar f ->
+  match spec_result ar with
+  | `Pure -> Some (Tac2val.DirectPure (spec_args ar, direct_pure ar f))
+  | `Env -> Some (Tac2val.DirectEnv (spec_args ar, direct_env ar f))
+  | `Monadic -> None
+
+(* The [Tac2val.fast] entry of the primitive [f] of spec [ar], for one to three arguments with a
+   pure result and one or two with a result given the environment and the evar map. Each converts
+   the arguments from left to right and passes each to [f] as soon as it is converted, then
+   converts the result, as [direct_pure] and [direct_env] do: [let g = f (tr1 a) in g (tr2 b)] is
+   [direct_pure]'s [f (tr a)] and then its next step on [g]. *)
+let fast_of : type v f r. (v, f, r) spec_aux -> f -> Tac2val.fast = fun ar f ->
+  match ar with
+  | F (tr1, V tr) -> Tac2val.Pure1 (fun a -> tr (f (tr1 a)))
+  | F (tr1, F (tr2, V tr)) ->
+    Tac2val.Pure2 (fun a b -> let g = f (tr1 a) in tr (g (tr2 b)))
+  | F (tr1, F (tr2, F (tr3, V tr))) ->
+    Tac2val.Pure3 (fun a b c -> let g = f (tr1 a) in let h = g (tr2 b) in tr (h (tr3 c)))
+  | F (tr1, E tr) -> Tac2val.Env1 (fun a env sigma -> let g = f (tr1 a) in tr (g env sigma))
+  | F (tr1, F (tr2, E tr)) ->
+    Tac2val.Env2 (fun a b env sigma -> let g = f (tr1 a) in let h = g (tr2 b) in tr (h env sigma))
+  | _ -> Tac2val.NoFast
+
 let define : type v f. _ -> (v,f) spec -> f -> unit = fun n ar v ->
   let v =
     match ar with
     | S (V tr) -> tr v
-    | S (F _) ->
+    | S (F _ as ar0) ->
       let arity = arity_of ar in
+      let direct = direct_of ar0 v in
+      let fast = match direct with None -> Tac2val.NoFast | Some _ -> fast_of ar0 v in
       let v = interp_spec ar v in
       let v = Tac2val.purify_closure arity v in
-      let cl = Tac2val.mk_closure arity v in
+      let cl = match direct with
+        | None -> Tac2val.mk_closure arity v
+        | Some d -> Tac2val.mk_closure_direct ~fast arity v d
+      in
       Tac2ffi.of_closure cl
     | _ -> invalid_arg "Tac2def.define: not a pure value"
   in
   Tac2env.define_primitive n v
+
+let direct_args = function
+  | Tac2val.DirectPure (n, _) | Tac2val.DirectEnv (n, _) | Tac2val.DirectRun (n, _, _)
+  | Tac2val.DirectCheck (n, _) -> n
+
+(* Whether [fast] may go with [d]: [NoFast], or an entry of the same kind and number of arguments. *)
+let fast_agrees d fast = match d, fast with
+  | _, Tac2val.NoFast -> true
+  | Tac2val.DirectPure (n, _), Tac2val.Pure1 _ | Tac2val.DirectEnv (n, _), Tac2val.Env1 _
+  | Tac2val.DirectRun (n, _, _), Tac2val.Run1 _ -> Int.equal n 1
+  | Tac2val.DirectPure (n, _), Tac2val.Pure2 _ | Tac2val.DirectEnv (n, _), Tac2val.Env2 _
+  | Tac2val.DirectCheck (n, _), Tac2val.Check2 _ | Tac2val.DirectRun (n, _, _), Tac2val.Run2 _ ->
+    Int.equal n 2
+  | Tac2val.DirectPure (n, _), Tac2val.Pure3 _ | Tac2val.DirectRun (n, _, _), Tac2val.Run3 _ ->
+    Int.equal n 3
+  | Tac2val.DirectRun (n, _, _), Tac2val.Run4 _ -> Int.equal n 4
+  | Tac2val.DirectRun (n, _, _), Tac2val.Run5 _ -> Int.equal n 5
+  | _, (Tac2val.Pure1 _ | Tac2val.Pure2 _ | Tac2val.Pure3 _ | Tac2val.Env1 _ | Tac2val.Env2 _
+       | Tac2val.Check2 _ | Tac2val.Run1 _ | Tac2val.Run2 _ | Tac2val.Run3 _ | Tac2val.Run4 _
+       | Tac2val.Run5 _) -> false
+
+(* [define n ar v] with the direct implementation [d] (and the entry [fast]) instead of the ones
+   [ar] gives (none for a primitive in the proof monad). *)
+let define_direct : type v f. ?fast:Tac2val.fast -> _ -> (v,f) spec -> f -> Tac2val.direct -> unit =
+  fun ?(fast = Tac2val.NoFast) n ar v d ->
+  match ar with
+  | S (F _ as ar0) ->
+    let () = if not (Int.equal (spec_args ar0) (direct_args d)) then
+        invalid_arg "Tac2def.define_direct: arity mismatch" in
+    let () = if not (fast_agrees d fast) then
+        invalid_arg "Tac2def.define_direct: fast entry mismatch" in
+    let arity = arity_of ar in
+    let v = interp_spec ar v in
+    let v = Tac2val.purify_closure arity v in
+    Tac2env.define_primitive n (Tac2ffi.of_closure (Tac2val.mk_closure_direct ~fast arity v d))
+  | _ -> invalid_arg "Tac2def.define_direct: not a function spec"

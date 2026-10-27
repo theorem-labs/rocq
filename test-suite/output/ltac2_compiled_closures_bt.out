@@ -1,0 +1,47 @@
+- : int list = [0; 0]
+- : int = 2
+- : int * int option = (1, Some 0)
+- : int = 0
+File "./output/ltac2_compiled_closures_bt.v", line 21, characters 0-30:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+File "./output/ltac2_compiled_closures_bt.v", line 24, characters 0-30:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+Backtrace:
+Call map_partial
+Call <fun>
+Call <fun>
+Call fail_at
+Prim <rocq-runtime.plugins.ltac2:throw>
+
+File "./output/ltac2_compiled_closures_bt.v", line 25, characters 0-28:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+Backtrace:
+Call local_rec
+Call <fun>
+Call <fun>
+Call <fun>
+Call fail_at
+Prim <rocq-runtime.plugins.ltac2:throw>
+
+File "./output/ltac2_compiled_closures_bt.v", line 26, characters 0-26:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+Backtrace:
+Call in_ctor
+Call fail_at
+Prim <rocq-runtime.plugins.ltac2:throw>
+
+File "./output/ltac2_compiled_closures_bt.v", line 27, characters 0-30:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+Backtrace:
+Call of_open
+Call fail_at
+Prim <rocq-runtime.plugins.ltac2:throw>
+
+File "./output/ltac2_compiled_closures_bt.v", line 29, characters 0-28:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
