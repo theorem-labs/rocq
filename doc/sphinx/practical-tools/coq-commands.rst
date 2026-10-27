@@ -726,6 +726,13 @@ It excludes for instance anything related to the concrete syntax of
 objects (customized syntax rules, association between short and long
 names), implicit arguments, etc.
 
+``rocqchk`` refuses a library that holds a name it may print, such as the
+name of the library, of a constant, of an inductive type, of a constructor or
+of a functor parameter, when that name is not made of identifiers, for
+instance when it holds a blank or a line break. Rocq's own commands never
+write such a name: only a plugin, or a modified ``.vo`` file, can. Printed,
+such a name could forge a line of the checker's output.
+
 This tool can be used for several purposes. One is to check that a
 compiled library provided by a third-party has not been forged and
 that loading it cannot introduce inconsistencies [#]_. Another point is
@@ -762,6 +769,56 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   plus the time of its last proof. Workers share the memory of the main process
   and copy more of it the longer they live, so a smaller budget bounds the
   memory they use. ``0`` makes a worker check a single proof.
+:-statement-report *file*: After checking, print a report on named
+  constants, before the summary of ``-o``. Each line of *file* is a
+  request ``name model trusted``, its tokens separated by single spaces:
+  *name* is a label printed back as given, and *model* and *trusted* are
+  fully qualified constant names as ``rocqchk`` prints them. *trusted* may
+  be ``-`` or left out. Blank lines and lines starting with ``#`` are skipped;
+  any other line, and any line with a tab or a carriage return, is an error,
+  reported before any library is loaded. For each request, the report says
+  whether ``Definition f := model`` (``Polymorphic`` when *trusted* is) is
+  accepted in a module sealed by a signature that declares *trusted*'s type:
+  ``match`` when the type of *model* is cumulative to the type of *trusted*
+  under universe constraints consistent with the environment (a polymorphic
+  *model* is taken at fresh universes against a monomorphic *trusted*, and
+  against a polymorphic *trusted* its universe context must be *trusted*'s);
+  ``mismatch`` when the types are not convertible; ``universes-differ`` when
+  they need universe constraints that the environment or *trusted* refuses,
+  when the universe contexts differ, and for every polymorphic *model* whose
+  universe context has sort variables or constraints, because elaborating
+  the definition can minimize those and the check does not replay it;
+  ``not-requested`` with no *trusted*;
+  ``model-missing`` or ``trusted-missing`` when a name is not in the
+  environment. The verdict is about the two constants as the kernel stores
+  them. Implicit arguments are elaboration data that the kernel never sees,
+  so a *model* declared with maximal implicit arguments reads ``match``
+  when its type is *trusted*'s; whether a bare alias ``Definition f :=
+  model`` then elaborates depends on the context it is written in, which
+  ``rocqchk`` does not see. It also lists the
+  axioms and relaxed typing conditions that its selected proof witness reaches.
+  A public declaration uses the environment; a bodyless public declaration
+  uses its module implementation and then follows references in that
+  implementation view. This prevents an independent signature proof from
+  hiding a relaxed implementation proof. Integer, float and string literals
+  and arrays also reach their registered primitive type.
+  The report is printed between the lines ``STATEMENT REPORT`` and
+  ``END STATEMENT REPORT``, one line per statement, axiom and condition:
+
+  .. code-block:: text
+
+     STATEMENT REPORT
+     statement <name> <model> <trusted|-> <verdict> <axiom-count> <condition-count>
+     axiom <name> <constant>
+     flag <name> <condition> <object>
+     END STATEMENT REPORT
+
+  It does not change the exit status. If the report stops after its start
+  line, it has no ``END STATEMENT REPORT`` line and the checker emits a
+  warning. A program that reads the report must treat such a stream as no
+  report, not as partial evidence. The report stops this way at a name it
+  would print that is not made of identifiers, for instance the name of a
+  constant that a term of an admitted library names but no library declares.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
