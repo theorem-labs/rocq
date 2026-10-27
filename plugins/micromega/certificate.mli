@@ -34,3 +34,9 @@ val linear_prover_with_cert : int -> (Mc.q Mc.pExpr * Mc.op1) list -> qres
 (** [nlinear depth sys] generates an unsat proof for the non-linear constraints in [sys].
     The solver is incompete -- the problem is decidable. *)
 val nlinear_prover : int -> (Mc.q Mc.pExpr * Mc.op1) list -> qres
+
+(** [develop_z_constraints depth sys] is [sys] as [lia] and [nia] develop it before their search:
+    linear constraints whose atoms are the monomials of [sys]. Like their entry points, it clears the
+    monomial table [Polynomial.LinPoly.MonT] and sets the depth bound. *)
+val develop_z_constraints :
+  int -> (Mc.z Mc.pExpr * Mc.op1) list -> Polynomial.WithProof.t list

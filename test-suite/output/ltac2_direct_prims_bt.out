@@ -1,0 +1,26 @@
+File "./output/ltac2_direct_prims_bt.v", line 12, characters 0-21:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: Invalid_argument None
+Backtrace:
+Call h
+Call g
+Call fail_in
+Prim <rocq-runtime.plugins.ltac2:throw>
+
+File "./output/ltac2_direct_prims_bt.v", line 15, characters 0-21:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: Invalid_argument None
+Backtrace:
+Call l
+Call g
+Call fail_in
+Prim <rocq-runtime.plugins.ltac2:throw>
+
+
+Backtrace:
+Call m
+Call k
+Call print_stack
+Prim <rocq-runtime.plugins.ltac2:current_exninfo>
+
+- : int = 5
