@@ -128,7 +128,8 @@ let check_constant_declaration env opac kn cb opacify =
     | Result.Error () -> Type_errors.error_actual_type env j ty
   in
   (* The body of an opaque constant, cooked: fetched from its library's
-     table, discharged ([cook_opaque_proofterm]) and substituted
+     table and discharged by [CheckLibrary.indirect_accessor], then
+     substituted
      ([subst_mps_list]), with the environment extended by its private
      universes. A pure function of the stored proof and its cooking
      information (kernel/discharge.ml), and of nothing that the checking

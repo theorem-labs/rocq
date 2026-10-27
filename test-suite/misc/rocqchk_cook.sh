@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # rocqchk -j N defers the check of each opaque body. The body is fetched
-# from its library's table, discharged (cook_opaque_proofterm) and
+# from its library's table, discharged (by CheckLibrary.indirect_accessor) and
 # substituted (subst_mps_list) inside that deferred check, so in the
 # process that checks it, and not in the main process before it is
 # deferred. The count that -d checker-workers prints, "N cooked in the
