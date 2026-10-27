@@ -98,6 +98,9 @@ COQFLAGS?=$(COQEXTRAFLAGS)
 
 coqc := $(BIN)rocq c -q -R prerequisite TestSuite $(COQFLAGS)
 coqchk := $(BIN)rocqchk -R prerequisite TestSuite
+# Every coqchk the suite runs also cooks each opaque body the stock way and
+# fails unless that equals the shared cook (checker/checkLibrary.ml).
+export ROCQCHK_COOK_CROSS_CHECK := 1
 coqdoc := $(BIN)rocq doc
 coqtop := $(BIN)rocq repl -q -test-mode -R prerequisite TestSuite
 
@@ -347,10 +350,16 @@ unit-tests/src/utest.cmi: unit-tests/src/utest.mli
 
 unit-tests: $(UNIT_LOGFILES)
 
+
 # Build executable, run it to generate log file
+UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2
+# The micromega unit tests also need the micromega plugin (Polynomial, Vect, ...).
+unit-tests/micromega/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.plugins.micromega
+# The sysinit unit tests call Coqinit and Unix.putenv.
+unit-tests/sysinit/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.sysinit,unix
 unit-tests/%.ml.log: unit-tests/%.ml unit-tests/src/$(UNIT_LINK)
 	$(SHOW) 'TEST      $<'
-	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package rocq-runtime.toplevel,rocq-runtime.checklib,ounit2 \
+	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package $(UNIT_PKGS) \
 	     -I unit-tests/src $(UNIT_LINK) $< -o $<.test;
 	$(HIDE)$(call WITH_TIMER,$@,./$<.test)
 	$(HIDE)$(call REPORT_TIMER,$@)

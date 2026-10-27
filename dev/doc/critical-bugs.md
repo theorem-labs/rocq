@@ -313,6 +313,18 @@ and lack of checking of relevance marks on constants in coqchk
 - exploit / GH issue: [#21701](https://github.com/rocq-prover/rocq/issues/21701)
 - risk: unknown (no development in CI was affected)
 
+#### incorrect variance inference with letin in constructor type
+- component: inductive declarations, universe polymorphism
+- introduced: V8.6 (cumulative inductives)
+- impacted released versions: V8.6 to V9.2.0
+- impacted rocqchk versions: same
+- fixed in: V9.2.1, V9.3
+- found by: OpenAI
+- issue: #22385
+- risk: the bug comes from being able to bind a constructor type letin in a match,
+  which means those letins cannot be irrelevant for conversion.
+  Differences in reduction may mean the bug is harder to exploit before V8.19, see issue.
+
 ### Module system
 
 #### missing universe constraints in typing "with" clause of a module type
@@ -425,6 +437,16 @@ and lack of checking of relevance marks on constants in coqchk
 - exploit: see issue
 - risk: high when combining module subyping with sort polymorphism
   (but not possible in non-rc version)
+
+### Incorrect subtyping of inductives with letins in constructor types
+- component: subtyping, inductive declarations
+- introduced: unclear, possibly only exploitable since V8.14 (#13563)
+- impacted versions: until V9.2.0
+- fixed in: 9.2.0, 9.3
+- found by: OpenAI
+- issue: #22387
+- risk: need to use module subtyping to confuse inductives with different letins,
+  and use those letins in a match.
 
 ### Universes
 
@@ -568,6 +590,17 @@ fix.
 - risk: needs a sort polymorphic inductive declared in a section with
   a section polymorphic sort and sort polymorphism in the inductive command (cf bug file)
 
+#### variance inference ignores stack of stuck irrelevant to relevant matches
+- component: inductive declarations, universe polymorphism
+- introduced: 8.13
+- impacted released versions: V8.13 to V9.2.0
+- impacted rocqchk versions: same
+- fixed in: V9.2.1, V9.3 ([#22377](https://github.com/rocq-prover/rocq/pull/22377))
+- found by: OpenAI
+- issue: [#22376](https://github.com/rocq-prover/rocq/issues/22376)
+- risk: needs a cumulative inductive in which a match on an empty SProp
+  inductive or inductive using Definitional UIP appears
+
 #### Missing universe substitution in primitive array instance in lazy
 
 - component: lazy, primitive arrays
@@ -591,6 +624,18 @@ fix.
 - risk: low (needs to use universe substitution in letin from the
   inductive indices to incorrectly convert match return clauses and
   somehow derive inconsistency from there)
+
+#### missing universe substitution when converting matches with letin in constructor type
+- component: conversion
+- introduced: V8.17
+- impacted released versions: V8.17 to V9.2.0
+- impacted rocqchk versions: same
+- fixed in: V9.2.1, V9.3 ([#22393](https://github.com/rocq-prover/rocq/pull/22393))
+- found by: OpenAI
+- issue: [#22391](https://github.com/rocq-prover/rocq/issues/22391)
+- risk: needs to convert stuck matches of a universe polymorphic inductive
+  with a letin in the constructor type. The bug only appears if a polymorphic
+  universe is used in the letin's body, and the match uses the letin.
 
 ### Primitive projections
 

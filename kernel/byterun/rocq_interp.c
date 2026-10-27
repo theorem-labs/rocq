@@ -28,6 +28,7 @@
 #include "rocq_fix_code.h"
 #include "rocq_memory.h"
 #include "rocq_values.h"
+#include "rocq_binnum.h"
 
 #if OCAML_VERSION < 41000
 extern void caml_minor_collection(void);
@@ -237,6 +238,130 @@ if (sp - num_args < rocq_stack_threshold) {                                     
 #define CheckFloat1() CheckPrimArgs(Is_double(accu), apply1)
 #define CheckFloat2() CheckPrimArgs(Is_double(accu) && Is_double(sp[0]), apply2)
 
+/* --- Native binary-number arithmetic ------------------------------------- *
+
+   The standard library's [positive] is xI | xO | xH and its [Z] is
+   Z0 | Zpos | Zneg. The machine represents a constant constructor by its rank
+   among the constant constructors, and a non-constant one by a one-field block
+   whose tag is one above its rank among the non-constant ones, tag 0 being kept
+   for accumulators. So a closed [Z] is Val_int(0) for Z0, or a block of tag 1
+   (Zpos) or 2 (Zneg) holding a chain of blocks of tag 1 (xI) and 2 (xO) that
+   ends in Val_int(0) (xH), least significant bit first. kernel/vmznative.ml
+   admits a definition only after checking that the inductive types it matches
+   on are declared exactly that way, so these two routines and that check are
+   one unit: neither is right without the other.
+
+   rocq_z_decode writes the integer of such a value and returns 1. It returns 1
+   only for a closed chain whose magnitude is below 2^ROCQ_Z_MAXBITS (bits
+   0..ROCQ_Z_MAXBITS-1); an accumulator (a stuck term) at any depth, and any
+   larger number, return 0, and the caller then applies the constant's own
+   value, which is what the machine does without the native path. The integer
+   is held in int64_t, not intnat, so the 60-bit magnitudes and the sum below
+   2^61 are exact on a 32-bit build too (where intnat is 32-bit). */
+
+#define ROCQ_Z_MAXBITS 60
+
+static int rocq_z_decode(value v, int64_t *res)
+{
+  int64_t acc = 0;
+  int bit = 0;
+  int neg;
+  if (Is_long(v)) { if (v == Val_int(0)) { *res = 0; return 1; } return 0; }
+  switch (Tag_val(v)) {
+  case 1: neg = 0; break;
+  case 2: neg = 1; break;
+  default: return 0;
+  }
+  v = Field(v, 0);
+  for (;;) {
+    if (bit >= ROCQ_Z_MAXBITS) return 0;
+    if (Is_long(v)) {
+      if (v != Val_int(0)) return 0;
+      acc |= (int64_t)1 << bit;
+      break;
+    }
+    switch (Tag_val(v)) {
+    case 1: acc |= (int64_t)1 << bit; bit++; v = Field(v, 0); break;
+    case 2: bit++; v = Field(v, 0); break;
+    default: return 0;
+    }
+  }
+  *res = neg ? -acc : acc;
+  return 1;
+}
+
+/* accu := the [Z] value of the integer n, whose absolute value must be below
+   2^61 so the chain fits int64_t arithmetic. The chain it builds round-trips
+   through rocq_z_decode only when |n| < 2^ROCQ_Z_MAXBITS; for a larger |n| the
+   chain is still a valid [Z], and a later decode of it simply takes the
+   fallback. The chain under construction is kept in accu, which Setup_for_gc
+   saves, so the allocations may run the minor collector. */
+#define Rocq_encode_Z(n) do {                                           \
+  int64_t rez_n = (n);                                                  \
+  if (rez_n == 0) accu = Val_int(0);                                    \
+  else {                                                                \
+    int64_t rez_a = rez_n < 0 ? -rez_n : rez_n;                         \
+    int rez_h = 0, rez_i;                                               \
+    value rez_b;                                                        \
+    while ((rez_a >> (rez_h + 1)) != 0) rez_h++;                        \
+    accu = Val_int(0);                                                  \
+    for (rez_i = rez_h - 1; rez_i >= 0; rez_i--) {                      \
+      Rocq_alloc_small(rez_b, 1, ((rez_a >> rez_i) & 1) ? 1 : 2);       \
+      Field(rez_b, 0) = accu;                                           \
+      accu = rez_b;                                                     \
+    }                                                                   \
+    Rocq_alloc_small(rez_b, 1, rez_n < 0 ? 2 : 1);                      \
+    Field(rez_b, 0) = accu;                                             \
+    accu = rez_b;                                                       \
+  }                                                                     \
+} while (0)
+
+/* A closed [positive] (xI | xO | xH) is a chain of blocks of tag 1 (xI) and
+   tag 2 (xO) that ends in Val_int(0) (xH), least significant bit first, and
+   always denotes a value of at least 1 because of the terminating xH. This
+   writes its integer and returns 1 only for a closed chain whose value is below
+   2^ROCQ_Z_MAXBITS; a stuck term at any depth, and any larger number, return 0.
+   It is the magnitude loop of rocq_z_decode without the [Z] sign wrapper. */
+static int rocq_pos_decode(value v, int64_t *res)
+{
+  int64_t acc = 0;
+  int bit = 0;
+  for (;;) {
+    if (bit >= ROCQ_Z_MAXBITS) return 0;
+    if (Is_long(v)) {
+      if (v != Val_int(0)) return 0;
+      acc |= (int64_t)1 << bit;
+      break;
+    }
+    switch (Tag_val(v)) {
+    case 1: acc |= (int64_t)1 << bit; bit++; v = Field(v, 0); break;
+    case 2: bit++; v = Field(v, 0); break;
+    default: return 0;
+    }
+  }
+  *res = acc;
+  return 1;
+}
+
+/* accu := the [positive] value of the integer n, which must be at least 1 and
+   below 2^61. The chain it builds round-trips through rocq_pos_decode only when
+   n < 2^ROCQ_Z_MAXBITS; a larger n still builds a valid [positive] that a later
+   decode refuses, taking the fallback. The most significant bit is the
+   terminating xH; the rest are xI (set) or xO (clear), least significant first.
+   The chain under construction is kept in accu, which Setup_for_gc saves. */
+#define Rocq_encode_pos(n) do {                                         \
+  int64_t rep_n = (n);                                                  \
+  int rep_h = 0, rep_i;                                                 \
+  value rep_b;                                                          \
+  while ((rep_n >> (rep_h + 1)) != 0) rep_h++;                          \
+  accu = Val_int(0);                                                    \
+  for (rep_i = rep_h - 1; rep_i >= 0; rep_i--) {                        \
+    Rocq_alloc_small(rep_b, 1, ((rep_n >> rep_i) & 1) ? 1 : 2);         \
+    Field(rep_b, 0) = accu;                                             \
+    accu = rep_b;                                                       \
+  }                                                                     \
+} while (0)
+
 #define AllocCarry(cond) Rocq_alloc_small(accu, 1, (cond)? rocq_tag_C1 : rocq_tag_C0)
 #define AllocPair() Rocq_alloc_small(accu, 2, rocq_tag_pair)
 
@@ -314,6 +439,12 @@ value rocq_interprete
 #else
   opcode_t curr_instr;
 #endif
+  /* The routine's result, its number of arguments, and where BINNUMCALL
+     goes on (NULL for BINNUM, which returns), between the two instructions
+     and the code that allocates the result. */
+  const struct binnum_result *binnum_res = NULL;
+  int binnum_nargs = 0;
+  code_t binnum_next = NULL;
   print_instr("Enter Interpreter");
   if (rocq_pc == NULL) {           /* Interpreter is initializing */
     print_instr("Interpreter is initializing");
@@ -708,6 +839,9 @@ value rocq_interprete
         print_instr("RETURN");
         print_int(*pc);
         sp += *pc++;
+        /* BINNUM jumps here, with its result in accu and its n arguments
+           popped. */
+      return_after_pop:
         print_instr("stack=");
         print_lint(sp[0]);
         print_lint(sp[1]);
@@ -822,6 +956,120 @@ value rocq_interprete
             sp += 3;
           }
         }
+        Next;
+      }
+
+      /* BINNUM k n comes right after the entry sequence of a function or
+         fixpoint of n arguments (add_grab and add_grabrec in
+         kernel/vmbytegen.ml), where the n arguments are sp[0..n-1]. If
+         routine k accepts them, the instruction allocates the result that
+         the routine describes (rocq_binnum.h) and returns it as RETURN n
+         does, through RETURN's own code; otherwise it does nothing and the
+         body runs. */
+      Instruct(BINNUM) {
+        print_instr("BINNUM");
+        binnum_nargs = pc[1];
+        binnum_res = rocq_binnum_run(pc[0], binnum_nargs, sp, 0);
+        pc += 2;
+        if (binnum_res == NULL) Next;
+        binnum_next = NULL;
+        goto binnum_build;
+      }
+
+      /* BINNUMCALL k n L comes at a call site of a function of n arguments,
+         after the arguments are pushed (vmbytegen.ml, compile_constant),
+         where they are sp[0..n-1], as at the entry of the function. If
+         routine k accepts them, the instruction allocates the result, pops
+         the n arguments and goes to L, which is the instruction after the
+         call (APPLY), or a RETURN of the frame after a tail call (APPTERM).
+         Otherwise it does nothing and the call runs. */
+      Instruct(BINNUMCALL) {
+        print_instr("BINNUMCALL");
+        binnum_nargs = pc[1];
+        binnum_res = rocq_binnum_run(pc[0], binnum_nargs, sp, 1);
+        if (binnum_res == NULL) {
+          pc += 3;
+          Next;
+        }
+        binnum_next = pc + 2 + pc[2];
+        goto binnum_build;
+      }
+
+      /* The allocation of the result of BINNUM and BINNUMCALL keeps every
+         heap value where the GC sees it: the chain being built in accu,
+         which Setup_for_gc saves, a finished part of a pair on the VM stack,
+         as MAKEBLOCK2 does, and the arguments on the VM stack, from which
+         the base of a chain is read before the first allocation of that
+         chain. The description itself is C memory. A base is xH, a fresh
+         packed block (rocq_binnum.h), or a subterm of an argument reached
+         through blocks that the routine read as nodes of a Z or of a chain,
+         never through a packed block (binnum_base_step checks it). */
+    binnum_build: {
+        const struct binnum_result *res = binnum_res;
+        if (res->nparts == 1 && res->part[0].kind == BINNUM_IMM) {
+          accu = res->part[0].imm;
+        } else {
+          int p;
+          for (p = res->nparts - 1; p >= 0; p--) {
+            const struct binnum_part *part = &res->part[p];
+            /* The parts after this one are on the stack, above the
+               arguments. */
+            int above = res->nparts - 1 - p;
+            if (part->kind == BINNUM_IMM) {
+              accu = part->imm;
+            } else {
+              uint64_t i;
+              if (part->base_arg == BINNUM_BASE_XH) {
+                accu = Val_int(0);
+              } else if (part->base_arg == BINNUM_BASE_PACKED) {
+                value block;
+                Rocq_alloc_small(block, 1, BINNUM_PACKED_TAG);
+                Field(block, 0) = Val_long(part->base_num);
+                accu = block;
+              } else {
+                accu = sp[above + part->base_arg];
+                for (i = 0; i < part->base_depth; i++) accu = binnum_base_step(accu);
+              }
+              if (part->nnodes <= 64) {
+                uint64_t word = part->word;
+                for (i = part->nnodes; i > 0; i--) {
+                  value block;
+                  tag_t tag = (word >> (i - 1)) & 1 ? 1 : 2;
+                  Rocq_alloc_small(block, 1, tag);
+                  Field(block, 0) = accu;
+                  accu = block;
+                }
+              } else {
+                const uint32_t *bits = part->bits;
+                for (i = part->nnodes; i > 0; i--) {
+                  value block;
+                  tag_t tag = (bits[(i - 1) >> 5] >> ((i - 1) & 31)) & 1 ? 1 : 2;
+                  Rocq_alloc_small(block, 1, tag);
+                  Field(block, 0) = accu;
+                  accu = block;
+                }
+              }
+              if (part->wrap) {
+                value block;
+                Rocq_alloc_small(block, 1, part->wrap);
+                Field(block, 0) = accu;
+                accu = block;
+              }
+            }
+            if (p > 0) *--sp = accu;
+          }
+          if (res->nparts == 2) {
+            value block;
+            Rocq_alloc_small(block, 2, 1);
+            Field(block, 0) = accu;
+            Field(block, 1) = sp[0];
+            sp += 1;
+            accu = block;
+          }
+        }
+        sp += binnum_nargs;
+        if (binnum_next == NULL) goto return_after_pop;
+        pc = binnum_next;
         Next;
       }
 
@@ -1049,7 +1297,38 @@ value rocq_interprete
         print_instr("SWITCH");
         if (Is_block(accu)) {
           long index = Tag_val(accu);
-          if (index == Closure_tag) index = 0;
+          /* Tags 246 and up: a packed positive or an accumulator. The other
+             tags are tested with one compare, as before. */
+          if (index >= BINNUM_PACKED_TAG) {
+#if ROCQ_BINNUM_PACKING
+            /* A packed positive (rocq_binnum.h): accu becomes the chain of
+               its number, the chain the block keeps when it is a literal,
+               and otherwise one built from the inside out with the partial
+               chain in accu under Setup_for_gc. The match then dispatches
+               on the head's tag. The packed block is not changed; the
+               branch's PUSHFIELDS and GETFIELD then read a chain. */
+            if (index == BINNUM_PACKED_TAG) {
+              uint64_t n = binnum_packed_number(accu);
+              value kept = binnum_packed_chain(accu);
+              if (kept != 0) {
+                accu = kept;
+                if (rocq_binnum_stats) rocq_binnum_count_expansion(0, 0);
+              } else {
+                unsigned i, nodes = binnum_bitlen(n) - 1;
+                accu = Val_int(0);
+                for (i = nodes; i-- > 0;) {
+                  value block;
+                  Rocq_alloc_small(block, 1, BINNUM_NODE_TAG(n, i));
+                  Field(block, 0) = accu;
+                  accu = block;
+                }
+                if (rocq_binnum_stats) rocq_binnum_count_expansion(0, nodes);
+              }
+              index = Tag_val(accu);
+            }
+#endif
+            if (index == Closure_tag) index = 0;
+          }
           print_instr("block");
           print_lint(index);
           pc += pc[(sizes >> 8) + index];
@@ -1148,6 +1427,36 @@ value rocq_interprete
             }
           }
         } else {
+#if ROCQ_BINNUM_PACKING
+          /* A one-field record whose field is a chain is itself a chain, so
+             a packed literal (rocq_binnum.h) can reach PROJ, which reads a
+             field with no SWITCH before it. accu becomes the chain the
+             block keeps, or the chain's head with the rest of the number
+             below it. Either way it is a block of one field, so the index
+             is 0; the packed block is not changed. */
+          if (Is_block(accu) && Tag_val(accu) == BINNUM_PACKED_TAG) {
+            uint64_t n = binnum_packed_number(accu);
+            value kept = binnum_packed_chain(accu);
+            if (*pc != 0) abort();
+            if (kept != 0) {
+              accu = kept;
+              if (rocq_binnum_stats) rocq_binnum_count_expansion(2, 0);
+            } else {
+              value block;
+              uint64_t rest = n >> 1;
+              if (rest == 1) accu = Val_int(0);
+              else {
+                Rocq_alloc_small(block, 1, BINNUM_PACKED_TAG);
+                Field(block, 0) = Val_long(rest);
+                accu = block;
+              }
+              Rocq_alloc_small(block, 1, BINNUM_NODE_TAG(n, 0));
+              Field(block, 0) = accu;
+              accu = block;
+              if (rocq_binnum_stats) rocq_binnum_count_expansion(2, 1);
+            }
+          }
+#endif
           accu = Field(accu, *pc);
           pc++;
         }
@@ -2027,6 +2336,56 @@ value rocq_interprete
           pc++;
         } else pc += *pc;
         Next;
+      }
+
+      /* The three instructions below sit at the ENTRY of the function whose
+         definition kernel/vmznative.ml recognised, after its GRAB or GRABREC,
+         where the two arguments are sp[0] and sp[1]. This is where BINNUM
+         sits, and for the same reason: the value of the constant stays the
+         value its body computes, so the kernel's conversion, which compares a
+         fixpoint against a fixpoint and a function against a function
+         (kernel/vconv.ml), sees what it would see without the native path.
+         When an argument is not a closed number of fewer than ROCQ_Z_MAXBITS
+         bits, the instruction falls through to the function's own body, which
+         is what the machine runs without the native path.
+
+         The result is built before the arguments are popped, so a minor
+         collection during the allocation still finds them on the stack. Then
+         the two arguments go and the function returns, as BINNUM does. */
+
+      /* Z.add sp[0] sp[1], both standard-library [Z] values. */
+      Instruct (CHECKZADD) {
+        int64_t zx, zy;
+        print_instr("CHECKZADD");
+        if (!(rocq_z_decode(sp[0], &zx) && rocq_z_decode(sp[1], &zy))) Next;
+        Rocq_encode_Z(zx + zy);
+        sp += 2;
+        goto return_after_pop;
+      }
+
+      /* Z.pos_sub sp[0] sp[1], both standard-library [positive] values: their
+         difference as a [Z]. It is in (-2^60, 2^60), which Rocq_encode_Z's
+         2^61 bound covers. */
+      Instruct (CHECKZPOSSUB) {
+        int64_t px, py;
+        print_instr("CHECKZPOSSUB");
+        if (!(rocq_pos_decode(sp[0], &px) && rocq_pos_decode(sp[1], &py))) Next;
+        Rocq_encode_Z(px - py);
+        sp += 2;
+        goto return_after_pop;
+      }
+
+      /* Pos.add sp[0] sp[1], both standard-library [positive] values: their
+         sum as a [positive]. Each operand is below 2^60, so the sum is at
+         least 2 and below 2^61, which Rocq_encode_pos covers; a sum of 2^60 or
+         more is simply refused by a later decode, which then falls through. */
+      Instruct (CHECKPOSADD) {
+        int64_t px, py;
+        print_instr("CHECKPOSADD");
+        if (!(rocq_pos_decode(sp[0], &px) && rocq_pos_decode(sp[1], &py))) Next;
+        Rocq_encode_pos(px + py);
+        sp += 2;
+        goto return_after_pop;
       }
 
 /* Debugging and machine control */

@@ -13,11 +13,16 @@ open Pp
 let stm_pr_err s  = Format.eprintf "%s] %s\n%!"     (Spawned.process_id ()) s
 let stm_prerr_endline s = if CDebug.(get_flag misc) then begin stm_pr_err s end else ()
 
-type response =
+type result =
   | RespBuiltSubProof of (Constr.constr * UState.t)
   | RespError of bool * Pp.t
   | RespKilled of int
   | RespNoProgress
+
+(* A tactic worker counts the timeouts its own process arms, and sends with
+   each answer what that task armed, so that the master's counts, which
+   -record-timeouts reports, cover the whole compilation. *)
+type response = { r_result : result; r_timeouts : Control.timeout_counts }
 
 module TacTask : sig
 
@@ -25,7 +30,7 @@ module TacTask : sig
 
   type task = {
     t_state    : Vernacstate.t;
-    t_assign   : response option ref;
+    t_assign   : result option ref;
     t_ast      : ComTactic.interpretable;
     t_goalno   : int;
     t_goal     : Evar.t;
@@ -43,7 +48,7 @@ end = struct (* {{{ *)
 
   type task = {
     t_state    : Vernacstate.t;
-    t_assign   : response option ref;
+    t_assign   : result option ref;
     t_ast      : ComTactic.interpretable;
     t_goalno   : int;
     t_goal     : Evar.t;
@@ -78,8 +83,9 @@ end = struct (* {{{ *)
     r := Some v
 
   let use_response _ { t_assign; t_kill } resp =
-    assign t_assign resp;
-    let kill = match resp with
+    Control.add_timeout_counts resp.r_timeouts;
+    assign t_assign resp.r_result;
+    let kill = match resp.r_result with
     | RespNoProgress | RespBuiltSubProof _ -> false
     | RespError _ -> true
     | RespKilled _ -> assert false
@@ -94,6 +100,10 @@ end = struct (* {{{ *)
   let on_task_cancellation_or_expiration_or_slave_death = function
     | Some { t_goalno; t_assign; t_kill } ->
       t_kill ();
+      (* The answer this task would have carried is lost, so what it armed is
+         unknown: count one timeout, because a count that is too low would
+         tell a build driver that the compilation never read the clock. *)
+      Control.add_timeout_counts { Control.armed = 1; fired = 0 };
       assert (Option.is_empty !t_assign);
       t_assign := Some (RespKilled t_goalno)
     | _ -> ()
@@ -137,10 +147,16 @@ end = struct (* {{{ *)
       RespError (noncrit, CErrors.print e ++ spc() ++ str "(for goal "++int r_goalno ++ str ")")
 
   let perform r : response =
-    NewProfile.profile "partac.perform"
-      ~args:(fun () -> ["goalno", `Intlit (string_of_int r.r_goalno)])
-      (fun () -> perform r)
-      ()
+    let before = Control.timeout_counts () in
+    let r_result =
+      NewProfile.profile "partac.perform"
+        ~args:(fun () -> ["goalno", `Intlit (string_of_int r.r_goalno)])
+        (fun () -> perform r)
+        () in
+    let after = Control.timeout_counts () in
+    { r_result;
+      r_timeouts = { Control.armed = after.Control.armed - before.Control.armed;
+                     fired = after.Control.fired - before.Control.fired } }
 
   let name_of_task { t_name } = t_name
   let name_of_request { r_name } = r_name

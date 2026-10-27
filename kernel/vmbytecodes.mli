@@ -36,6 +36,14 @@ type caml_prim =
 | CAML_Stringcat
 | CAML_Stringcompare
 
+(** Operations of the standard library's binary numbers that the machine
+    evaluates natively instead of interpreting them one digit at a time. See
+    [Vmznative], which decides which constants carry them. *)
+type znative_op =
+| ZNadd      (** [Z.add] of two closed [Z] below the native window *)
+| ZNpossub   (** [Z.pos_sub] of two closed [positive] below the window *)
+| ZNposadd   (** [Pos.add] of two closed [positive] below the window *)
+
 type instruction =
   | Klabel of Label.t
   | Kacc of int                         (** accu = sp[n] *)
@@ -72,10 +80,26 @@ type instruction =
   | Ksequence of bytecodes
   | Kproj of int
   | Kensurestackcapacity of int
+  | Kbinnum of int * int                (** routine, number of arguments: run the
+                                           C routine of {!Vmbinnum} on the
+                                           arguments sp[0..n-1]; if it accepts
+                                           them, return its result as
+                                           [Kreturn n] does *)
+  | Kbinnumcall of int * int * Label.t  (** routine, number of arguments,
+                                           label: at a call site, run the C
+                                           routine on sp[0..n-1]; if it
+                                           accepts them, set accu to its
+                                           result, pop the n arguments and
+                                           jump to the label *)
 
   | Kbranch of Label.t                  (** jump to label, is it needed ? *)
   | Kprim of CPrimitives.t * pconstant
   | Kcamlprim of caml_prim * Label.t
+  | Kznative of znative_op
+      (** native binary-number operation, at the entry of the function whose
+          definition carries it, where its two arguments are sp[0] and sp[1];
+          it returns the result, or falls through to the body when an argument
+          is not a closed number *)
 
 and bytecodes = instruction list
 
