@@ -149,6 +149,8 @@ let indices_matter = ref false
 
 let enable_vm = ref false
 
+let statement_report = ref None
+
 let jobs = ref 1
 let set_jobs s =
   match int_of_string_opt s with
@@ -160,6 +162,64 @@ let set_worker_budget s =
   | Some t when t >= 0. -> CheckWorkers.set_budget t
   | _ ->
     fatal_error (str "Option -worker-budget expects a number of seconds, got " ++ qstring s ++ str ".") 1
+
+(* "<library> <seconds>" per line; a later line for a library replaces an
+   earlier one. Costs only order the workers' checks, so nothing about the
+   file can stop the check: a malformed line is skipped, and anything but a
+   regular file of at most [max_cost_hints_bytes] that can be read to its
+   end is ignored whole, with a warning. The bound is on the bytes read,
+   not on the size the file reports. *)
+let max_cost_hints_bytes = 16 * 1024 * 1024
+
+let set_cost_hints f =
+  let ignored why =
+    Feedback.msg_warning (str "Ignoring the cost hints " ++ qstring f ++ str " (" ++
+                          str why ++ str "); the checks are dealt without them.")
+  in
+  let parse line =
+    let fields = List.filter (fun s -> s <> "")
+        (String.split_on_char ' ' (String.map (fun c -> if c = '\t' then ' ' else c) line)) in
+    match fields with
+    | [lib; s] ->
+      (match float_of_string_opt s with
+       | Some c when c >= 0. && Float.is_finite c -> Some (lib, c)
+       | _ -> None)
+    | _ -> None
+  in
+  (* At most [max_cost_hints_bytes + 1] bytes, so that a source reporting
+     a wrong size, or growing, cannot make the read unbounded. *)
+  let read_bounded ch =
+    let buf = Buffer.create 65536 in
+    let chunk = Bytes.create 65536 in
+    let rec go () =
+      let want = min (Bytes.length chunk) (max_cost_hints_bytes + 1 - Buffer.length buf) in
+      if want <= 0 then Error "too large"
+      else match input ch chunk 0 want with
+        | 0 -> Ok (Buffer.contents buf)
+        | n -> Buffer.add_subbytes buf chunk 0 n; go ()
+    in
+    go ()
+  in
+  (* Opened without blocking, and its kind read from the open descriptor:
+     whatever the path names when it is opened, a FIFO cannot block the
+     check and only a regular file is read. *)
+  match Unix.openfile f [Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC] 0 with
+  | exception Unix.Unix_error (e, _, _) -> ignored (Unix.error_message e)
+  | fd ->
+    let contents =
+      match (Unix.fstat fd).Unix.st_kind with
+      | exception Unix.Unix_error (e, _, _) -> Unix.close fd; Error (Unix.error_message e)
+      | Unix.S_REG ->
+        Unix.clear_nonblock fd;
+        let ch = Unix.in_channel_of_descr fd in
+        set_binary_mode_in ch true;
+        Fun.protect ~finally:(fun () -> close_in_noerr ch) (fun () ->
+            try read_bounded ch with Sys_error e -> Error e)
+      | _ -> Unix.close fd; Error "not a regular file"
+    in
+    match contents with
+    | Error why -> ignored why
+    | Ok s -> CheckWorkers.set_cost_hints (List.filter_map parse (String.split_on_char '\n' s))
 
 let make_senv () =
   let senv = Safe_typing.empty_environment in
@@ -223,6 +283,11 @@ let print_usage_channel co command =
 \n  -worker-budget s            with -j, a worker process stops after s seconds\
 \n                              (default is 20) and its remaining checks are given\
 \n                              to another one; this bounds the memory it uses\
+\n  -cost-hints f               with -j, deal first the checks of the libraries that f\
+\n                              says cost most (\"<library> <seconds>\" per line)\
+\n  -statement-report f         print, for each statement named in f, whether its model\
+\n                              constant has its trusted constant's type and the axioms its\
+\n                              closure uses\
 \n\
 \n  -impredicative-set          set sort Set impredicative\
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
@@ -355,9 +420,9 @@ let rec explain_exn = function
   | Mod_checking.BadConstant (cst, why) ->
     hov 0 (Constant.print cst ++ spc() ++ why)
 
-  | CheckWorkers.CheckError (cst, e) ->
+  | CheckWorkers.CheckError (job, e) ->
     explain_exn e ++ fnl () ++
-    hov 0 (str "while checking the opaque proof of" ++ spc () ++ Constant.print cst ++ str ".")
+    hov 0 (str "while " ++ CheckWorkers.pr_doing job ++ str ".")
 
   | CheckWorkers.WorkerFailed (pid, status, batch) ->
     let status = match status with
@@ -446,6 +511,15 @@ let parse_args argv =
     | "-worker-budget" :: s :: rem -> set_worker_budget s; parse rem
     | "-worker-budget" :: [] -> usage 1
 
+    | "-cost-hints" :: f :: rem -> set_cost_hints f; parse rem
+    | "-cost-hints" :: [] -> usage 1
+
+    | "-statement-report" :: f :: rem ->
+        (* Read now, so that a malformed file stops the run before any
+           library is loaded. *)
+        statement_report := Some (Check_closure.read_requests f); parse rem
+    | "-statement-report" :: [] -> usage 1
+
     | s :: _ when s<>"" && s.[0]='-' ->
         fatal_error (str "Unknown option " ++ str s) 1
     | s :: rem ->  add_compile s; parse rem
@@ -510,8 +584,25 @@ let run senv =
     if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
     fatal_error (explain_exn e) (exit_code e)
 
+(* The report is evidence beside the verdict, never the verdict: a report
+   that cannot be completed is left without its end marker, which a reader
+   takes as no report, and the exit status is unchanged. It comes before the
+   context summary. The run goes on to exit 0, so the warning escapes the text
+   of the exception, which can quote a name read from a library (checkNames.mli).
+   The text is the one [explain_exn] returns: it prints the terms of a
+   [CantApplyBadType] type error itself, but nothing in the report raises one. *)
+let print_statement_report env requests =
+  try Check_closure.print env CheckLibrary.indirect_accessor requests
+  with e when (match e with Sys.Break | Out_of_memory -> false | _ -> true) ->
+    Feedback.msg_warning
+      (str "Statement report stopped: " ++
+       str (String.escaped (Pp.string_of_ppcmds (explain_exn e))))
+
 let main () =
   let senv = init() in
+  Check_stat.start_summary !Check_stat.output_context;
   let senv, opac = run senv in
-  Check_stat.stats (Safe_typing.env_of_safe_env senv) opac;
+  let env = Safe_typing.env_of_safe_env senv in
+  Option.iter (print_statement_report env) !statement_report;
+  Check_stat.stats env opac;
   exit 0

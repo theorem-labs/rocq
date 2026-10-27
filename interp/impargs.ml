@@ -663,7 +663,10 @@ let inImplicits : implicits_obj -> obj =
     subst_function = subst_implicits;
     classify_function = classify_implicits;
     discharge_function = discharge_implicits;
-    rebuild_function = rebuild_implicits }
+    rebuild_function = rebuild_implicits;
+    (* Flags, global references, names and argument positions: no source
+       location. *)
+    interface_key = Key_as_is }
 
 let is_local local ref = local || isVarRef ref && Global.is_in_section ref
 

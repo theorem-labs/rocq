@@ -25,6 +25,8 @@ type t =
   ; glob_out    : glob_output option
 
   ; output_context : bool
+
+  ; record_timeouts : bool
   }
 
 let default =
@@ -38,6 +40,8 @@ let default =
   ; glob_out = None
 
   ; output_context = false
+
+  ; record_timeouts = false
   }
 
 let depr opt =
@@ -127,6 +131,9 @@ let parse arglist : t =
         |"-dump-glob" ->
           let file = next () in
           { oval with glob_out = Some (GlobFile file) }
+
+        |"-record-timeouts" ->
+          { oval with record_timeouts = true }
 
         (* Rest *)
         | s ->

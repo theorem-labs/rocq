@@ -54,6 +54,8 @@ type coqargs_config = {
   rcfile      : string option;
   coqlib      : string option;
   enable_VM   : bool;
+  location_free_label : bool;
+  (** [-location-free-label], see {!Library.set_location_free_label} *)
   native_compiler : native_compiler;
   native_output_dir : CUnix.physical_path;
   native_include_dirs : CUnix.physical_path list;

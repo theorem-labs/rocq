@@ -694,7 +694,10 @@ let inStruc : Structure.t -> Libobject.obj =
     subst_function = subst_structure;
     classify_function = (fun _ -> Substitute);
     discharge_function = discharge_structure;
-    rebuild_function = rebuild_structure; }
+    rebuild_function = rebuild_structure;
+    (* An inductive, projection names and constants, flags and a count:
+       no source location. *)
+    interface_key = Key_as_is; }
 
 let declare_structure_entry o =
   Lib.add_leaf (inStruc o)

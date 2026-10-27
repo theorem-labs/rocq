@@ -57,6 +57,7 @@ ARGUMENT EXTEND glob_constr_with_bindings
     INTERPRETED BY { interp_glob_constr_with_bindings }
     GLOBALIZED BY { glob_glob_constr_with_bindings }
     SUBSTITUTED BY { subst_glob_constr_with_bindings }
+    STRIPPED BY { Tacstrip.with_bindings }
 
     RAW_PRINTED BY { pr_constr_expr_with_bindings env sigma }
     GLOB_PRINTED BY { pr_glob_constr_with_bindings env sigma }
@@ -88,6 +89,7 @@ ARGUMENT EXTEND rewstrategy
     INTERPRETED BY { Tacinterp.interp_strategy }
     GLOBALIZED BY { Tacintern.intern_strategy }
     SUBSTITUTED BY { subst_strategy }
+    STRIPPED BY { map_strategy ConstrStrip.glob_constr_and_expr Tacstrip.red_expr (fun id -> id) }
 
     RAW_PRINTED BY { pr_raw_strategy env sigma }
     GLOB_PRINTED BY { pr_glob_strategy env sigma }

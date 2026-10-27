@@ -18,6 +18,7 @@ type t = {
   path_logical : DP.t;
   path_implicit : bool;  (* true for -R, false for -Q in command line *)
   path_installed : bool; (* true for automatically added paths (assumed installed), false for command line paths *)
+  path_recursive : bool; (* added by a recursive scan: a new subdirectory becomes an entry at the next start *)
 }
 
 let load_vos_libraries = ref false
@@ -26,6 +27,7 @@ let load_paths = Summary.ref ([] : t list) ~stage:Summary.Stage.Synterp ~name:"L
 
 let logical p = p.path_logical
 let physical p = p.path_physical
+let recursive p = p.path_recursive
 
 let pp p =
   let installed = Pp.str (if p.path_installed then "i" else " ") in
@@ -97,7 +99,7 @@ let warn_overriding_logical_loadpath =
                ; DP.print old_path; strbrk "; it is remapped to "
                ; DP.print rocq_path]))
 
-let add_load_path ~installed phys_path rocq_path ~implicit =
+let add_load_path ~installed ~recursive phys_path rocq_path ~implicit =
   let phys_path = CUnix.canonical_path_name phys_path in
   let filter p = String.equal p.path_physical phys_path in
   let binding = {
@@ -105,11 +107,12 @@ let add_load_path ~installed phys_path rocq_path ~implicit =
     path_physical = phys_path;
     path_implicit = implicit;
     path_installed = installed;
+    path_recursive = recursive;
   } in
   match List.filter filter !load_paths with
   | [] ->
     load_paths := binding :: !load_paths
-  | [{ path_logical = old_path; path_implicit = old_implicit }] ->
+  | [{ path_logical = old_path; path_implicit = old_implicit; path_recursive = old_recursive }] ->
     let replace =
       if DP.equal rocq_path old_path then
         implicit <> old_implicit
@@ -123,8 +126,11 @@ let add_load_path ~installed phys_path rocq_path ~implicit =
     if replace then
       begin
         remove_load_path phys_path;
-        load_paths := binding :: !load_paths;
+        load_paths := { binding with path_recursive = recursive || old_recursive } :: !load_paths;
       end
+    else if recursive && not old_recursive then
+      (* The binding stays; a recursive scan has now reached the directory. *)
+      load_paths := List.map (fun p -> if filter p then { p with path_recursive = true } else p) !load_paths
   | _ -> anomaly_too_many_paths phys_path
 
 let filter_path f =
@@ -284,6 +290,39 @@ let locate_qualified_library ?root qid =
      | Error _ -> e
      | Ok _ as o -> warn_deprecated_missing_stdlib ?loc:qid.loc qid; o
 
+(* The candidate files a lookup probes, as (directory, file name), for the
+   attempted-resolution records (Attempts): what [select_vo_file] looks for
+   in each directory that [expand_path] or [filter_path] gives. All the
+   blocks a qualified lookup could search are listed, and, for a name with
+   no root, the Stdlib fallback's too, so the list is a superset of what one
+   lookup probed. *)
+let library_probes dirs base =
+  let base = Names.Id.to_string base in
+  let names = (if !load_vos_libraries then [base ^ ".vos"] else []) @ [base ^ ".vo"] in
+  List.concat_map (fun (ph, _) -> List.map (fun n -> (ph, n)) names) dirs
+
+let qualified_library_probes ?root qid =
+  let dir, base = Libnames.repr_qualid qid in
+  let probes ?root () =
+    let (full_installed, full_local), (installed, local) = expand_path ?root dir in
+    library_probes (full_local @ full_installed @ local @ installed) base
+  in
+  match root with
+  | Some _ -> probes ?root ()
+  | None ->
+    let root_stdlib =
+      Names.(Libnames.add_dirpath_suffix DirPath.empty (Id.of_string "Stdlib")) in
+    probes () @ probes ~root:root_stdlib ()
+
+let absolute_library_probes dir =
+  let pref, base = Libnames.split_dirpath dir in
+  library_probes (filter_path (fun dir -> DP.equal dir pref)) base
+
+(* As [System.find_file_in_path] in [locate_file]. *)
+let file_probes fname =
+  if not (Filename.is_implicit fname) then [(Filename.dirname fname, Filename.basename fname)]
+  else List.map (fun p -> (p.path_physical, fname)) !load_paths
+
 (** { 5 Extending the load path } *)
 
 type vo_path =
@@ -328,10 +367,10 @@ let add_vo_path lp =
       with Exit -> None
     in
     let dirs = List.map_filter convert_dirs dirs in
-    let add (path, dir) = add_load_path ~installed path ~implicit dir in
+    let add (path, dir) = add_load_path ~installed ~recursive path ~implicit dir in
     (* deeper dirs registered first and thus be found last *)
     let dirs = List.rev dirs in
     let () = List.iter add dirs in
-    add_load_path ~installed unix_path ~implicit lp.coq_path
+    add_load_path ~installed ~recursive unix_path ~implicit lp.coq_path
   else
     warn_cannot_open_path unix_path

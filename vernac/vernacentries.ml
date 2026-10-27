@@ -1505,9 +1505,12 @@ let cache_names ns = List.iter cache_name ns
 let subst_names (subst,ns) = List.Smart.map (on_snd (Globnames.subst_extended_reference subst)) ns
 
 let inExportNames = Libobject.declare_object
-    (Libobject.global_object "EXPORTNAMES"
+    { (Libobject.global_object "EXPORTNAMES"
        ~cache:cache_names ~subst:(Some subst_names)
        ~discharge:(fun x -> Some x))
+      (* A visibility depth and an extended global reference: no source
+         location. *)
+      with Libobject.interface_key = Libobject.Key_as_is }
 
 let import_names ~export m ns =
   let ns = interp_names m ns in

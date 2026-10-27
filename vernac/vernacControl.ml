@@ -142,7 +142,10 @@ let with_timeout ~timeout:n f =
   | Ok v ->
     let stop = Unix.gettimeofday () in
     let remaining = n -. (stop -. start) in
-    if remaining <= 0. then raise CmdTimeout
+    (* The timer did not fire, but the deadline passed while the command was
+       returning: this timeout expired, so count it. *)
+    if remaining <= 0. then
+      (Control.add_timeout_counts { Control.armed = 0; fired = 1 }; raise CmdTimeout)
     else Some (ControlTimeout { remaining }, v)
   end
 

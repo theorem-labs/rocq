@@ -96,3 +96,33 @@ let () =
   register_grammar wit_constr Constr.constr;
   register_grammar wit_open_binders Constr.open_binders;
   ()
+
+(** Location strippers of the globalized values (interface key, see
+    Genstrip). [wit_generic_tactic] is registered in Gentactic. *)
+
+let () =
+  let open Genstrip in
+  let no_loc x = x in
+  (* unit, bool, int, string: no location *)
+  register_strip0 wit_unit no_loc;
+  register_strip0 wit_bool no_loc;
+  register_strip0 wit_int no_loc;
+  register_strip0 wit_nat no_loc;
+  register_strip0 wit_string no_loc;
+  register_strip0 wit_pre_ident no_loc;
+  register_strip0 wit_int_or_var (GlobStrip.or_var no_loc);
+  register_strip0 wit_nat_or_var (GlobStrip.or_var no_loc);
+  (* Id.t: no location *)
+  register_strip0 wit_ident no_loc;
+  register_strip0 wit_identref ConstrStrip.lident;
+  register_strip0 wit_hyp ConstrStrip.lident;
+  let globref = GlobStrip.or_var (LocStrip.located no_loc) in
+  register_strip0 wit_ref globref;
+  register_strip0 wit_smart_global globref;
+  (* glob level is unit *)
+  register_strip0 wit_sort_quality_or_set no_loc;
+  register_strip0 wit_constr ConstrStrip.glob_constr_and_expr;
+  register_strip0 wit_uconstr ConstrStrip.glob_constr_and_expr;
+  register_strip0 wit_open_constr ConstrStrip.glob_constr_and_expr;
+  register_strip0 wit_clause_dft_concl (GlobStrip.clause_expr ConstrStrip.lident);
+  register_strip0 wit_open_binders (List.map ConstrStrip.local_binder_expr)

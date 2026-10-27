@@ -69,7 +69,7 @@ let rhs_loc n =
 %token <int> INT
 %token VERNAC TACTIC GRAMMAR DOC_GRAMMAR EXTEND END DECLARE PLUGIN DEPRECATED ARGUMENT
 %token RAW_PRINTED GLOB_PRINTED
-%token SYNTERP COMMAND CLASSIFIED STATE PRINTED TYPED INTERPRETED GLOBALIZED SUBSTITUTED BY AS
+%token SYNTERP COMMAND CLASSIFIED STATE PRINTED TYPED INTERPRETED GLOBALIZED SUBSTITUTED STRIPPED BY AS
 %token BANGBRACKET HASHBRACKET LBRACKET RBRACKET PIPE ARROW FUN COMMA EQUAL STAR
 %token LPAREN RPAREN COLON SEMICOLON
 %token GLOBAL TOP FIRST LAST BEFORE AFTER LEVEL LEFTA RIGHTA NONA BOTHA
@@ -122,19 +122,21 @@ argument_extend:
     interpreted_opt
     globalized_opt
     substituted_opt
+    stripped_opt
     raw_printed_opt
     glob_printed_opt
     tactic_rules
   END
   { ArgumentExt {
     argext_name = $3;
-    argext_rules = $11;
-    argext_rprinter = $9;
-    argext_gprinter = $10;
+    argext_rules = $12;
+    argext_rprinter = $10;
+    argext_gprinter = $11;
     argext_tprinter = $5;
     argext_interp = $6;
     argext_glob = $7;
     argext_subst = $8;
+    argext_strip = $9;
     argext_type = $4;
   } }
 | VERNAC ARGUMENT EXTEND IDENT printed_opt tactic_rules END
@@ -178,6 +180,11 @@ globalized_opt:
 substituted_opt:
 | { None }
 | SUBSTITUTED BY CODE { Some $3 }
+;
+
+stripped_opt:
+| { None }
+| STRIPPED BY CODE { Some $3 }
 ;
 
 typed_opt:
