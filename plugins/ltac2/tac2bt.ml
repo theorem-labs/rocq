@@ -70,3 +70,5 @@ let with_frame frame tac =
     let pr_frame f = Some (Hook.get pr_frame f) in
     Profile_tactic.do_profile_gen pr_frame frame ~count_call:true tac
   else tac
+
+let with_frame_is_identity () = not (!print_ltac2_backtrace || !ltac2_in_ltac1_profiling)

@@ -64,6 +64,11 @@ val abstract_as_type : cooking_cache -> types -> types
 
 val abstract_as_body : cooking_cache -> constr -> constr
 
+(** The term {!abstract_as_body} gives, built so that it keeps the sharing of
+    its argument: each distinct subterm is expanded once per binder depth, so
+    the cost does not grow with the size of the term's tree unfolding. *)
+val abstract_as_body_shared : cooking_cache -> constr -> constr
+
 (** The expansion/substitution core of {!abstract_as_body}/{!abstract_as_type}
     (steps 1-2 of the 4-step comment above [expand_subst0] in cooking.ml:
     expand a reference to a generalized global by applying it to the section

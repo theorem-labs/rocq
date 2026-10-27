@@ -1,0 +1,17 @@
+- : int list = [4; 4]
+File "./output/ltac2_direct_bodies_bt.v", line 15, characters 0-26:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+File "./output/ltac2_direct_bodies_bt.v", line 18, characters 0-26:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+Backtrace:
+Call in_ctor
+Call in_let
+Call in_arg
+Call fail_at
+Prim <rocq-runtime.plugins.ltac2:throw>
+
+File "./output/ltac2_direct_bodies_bt.v", line 20, characters 0-26:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E

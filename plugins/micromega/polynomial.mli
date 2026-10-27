@@ -172,6 +172,13 @@ module LinPoly : sig
       i.e can be written c*x+r where c is a constant and r is independent from x *)
   val is_linear_for : var -> t -> bool
 
+  (** [quotient x p]
+      @return the polynomial [a] such that [p = x * a + b] and [x] does not
+      occur in [b]. It registers the monomials of [a] that are new, in the
+      order in which [linpol_of_pol] registers them.
+      @raise Not_found if an index of [p] is not registered *)
+  val quotient : var -> t -> t
+
   (** [constant c]
       @return the constant polynomial c
    *)
@@ -245,6 +252,10 @@ module ProofFormat : sig
   val add_proof : prf_rule -> prf_rule -> prf_rule
   val mul_cst_proof : Q.t -> prf_rule -> prf_rule
   val mul_proof : prf_rule -> prf_rule -> prf_rule
+
+  (** [simplify_prf_rule p] develops [p] into a sum of scaled proof steps. It is idempotent, and
+      applied to one of its values it registers no monomial. *)
+  val simplify_prf_rule : prf_rule -> prf_rule
 
   module Env: sig
     type t
@@ -337,6 +348,10 @@ module WithProof : sig
       p = c+a1.x1+....+c.x+...an.xn and c <> 0 *)
   val simple_pivot : Q.t * var -> t -> t -> t option
 
+  (** [simple_pivot_cut (c,x) p q] is [cutting_plane] of [simple_pivot (c,x) p q], when that is
+      [Some]; it builds the pivot's proof only for a cut *)
+  val simple_pivot_cut : Q.t * var -> t -> t -> t option
+
   (** [sort sys] sorts constraints according to the lexicographic order (number of variables, size of the smallest coefficient *)
   val sort : t list -> ((int * (Q.t * var)) * t) list
 
@@ -350,6 +365,12 @@ module WithProof : sig
  *)
 
   val subst : t list -> t list
+
+  (** [subst] answers a system that differs from the previous call's in one inequality from that
+      call's rounds (see polynomial.ml, "[subst] from the previous call"): the number of calls so
+      answered, and [subst_cache_clear ()], which forgets the previous call (for tests). *)
+  val subst_cache_hits : unit -> int
+  val subst_cache_clear : unit -> unit
 
   (** [subst_constant b sys] performs the equivalent of the 'subst' tactic of Rocq
       only if there is an equation a.x = c for a,c a constant and a divides c if b= true*)
