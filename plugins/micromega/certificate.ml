@@ -1012,8 +1012,68 @@ let nlia prfdepth sys =
 
 (* For regression testing, if bench = true generate a Rocq goal *)
 
-let lia  prfdepth sys = gen_bench ("lia", lia)  prfdepth sys
-let nlia  prfdepth sys = gen_bench ("nia", nlia)  prfdepth sys
+(* certstore corpus (dispatch://INFRA-213; measurement instrumentation, not for upstream). With
+   LIA_CORPUS_DIR set, every call of the four oracles below appends one Marshal'd [corpus_entry] to
+   <LIA_CORPUS_DIR>/<source>.corpus, where <source> is this process's last *.v argument with '/' replaced by
+   '%' (or "pid<N>" when there is none). The results are returned unchanged. *)
+type corpus_sys = ZSys of (Mc.z Mc.pExpr * Mc.op1) list | QSys of (Mc.q Mc.pExpr * Mc.op1) list
+type corpus_res = ZRes of zres | QRes of qres | Exn of string
+
+type corpus_entry = {
+  c_prover : string;
+  c_seq : int;
+  c_depth : int;
+  c_sys : corpus_sys;
+  c_res : corpus_res;
+  c_wall : float;
+  c_cpu : float;
+}
+
+let corpus_out =
+  lazy
+    (match Sys.getenv_opt "LIA_CORPUS_DIR" with
+     | None | Some "" -> None
+     | Some dir ->
+       let src =
+         Array.fold_left
+           (fun acc a -> if Filename.check_suffix a ".v" then Some a else acc)
+           None Sys.argv
+       in
+       let base =
+         match src with
+         | Some f -> String.map (fun c -> if c = '/' then '%' else c) f
+         | None -> Printf.sprintf "pid%d" (Unix.getpid ())
+       in
+       Some
+         (open_out_gen [Open_wronly; Open_append; Open_creat; Open_binary] 0o644
+            (Filename.concat dir (base ^ ".corpus"))))
+
+let corpus_seq = ref 0
+
+let corpus name wrap_sys wrap_res prover prfdepth sys =
+  match Lazy.force corpus_out with
+  | None -> prover prfdepth sys
+  | Some oc ->
+    incr corpus_seq;
+    let w0 = Unix.gettimeofday () and c0 = Sys.time () in
+    let write res =
+      Marshal.to_channel oc
+        { c_prover = name; c_seq = !corpus_seq; c_depth = prfdepth; c_sys = wrap_sys sys; c_res = res
+        ; c_wall = Unix.gettimeofday () -. w0; c_cpu = Sys.time () -. c0 }
+        [];
+      flush oc
+    in
+    match prover prfdepth sys with
+    | res -> write (wrap_res res); res
+    | exception e -> write (Exn (Printexc.to_string e)); raise e
+
+let zcorpus name = corpus name (fun s -> ZSys s) (fun r -> ZRes r)
+let qcorpus name = corpus name (fun s -> QSys s) (fun r -> QRes r)
+
+let lia  prfdepth sys = zcorpus "lia" (gen_bench ("lia", lia)) prfdepth sys
+let nlia  prfdepth sys = zcorpus "nlia" (gen_bench ("nia", nlia)) prfdepth sys
+let linear_prover_with_cert prfdepth sys = qcorpus "lra" linear_prover_with_cert prfdepth sys
+let nlinear_prover prfdepth sys = qcorpus "nra" nlinear_prover prfdepth sys
 
 (* Local Variables: *)
 (* coding: utf-8 *)
