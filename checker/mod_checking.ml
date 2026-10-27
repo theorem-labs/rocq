@@ -27,9 +27,9 @@ let push_bytecode vmtab code =
   | Some BCconstant -> vmtab, Some BCconstant
   | Some (BCalias kn) -> vmtab, Some (BCalias kn)
 
-let compile_constant_bytecode env vmtab cb =
+let compile_constant_bytecode env vmtab c cb =
   let code =
-    Vmbytegen.compile_constant_body ~fail_on_error:false env
+    Vmbytegen.compile_constant_body ~name:c ~fail_on_error:false env
       cb.const_universes cb.const_body
   in
   let vmtab, code = push_bytecode vmtab code in
@@ -41,7 +41,7 @@ let rec compile_structure env vmtab mp res struc =
   let fold (env, vmtab, accu) (lab, sfb) = match sfb with
   | SFBconst cb ->
     let c = Mod_subst.constant_of_delta_kn res (KerName.make mp lab) in
-    let vmtab, cb = compile_constant_bytecode env vmtab cb in
+    let vmtab, cb = compile_constant_bytecode env vmtab c cb in
     Environ.add_constant c cb env, vmtab, (lab, SFBconst cb) :: accu
   | SFBmind mib ->
     let mind = Mod_subst.mind_of_delta_kn res (KerName.make mp lab) in
@@ -121,39 +121,58 @@ let check_constant_declaration env opac kn cb opacify =
   let jty = Typeops.infer_type env ty in
   if not (Sorts.relevance_equal cb.const_relevance (Sorts.relevance_of_sort jty.utj_type))
   then raise Pp.(BadConstant (kn, str "incorrect const_relevance"));
-  (* The boolean tells whether the body is opaque. *)
-  let body, env = match cb.const_body with
-    | Undef _ | Primitive _ | Symbol _ -> None, env
-    | Def c -> Some (false, c), env
-    | OpaqueDef o ->
-      let c, u = !indirect_accessor o in
-      let env = match u, cb.const_universes with
-        | Opaqueproof.PrivateMonomorphic (), Monomorphic -> env
-        | Opaqueproof.PrivatePolymorphic local, Polymorphic _ ->
-          push_subgraph local env
-        | _ -> assert false
-      in
-      Some (true, c), env
+  let check env bd () =
+    let j = Typeops.infer env bd in
+    match conv_leq env j.uj_type ty with
+    | Result.Ok () -> ()
+    | Result.Error () -> Type_errors.error_actual_type env j ty
   in
-  let () =
-    match body with
-    | Some (opaque, bd) ->
-      let check () =
-        let j = Typeops.infer env bd in
-        match conv_leq env j.uj_type ty with
-        | Result.Ok () -> ()
-        | Result.Error () -> Type_errors.error_actual_type env j ty
-      in
-      (* Nothing else that is checked looks into an opaque body, so its
-         check can be postponed, and possibly run in another process. A
-         transparent body may be unfolded by later checks, which rely
-         on it being well-typed, so it is checked here. *)
-      if opaque then CheckWorkers.defer kn check else check ()
-    | None -> ()
+  (* The body of an opaque constant, cooked: fetched from its library's
+     table and discharged by [CheckLibrary.indirect_accessor], then
+     substituted
+     ([subst_mps_list]), with the environment extended by its private
+     universes. A pure function of the stored proof and its cooking
+     information (kernel/discharge.ml), and of nothing that the checking
+     changes: the table is the library's file as the main process hashed
+     it when it interned the library, which the process that reads it
+     checks (CheckLibrary.read_opaque_table). [note_cook] counts this
+     where it runs, so that a test can tell the main process from a
+     worker. *)
+  let cook o =
+    CheckWorkers.note_cook ();
+    let c, u = !indirect_accessor o in
+    let env = match u, cb.const_universes with
+      | Opaqueproof.PrivateMonomorphic (), Monomorphic -> env
+      | Opaqueproof.PrivatePolymorphic local, Polymorphic _ ->
+        push_subgraph local env
+      | _ -> assert false
+    in
+    c, env
   in
-  match body with
-  | Some (_, body) when opacify -> register_opacified_constant env opac kn body
-  | Some _ | None -> opac
+  match cb.const_body with
+  | Undef _ | Primitive _ | Symbol _ -> opac
+  | Def c ->
+    (* A transparent body may be unfolded by later checks, which rely on
+       it being well-typed, so it is checked here. *)
+    check env c ();
+    if opacify then register_opacified_constant env opac kn c else opac
+  | OpaqueDef o when opacify ->
+    (* A constant of a sealed module that its signature declares without
+       a body: what it uses is recorded from its body, which is therefore
+       cooked here, in the main process. Its check is still deferred. *)
+    let c, env = cook o in
+    CheckWorkers.defer kn (check env c);
+    register_opacified_constant env opac kn c
+  | OpaqueDef o ->
+    (* Nothing else that is checked looks into an opaque body, so its check
+       can be postponed, and possibly run in another process, and so can
+       its cooking: the main process keeps no cooked body while the check
+       waits. The process that runs the check reads the table it needs
+       ([CheckLibrary.indirect_accessor]), and a check handed back cooks
+       again in the process that runs it. With -j 1, [defer] runs the
+       closure at once, so the order of effects is as before. *)
+    CheckWorkers.defer kn (fun () -> let c, env = cook o in check env c ());
+    opac
 
 let check_constant_declaration env opac kn cb opacify =
   let opac = NewProfile.profile "check_constant" ~args:(fun () ->
@@ -291,6 +310,66 @@ let rec collect_constants_without_body sign mp accu =
   | NoFunctor struc ->
      List.fold_left (fun s (lab,mb) -> collect_field s lab mb) accu struc
 
+(* The Axioms section of the summary folds over the final environment, which
+   holds a sealed module's interface and not its implementation, so an axiom
+   declared inside [Module M : T] is invisible to it.
+   [register_opacified_constant] above recovers one that a sealed constant's
+   own body names, but a helper that also lives in the implementation has a
+   body, and the fold over its uses keeps only bodyless constants, so the
+   axioms behind such a helper are lost. The walk below
+   records every axiom declared in an implementation the environment does
+   not hold, whether or not a proof reaches it, which is what the fold does
+   for the axioms it can see.
+
+   It reports an axiom where it is declared, which for a functor's field is
+   the module each application makes ([App.in_f]), the name the environment
+   fold and [Print Assumptions] both use. Upstream rocq-prover/rocq#22623
+   makes the other choice and reports [F.in_f]; keeping ours is deliberate,
+   for the two joins in the verification harness (the statement checker, the engine's driver).
+
+   It would rather leave an axiom unreported, which both joins fail closed
+   on, than report a name no [Print Assumptions] prints, which they read as
+   a smuggled assumption. So it stops at a module an expression defines (an
+   application and [Module M : T := E] alike): all it has there is that
+   module's type, which says nothing about what the expression leaves
+   assumed, whether in a field of its own or in a structure under it that
+   the type, not the expression, declares. The known cost is that an axiom
+   reached that way goes unreported: a functor's own axiom through an
+   application inside a seal, the body of a sealed functor, a seal a functor
+   body declares. Where a sealed implementation reaches a sibling's axiom
+   through an [Include], an alias or an ascription of it, the two accounts
+   name one axiom twice: the walk reports it where it is declared, while
+   [Print Assumptions] names the path the proof wrote. That pair fails both
+   joins closed, as it does without this walk, where the axiom goes
+   unreported instead. *)
+let rec record_sealed_axioms ~hidden mp mb =
+  match mod_type mb, mod_expr mb with
+  | MoreFunctor _, _ ->
+    (* A functor: its fields have no name of their own, see above. *)
+    ()
+  | NoFunctor _, Struct (_, impl) ->
+    (* [Module M : T. ... End M]: a structure of its own, which the
+       environment replaces with T, so all of it is hidden. *)
+    record_sealed_structure ~hidden:true mp impl
+  | NoFunctor _, Algebraic _ ->
+    (* [Module M := E] and [Module M : T := E], see above. *)
+    ()
+  | NoFunctor struc, (Abstract | FullStruct) ->
+    (* The type is all there is of this module ([Declare Module M : T] or a
+       plain [Module M]), and the environment holds it unless an enclosing
+       implementation hides it. *)
+    record_sealed_structure ~hidden mp struc
+
+and record_sealed_structure ~hidden mp struc =
+  let record_field (lab, field) = match field with
+  | SFBconst cb ->
+    if hidden && not (Declareops.constant_has_body cb) then
+      Check_stat.record_axiom (Constant.make2 mp lab)
+  | SFBmodule msb -> record_sealed_axioms ~hidden (MPdot (mp, lab)) msb
+  | SFBmind _ | SFBrules _ | SFBmodtype _ -> ()
+  in
+  List.iter record_field struc
+
 let rec check_mexpr env opac mse mp_mse res = match mse with
   | MEident mp ->
     let mb = lookup_module mp env in
@@ -363,10 +442,15 @@ and check_structure_field env opac mp lab res opacify = function
   | SFBconst cb ->
       let kn = KerName.make mp lab in
       let kn = Mod_subst.constant_of_delta_kn res kn in
+      let () = Check_stat.record_constant kn cb in
       check_constant_declaration env opac kn cb (Cset.mem kn opacify)
   | SFBmind mib ->
       let kn = KerName.make mp lab in
       let kn = Mod_subst.mind_of_delta_kn res kn in
+      let () =
+        let indices_matter = (Environ.typing_flags env).indices_matter in
+        Check_stat.record_inductive ~indices_matter kn mib
+      in
       CheckInductive.check_inductive env kn mib, opac
   | SFBmodule msb ->
       let mp = MPdot(mp, lab) in
@@ -393,7 +477,13 @@ and check_signature env opac sign mp_mse res opacify = match sign with
       opac
 
 let check_module env opac mp mb =
-  NewProfile.profile "check_module"
-    ~args:(fun () -> [("name", `String (ModPath.to_string mp))])
-    (fun () -> check_module env opac mp mb Cset.empty)
-    ()
+  let opac =
+    NewProfile.profile "check_module"
+      ~args:(fun () -> [("name", `String (ModPath.to_string mp))])
+      (fun () -> check_module env opac mp mb Cset.empty)
+      ()
+  in
+  let () =
+    if Check_stat.summary_enabled () then record_sealed_axioms ~hidden:false mp mb
+  in
+  opac

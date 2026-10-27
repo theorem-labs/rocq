@@ -265,6 +265,63 @@ let envcache_of_rel i envcache = {
   rel_adjust = envcache.rel_adjust + i
 }
 
+(* Code compiled to run in this process is compiled with small constant bodies expanded
+   ([Genlambda.inlinable_body]), which removes a call, its entry and its return from each expanded
+   application. [inline_limit] is the size under which a body is expanded; 50 nodes measured best on
+   lane R2's fast set (a larger limit copies large bodies into many sites and costs more than it
+   saves).
+
+   Why the value is the same: the bytecode a library file carries for a constant is the compilation
+   of the same body term, by the same compiler, with nothing expanded. Expanding the body of a
+   transparent constant at an application site is the delta step followed by beta, which the
+   compiler already takes for a constant with inline code, so both run to the same value of the
+   constant. Nothing a library file holds changes: [compile_constant_body] keeps its default
+   [inline_limit = 0] everywhere a declaration is compiled, and only the two calls below pass a
+   limit.
+
+   The one thing a caller must agree with the callee on is which arguments the code reads: a caller
+   erases the arguments the callee's stored mask calls unused ([Genlambda.lambda_of_app]). So the
+   code compiled again is kept only when its mask is the stored one; otherwise this run uses the
+   stored code, as stock does.
+
+   It is also kept only when this compilation actually expanded a body ([Genlambda.expansions]
+   moved). With nothing expanded the code is the compilation the library file already holds, so
+   there is nothing to gain, and replacing the stored code would make this process ignore the
+   bytecode its .vo carries for no reason: test-suite/misc/rocqchk_vm_bytecode.sh builds a .vo
+   whose vmlibrary disagrees with its library, and the compiler must use the bytecode that file
+   carries, as stock does, for the checker to be the thing that refuses it.
+
+   ROCQ_VM_INLINE=0 turns the expansion off: no body is expanded, no constant is compiled again,
+   and this process generates the code speed-6 generates, which gives a reviewer an arm that
+   differs from the base in nothing else. ROCQ_VM_INLINE=1 and an unset variable are the default.
+   Any other value stops the process, as a misspelt switch that silently did nothing would be read
+   as a measurement. *)
+let inline_limit =
+  match Sys.getenv_opt "ROCQ_VM_INLINE" with
+  | None | Some "1" -> 50
+  | Some "0" -> 0
+  | Some v ->
+    Printf.eprintf "ROCQ_VM_INLINE=%s: expected 0 (no expansion) or 1.\n%!" v;
+    exit 1
+
+let compiled_again_count = ref 0
+let compiled_again () = !compiled_again_count
+
+(* [count:false]: the statistics of [Vmbinnum] count the declarations the recognizer reads, and
+   this body's declaration was already counted where it was declared. *)
+let compile_again env cb mask =
+  if Int.equal inline_limit 0 then None
+  else match cb.const_body with
+  | Def _ ->
+    let before = Genlambda.expansions () in
+    (match Vmbytegen.compile_constant_body ~fail_on_error:false ~count:false ~inline_limit
+             env cb.const_universes cb.const_body with
+     | Some (BCdefined (mask', code, patches))
+       when CArray.equal Bool.equal mask mask' && Genlambda.expansions () > before ->
+       incr compiled_again_count; Some (code, patches)
+     | _ -> None)
+  | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> None
+
 let rec slot_for_getglobal env sigma kn envcache table =
   let cb = CClosure.lookup_constant_handler env sigma.Genlambda.evars_val kn in
   let rk =
@@ -277,9 +334,11 @@ let rec slot_for_getglobal env sigma kn envcache table =
   try key rk
   with NotEvaluated ->
     let pos = match cb.const_body_code with
-    | BCdefined (_, index, patches) ->
-      let code = index () in
-      let code = (code, patches) in
+    | BCdefined (mask, index, patches) ->
+      let code = match compile_again env cb mask with
+        | Some code -> code
+        | None -> (index (), patches)
+      in
       let v = eval_to_patch env sigma code envcache table in
       set_global v table
     | BCalias kn' -> slot_for_getglobal env sigma kn' envcache table
@@ -338,7 +397,7 @@ and eval_to_patch env sigma code envcache table =
   v
 
 and val_of_constr env sigma c envcache table =
-  match compile ~fail_on_error:true env sigma c with
+  match compile ~fail_on_error:true ~inline_limit env sigma c with
   | Some (_, code, patch) -> eval_to_patch env sigma (code, patch) envcache table
   | None -> assert false
 

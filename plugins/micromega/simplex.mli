@@ -22,6 +22,16 @@ type profile_info =
 
 val get_profile_info : unit -> profile_info
 
+(** What the calls of [integer_solver] during a computation added to the profile. *)
+type profile_trace
+
+(** [traced f] is [(f (), t)], [t] what the calls of [integer_solver] during [f ()] added to the
+    profile. *)
+val traced : (unit -> 'a) -> 'a * profile_trace
+
+(** [replay t] adds [t] to the profile again, as the calls that made it did. *)
+val replay : profile_trace -> unit
+
 (** Simplex interface *)
 
 val find_point : cstr list -> Vect.t option
@@ -29,3 +39,8 @@ val find_unsat_certificate : cstr list -> Vect.t option
 
 val integer_solver :
   WithProof.t list -> ProofFormat.proof option
+
+(** [relaxed_point lp] solves the rational relaxation of [lp] once, up to feasibility, with the
+    environment that [integer_solver lp] builds: [Some sol], one of its points, or [None] if it is
+    infeasible. *)
+val relaxed_point : WithProof.t list -> Vect.t option

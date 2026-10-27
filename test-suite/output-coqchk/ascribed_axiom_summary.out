@@ -1,0 +1,50 @@
+
+CONTEXT SUMMARY
+===============
+
+* Theory: Set is predicative
+  
+* Theory: Rewrite rules are not allowed
+  
+* Axioms:
+    ascribed_axiom_summary.AssumesInside.Asc.p
+    ascribed_axiom_summary.OpenAssumed.p
+    ascribed_axiom_summary.Declared.p
+    ascribed_axiom_summary.OfType.Asc.p
+    ascribed_axiom_summary.OverType.Held.Asc.p
+    ascribed_axiom_summary.global_ax
+    ascribed_axiom_summary.Nested.Plain.inner_ax
+    ascribed_axiom_summary.OverAxiom.Asc.p
+    ascribed_axiom_summary.Applied.Asc.p
+    ascribed_axiom_summary.Assumes.p
+  
+* Constants/Inductives relying on type-in-type: <none>
+  
+* Constants/Inductives relying on unsafe (co)fixpoints: <none>
+  
+* Inductives whose positivity is assumed: <none>
+  
+* Inductives relying on indices not mattering:
+    Corelib.Init.Datatypes.eq_true
+    Corelib.Init.Logic.eq
+  
+* Libraries admitted without checking, so the sections above cannot see unsafe flags inside their sealed modules:
+    Corelib.Init.Ltac
+    Corelib.Init.Notations
+    Corelib.Init.Logic
+    Corelib.Init.Datatypes
+    Corelib.Init.Specif
+    Corelib.Init.Sumbool
+    Corelib.Init.Tauto
+    Corelib.Init.Tactics
+    Corelib.Init.Wf
+    Corelib.Init.Decimal
+    Corelib.Init.Hexadecimal
+    Corelib.Init.Number
+    Corelib.Init.Nat
+    Corelib.Init.Peano
+    Corelib.Init.Byte
+    Corelib.Init.Equality
+    Corelib.Init.Prelude
+
+
