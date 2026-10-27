@@ -442,6 +442,11 @@ let check_caml_prim_op = function
 | CAML_Stringsub -> opCHECKCAMLCALL3
 | CAML_Stringcat | CAML_Stringcompare -> opCHECKCAMLCALL2
 
+let znative_op_code = function
+| ZNadd -> opCHECKZADD
+| ZNpossub -> opCHECKZPOSSUB
+| ZNposadd -> opCHECKPOSADD
+
 let inplace_prim_op = function
   | Float64next_up | Float64next_down -> true
   | _ -> false
@@ -540,6 +545,9 @@ let emit_instr env = function
   | Ksequence _ -> invalid_arg "Vmemitcodes.emit_instr"
   | Kproj p -> out env opPROJ; out_int env p
   | Kensurestackcapacity size -> out env opENSURESTACKCAPACITY; out_int env size
+  | Kbinnum (k, n) -> out env opBINNUM; out_int env k; out_int env n
+  | Kbinnumcall (k, n, lbl) ->
+      out env opBINNUMCALL; out_int env k; out_int env n; out_label env lbl
   | Kbranch lbl -> out env opBRANCH; out_label env lbl
   | Kprim (op, (q,_u)) ->
       out env (check_prim_op op);
@@ -549,6 +557,8 @@ let emit_instr env = function
     out env (check_caml_prim_op op);
     out_label env lbl;
     slot_for_caml_prim env op
+
+  | Kznative op -> out env (znative_op_code op)
 
   | Kstop -> out env opSTOP
 
