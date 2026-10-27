@@ -35,6 +35,10 @@ module type ZArith = sig
   val lcm : t -> t -> t
 
   val to_string : t -> string
+
+  (** [numbits x] is the number of significant bits of [x]: 0 for 0, otherwise the [n] with
+      [2^(n-1) <= |x| < 2^n] *)
+  val numbits : t -> int
 end
 
 module type QArith = sig
