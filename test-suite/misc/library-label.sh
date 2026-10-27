@@ -72,7 +72,7 @@ variant() {
 }
 
 KEEP="same comment blank spaces proof attrs admitted axqed"
-CHANGE="stmt body inductive universe notation abbrev hint extern ltac redef tacnot option ltac2 functor counter canonical axdef secbind safe info"
+CHANGE="stmt body inductive addcon universe notation abbrev hint extern ltac redef tacnot option ltac2 functor counter canonical axdef secbind guard safe info"
 
 mkdir -p _test/base
 cp base/A.v _test/base/A.v
@@ -87,6 +87,7 @@ variant proof -e 's/^Proof\. intros n\. reflexivity\. Qed\./Proof.\n  intros n.\
 variant stmt -e 's/forall n, f n = S n/forall n, f n = S (0 + n)/'
 variant body -e 's/^Definition g := f\./Definition g := fun n => f n./'
 variant inductive -e 's/C1 | C2/C1 | C3/'
+variant addcon -e 's/^Inductive t := C1 | C2\./Inductive t := C1 | C2 | C3./'
 variant universe -e '$a\
 Universe label_u.'
 variant notation -e 's/at level 50/at level 40/'
@@ -106,6 +107,7 @@ variant admitted -e 's/^Proof\. intros n\. reflexivity\. Qed\./Proof. intros n. 
 variant axqed -e 's/^Admitted\.$/Proof. exact I. Qed./'
 variant axdef -e 's/^Lemma lax : True\.$/Definition lax := I./' -e '/^Admitted\.$/d'
 variant secbind -e 's/Proof using sv\./Proof using sv sw./'
+variant guard -e 's/^Fixpoint fg /Unset Guard Checking.\nFixpoint fg /'
 variant safe -e 's/^Require Corelib\.Classes\.CMorphisms\./Require (safe) Corelib.Classes.CMorphisms./'
 variant info -e 's/note="label fixture"/note="label fixture, changed"/'
 

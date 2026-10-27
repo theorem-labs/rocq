@@ -61,3 +61,10 @@ Section Sec.
   Context (sv sw : nat).
   Lemma lsec : sv = sv. Proof using sv. reflexivity. Qed.
 End Sec.
+
+(* A structurally-decreasing fixpoint: the `guard` variant recompiles it with
+   Unset Guard Checking, which changes its const_typing_flags (check_guarded) with
+   body, type and universes unchanged, so the label must move (ROCQ: an unsound
+   toolchain flag must not be kept over). The `addcon` variant adds a constructor
+   to t above. *)
+Fixpoint fg (n : nat) : nat := match n with O => O | S m => fg m end.
