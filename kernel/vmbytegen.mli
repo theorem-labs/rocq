@@ -13,14 +13,26 @@ open Constr
 open Declarations
 open Environ
 
+(** [inline_limit] (default 0, no inlining) is the size under which an applied constant's body is
+    expanded instead of called; see [Genlambda.inlinable_body]. Code that goes into a library file
+    is compiled with the default, so a library's bytes do not depend on it. *)
 val compile :
   fail_on_error:bool ->
+  ?inline_limit:int ->
   env -> Genlambda.evars -> constr ->
   (bool array * to_patch * patches) option
 
 val compile_constant_body : fail_on_error:bool ->
+  ?inline_limit:int ->
   env -> universes -> (Constr.t, 'opaque, 'symb) constant_def ->
   body_code option
+
+val compile_znative_wrapper :
+  Names.Constant.t -> Vmbytecodes.znative_op -> to_patch * patches
+(** Code for [fun x y => op x y], the value the machine gives a constant whose
+    definition [Vmznative] recognises. When an argument is not a closed number
+    the operation applies the value of the constant instead, so such a call
+    reduces exactly as it does without the native path. *)
 
 (** Shortcut of the previous function used during module strengthening *)
 

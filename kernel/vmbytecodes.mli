@@ -36,6 +36,14 @@ type caml_prim =
 | CAML_Stringcat
 | CAML_Stringcompare
 
+(** Operations of the standard library's binary numbers that the machine
+    evaluates natively instead of interpreting them one digit at a time. See
+    [Vmznative], which decides which constants carry them. *)
+type znative_op =
+| ZNadd      (** [Z.add] of two closed [Z] below the native window *)
+| ZNpossub   (** [Z.pos_sub] of two closed [positive] below the window *)
+| ZNposadd   (** [Pos.add] of two closed [positive] below the window *)
+
 type instruction =
   | Klabel of Label.t
   | Kacc of int                         (** accu = sp[n] *)
@@ -76,6 +84,9 @@ type instruction =
   | Kbranch of Label.t                  (** jump to label, is it needed ? *)
   | Kprim of CPrimitives.t * pconstant
   | Kcamlprim of caml_prim * Label.t
+  | Kznative of znative_op * Constant.t
+      (** native binary-number operation; the constant is the one whose value
+          the machine applies instead when an argument is not a closed number *)
 
 and bytecodes = instruction list
 

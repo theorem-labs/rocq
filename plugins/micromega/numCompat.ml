@@ -28,6 +28,7 @@ module type ZArith = sig
   val gcd : t -> t -> t
   val lcm : t -> t -> t
   val to_string : t -> string
+  val numbits : t -> int
 end
 
 module Z = struct
