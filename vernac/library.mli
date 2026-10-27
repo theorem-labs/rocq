@@ -98,6 +98,17 @@ val native_name_from_filename : string -> string
     of the state and are not counted. *)
 val opaque_tables_generation : unit -> int
 
+(** [content_digests ()] maps a loaded library to a digest of its name, of
+    the digest its file records for its declarations, of the digest the file
+    its opaque-proof table was read from records for that table, and of the
+    same digest of every library it depends on, transitively; [None] for a
+    library that is not loaded, such as the one being compiled. Two processes
+    that give a library the same digest have loaded the same declarations and
+    opaque proofs for it and for everything it depends on, as far as the
+    digests the files record tell. The function memoizes: call it again after
+    a library or an opaque table is loaded. *)
+val content_digests : unit -> (DirPath.t -> Digest.t option)
+
 (** {6 Opaque accessors} *)
 val indirect_accessor : Global.indirect_accessor
 [@@deprecated

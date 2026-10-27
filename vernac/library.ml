@@ -36,6 +36,7 @@ sig
 type 'a delayed
 val in_delayed : string -> ObjFile.in_handle -> segment:'a ObjFile.id -> 'a delayed * Digest.t
 val fetch_delayed : 'a delayed -> 'a
+val delayed_digest : 'a delayed -> Digest.t
 
 end =
 struct
@@ -50,6 +51,8 @@ let in_delayed f ch ~segment =
   let seg = ObjFile.get_segment ch ~segment in
   let digest = seg.ObjFile.hash in
   { del_file = f; del_digest = digest; del_off = seg.ObjFile.pos; }, digest
+
+let delayed_digest del = del.del_digest
 
 (** Fetching a table of opaque terms at position [pos] in file [f],
     expecting to find first a copy of [digest]. *)
@@ -198,11 +201,59 @@ let opaque_tables =
    returns. *)
 let opaque_generation = ref 0
 
+(* The digest of the segment each table in [opaque_tables] was or will be read
+   from, as the file records it: what [Library.content_digests] covers of a
+   library's opaque proofs. Written with the table, so a Require that replaces
+   the table of a loaded library replaces it too. *)
+let opaque_digests = ref (DirPath.Map.empty : Digest.t DirPath.Map.t)
+
 let add_opaque_table dp st =
   incr opaque_generation;
+  let () = match st with
+    | ToFetch del -> opaque_digests := DirPath.Map.add dp (delayed_digest del) !opaque_digests
+    | Fetched _ -> opaque_digests := DirPath.Map.remove dp !opaque_digests
+  in
   opaque_tables := DirPath.Map.add dp st !opaque_tables
 
 let opaque_tables_generation () = !opaque_generation
+
+let content_digests () =
+  let memo = ref DirPath.Map.empty in
+  let add_dirpath b dp =
+    List.iter (fun id ->
+        let s = Id.to_string id in
+        Buffer.add_string b (string_of_int (String.length s));
+        Buffer.add_char b ':';
+        Buffer.add_string b s)
+      (DirPath.repr dp);
+    Buffer.add_char b ';'
+  in
+  (* Library dependencies form a DAG ([error_recursively_dependent_library]),
+     so this terminates, at the depth of that DAG. *)
+  let rec digest dp =
+    match DirPath.Map.find_opt dp !memo with
+    | Some d -> d
+    | None ->
+      let d = match find_library dp, DirPath.Map.find_opt dp !opaque_digests with
+        | Some (_, lib), Some opaque ->
+          let Safe_typing.Dvo_or_vi library = lib.library_digests in
+          let deps = List.sort DirPath.compare (Array.to_list (Array.map fst lib.library_deps)) in
+          let deps = List.map digest deps in
+          if List.exists Option.is_empty deps then None
+          else begin
+            let b = Buffer.create 256 in
+            add_dirpath b dp;
+            Buffer.add_string b library;
+            Buffer.add_string b opaque;
+            List.iter (fun d -> Buffer.add_string b (Option.get d)) deps;
+            Some (Digest.string (Buffer.contents b))
+          end
+        | _ -> None
+      in
+      memo := DirPath.Map.add dp d !memo;
+      d
+  in
+  digest
 
 let access_table what tables dp i =
   let t = match DirPath.Map.find dp !tables with

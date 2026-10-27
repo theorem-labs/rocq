@@ -430,32 +430,41 @@ let[@inline always] add_entry value edges obj =
   let m = !memo in
   memo := { m with entries = GlobRef.Map_env.add obj e m.entries; weight = m.weight + weight }
 
+(** The inductives and constructors of a mutual block. *)
+let block_members mind mib =
+  Array.fold_left_i (fun n members oib ->
+      let ind = (mind, n) in
+      Array.fold_left_i (fun k members _ ->
+          GlobRef.Set_env.add (GlobRef.ConstructRef (ind, k+1)) members)
+        (GlobRef.Set_env.add (GlobRef.IndRef ind) members) oib.mind_consnames)
+    GlobRef.Set_env.empty mib.mind_packets
+
+(** [entries] plus an entry for each member of a block whose walk found
+    [contents], with the weight of those entries. *)
+let block_entries members contents entries =
+  let edges = GlobRef.Set_env.union contents members in
+  let size = GlobRef.Set_env.cardinal edges in
+  let weight = GlobRef.Set_env.cardinal members + size in
+  let memo_edges = Direct { refs = edges; size } in
+  let entries = GlobRef.Set_env.fold (fun obj entries ->
+      let e = { memo_obj = obj; memo_value = Some contents; memo_edges } in
+      GlobRef.Map_env.add obj e entries) members entries
+  in
+  entries, weight
+
 (* The members are added to a new map, which is assigned once, with the
    weight: a block recorded in part (a [Timeout] or an interrupt during the
    loop) would keep its other members from ever being recorded
    ([user_name_unrecorded]), and every replay that reaches one of them would
    miss deep in the graph. *)
 let record_block mind mib contents =
-  let members = Array.fold_left_i (fun n members oib ->
-      let ind = (mind, n) in
-      Array.fold_left_i (fun k members _ ->
-          GlobRef.Set_env.add (GlobRef.ConstructRef (ind, k+1)) members)
-        (GlobRef.Set_env.add (GlobRef.IndRef ind) members) oib.mind_consnames)
-      GlobRef.Set_env.empty mib.mind_packets
-  in
+  let members = block_members mind mib in
   let cached r = GlobRef.Set_env.mem r members || has_entry r in
   if GlobRef.Set_env.for_all user_name_unrecorded members
      && GlobRef.Set_env.for_all cached contents then
-    let edges = GlobRef.Set_env.union contents members in
-    let size = GlobRef.Set_env.cardinal edges in
-    let weight = GlobRef.Set_env.cardinal members + size in
-    query_weight := !query_weight + weight;
     let m = !memo in
-    let memo_edges = Direct { refs = edges; size } in
-    let entries = GlobRef.Set_env.fold (fun obj entries ->
-        let e = { memo_obj = obj; memo_value = Some contents; memo_edges } in
-        GlobRef.Map_env.add obj e entries) members m.entries
-    in
+    let entries, weight = block_entries members contents m.entries in
+    query_weight := !query_weight + weight;
     memo := { m with entries; weight = m.weight + weight }
 
 exception Miss
@@ -747,11 +756,30 @@ let seen gen c =
     false
   end
 
+(** The first phase of a shared query ([Shared] below) walks one object at a
+    time: while [shallow] is set, a walk stops at every reference it meets,
+    once it has added it to the walked object's set, as a walk does for an
+    object already in [data]; and its end leaves in [shallow_result] what it
+    would have recorded, with whether the walk took no unreplayable step,
+    instead of recording it. The set a walk collects does not depend on which
+    references it goes down into ([traverse_object] adds a reference to it
+    before deciding), so it is the set the full walk collects. *)
+let shallow = ref false
+
+type shallow_result =
+  | No_result
+  | Object_walked of { value : GlobRef.Set_env.t option; edges : GlobRef.Set_env.t; replayable : bool }
+  | Block_walked of { contents : GlobRef.Set_env.t; replayable : bool }
+
+let shallow_result = ref No_result
+
 (* The end of a walk of [obj]: its entry is recorded when no step the walk took
    is one that cannot be replayed, and every edge has an entry. Not inlined, so
    that the frames of the walks that call it are as they would be without it. *)
 let[@inline never] record mark value edges obj =
-  if Int.equal mark !unreplayable_steps && user_name_unrecorded obj
+  if !shallow then
+    shallow_result := Object_walked { value; edges; replayable = Int.equal mark !unreplayable_steps }
+  else if Int.equal mark !unreplayable_steps && user_name_unrecorded obj
      && edges_have_entries obj edges
   then add_entry value edges obj
 
@@ -834,7 +862,7 @@ and traverse_node access gen bound cooking (current:GlobRef.t) ctx accu t =
    [inductive_marks] rather than in that frame. *)
 and traverse_object access (curr, data, ax2ty) body obj =
   let curr = GlobRef.Set_env.add obj curr in
-  if GlobRef.Map_env.mem obj data then (curr, data, ax2ty)
+  if !shallow || GlobRef.Map_env.mem obj data then (curr, data, ax2ty)
   else match replay obj data with
   | Some data -> (curr, data, ax2ty)
   | None -> (walk_object [@ocaml.tailcall]) access curr data ax2ty body obj
@@ -937,6 +965,7 @@ and traverse_inductive access (curr, data, ax2ty) mind obj =
   let recursive = GlobRef.Set_env.mem firstind_ref curr in
   let curr = GlobRef.Set_env.add obj curr in
   if
+    (* first phase of a shared query: *) !shallow ||
     (* recursive call: *) recursive ||
     (* already in: *) GlobRef.Map_env.mem firstind_ref data
   then (curr, data, ax2ty)
@@ -986,7 +1015,11 @@ and walk_inductive access curr data ax2ty mind obj =
     | mark :: marks -> inductive_marks := marks; mark
     | [] -> assert false
   in
-  let () = if Int.equal mark !unreplayable_steps then record_block mind mib contents in
+  let () =
+    if !shallow then
+      shallow_result := Block_walked { contents; replayable = Int.equal mark !unreplayable_steps }
+    else if Int.equal mark !unreplayable_steps then record_block mind mib contents
+  in
   (curr, data, ax2ty)
 
 (** The context a discharge abstracts over, walked as the binders of the
@@ -1015,18 +1048,631 @@ and traverse_context access gen bound cooking current ctx accu ctxt =
           let ctx = Context.Rel.add decl ctx in
            ctx, accu) ctxt ~init:(ctx, accu))
 
+(** {6 Entries shared by several processes}
+
+    When [ROCQ_ASSUMPTIONS_SHARED_DIR] names a directory, the queries of this
+    process share entries with every other process that names the same
+    directory, such as the files of one build that print the assumptions of
+    statements proved from one library. A query then has two phases.
+
+    The first ([phase1]) collects the entry of every object the query can
+    reach, and prints nothing. It takes objects one at a time from a stack
+    that starts with the query's roots, gets the entry of each, and pushes
+    the references the entry holds. An entry comes from this process's
+    entries, from the directory, or from a walk of that object alone
+    ([shallow_walk]), after which the process writes it to the directory.
+    Before such a walk the process claims the object in the directory, and
+    holds a lock on the claim while it walks; a process that finds an object
+    claimed puts it aside until the claimant has written its entry, and goes
+    on with the rest of its stack. The system releases the lock of a
+    claimant that ends, so a process takes over at once the claim of one
+    that died. So the processes that need an object walk it once between
+    them, and processes that need the same closure at the same time divide
+    its walks.
+
+    The second phase is the query as without sharing, once the entries of
+    the first phase are among this process's entries ([install]). Its output
+    is the output without reuse, by the invariant above, if each entry
+    [install] adds is the entry the invariant defines, and if every edge of
+    every entry has an entry. Both hold:
+    - An entry the first phase computes is what the walk of the object
+      records ([shallow]: the set a walk collects does not depend on which
+      references it goes down into), except that it does not wait until its
+      edges have entries. [install] adds an entry only when the entries reach
+      no object without one, and the walk of an object that a walk nested in
+      it makes unrecordable reaches that object, which has no entry: what
+      [install] adds is what recording each object once its edges have
+      entries would have recorded.
+    - An entry read from the directory was written by a process that walked
+      an object with the same user and canonical names, of libraries to which
+      both processes give the same [Library.content_digests] (see [key]): the
+      same declarations and opaque proofs for those libraries and every
+      library they depend on. That is all the walk of an object of a library
+      reads: its body and type, its opaque proof and that proof's section
+      discharge, the inductives it matches on, and the module structures
+      [lookup_constant] searches. Only objects of loaded libraries are
+      shared; those of the library being compiled, and section variables,
+      are walked by each process.
+    - The key carries over the rule that clears the entries above when an
+      opaque table changes: a Require that replaces the opaque table of a
+      loaded library changes that library's [Library.content_digests], which
+      covers the segment the table now comes from, so no entry walked from
+      the old table matches.
+
+    The first phase can walk objects the second does not reach: [traverse]
+    does not go down into the axiom of a match on an empty type
+    ([empty_match]), while the first phase pushes it like any reference. So
+    the first phase gives up on an object whose walk raises anything but an
+    interruption ([shallow_walk]); the second phase walks the object again
+    if it reaches it, and raises what it would have raised without sharing.
+    Any failure to use the directory turns sharing off for the rest of the
+    process, which only costs reuse.
+
+    The directory must hold only what the processes of one build over one
+    set of library files wrote: the key rests on the digests the files
+    record, and entries are read back with [Marshal]. The digest each entry
+    file carries is checked before that, so a damaged file counts as absent;
+    it does not protect against a file crafted to match it, so nothing the
+    build does not trust may write to the directory. *)
+module Shared = struct
+
+  let dir = match Sys.getenv_opt "ROCQ_ASSUMPTIONS_SHARED_DIR" with
+    | Some d when not (String.equal d "") -> Some d
+    | _ -> None
+
+  (* ROCQ_DEBUG_ASSUMPTIONS_SHARED=1: one line per query, on standard error,
+     like ROCQ_DEBUG_ASSUMPTIONS_MEMO. *)
+  let debug = Sys.getenv_opt "ROCQ_DEBUG_ASSUMPTIONS_SHARED" = Some "1"
+
+  let usable = ref (Option.has_some dir)
+
+  let disable what e =
+    if !usable && debug then
+      Printf.eprintf "[assumptions-shared] off after %s: %s\n%!" what (Printexc.to_string e);
+    usable := false
+
+  let path sub = Filename.concat (Option.get dir) sub
+
+  (** References compared by user and canonical name: the identity of an
+      object for [find_entry]. *)
+  module Exact = struct
+    type t = GlobRef.t
+    let compare a b =
+      let c = GlobRef.UserOrd.compare a b in
+      if c <> 0 then c else GlobRef.CanOrd.compare a b
+  end
+  module EMap = Map.Make (Exact)
+
+  (** What a walk of one object found: a constant or variable without a body
+      and the references of its type, one with a body and its references, an
+      inductive block and its references, or a walk that raised. *)
+  type kind = No_body | Body | Block | Failed
+
+  (** One entry, as written to the directory. *)
+  type record = {
+    r_key : string;
+    r_kind : kind;
+    r_replayable : bool;
+    r_refs : GlobRef.t list;
+  }
+
+  (** The first line of every entry file. A reader skips a file that another
+      build of Rocq wrote, since it reads the entry with [Marshal]. *)
+  let magic =
+    Printf.sprintf "rocq-assumptions-shared 1 %s %s %d\n"
+      Coq_config.version Coq_config.caml_version Sys.word_size
+
+  let magic_length = String.length magic
+
+  (* For each key, two files in one of 256 directories (so that the processes
+     creating files seldom wait for one another): the claim, which the first
+     process to create it owns, and the entry: [magic], the MD5 of the
+     payload, the payload (the marshaled record). The entry is written under
+     a name of the writer's own and renamed into place, so a reader finds
+     nothing or the whole file; a reader also takes it only when its digest
+     matches. *)
+  let out_buffer = ref (Bytes.create 65536)
+
+  (* The entry file of [record], in [!out_buffer], and its length. Built in
+     place: an entry is a few kilobytes, which the major heap would otherwise
+     take several times over at each write. *)
+  let rec contents record =
+    let b = !out_buffer in
+    let start = magic_length + 16 in
+    match Marshal.to_buffer b start (Bytes.length b - start) record [] with
+    | n ->
+      Bytes.blit_string magic 0 b 0 magic_length;
+      Bytes.blit_string (Digest.subbytes b start n) 0 b magic_length 16;
+      start + n
+    | exception Failure _ ->
+      out_buffer := Bytes.create (2 * Bytes.length b);
+      contents record
+
+  let rec write_all fd b off len =
+    if len > 0 then
+      let k = Unix.write fd b off len in
+      write_all fd b (off + k) (len - k)
+
+  let mkdir d = try Unix.mkdir d 0o700 with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+
+  let file_of key =
+    let h = Digest.to_hex (Digest.string key) in
+    Filename.concat (Filename.concat (path "entries") (String.sub h 0 2)) h
+
+  let claim_of key = file_of key ^ ".claim"
+
+  type found = { f_kind : kind; f_replayable : bool; f_refs : GlobRef.t list }
+
+  (** Entries this process read or wrote, by key. *)
+  let index : (string, found) Hashtbl.t = Hashtbl.create 1024
+
+  type claim =
+    | Mine of Unix.file_descr
+    (** this process holds the claim, open: locked, unless the system
+        refused the lock, which only lets another process walk the object
+        too *)
+    | Taken  (** another process holds it *)
+    | Off  (** sharing is off: the process walks every object itself *)
+
+  let lock fd = try Unix.lockf fd Unix.F_TLOCK 0; true with Unix.Unix_error _ -> false
+
+  (** Claims [key]: the first process to create its claim gets it. *)
+  let claim key =
+    if not !usable then Off
+    else
+      match Unix.openfile (claim_of key) [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC] 0o600 with
+      | fd -> ignore (lock fd : bool); Mine fd
+      | exception Unix.Unix_error (Unix.EEXIST, _, _) -> Taken
+      | exception (Unix.Unix_error _ as e) -> disable "a claim" e; Off
+
+  (** The claim of [key], when the process that held it ended without writing
+      the entry: its lock is free. A lock taken in the moment between the
+      claimant's creating the claim and locking it makes two processes walk
+      the object, which write equal entries. *)
+  let take_over key =
+    if not !usable then Some Off
+    else
+      match Unix.openfile (claim_of key) [Unix.O_WRONLY; Unix.O_CLOEXEC] 0 with
+      | exception (Unix.Unix_error _ as e) -> disable "a claim" e; Some Off
+      | fd ->
+        if lock fd then Some (Mine fd)
+        else begin Unix.close fd; None end
+
+  (** Keeps the entry of [key], and writes it to the directory when this
+      process holds the claim, which it then releases. *)
+  let publish claim key kind replayable refs =
+    Hashtbl.replace index key { f_kind = kind; f_replayable = replayable; f_refs = refs };
+    match claim with
+    | Taken | Off -> ()
+    | Mine claim_fd ->
+      try
+        Fun.protect ~finally:(fun () -> Unix.close claim_fd) (fun () ->
+            if !usable then begin
+              let file = file_of key in
+              let tmp = Printf.sprintf "%s.%d.tmp" file (Unix.getpid ()) in
+              let n = contents { r_key = key; r_kind = kind; r_replayable = replayable; r_refs = refs } in
+              let fd = Unix.openfile tmp [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_CLOEXEC] 0o600 in
+              Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> write_all fd !out_buffer 0 n);
+              Unix.rename tmp file
+            end)
+      with Unix.Unix_error _ as e -> disable "a write" e
+
+  (** Releases the claim of an object whose walk raised. *)
+  let abandon = function
+    | Mine fd -> (try Unix.close fd with Unix.Unix_error _ -> ())
+    | Taken | Off -> ()
+
+  let buffer = ref (Bytes.create 65536)
+
+  (* The entry of [key] in the directory, when its digest matches: the bytes
+     are checked before [Marshal] reads them. *)
+  let read key =
+    match Unix.openfile (file_of key) [Unix.O_RDONLY; Unix.O_CLOEXEC] 0 with
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
+    | fd ->
+      let n = Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+          let n = (Unix.fstat fd).Unix.st_size in
+          if Bytes.length !buffer < n then buffer := Bytes.create n;
+          let rec fill k =
+            if k >= n then k
+            else match Unix.read fd !buffer k (n - k) with
+              | 0 -> k
+              | r -> fill (k + r)
+          in
+          fill 0)
+      in
+      let b = !buffer in
+      let start = magic_length + 16 in
+      if n < start || not (String.equal (Bytes.sub_string b 0 magic_length) magic)
+         || not (String.equal (Bytes.sub_string b magic_length 16) (Digest.subbytes b start (n - start)))
+      then None
+      else
+        let r : record = Marshal.from_bytes b start in
+        if not (String.equal r.r_key key) then None
+        else begin
+          let f = { f_kind = r.r_kind; f_replayable = r.r_replayable; f_refs = r.r_refs } in
+          Hashtbl.replace index key f;
+          Some f
+        end
+
+  (** The entry of [key], read once from the directory. A file that is not a
+      whole entry of [key] (another build, a damaged file, a key whose MD5
+      collides) counts as absent. *)
+  let find key =
+    match Hashtbl.find_opt index key with
+    | Some _ as f -> f
+    | None ->
+      if not !usable then None
+      else
+        try read key
+        with (Unix.Unix_error _ | Sys_error _ | Failure _ | Invalid_argument _ | End_of_file) as e ->
+          disable "a read" e; None
+
+  let started = ref false
+
+  let start () =
+    if !usable && not !started then
+      try
+        mkdir (path "entries");
+        for i = 0 to 255 do mkdir (Filename.concat (path "entries") (Printf.sprintf "%02x" i)) done;
+        started := true
+      with (Unix.Unix_error _ | Sys_error _) as e -> disable "setting up the directory" e
+
+  let add_name b id =
+    let s = Id.to_string id in
+    Buffer.add_string b (string_of_int (String.length s));
+    Buffer.add_char b ':';
+    Buffer.add_string b s
+
+  let rec add_modpath b = function
+    | ModPath.MPfile dp -> Buffer.add_char b 'F'; List.iter (add_name b) (DirPath.repr dp); Buffer.add_char b ';'
+    | ModPath.MPbound _ -> raise Exit
+    | ModPath.MPdot (mp, l) -> add_modpath b mp; Buffer.add_char b '.'; add_name b l
+
+  let add_kername b kn =
+    let mp, l = KerName.repr kn in
+    add_modpath b mp;
+    Buffer.add_char b '/';
+    add_name b l
+
+  let rec library = function
+    | ModPath.MPfile dp -> dp
+    | ModPath.MPbound _ -> raise Exit
+    | ModPath.MPdot (mp, _) -> library mp
+
+  (** The key of an object, or of the inductive block of an inductive or
+      constructor: its user and canonical names, and the
+      [Library.content_digests] of the libraries they belong to; [None] for an
+      object that is not shared: a section variable, an object under a functor
+      parameter, or one of a library that is not loaded. *)
+  let key digests obj =
+    let of_names tag user canonical =
+      let digest kn = match digests (library (KerName.modpath kn)) with
+        | Some d -> d
+        | None -> raise Exit
+      in
+      try
+        let b = Buffer.create 128 in
+        Buffer.add_char b tag;
+        add_kername b user;
+        Buffer.add_char b '|';
+        add_kername b canonical;
+        Buffer.add_char b '|';
+        Buffer.add_string b (digest user);
+        Buffer.add_string b (digest canonical);
+        Some (Buffer.contents b)
+      with Exit -> None
+    in
+    match obj with
+    | GlobRef.VarRef _ -> None
+    | GlobRef.ConstRef c -> of_names 'C' (Constant.user c) (Constant.canonical c)
+    | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+      of_names 'I' (MutInd.user mind) (MutInd.canonical mind)
+
+end
+
+type phase1_result =
+  | P_object of { value : GlobRef.Set_env.t option; edges : GlobRef.Set_env.t; replayable : bool }
+  | P_block of { contents : GlobRef.Set_env.t; replayable : bool }
+  | P_failed
+
+(** The object that stands for its inductive block in the first phase. *)
+let node_of = function
+  | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> GlobRef.IndRef (mind, 0)
+  | GlobRef.ConstRef _ | GlobRef.VarRef _ as obj -> obj
+
+let interruption = function
+  | Control.Timeout | Sys.Break -> true
+  | _ -> Memprof_coq.is_interrupted ()
+
+(** The walk of [obj] alone (of its block, for an inductive or constructor),
+    with [shallow] set. [P_failed] when the walk raised anything but an
+    interruption: see why in the comment of [Shared]. *)
+let shallow_walk access obj =
+  let types = !type_stack and marks = !inductive_marks in
+  let walk () =
+    let curr = GlobRef.Set_env.empty and data = GlobRef.Map_env.empty in
+    match obj with
+    | GlobRef.ConstRef kn ->
+      ignore (walk_object access curr data data (fun () -> get_constant_body access kn) obj)
+    | GlobRef.VarRef id ->
+      let body () = Option.map no_discharge (id |> Global.lookup_named |> NamedDecl.get_value) in
+      ignore (walk_object access curr data data body obj)
+    | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+      ignore (walk_inductive access curr data data mind obj)
+  in
+  let reset () =
+    shallow := false;
+    shallow_result := No_result
+  in
+  shallow := true;
+  shallow_result := No_result;
+  match walk () with
+  | () ->
+    let result = match !shallow_result with
+      | Object_walked { value; edges; replayable } -> P_object { value; edges; replayable }
+      | Block_walked { contents; replayable } -> P_block { contents; replayable }
+      | No_result -> P_failed
+    in
+    reset ();
+    result
+  | exception e ->
+    let e = Exninfo.capture e in
+    reset ();
+    type_stack := types;
+    inductive_marks := marks;
+    if interruption (fst e) then Exninfo.iraise e else P_failed
+
+(** What is written to the directory for a result: a body's value is its
+    edge set ([finish_body]), so the kind and the references say it all. *)
+let to_shared = function
+  | P_object { value = None; edges; replayable } ->
+    (Shared.No_body, replayable, GlobRef.Set_env.elements edges)
+  | P_object { value = Some v; edges; replayable } when v == edges ->
+    (Shared.Body, replayable, GlobRef.Set_env.elements edges)
+  | P_block { contents; replayable } ->
+    (Shared.Block, replayable, GlobRef.Set_env.elements contents)
+  | P_object _ | P_failed -> (Shared.Failed, false, [])
+
+(* The elements of a set, added back in their order, give the same set: a set
+   holds one reference per user name. *)
+let of_shared access node (f : Shared.found) =
+  let set = List.fold_left (fun s r -> GlobRef.Set_env.add r s) GlobRef.Set_env.empty f.f_refs in
+  match f.f_kind with
+  | Shared.No_body -> P_object { value = None; edges = set; replayable = f.f_replayable }
+  | Shared.Body -> P_object { value = Some set; edges = set; replayable = f.f_replayable }
+  | Shared.Block -> P_block { contents = set; replayable = f.f_replayable }
+  | Shared.Failed -> shallow_walk access node
+
+type phase1_stats = {
+  mutable walked : int;
+  mutable read : int;
+  mutable put_aside : int;
+  mutable taken_over : int;
+  mutable waited : float;
+  mutable walk_s : float;
+  mutable read_s : float;
+  mutable claim_s : float;
+  mutable publish_s : float;
+}
+
+let timed add f =
+  let t = Unix.gettimeofday () in
+  let r = f () in
+  add (Unix.gettimeofday () -. t);
+  r
+
+(** The first phase of a shared query: the result of each object the query
+    can reach that has no entry yet, by the object that stands for it
+    ([node_of]). *)
+let phase1 access grs stats =
+  let digests = Library.content_digests () in
+  let results = ref Shared.EMap.empty in
+  let aside = ref Shared.EMap.empty in
+  let waiting = ref [] in
+  let stack = ref grs in
+  let finish node r =
+    results := Shared.EMap.add node r !results;
+    let push s = stack := GlobRef.Set_env.fold (fun r l -> r :: l) s !stack in
+    match r with
+    | P_object { edges; _ } -> push edges
+    | P_block { contents; _ } -> push contents
+    | P_failed -> ()
+  in
+  let walk node =
+    stats.walked <- stats.walked + 1;
+    timed (fun t -> stats.walk_s <- stats.walk_s +. t) (fun () -> shallow_walk access node)
+  in
+  let find key = timed (fun t -> stats.read_s <- stats.read_s +. t) (fun () -> Shared.find key) in
+  let walk_and_publish claim node key =
+    let r = match walk node with
+      | r -> r
+      | exception e ->
+        let e = Exninfo.capture e in
+        Shared.abandon claim;
+        Exninfo.iraise e
+    in
+    let kind, replayable, refs = to_shared r in
+    timed (fun t -> stats.publish_s <- stats.publish_s +. t)
+      (fun () -> Shared.publish claim key kind replayable refs);
+    r
+  in
+  let process obj =
+    let node = node_of obj in
+    if Shared.EMap.mem node !results || Shared.EMap.mem node !aside || has_entry node then ()
+    else match Shared.key digests node with
+      | None -> finish node (walk node)
+      | Some key ->
+        match find key with
+        | Some f ->
+          stats.read <- stats.read + 1;
+          finish node (of_shared access node f)
+        | None ->
+          match timed (fun t -> stats.claim_s <- stats.claim_s +. t) (fun () -> Shared.claim key) with
+          | Shared.Mine _ | Shared.Off as claim -> finish node (walk_and_publish claim node key)
+          | Shared.Taken ->
+            stats.put_aside <- stats.put_aside + 1;
+            aside := Shared.EMap.add node () !aside;
+            waiting := (node, key) :: !waiting
+  in
+  let rec loop () =
+    match !stack with
+    | obj :: rest -> stack := rest; process obj; loop ()
+    | [] when List.is_empty !waiting -> ()
+    | [] ->
+      let now = Unix.gettimeofday () in
+      let progress = ref false in
+      let resume node r =
+        aside := Shared.EMap.remove node !aside;
+        progress := true;
+        finish node r
+      in
+      let still = List.filter (fun (node, key) ->
+          match find key with
+          | Some f ->
+            stats.read <- stats.read + 1;
+            resume node (of_shared access node f);
+            false
+          | None ->
+            match Shared.take_over key with
+            | Some claim ->
+              stats.taken_over <- stats.taken_over + 1;
+              resume node (walk_and_publish claim node key);
+              false
+            | None -> true)
+          !waiting
+      in
+      waiting := still;
+      if not !progress then begin
+        Unix.sleepf 0.0005;
+        stats.waited <- stats.waited +. (Unix.gettimeofday () -. now)
+      end;
+      loop ()
+  in
+  loop ();
+  !results
+
+(** Adds the entries of the first phase whose edges, transitively, all have
+    entries, in one assignment. An object is added only when no entry has its
+    user name, and a block only when none has the user name of a member, as
+    [record] and [record_block] require; among results with one user name,
+    the first in [Shared.Exact] order is the one considered. *)
+let install results =
+  let module M = Shared.EMap in
+  let taken = ref GlobRef.Map_env.empty in
+  let free obj = user_name_unrecorded obj && not (GlobRef.Map_env.mem obj !taken) in
+  let take obj = taken := GlobRef.Map_env.add obj () !taken in
+  (* the results considered, with the members of each block *)
+  let chosen = ref M.empty in
+  M.iter (fun node r -> match r, node with
+      | P_object { replayable = true; _ }, _ ->
+        if free node then begin take node; chosen := M.add node None !chosen end
+      | P_block { replayable = true; _ }, GlobRef.IndRef (mind, _) ->
+        let members = block_members mind (lookup_mind mind) in
+        if GlobRef.Set_env.for_all free members then begin
+          GlobRef.Set_env.iter take members;
+          chosen := M.add node (Some members) !chosen
+        end
+      | _ -> ())
+    results;
+  let edges_of node = match M.find node results with
+    | P_object { edges; _ } -> GlobRef.Set_env.elements edges
+    | P_block { contents; _ } -> GlobRef.Set_env.elements contents
+    | P_failed -> []
+  in
+  (* [true] once a node is known complete, [false] once known incomplete or
+     while its edges are being checked: the graph of objects has no cycle
+     other than through the members of one block, which are one node. *)
+  let complete = ref M.empty in
+  let check root =
+    if not (M.mem root !complete) then begin
+      let frame node = (node, ref (edges_of node), ref (M.mem node !chosen)) in
+      complete := M.add root false !complete;
+      let frames = ref [frame root] in
+      while not (List.is_empty !frames) do
+        match !frames with
+        | [] -> ()
+        | (node, todo, ok) :: parents ->
+          match !todo with
+          | [] ->
+            complete := M.add node !ok !complete;
+            frames := parents;
+            begin match parents with
+              | (_, _, parent_ok) :: _ -> if not !ok then parent_ok := false
+              | [] -> ()
+            end
+          | edge :: rest ->
+            todo := rest;
+            if !ok && not (has_entry edge) then begin
+              let n = node_of edge in
+              if Shared.Exact.compare n node = 0 then ()
+              else match M.find_opt n !complete with
+                | Some true -> ()
+                | Some false -> ok := false
+                | None ->
+                  if M.mem n results then begin
+                    complete := M.add n false !complete;
+                    frames := frame n :: !frames
+                  end
+                  else ok := false
+            end
+      done
+    end
+  in
+  M.iter (fun node _ -> check node) !chosen;
+  let m = !memo in
+  let entries, weight = M.fold (fun node members (entries, weight) ->
+      if not (M.find node !complete) then (entries, weight)
+      else match M.find node results, members with
+        | P_object { value; edges; _ }, None ->
+          let e = make_entry value edges node in
+          (GlobRef.Map_env.add node e entries, weight + 1 + edges_size e.memo_edges)
+        | P_block { contents; _ }, Some members ->
+          let entries, w = block_entries members contents entries in
+          (entries, weight + w)
+        | _ -> (entries, weight))
+      !chosen (m.entries, 0)
+  in
+  query_weight := !query_weight + weight;
+  memo := { m with entries; weight = m.weight + weight };
+  M.fold (fun _ ok n -> if ok then n + 1 else n) !complete 0
+
+let share access grs =
+  let t0 = Unix.gettimeofday () in
+  let stats = { walked = 0; read = 0; put_aside = 0; taken_over = 0; waited = 0.;
+                walk_s = 0.; read_s = 0.; claim_s = 0.; publish_s = 0. } in
+  Shared.start ();
+  let results = phase1 access grs stats in
+  let t1 = Unix.gettimeofday () in
+  let added = install results in
+  if Shared.debug then
+    Printf.eprintf "[assumptions-shared] objects %d: walked %d (%.3f s), read %d (%.3f s), \
+                    claims %.3f s, writes %.3f s, put aside %d (%d taken over), waited %.3f s, \
+                    first phase %.3f s, %d added in %.3f s%s\n%!"
+      (Shared.EMap.cardinal results) stats.walked stats.walk_s stats.read stats.read_s
+      stats.claim_s stats.publish_s stats.put_aside stats.taken_over stats.waited
+      (t1 -. t0) added (Unix.gettimeofday () -. t1)
+      (if !Shared.usable then "" else ", sharing off")
+
 let traverse access grs =
   let () = modcache := ModPath.Map.empty in
   let () = inductive_marks := [] in
   let () = type_stack := [] in
+  let () = shallow := false in
   let () = sync_memo access in
   let () = cache_init () in
   let env = Global.env () in
   match
-    List.fold_left (fun accu gr ->
-      let t, _ = UnivGen.fresh_global_instance env gr in
-      traverse access (fresh_gen ()) Id.Set.empty no_cooking gr Context.Rel.empty accu t
-    ) (GlobRef.Set_env.empty, GlobRef.Map_env.empty, GlobRef.Map_env.empty) grs
+    if !Shared.usable then share access grs;
+    let t = Unix.gettimeofday () in
+    let ans = List.fold_left (fun accu gr ->
+        let t, _ = UnivGen.fresh_global_instance env gr in
+        traverse access (fresh_gen ()) Id.Set.empty no_cooking gr Context.Rel.empty accu t
+      ) (GlobRef.Set_env.empty, GlobRef.Map_env.empty, GlobRef.Map_env.empty) grs
+    in
+    if Shared.debug then
+      Printf.eprintf "[assumptions-shared] second phase %.3f s\n%!" (Unix.gettimeofday () -. t);
+    ans
   with
   | ans -> cache_clear (); ans
   | exception e ->
