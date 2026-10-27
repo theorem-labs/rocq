@@ -370,6 +370,12 @@ module LinPoly = struct
     let (index_of_monomial : int MonoMap.t ref) = ref MonoMap.empty
 
     let (monomial_of_index : Monomial.t IntMap.t ref) = ref IntMap.empty
+
+    (** [linear_of_index] records, per registered index, whether its monomial
+        has degree <= 1 (the constant or a single variable). It lets
+        [LinPoly.factorise] recognise a linear vector without retrieving and
+        inspecting every monomial. *)
+    let (linear_of_index : bool IntMap.t ref) = ref IntMap.empty
     let fresh = ref 0
 
     let reserve vr =
@@ -388,14 +394,25 @@ module LinPoly = struct
         let res = !fresh in
         index_of_monomial := MonoMap.add m res !index_of_monomial;
         monomial_of_index := IntMap.add res m !monomial_of_index;
+        linear_of_index := IntMap.add res (Monomial.degree m <= 1) !linear_of_index;
         incr fresh;
         res
 
     let retrieve i = IntMap.find i !monomial_of_index
 
+    (** [is_linear_index i] is [true] when the monomial registered at index [i]
+        has degree <= 1. An unregistered index is reported non-linear, which
+        only sends [factorise] to its general path. *)
+    let is_linear_index i =
+      try IntMap.find i !linear_of_index with Not_found -> false
+
+    (** [index_of_var x] is the index of the monomial [x^1], if registered. *)
+    let index_of_var x = MonoMap.find_opt (Monomial.var x) !index_of_monomial
+
     let clear () =
       index_of_monomial := MonoMap.empty;
       monomial_of_index := IntMap.empty;
+      linear_of_index := IntMap.empty;
       fresh := 0;
       ignore (register Monomial.const)
 
@@ -454,9 +471,79 @@ module LinPoly = struct
     if Vect.is_null r && v >/ Q.zero then Monomial.get_var (MonT.retrieve x)
     else None
 
-  let factorise x p =
+  let factorise_slow x p =
     let px, cx = Poly.factorise x (pol_of_linpol p) in
     (linpol_of_pol px, linpol_of_pol cx)
+
+  (* Fast path. When every monomial of [p] has degree <= 1, the only monomial
+     that mentions the variable [x] is [x^1] itself, so factoring by [x] moves
+     the [x^1] entry out as the constant quotient [a] and drops it from the
+     remainder [b], in a single pass over the sparse vector. This returns
+     exactly the vectors [factorise_slow] would: the quotient is
+     [constant (Vect.get ix p)] (the coefficient of [x^1], laid out at index 0
+     as [linpol_of_pol] of the singleton quotient polynomial would), and the
+     remainder is [p] with the [x^1] entry removed, which is index-sorted just
+     like the general path's rebuild. If [x^1] was never registered it does not
+     occur in [p], so [a] is null and [b] is [p]. *)
+  let factorise_linear x p =
+    match MonT.index_of_var x with
+    | None -> (Vect.null, p)
+    | Some ix -> (constant (Vect.get ix p), Vect.set ix Q.zero p)
+
+  let all_linear p = Vect.for_all (fun v _ -> MonT.is_linear_index v) p
+
+  (* Equivalence instrumentation, inert unless MICROMEGA_FACTORISE_CHECK is set.
+     When on, every linear-eligible call computes both the fast and the general
+     result and aborts on any difference, and the per-process call counts are
+     written to $MICROMEGA_FACTORISE_LOG/<unique>.json at exit. It never changes
+     the value [factorise] returns. *)
+  let factorise_check =
+    match Sys.getenv_opt "MICROMEGA_FACTORISE_CHECK" with
+    | None | Some ("" | "0") -> false
+    | Some _ -> true
+
+  let factorise_calls = ref 0
+  let factorise_linear_calls = ref 0
+  let factorise_mismatches = ref 0
+
+  let () =
+    if factorise_check then
+      at_exit (fun () ->
+          match Sys.getenv_opt "MICROMEGA_FACTORISE_LOG" with
+          | None -> ()
+          | Some dir -> (
+            try
+              let fn = Filename.temp_file ~temp_dir:dir "factorise-" ".json" in
+              let oc = open_out fn in
+              Printf.fprintf oc
+                "{\"calls\": %d, \"linear_calls\": %d, \"mismatches\": %d}\n"
+                !factorise_calls !factorise_linear_calls !factorise_mismatches;
+              close_out oc
+            with _ -> ()))
+
+  let eq_pair (a1, b1) (a2, b2) = Vect.equal a1 a2 && Vect.equal b1 b2
+
+  let factorise x p =
+    if all_linear p then
+      if factorise_check then begin
+        incr factorise_calls;
+        incr factorise_linear_calls;
+        let fast = factorise_linear x p in
+        let slow = factorise_slow x p in
+        if not (eq_pair fast slow) then begin
+          incr factorise_mismatches;
+          Printf.eprintf
+            "micromega factorise MISMATCH: x=%i p=%a\n  fast a=%a b=%a\n  slow a=%a b=%a\n%!"
+            x pp p pp (fst fast) pp (snd fast) pp (fst slow) pp (snd slow);
+          failwith "micromega factorise fast/slow mismatch"
+        end;
+        fast
+      end
+      else factorise_linear x p
+    else begin
+      if factorise_check then incr factorise_calls;
+      factorise_slow x p
+    end
 
   let is_linear_for x p =
     let a, b = factorise x p in

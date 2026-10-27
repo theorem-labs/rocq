@@ -368,6 +368,18 @@ external accumulate : unit -> tcode = "rocq_accumulate"
 external set_bytecode_field : Obj.t -> int -> tcode -> unit = "rocq_set_bytecode_field"
 let accumulate = accumulate ()
 
+(* The chain of a packed positive number (kernel/byterun/rocq_binnum.h): a
+   fresh block of tag 1 or 2, the head of the chain. Packed blocks have
+   OCaml's [lazy_tag], which no other VM value has. *)
+external expand_packed : Obj.t -> Obj.t = "rocq_binnum_expand"
+
+(* The packed form of a chain in the VM value of a structured constant
+   (kernel/byterun/rocq_binnum.h): a block of tag [lazy_tag] and size 2,
+   whose field 0 is the number of the chain and field 1 the chain itself.
+   It returns its argument when that is not a chain of 1 to 61 nodes, or
+   when the packing of literals is off. *)
+external pack_literal : Obj.t -> Obj.t = "rocq_binnum_pack_literal"
+
 let whd_val (v: values) =
   let o = Obj.repr v in
   if Obj.is_int o then Vconst (Obj.obj o)
@@ -388,6 +400,7 @@ let whd_val (v: values) =
     else if Int.equal tag Obj.custom_tag then Vint64 (Obj.magic v)
     else if Int.equal tag Obj.double_tag then Vfloat64 (Obj.magic v)
     else if Int.equal tag Obj.string_tag then Vstring (Obj.magic v)
+    else if Int.equal tag Obj.lazy_tag then Vblock (Obj.obj (expand_packed o))
     else
       Vblock (Obj.obj o)
 
@@ -426,7 +439,83 @@ let val_of_block tag (args : structured_values array) =
 
 let val_of_obj o = ((Obj.obj o) : values)
 
-let val_of_str_const str = val_of_obj (obj_of_str_const str)
+(* Every chain of a VM value of a structured constant ([Const_val]) becomes
+   a packed block, which a routine of the VM reads as a number without
+   walking it, and which SWITCH, PROJ and whd_val read as the chain it
+   keeps. The value is a copy, because [obj_of_str_const] returns the
+   [Const_val] object itself, which is the cache key of
+   [Vmsymtable.slot_for_str_cst] and what coqc stores in a .vo file; only
+   the blocks on the path to a chain are duplicated.
+
+   Blocks of tag [lazy_tag] and above are left alone: accumulators and
+   closures hold a code pointer in field 0, and strings, floats, flat float
+   arrays and custom blocks hold no value. A chain is packed as it is, so
+   the walk does not go below it; a chain of more than 61 nodes is walked
+   like any block, so it keeps its outer nodes and its suffix of 61 nodes
+   is packed. The last field of a block is walked by iteration, so a long
+   list literal does not recurse. *)
+let rec pack_literals (o : Obj.t) =
+  if Obj.is_int o || Obj.tag o >= Obj.lazy_tag || Int.equal (Obj.size o) 0 then o
+  else
+    let p = pack_literal o in
+    if p != o then p else pack_spine o
+
+and pack_spine o =
+  (* Down the last fields, keeping each block with its other fields packed;
+     then up again, copying a block only where one of its fields changed. *)
+  let stack = ref [] in
+  let rec down o =
+    let n = Obj.size o in
+    let changed = ref false in
+    (* Not Array.init: on a build with flat float arrays, a primitive float in
+       field 0 would make the array flat, and the other fields would be
+       stored as doubles (as in Vmlambda.as_value). *)
+    let heads = Array.make (n - 1) (Obj.repr 0) in
+    for i = 0 to n - 2 do
+      let f = Obj.field o i in
+      let g = pack_literals f in
+      if g != f then changed := true;
+      heads.(i) <- g
+    done;
+    stack := (o, heads, !changed) :: !stack;
+    let last = Obj.field o (n - 1) in
+    if Obj.is_int last || Obj.tag last >= Obj.lazy_tag || Int.equal (Obj.size last) 0
+    then last
+    else
+      let p = pack_literal last in
+      if p != last then p else down last
+  in
+  let rec up v =
+    match !stack with
+    | [] -> v
+    | (o, heads, changed) :: rest ->
+      stack := rest;
+      let n = Obj.size o in
+      if changed || v != Obj.field o (n - 1) then begin
+        let r = Obj.new_block (Obj.tag o) n in
+        for i = 0 to n - 2 do Obj.set_field r i heads.(i) done;
+        Obj.set_field r (n - 1) v;
+        up r
+      end
+      else up o
+  in
+  up (down o)
+
+(* Only a [Const_val] is a VM value made of constructor blocks
+   (Vmlambda.as_value), and only its chains are packed. The other
+   structured constants are not packed, whatever their blocks look like:
+   - [Const_univ_instance] is the OCaml value of a universe instance, which
+     SUBSTINSTANCE and [uni_instance] read as OCaml data: a quality such as
+     [QConstant QProp] is a block of tag 1 and size 1 over [Val_int 0],
+     which is the shape of a chain;
+   - [Const_sort], [Const_ind] and [Const_evar] are accumulators, whose atom
+     holds OCaml data;
+   - [Const_b0] and [Const_uint] (on 64-bit builds) are immediates, and
+     [Const_float] and [Const_string] are blocks with no fields to scan. *)
+let val_of_str_const str = match str with
+  | Const_val v -> val_of_obj (pack_literals (Obj.repr v))
+  | Const_sort _ | Const_ind _ | Const_evar _ | Const_b0 _ | Const_univ_instance _
+  | Const_uint _ | Const_float _ | Const_string _ -> val_of_obj (obj_of_str_const str)
 
 let val_of_atom a = val_of_obj (obj_of_atom a)
 
