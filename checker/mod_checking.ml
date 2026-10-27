@@ -73,10 +73,9 @@ let check_constant_declaration env opac kn cb opacify =
   let jty = Typeops.infer_type env ty in
   if not (Sorts.relevance_equal cb.const_relevance (Sorts.relevance_of_sort jty.utj_type))
   then raise Pp.(BadConstant (kn, str "incorrect const_relevance"));
-  (* The boolean tells whether the body is opaque. *)
   let body, env = match cb.const_body with
     | Undef _ | Primitive _ | Symbol _ -> None, env
-    | Def c -> Some (false, c), env
+    | Def c -> Some c, env
     | OpaqueDef o ->
       let c, u = !indirect_accessor o in
       let env = match u, cb.const_universes with
@@ -85,11 +84,11 @@ let check_constant_declaration env opac kn cb opacify =
           push_subgraph local env
         | _ -> assert false
       in
-      Some (true, c), env
+      Some c, env
   in
   let () =
     match body with
-    | Some (opaque, bd) ->
+    | Some bd ->
       let check () =
         let j = Typeops.infer env bd in
         match conv_leq env j.uj_type ty with
@@ -100,7 +99,7 @@ let check_constant_declaration env opac kn cb opacify =
          check can be postponed, and possibly run in another process. A
          transparent body may be unfolded by later checks, which rely
          on it being well-typed, so it is checked here. *)
-      if opaque then CheckWorkers.defer kn check else check ()
+      if Declareops.is_opaque cb then CheckWorkers.defer kn check else check ()
     | None -> ()
   in
   let retro, opac = match Cmap_env.find_opt kn (snd opac.st_retro) with
@@ -111,7 +110,7 @@ let check_constant_declaration env opac kn cb opacify =
     Some retro, opac
   in
   match body with
-  | Some (_, body) when opacify -> retro, register_opacified_constant env opac kn body
+  | Some body when opacify -> retro, register_opacified_constant env opac kn body
   | Some _ | None -> retro, opac
 
 let check_constant_declaration env opac kn cb opacify =

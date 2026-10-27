@@ -52,7 +52,8 @@ exception CheckError of Names.Constant.t * exn
     Only raised when checks are deferred, i.e. not with [-j 1]. *)
 
 val set_error_printer : (exn -> unit) -> unit
-(** How a worker reports the [CheckError] it caught, before it exits. *)
+(** How a worker prints why it fails, before it exits with a non-zero
+    code: the [CheckError] it caught, or another exception. *)
 
 val defer : Names.Constant.t -> (unit -> unit) -> unit
 (** [defer kn check] runs or queues the check of the opaque body of
@@ -75,17 +76,15 @@ type batch = {
 
 exception WorkerFailed of int * Unix.process_status * batch
 (** A worker (pid, status) failed while checking the given batch. The
-    other workers have been killed. *)
+    other workers have been killed. If the worker exited with a non-zero
+    code, it has printed why itself. *)
 
 val pr_batch : batch -> Pp.t
 
 val signal_name : int -> string
 
-(** {2 For tests only} *)
-
-val default_report_writer : Unix.file_descr -> int -> unit
-(** What a worker does to report the number of checks it completed. *)
-
-val set_report_writer : (Unix.file_descr -> int -> unit) -> unit
-(** [set_report_writer f] replaces what a worker does to report the number
-    of checks it completed, given the descriptor to write to. *)
+val completed_count : size:int -> Unix.process_status -> string -> int option
+(** [completed_count ~size status report] is the number of checks that a
+    worker given [size] checks completed, from its exit status and what it
+    wrote on its report pipe: [Some k] for a normal exit with code 0 and
+    a well-formed report of [k] in [1, size], [None] otherwise. *)

@@ -527,7 +527,6 @@ let init() = init_with_argv Sys.argv
 
 let exit_code = function
   | CheckWorkers.CheckError (_, e) -> CErrors.exit_code e
-  | CheckWorkers.WorkerFailed (_, Unix.WEXITED n, _) when n <> 0 -> n
   | CheckWorkers.WorkerFailed _ -> 1
   | e -> CErrors.exit_code e
 
@@ -541,7 +540,11 @@ let run senv =
   try
     let senv = compile_files senv in
     flush_all(); senv
-  with e ->
+  with
+  | CheckWorkers.WorkerFailed (_, Unix.WEXITED n, _) when n <> 0 ->
+    (* The worker has printed its error. *)
+    exit n
+  | e ->
     if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
     fatal_error (explain_exn e) (exit_code e)
 

@@ -138,13 +138,14 @@ let tune_gc () =
    endian). Nothing else is ever written to the pipe. *)
 let report_size = 8
 
-let default_report_writer fd completed =
+let write_report fd completed =
   let b = Bytes.create report_size in
   Bytes.set_int64_be b 0 (Int64.of_int completed);
   if Unix.write fd b 0 report_size <> report_size then failwith "short write"
 
-let report_writer = ref default_report_writer
-let set_report_writer f = report_writer := f
+(* A worker that exits with a non-zero code has printed why, so the main
+   process only passes the code on. *)
+let print_error e = try !error_printer e with _ -> ()
 
 (* Runs in the child, never returns.
 
@@ -161,7 +162,9 @@ let run_worker parent report (tasks : task array) =
   let completed = ref 0 in
   (* Only reaching the end of the batch, or a stop that is reported, may
      count as success. *)
-  at_exit (fun () -> Unix._exit 2);
+  at_exit (fun () ->
+      print_error (CheckError (!current, Failure "exit was called"));
+      Unix._exit 2);
   let deadline = Unix.gettimeofday () +. !budget in
   let code =
     try
@@ -177,12 +180,12 @@ let run_worker parent report (tasks : task array) =
       done;
       0
     with e ->
-      (try !error_printer (CheckError (!current, e)) with _ -> ());
+      print_error (CheckError (!current, e));
       CErrors.exit_code e
   in
   let code =
     if code <> 0 then code
-    else (try !report_writer report !completed; 0 with _ -> 3)
+    else (try write_report report !completed; 0 with e -> print_error e; 3)
   in
   (try flush_output () with _ -> ());
   (* Not [exit]: the at_exit functions of the main process must not run
@@ -220,9 +223,12 @@ let spawn tasks =
   | report, report_out ->
     match Unix.fork () with
     | 0 ->
-      Unix.close report;
-      List.iter (fun w -> try Unix.close w.report with Unix.Unix_error _ -> ()) !running;
-      run_worker parent report_out tasks
+      (* The child never returns into the main process's code. *)
+      (try
+         Unix.close report;
+         List.iter (fun w -> try Unix.close w.report with Unix.Unix_error _ -> ()) !running;
+         run_worker parent report_out tasks
+       with e -> print_error e; Unix._exit 127)
     | pid ->
       Unix.close report_out;
       incr forks;

@@ -428,73 +428,37 @@ let () = if Sys.file_exists "/proc/self/stat" then add_test "workers that end to
 (* The report is the one thing the main process believes about what a
    worker did not do: anything but a well-formed count in [1, size],
    together with a normal exit, fails the batch. *)
-let with_writer w f =
-  CheckWorkers.set_report_writer w;
-  Fun.protect ~finally:(fun () ->
-      CheckWorkers.set_report_writer CheckWorkers.default_report_writer) f
-
-let assert_worker_failed ?status writer =
-  with_writer writer (fun () ->
-      let result, _ = run ~budget:CheckWorkers.default_budget n in
-      match result, status with
-      | Some (CheckWorkers.WorkerFailed (_, s, b)), expected ->
-        assert_bool "batch is not empty" (b.CheckWorkers.size >= 1);
-        Option.iter (fun e -> assert_bool "status" (e = s)) expected
-      | Some e, _ -> assert_failure ("unexpected " ^ Printexc.to_string e)
-      | None, _ -> assert_failure "no failure")
-
-let write_raw fd s = ignore (Unix.write_substring fd s 0 (String.length s))
-
 let count_bytes k =
   let b = Bytes.create 8 in
   Bytes.set_int64_be b 0 k;
   Bytes.to_string b
 
-let () = add_test "no report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun _ _ -> ()))
+let assert_refused ?(size = 50) status report =
+  assert_equal ~printer:(function None -> "None" | Some k -> string_of_int k)
+    None (CheckWorkers.completed_count ~size status report)
 
-let () = add_test "short report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ -> write_raw fd "abcd"))
+let ok = Unix.WEXITED 0
+let good = count_bytes 50L
 
-let () = add_test "long report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd c -> write_raw fd (count_bytes (Int64.of_int c) ^ "x")))
+let report_tests = [
+  mk_test "a good report is accepted" (TestCase (fun () ->
+      assert_equal (Some 50) (CheckWorkers.completed_count ~size:50 ok good);
+      assert_equal (Some 1) (CheckWorkers.completed_count ~size:50 ok (count_bytes 1L))));
+  mk_test "no report fails the worker" (TestCase (fun () -> assert_refused ok ""));
+  mk_test "short report fails the worker" (TestCase (fun () -> assert_refused ok "abcd"));
+  mk_test "long report fails the worker" (TestCase (fun () -> assert_refused ok (good ^ "x")));
+  mk_test "report of 0 fails the worker" (TestCase (fun () -> assert_refused ok (count_bytes 0L)));
+  mk_test "negative report fails the worker" (TestCase (fun () -> assert_refused ok (count_bytes (-1L))));
+  mk_test "report off by one above the batch size fails the worker" (TestCase (fun () ->
+      assert_refused ok (count_bytes 51L)));
+  mk_test "huge report fails the worker" (TestCase (fun () -> assert_refused ok (count_bytes Int64.max_int)));
+  mk_test "exit code 7 after a good report fails the worker" (TestCase (fun () ->
+      assert_refused (Unix.WEXITED 7) good));
+  mk_test "kill after a good report fails the worker" (TestCase (fun () ->
+      assert_refused (Unix.WSIGNALED Sys.sigkill) good));
+]
 
-let () = add_test "report of 0 fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ -> write_raw fd (count_bytes 0L)))
-
-let () = add_test "negative report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ -> write_raw fd (count_bytes (-1L))))
-
-let () = add_test "report above the batch size fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0)
-      (fun fd _ -> write_raw fd (count_bytes (Int64.of_int 1_000_000))))
-
-let () = add_test "huge report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 0) (fun fd _ -> write_raw fd (count_bytes Int64.max_int)))
-
-let () = add_test "report off by one above the batch size fails the worker" (fun () ->
-    (* The batch is [n / stride] = 50 checks. *)
-    assert_worker_failed ~status:(Unix.WEXITED 0)
-      (fun fd c -> write_raw fd (count_bytes (Int64.of_int (c + 1)))))
-
-let () = add_test "exit code 7 after a good report fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 7)
-      (fun fd c -> CheckWorkers.default_report_writer fd c; Unix._exit 7))
-
-let () = add_test "kill after a good report fails the worker" (fun () ->
-    assert_worker_failed
-      (fun fd c -> CheckWorkers.default_report_writer fd c; Unix.kill (Unix.getpid ()) Sys.sigkill))
-
-let () = add_test "raise while reporting fails the worker" (fun () ->
-    assert_worker_failed ~status:(Unix.WEXITED 3) (fun _ _ -> failwith "no report"))
-
-let () = add_test "a good report is accepted" (fun () ->
-    with_writer CheckWorkers.default_report_writer (fun () ->
-        let result, log = run ~budget:CheckWorkers.default_budget n in
-        assert_no_exception result;
-        assert_exactly_once n log))
-
-(* Every test above forks. *)
+(* Every test added with [add_test] forks. *)
 let fork_tests = if Sys.unix then List.rev !tests else []
 
 let budget_test = mk_test "negative budget is refused" (TestCase (fun () ->
@@ -527,4 +491,6 @@ let sequential_tests = [
     (TestCase (fun () -> if not Sys.unix then assert_sequential ~jobs:4 ~profiling:false));
 ]
 
-let () = run_tests __FILE__ (open_log_out_ch __FILE__) (budget_test :: sequential_tests @ fork_tests)
+let () =
+  run_tests __FILE__ (open_log_out_ch __FILE__)
+    (budget_test :: report_tests @ sequential_tests @ fork_tests)
