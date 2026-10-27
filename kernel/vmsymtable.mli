@@ -17,3 +17,7 @@ open Vmvalues
 val val_of_constr : env -> Genlambda.evars -> constr -> Vmvalues.values
 
 val vm_interp : tcode -> values -> vm_env -> int -> values
+
+(** How many constants this process has compiled again, with small bodies expanded, instead of
+    running the code their library file carries. *)
+val compiled_again : unit -> int

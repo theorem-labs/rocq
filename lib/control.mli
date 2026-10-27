@@ -29,6 +29,16 @@ val timeout : float -> ('a -> 'b) -> 'a -> ('b, Exninfo.info) result
     so before [n] seconds, returns [Error info] instead (where [info]
     contains the backtrace of the timeout exception). *)
 
+type timeout_counts = { armed : int; fired : int }
+
+val timeout_counts : unit -> timeout_counts
+(** How many timeouts {!timeout} armed in this process, and how many of them
+    expired. Both only grow. *)
+
+val add_timeout_counts : timeout_counts -> unit
+(** Add to this process's counts the counts of another process, so that a
+    master can report the timeouts its workers armed. *)
+
 (** Set a particular timeout function; warning, this is an internal
    API and it is scheduled to go away. *)
 type timeout = { timeout : 'a 'b. float -> ('a -> 'b) -> 'a -> ('b,Exninfo.info) result }
