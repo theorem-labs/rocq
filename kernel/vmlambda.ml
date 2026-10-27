@@ -41,18 +41,39 @@ let hash_block tag args =
     in
     combine accu h
   in
-  combine tag (Array.fold_left fold 0 args)
+  (* [combine] is linear, so the hash is mixed at every level: an [Lval]
+     carries the hash of its block. Unmixed, a block of tag 0 with one field
+     had the hash of that field (S n that of n, xI p that of p), and xO p that
+     of p plus a constant, so every positive with as many xO had one hash. *)
+  Hashtbl.hash (combine tag (Array.fold_left fold 0 args))
 
+(* Structured constants of the same tag whose arguments are physically
+   equal are shared, within one compilation: the table is strong and
+   [lambda_of_constr] empties it when it starts. It cannot empty it when it
+   ends: [Vmbytegen] calls [as_value] for an [Lparray] after the lambda,
+   in the same compilation.
+
+   It was a weak set kept for the life of the process, whose elements were
+   the triples [(tag, args, block)] built here. Nothing else refers to a
+   triple, so an entry died at the next minor collection unless one ran
+   during a lookup and promoted it; a promoted entry then lived as long as
+   lookups of its hash read it while the major GC was marking, since a weak
+   get darkens what it returns. With the unmixed hash, hundreds of distinct
+   constants stayed alive under one hash, and every lookup of that hash
+   read them all: 30 to 45 weak gets per lookup, and 195 to 275 s of the
+   workers' time in a coqchk -j 16 of a large development, varying from run
+   to run with what the main process held when it forked. *)
 module HashBlock =
 struct
-  type t = int * structured_values array * structured_values (* tag, block, value *)
-  let eq (tag1, args1, _) (tag2, args2, _) =
-    Int.equal tag1 tag2 && CArray.equal (==) args1 args2
+  type t = int * int * structured_values array (* hash, tag, arguments *)
+  let equal (h1, tag1, args1) (h2, tag2, args2) =
+    Int.equal h1 h2 && Int.equal tag1 tag2 && CArray.equal (==) args1 args2
+  let hash (h, _, _) = h
 end
 
-module HashsetBlock = Hashset.Make(HashBlock)
+module BlockTable = Hashtbl.Make(HashBlock)
 
-let block_table = HashsetBlock.create 97
+let block_table : structured_values BlockTable.t = BlockTable.create 97
 
 let as_value tag args =
   if Array.for_all is_value args then
@@ -64,14 +85,18 @@ let as_value tag args =
       let () = Array.iteri (fun i v -> ans.(i) <- get_value v) args in
       ans
     in
-    if tag < Obj.last_non_constant_constructor_tag then
-      let block = val_of_block tag args in
-      let (_, _, block) = HashsetBlock.repr h (tag, args, block) block_table in
-      Some (h, block)
-    else
-      let args = Array.append [| val_of_int (tag - Obj.last_non_constant_constructor_tag) |] args in
-      let block = val_of_block Obj.last_non_constant_constructor_tag args in
-      let (_, _, block) = HashsetBlock.repr h (tag, args, block) block_table in
+    let block_tag, args =
+      if tag < Obj.last_non_constant_constructor_tag then tag, args
+      else
+        Obj.last_non_constant_constructor_tag,
+        Array.append [| val_of_int (tag - Obj.last_non_constant_constructor_tag) |] args
+    in
+    let key = (h, tag, args) in
+    match BlockTable.find_opt block_table key with
+    | Some block -> Some (h, block)
+    | None ->
+      let block = val_of_block block_tag args in
+      let () = BlockTable.add block_table key block in
       Some (h, block)
   else None
 
@@ -90,6 +115,7 @@ module Lambda = Genlambda.Make(Val)
 let dump_lambda_flag, dump_lambda = CDebug.create_full ~name:"vmlambda" ()
 
 let lambda_of_constr env sigma c =
+  let () = BlockTable.reset block_table in
   let lam = Lambda.lambda_of_constr env sigma c in
   let lam = optimize lam in
   dump_lambda (fun () -> pp_lam lam);
