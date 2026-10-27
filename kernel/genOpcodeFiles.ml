@@ -159,7 +159,15 @@ let opcodes =
     "CHECKCAMLCALL2", 2;
     "CHECKCAMLCALL3", 2;
     "CHECKCAMLCALL3_1", 2;
-    "STOP", 0
+    "STOP", 0;
+    (* A new opcode goes after [STOP], never before it: a .vo file holds the
+       bytecode of its constants as these numbers, so moving one changes what
+       every library compiled before means. The bound check in
+       kernel/byterun/rocq_fix_code.c reads the length of the arity table, so it
+       follows this list. *)
+    "CHECKZADD", 1;
+    "CHECKZPOSSUB", 1;
+    "CHECKPOSADD", 1
   |]
 
 let pp_c_comment fmt =

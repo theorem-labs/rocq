@@ -12,22 +12,64 @@
 
 (** Rocq is a heavy user of persistent data structures and symbolic ASTs, so the
     minor heap is heavily solicited. Unfortunately, the default size is far too
-    small, so we enlarge it a lot (128 times larger).
+    small, so we enlarge it a lot (8 times larger).
 
-    To better handle huge memory consumers, we also augment the default major
-    heap increment and the GC pressure coefficient.
+    To better handle huge memory consumers, we also augment the GC pressure
+    coefficient.
+
+    The two numbers below are measured, not estimated: a proof check allocates tens of gigabytes
+    of short-lived terms (lane R2's A0IgPO allocates 10.6 Gwords) and then ends, and on that shape
+    both of the collector's costs were much larger than they need to be. Measured on speed-r2 with
+    the lane's four files compiled at once, against the former [32*1024*1024] words and [200]
+    (per-file wall seconds, median of five interleaved runs of each arm, every range disjoint;
+    dispatch://INFRA-217):
+
+      A0IgPO 41.9 -> 35.8, RtLgTopA 41.9 -> 32.5, B0IgPO 38.3 -> 33.4, AMWrapMallocRf 33.7 -> 25.6
+
+    The two values must be chosen together, because what the minor heap costs is cache. Four
+    concurrent checks with a 256 MB minor heap each want 1 GB of this box's 480 MB last-level
+    cache, so each minor collection walks memory that no cache holds and the four evict each
+    other. At the former [space_overhead] a smaller minor heap alone measured slower (8 Mwords:
+    A0IgPO 43.1-44.2 s against the base's 41.6-41.9); with [space_overhead = 3200] the minor heap
+    decides the rest of the gain (A0IgPO 41.5 s at 8 Mwords, 38.0 at 4, 35.8 at 2).
+
+    [space_overhead]: the major collector marks and sweeps in proportion to the allocation, so at
+    200 it spends about 1.7 s per file of this lane on a heap of about 2 GB whose garbage no later
+    work reuses -- the process ends at the end of the file. 3200 keeps that work small; what it
+    costs is heap: max RSS per file grows from about 2.1 GB to about 3.5 GB on the lane's heaviest
+    file, which is why it is a number and not "no limit".
+
+    Neither value changes what rocq computes. OCaml's collector decides when a value moves and when
+    its memory is reused, and no result is a function of that. The places that read a GC counter at
+    all are reports -- [CObj.heap_size] for -m, [NewProfile], [Mltop.print_gc] -- and zify's
+    translation memo (plugins/micromega/zify.ml), which measures a translation with
+    [Gc.minor_words], a count of allocation and not of collection, to decide whether to keep it;
+    its hits are guarded by [exact_eq], so a different decision there changes work, not results.
+
+    What a GC policy does change is sharing. The hash-consing tables are weak hashsets
+    (clib/hashset.ml) and the kernel's bytecode and side-effect caches are ephemerons, so an entry
+    whose value is unreachable dies at the next major collection: a policy that collects less keeps
+    more entries, and a term built later then shares more with an earlier one. A dead entry costs a
+    new representative, never a different term, and every ephemeron reader recomputes on a miss.
+    Sharing changes how a term is marshalled, not what it is, so a .vo file can differ byte for byte
+    from one built under another policy while holding the same terms -- the variance the lane already
+    sees between two runs of one build (lever 7). The lane checks both halves: its normalising
+    segment compare for the summary, library and opaques segments, and, for the vmlibrary segment
+    that compare leaves out, unmarshalling both and marshalling them again with [No_sharing], which
+    gives the same bytes (dispatch://INFRA-217). coqchk does not install this policy at all
+    ([init_ocaml]'s only caller is toplevel/coqtop.ml) and compiles its own bytecode.
 *)
 
 let set_gc_policy () =
   Gc.set { (Gc.get ()) with
-           Gc.minor_heap_size = 32*1024*1024 (* 32Mwords x 8 bytes/word = 256Mb *)
+           Gc.minor_heap_size = 2*1024*1024 (* 2Mwords x 8 bytes/word = 16Mb *)
          ; Gc.space_overhead = 120
          }
 
 let set_gc_best_fit () =
   Gc.set { (Gc.get ()) with
            Gc.allocation_policy = 2      (* best-fit *)
-         ; Gc.space_overhead = 200
+         ; Gc.space_overhead = 3200
          }
 
 let init_gc () =

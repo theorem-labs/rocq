@@ -39,7 +39,7 @@ TACTIC EXTEND Lra_R
 END
 
 TACTIC EXTEND Lia
-| [ "xlia" tactic(t) ] -> { Coq_micromega.xlia (Tacinterp.tactic_of_value ist t) }
+| [ "xlia" tactic(t) ] -> { Coq_micromega.xlia (Zcheck_oracle.checker ist t) }
 END
 
 TACTIC EXTEND Lia_wit
@@ -59,7 +59,7 @@ TACTIC EXTEND Nra_R
 END
 
 TACTIC EXTEND Nia
-| [ "xnia" tactic(t) ] -> { Coq_micromega.xnia (Tacinterp.tactic_of_value ist t) }
+| [ "xnia" tactic(t) ] -> { Coq_micromega.xnia (Zcheck_oracle.checker ist t) }
 END
 
 TACTIC EXTEND Nia_wit
