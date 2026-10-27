@@ -2648,6 +2648,17 @@ let rec codomain_is_coind ?evars env c =
           raise (CoFixGuardError (env, CodomainNotInductiveType b)))
 
 let check_one_cofix cache ?evars env nbfix def deftype =
+  (* [dropped]/[inert] walk a dropped VALUE position, re-reducing with
+     [whd_erasing], so a subst-shared sub-term would be examined once per
+     physical copy. The per-depth memo records sub-terms already checked OK
+     at a depth by physical identity ([List.memq]); the duplicates [subst]
+     leaves behind are the same value at the same depth, so a repeat accepts
+     again (verdict-preserving) and never skips a refusal (a refusal raises
+     before the record). The write re-reads the depth bucket after [inert],
+     so records [inert]'s descendants added at the same depth are not
+     clobbered by a pre-[inert] snapshot. Reset at each top-level
+     [check_erased]. *)
+  let dropped_memo = ref Int.Map.empty in
   let rec check_rec_call env alreadygrd n tree vlra t =
     if not (noccur_with_meta n nbfix t) then
       let () = check_erased env n t in
@@ -2780,6 +2791,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
      drops is unchecked. A proof that uses rewrite rules names the symbol in
      [Print Assumptions], which is where this is caught. *)
   and check_erased env n t =
+    let () = dropped_memo := Int.Map.empty in
     let _ : constr = whd_erasing env n t in ()
 
   (* A dropped term whose only mention of the block is the HEAD of its
@@ -2817,6 +2829,58 @@ let check_one_cofix cache ?evars env nbfix def deftype =
     if not (noccur_with_meta n nbfix c) then
       raise (CoFixGuardError (env, UnguardedRecursiveCall c))
 
+  (* Dropped VALUE positions whose binder iota does not later REREAD and so
+     call-by-value never forces: unselected match branches, plain unread
+     constructor arguments (when the constructor has no let-in), dead let
+     values, dead beta arguments, dropped projection fields. [dropped]
+     accepts a term iff no occurrence of the block can be forced by a match
+     or a projection in it. It extends [erased]'s [cofix_inert] exemption to
+     constructor-headed inert terms ([c r]) and to any head the walk can
+     follow safely; a head the walk cannot follow is refused only while a
+     block occurrence still survives, so [coqchk] unfolding further cannot
+     reach a force [coqc] did not. Positions iota CAN still force (match
+     parameters, case-inversion indices, constructor arguments when the
+     constructor has a let-in) stay with [erased_strict] above. *)
+  and dropped env n t =
+    if not (noccur_with_meta n nbfix t) then begin
+      let seen = Option.default [] (Int.Map.find_opt n !dropped_memo) in
+      if not (List.memq t seen) then begin
+        let () = inert env n t in
+        let cur = Option.default [] (Int.Map.find_opt n !dropped_memo) in
+        dropped_memo := Int.Map.add n (t :: cur) !dropped_memo
+      end
+    end
+
+  and inert env n t =
+    let hd, args = decompose_app_list (whd_erasing env n t) in
+    match kind hd with
+    | Rel p when n <= p && p < n + nbfix ->
+      List.iter (erased env n) args
+    | Construct _ -> List.iter (dropped env n) args
+    | Lambda (x, a, b) when List.is_empty args ->
+      let () = erased env n a in
+      dropped (push_rel (LocalAssum (x, a)) env) (n + 1) b
+    | CoFix (_, (_, varit, vdefs as recdef)) ->
+      let () = List.iter (erased env n) args in
+      let () = Array.iter (erased env n) varit in
+      let env' = push_rec_types recdef env in
+      Array.iter (dropped env' (n + Array.length vdefs)) vdefs
+    | Case (ci, u, pms, p, iv, tm, br) ->
+      let () = erased_strict env n tm in
+      let () = List.iter (erased env n) args in
+      let (_, (p', _), _, _, brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
+      let () = Array.iter (erased env n) pms in
+      let () = erased env n p' in
+      Array.iter (dropped env n) brs
+    | Proj (_, _, c) ->
+      let () = erased_strict env n c in
+      List.iter (erased env n) args
+    | Meta _ -> ()
+    | Evar _ -> List.iter (dropped env n) args
+    | _ ->
+      if not (noccur_with_meta n nbfix (Term.applist (hd, args))) then
+        raise (CoFixGuardError (env, UnguardedRecursiveCall t))
+
   and whd_erasing env n t =
     match kind t with
     | Cast (c, _, ty) ->
@@ -2824,7 +2888,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
       whd_erasing env n c
     | LetIn (_, v, ty, b) ->
       let () = erased env n ty in
-      let () = if noccurn 1 b then erased env n v in
+      let () = if noccurn 1 b then dropped env n v in
       whd_erasing env n (subst1 v b)
     | App (f, args) ->
       let hd, fargs = decompose_app_list (whd_erasing env n f) in
@@ -2836,7 +2900,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
       begin match kind hd with
       | Construct ((_, i), _ as cstr) ->
         let () = erased env n p' in
-        let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then erased env n b) brs in
+        let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then dropped env n b) brs in
         let () = List.iteri (fun j a -> if j < ci'.ci_npar then erased_strict env n a) cargs in
         (* Iota also drops the case-inversion indices. They are not this
            exemption's business, so they keep the strict rule. *)
@@ -2856,7 +2920,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
           | LocalAssum _ :: decls, a :: args ->
             let () =
               if noccurn (nd - k) body then
-                (if has_letin then erased_strict env n a else erased env n a) in
+                (if has_letin then erased_strict env n a else dropped env n a) in
             unread (k + 1) decls args
         in
         let () = unread 0 (List.rev ctx) (List.skipn_at_best ci'.ci_npar cargs) in
@@ -2876,7 +2940,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
       begin match kind hd with
       | Construct _ ->
         let k = Projection.npars pr + Projection.arg pr in
-        let () = List.iteri (fun j a -> if not (Int.equal j k) then erased env n a) args in
+        let () = List.iteri (fun j a -> if not (Int.equal j k) then dropped env n a) args in
         whd_erasing env n (List.nth args k)
       | CoFix cofix ->
         whd_erasing env n (mkProj (pr, r, mkApp (contract_cofix cofix, Array.of_list args)))
@@ -2905,7 +2969,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
     | _, [] -> hd
     | Lambda (_, ty, b), a :: rest ->
       let () = erased env n ty in
-      let () = if noccurn 1 b then erased env n a in
+      let () = if noccurn 1 b then dropped env n a in
       let hd', args' = decompose_app_list (whd_erasing env n (subst1 a b)) in
       whd_erasing_app env n hd' (args' @ rest)
     | Fix ((recindxs, i), _ as fix), _ when List.length args > recindxs.(i) ->

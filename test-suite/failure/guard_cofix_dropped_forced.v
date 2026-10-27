@@ -30,11 +30,6 @@ Definition hd_ (s : stream) : nat := match s with Cons n _ => n end.
 Fail Definition forced_arg : stream :=
   cofix recur (k : nat) : stream := let dead := recur (hd_ (recur k)) in Cons k (recur (S k)).
 
-(* A recorded cost: the occurrence is inside a constructor, so its head is
-   not the block. Stock accepts; the fork refuses. *)
-Fail Definition inside_ctor : SL :=
-  cofix recur : SL := let dead := consL recur in consL recur.
-
 (* A constructor argument the selected branch does not read, but that a
    constructor-internal let-in DESTRUCTS: call-by-value computes the let-in
    value at iota, so the dropped occurrence is forced after all. *)
