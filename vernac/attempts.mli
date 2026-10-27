@@ -141,4 +141,10 @@ v}
     A probe's [exists] is as [Loadpath.select_vo_file] reads a candidate:
     the file exists, and a [.vos] counts only when it is not empty. Paths
     are as recorded. [Error] when a string is not valid UTF-8, which JSON
-    cannot carry as it is. *)
+    cannot carry as it is.
+
+    A record written before label v2 did not say which entries a recursive
+    scan made, and its entries all read [recursive: true] here, the working
+    directory's among them. Such a file's stored digest is not a version-2
+    label ([rocq-library-label --check] says [other] or [md5]), so a reader
+    that acts on these records checks that first. *)

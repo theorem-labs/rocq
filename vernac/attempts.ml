@@ -67,7 +67,12 @@ let probe_exists dir file =
    other subdirectories (other builds beside this one) are no input. *)
 let scan (d, recursive) =
   let entry n =
-    n <> "" && n.[0] <> '.' && Sys.is_directory (Filename.concat d n) &&
+    n <> "" && n.[0] <> '.' &&
+    (* A dangling symbolic link or a path that cannot be read is no
+       directory, and never becomes a load path entry. *)
+    (match Sys.is_directory (Filename.concat d n) with
+     | b -> b
+     | exception Sys_error _ -> false) &&
     (match Id.of_string n with _ -> true | exception e when CErrors.noncritical e -> false)
   in
   if not recursive then (d, Not_recursive)
@@ -219,12 +224,15 @@ let to_json t =
             ("loadpath", fun () -> int a.loadpath)]
   in
   let digest (file, sha) = fields [("file", fun () -> str file); ("sha256", fun () -> str sha)] in
-  let entry (dir, scan) =
-    let dir = ("dir", fun () -> str dir) in
-    match scan with
-    | Not_recursive -> fields [dir; ("recursive", fun () -> bool false)]
-    | Unreadable -> fields [dir; ("recursive", fun () -> bool true); ("subdirs", fun () -> Buffer.add_string b "null")]
-    | Subdirs l -> fields [dir; ("recursive", fun () -> bool true); ("subdirs", fun () -> list str l)]
+  let entry (d, sc) =
+    let dir_field = ("dir", fun () -> str d) in
+    match sc with
+    | Not_recursive -> fields [dir_field; ("recursive", fun () -> bool false)]
+    | Unreadable ->
+      fields [dir_field; ("recursive", fun () -> bool true);
+              ("subdirs", fun () -> Buffer.add_string b "null")]
+    | Subdirs l ->
+      fields [dir_field; ("recursive", fun () -> bool true); ("subdirs", fun () -> list str l)]
   in
   let record t =
     fields [("attempts", fun () -> list attempt t.attempts);

@@ -834,8 +834,8 @@ let save_library_to todo_proofs ~output_native_objects dir f =
 
 type file_label = {
   stored : string;
-  segment_md5 : string;
-  label : (string, string) result;
+  segment_md5 : string Lazy.t;
+  label : (string, string) result Lazy.t;
   attempts : Attempts.t option;
 }
 
@@ -846,11 +846,12 @@ let read_file_label f =
       let md, stored = ObjFile.marshal_in_segment ch ~segment:library_seg in
       sd, md, stored, ObjFile.get_segment ch ~segment:library_seg)
   in
-  let segment_md5 = In_channel.with_open_bin f (fun ic ->
+  let segment_md5 = lazy (In_channel.with_open_bin f (fun ic ->
       In_channel.seek ic seg.ObjFile.pos;
-      Digest.channel ic (Int64.to_int seg.ObjFile.len))
+      Digest.channel ic (Int64.to_int seg.ObjFile.len)))
   in
-  { stored; segment_md5; label = label_result sd md; attempts = Attempts.find md.md_objects }
+  { stored; segment_md5; label = lazy (label_result sd md);
+    attempts = Attempts.find md.md_objects }
 
 let get_used_load_paths () =
   String.Set.elements

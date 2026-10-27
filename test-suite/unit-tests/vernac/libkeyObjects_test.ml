@@ -97,18 +97,15 @@ let objects_exn ?(compiled = lib_a) ?(summary = sum_a) (syntax, objects) =
   | Error what -> failwith ("no label: " ^ what)
 
 (* Version 2 test vector: the label of [vector_input] over [lib_a] and
-   [sum_a]. It pins the layout of LibkeyObjects (version, the compiled form,
-   the segments' tree, the summary's view) and of Libkey beneath it; a
-   change of either must bump a version and change this value. *)
-let vector = "a3bb937031bf2573da81b875c89dbcff7950703ad0c9716cc7e55a59af5286bb"
+   [sum_a], without [Libkey]'s header, which holds the OCaml version and so
+   differs between switches. It pins the layout of LibkeyObjects (version,
+   the compiled form, the segments' tree, the summary's view) and the
+   encoding beneath it; a change of either must bump a version and change
+   this value. *)
+let vector = "918b2608ee7efe3be1f57b331eedb2d3f2d7459f8c18ddec4e85873b39beebc4"
 
 let () = add_test "layout version 2" (fun () ->
     assert_equal ~printer:string_of_int 2 LibkeyObjects.version)
-
-let () = add_test "test vector" (fun () ->
-    let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
-    assert_equal ~msg:"32 bytes" ~printer:string_of_int 32 (String.length label);
-    assert_equal ~msg:"label" ~printer:(fun s -> s) vector (hex label))
 
 (* The summary as the layout reads it, written out: the name, the
    dependencies as a list in their order, the safe dependencies in
@@ -117,6 +114,14 @@ let summary_view (s : LibkeyObjects.summary) =
   (s.name, Array.to_list s.deps, List.sort DirPath.compare (DirPath.Set.elements s.safe_deps),
    (Option.map (fun { Deprecation.since; note } -> (since, note)) s.info.UserWarn.depr,
     List.map (fun (w : UserWarn.warn) -> (w.note, w.cats)) s.info.UserWarn.warn))
+
+let () = add_test "test vector" (fun () ->
+    let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
+    assert_equal ~msg:"32 bytes" ~printer:string_of_int 32 (String.length label);
+    let syn, obj = vector_input None None in
+    let headerless =
+      Libkey.sha256 (Libkey.encode (Obj.repr (2, lib_a, syn, obj, summary_view sum_a))) in
+    assert_equal ~msg:"label without the header" ~printer:(fun s -> s) vector (hex headerless))
 
 (* The reference reading of the layout: Libkey.label of the version, the
    compiled form, the two segments as they would be with no location in

@@ -65,7 +65,7 @@ refused() {
 }
 # json WHAT DIR CONDITION: the --attempts-json document of DIR's A.vo
 # follows the schema of vernac/attempts.mli, and the Python CONDITION holds
-# of it (j: the document, r: its record, sha: the SHA-256 of a file, now).
+# of it (j: the document, r: its record, sha: the SHA-256 of a file now).
 cat > _test/attempts_json.py <<'PY'
 import hashlib, json, re, sys
 def valid(j):
@@ -86,7 +86,9 @@ def valid(j):
     for d in r["digests"]:
         if set(d) != {"file", "sha256"} or not isinstance(d["file"], str): return False
         if not re.fullmatch("[0-9a-f]{64}|unreadable", d["sha256"]): return False
-    files = {d["file"] for d in r["digests"]}
+    names = [d["file"] for d in r["digests"]]
+    if names != sorted(set(names)): return False
+    files = set(names)
     for a in r["attempts"]:
         if set(a) != {"request", "probes", "library", "found", "loadpath"}: return False
         q = a["request"]; k = q.get("kind")
@@ -99,6 +101,7 @@ def valid(j):
         if not isinstance(q["name"], str): return False
         for p in a["probes"]:
             if set(p) != {"dir", "file", "exists"} or not isinstance(p["exists"], bool): return False
+            if not isinstance(p["dir"], str) or not isinstance(p["file"], str): return False
         if not (a["library"] is None or isinstance(a["library"], str)): return False
         if not all(isinstance(f, str) and f in files for f in a["found"]): return False
         l = a["loadpath"]
@@ -244,5 +247,13 @@ json "the JSON marks the working directory not recursive and lists no subdirecto
   '(any(e["dir"].endswith("det/cwd") and e["recursive"] is False for lp in r["loadpaths"] for e in lp)
     and any(e["dir"].endswith("det/cwd/lib") and e["recursive"] is True and e["subdirs"] == []
             for lp in r["loadpaths"] for e in lp))'
+# A new subdirectory of a directory a recursive -R made an entry does become
+# an entry (it is a library's directory at the next compile), so it is an
+# input: the label changes. This is what the record of a recursive entry is
+# for, and what a scan that reported no subdirectory at all would lose.
+mkdir -p _test/det/cwd/lib/Sub
+(cd _test/det/cwd && rocq c -q -location-free-label -R lib Test lib/A.v)
+check "a new subdirectory under the -R root: another label" \
+  test "$l3" != "$("$TOOL" --stored _test/det/cwd/lib/A.vo)"
 
 exit $fail

@@ -10,10 +10,11 @@
 
 (** A canonical, sharing-independent encoding of OCaml values, and SHA-256.
 
-    [coqc] writes, as the digest of a library's [library] segment, the first
-    16 bytes of a label computed over the {e value} of that segment and of
-    the library's summary with their source locations removed
-    ([LibkeyObjects.label]), in place of the MD5 of the segment's bytes.
+    [coqc -location-free-label] writes, as the digest of a library's
+    [library] segment, the first 16 bytes of a label computed over the {e
+    value} of that segment and of the library's summary with their source
+    locations removed ([LibkeyObjects.label]), in place of the MD5 of the
+    segment's bytes.
     [coqc] and [rocqchk] never recompute that digest: they compare the copy
     a dependent recorded with the copy the library's file stores. So a
     dependent stays valid across a rebuild of its dependency that only moves
@@ -25,12 +26,13 @@
     processor has them. *)
 
 val version : int
-(** Version of the byte layout below. It is part of every label's input, so
-    labels made under different layouts never match. Version 2 (label v2,
-    design D18 after the Astra review, dispatch://INFRA-361): the encoding
-    is version 1's; the version marks labels whose input includes the
-    library's summary ([LibkeyObjects]), and {!label} returns the whole
-    SHA-256 where version 1 returned its first 16 bytes. *)
+(** Version of the label's input: the byte layout below, and what
+    [LibkeyObjects] feeds it. It is part of every label's input, so labels
+    made under different versions never match. Version 2 (label v2, design
+    D18 after the Astra review, dispatch://INFRA-361): the encoding is
+    version 1's; the version marks labels whose input includes the
+    library's summary, and {!label} returns the whole SHA-256 where
+    version 1 returned its first 16 bytes. *)
 
 exception Unsupported of string
 (** The value holds something the layout does not define: a closure, a lazy

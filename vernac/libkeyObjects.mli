@@ -25,9 +25,15 @@ open Names
     {b Byte layout, version 2.} The label is
     {v Libkey.label (Obj.repr (version, compiled, syn', obj', summary')) v}
     (32 bytes) where:
-    - [compiled] is the library's compiled form as stored (its dependencies'
-      digests included, so a label covers what a library was compiled
-      against);
+    - [compiled] is the library's compiled form as stored. It holds the
+      digests its dependencies' files stored when this library was compiled
+      against them. Such a digest covers a dependency's own summary only
+      when it is itself a version-2 label: for a dependency compiled
+      without [-location-free-label], or one that has no label, it is the
+      MD5 of that dependency's [library] segment, which its summary is not
+      part of. So a reuse decision must require a version-2 label
+      ([rocq-library-label --check] says [label2]) of every library of the
+      cone, not of the candidate alone;
     - [syn'] and [obj'] are its two object segments with the same tree of
       module, module type, include, keep, escape and export entries, in the
       same order, and each atomic object replaced by its view
@@ -72,7 +78,19 @@ open Names
     The version changes whenever this layout or the meaning of a kind's
     view changes (a kind that starts being stripped, a stripper that starts
     reaching a new field), so that labels made by different views never
-    match. *)
+    match.
+
+    {b What the label does not cover.} The [opaques] segment (the proof
+    terms of opaque constants: a changed proof keeps the label unless it
+    changes what the compiled form holds, which is the point of the
+    design, so its owning library must still reach the proof checker), the
+    [vm] segment, which the checker regenerates, and the native sidecar
+    files beside the [.vo]. A [.vos] built from a source has the same
+    summary and [library] segments as its [.vo], and so the same label.
+    The OCaml version is in [Libkey]'s header, so it is covered for a file
+    whose stored digest has been checked against a label recomputed by a
+    tool of the same build, not for one read as it is. The keep rule that
+    reads labels handles all of these. *)
 
 val version : int
 

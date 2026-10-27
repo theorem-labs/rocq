@@ -49,11 +49,11 @@ let () =
     begin match mode with
     | "--check" ->
       let l = read f in
-      begin match l.label with
+      begin match Lazy.force l.label with
       | Ok label when String.equal (Libkey.stored label) l.stored ->
         Printf.printf "label2 %s\n" (hex label)
       | Ok _ | Error _ ->
-        if String.equal l.segment_md5 l.stored then Printf.printf "md5 %s\n" (hex l.stored)
+        if String.equal (Lazy.force l.segment_md5) l.stored then Printf.printf "md5 %s\n" (hex l.stored)
         else Printf.printf "other %s\n" (hex l.stored)
       end
     | "--stored" -> print_endline (hex (read f).stored)

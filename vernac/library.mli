@@ -85,14 +85,16 @@ val set_location_free_label : bool -> unit
     library that holds an [ATTEMPTS] object (it does not know the object
     kind). *)
 
-(** What [rocq-library-label] reads in a [.vo] file. *)
+(** What [rocq-library-label] reads in a [.vo] file. The two digests are
+    computed when they are forced: a reader that only wants the records
+    pays for neither. *)
 type file_label = {
   stored : string;
   (** The digest the file stores for its [library] segment: what its
       dependents record. *)
-  segment_md5 : string;
+  segment_md5 : string Lazy.t;
   (** The MD5 of that segment's bytes: what stock stores there. *)
-  label : (string, string) result;
+  label : (string, string) result Lazy.t;
   (** The label (32 bytes) recomputed from the file's [summary] and
       [library] segments ([LibkeyObjects.label_result]), or why the library
       has none. *)

@@ -125,7 +125,7 @@ let add_test_both_sha name test =
       Libkey.force_portable_sha256 true;
       Fun.protect ~finally:(fun () -> Libkey.force_portable_sha256 false) test)
 
-let () = add_test_both_sha "encoding follows the documented layout" (fun () ->
+let () = add_test "encoding follows the documented layout" (fun () ->
     List.iter (fun (name, v) ->
         assert_equal ~msg:name ~printer:String.escaped (ref_repr v) (Libkey.encode v))
       samples)
