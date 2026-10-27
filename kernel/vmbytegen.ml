@@ -920,9 +920,9 @@ let skip_suffix l =
   in
   match aux l with None -> [] | Some l -> l
 
-let compile ~uinstance env sigma c =
+let compile ~inline_limit ~uinstance env sigma c =
   Label.reset_label_counter ();
-  let lam = lambda_of_constr env sigma c in
+  let lam = lambda_of_constr ~inline_limit env sigma c in
   let params, body = decompose_Llam lam in
   let arity = Array.length params in
   let mask =
@@ -974,8 +974,8 @@ let warn_compile_error =
   CWarnings.create ~name:"bytecode-compiler-failed-compilation" ~category:CWarnings.CoreCategories.bytecode_compiler
     Vmerrors.pr_error
 
-let compile ~fail_on_error ~uinstance env sigma c =
-  try NewProfile.profile "vm_compile" (fun () -> Some (compile ~uinstance env sigma c)) ()
+let compile ~fail_on_error ~inline_limit ~uinstance env sigma c =
+  try NewProfile.profile "vm_compile" (fun () -> Some (compile ~inline_limit ~uinstance env sigma c)) ()
   with Vmerrors.CompileError msg as exn ->
     let exn = Exninfo.capture exn in
     if fail_on_error then
@@ -985,7 +985,7 @@ let compile ~fail_on_error ~uinstance env sigma c =
       None
     end
 
-let compile_constant_body ~fail_on_error env univs = function
+let compile_constant_body ~fail_on_error ?(inline_limit = 0) env univs = function
   | Undef _ | OpaqueDef _ -> Some BCconstant
   | Primitive _ | Symbol _ -> None
   | Def body ->
@@ -1006,11 +1006,30 @@ let compile_constant_body ~fail_on_error env univs = function
       | Some kn -> Some (BCalias kn)
       | _ ->
         let uinstance = Bound instance_size in
-        let res = compile ~fail_on_error ~uinstance env (empty_evars env) body in
+        let res = compile ~fail_on_error ~inline_limit ~uinstance env (empty_evars env) body in
         Option.map (fun (mask, code, patch) -> BCdefined (mask, code, patch)) res
 
-let compile ~fail_on_error env sigma c =
-  compile ~fail_on_error ~uinstance:Global env sigma c
+(* Code for [fun x y => op x y]. After GRAB the two arguments are at sp[0] and
+   sp[1]; the operation wants the first in the accumulator and the second on top
+   of the stack, and pops the second. The operand of the instruction is the slot
+   of the value of [kn]: the operation applies it to the two arguments when they
+   are not both closed numbers, which is what the machine does without this
+   wrapper. *)
+let compile_znative_wrapper kn op =
+  let arity = match op with
+    | Vmbytecodes.ZNadd | Vmbytecodes.ZNpossub | Vmbytecodes.ZNposadd -> 2 in
+  Label.reset_label_counter ();
+  let lbl_fun = Label.create () in
+  let r_fun = comp_env_fun arity in
+  let () = set_max_stack_size r_fun (arity + 1) in
+  let body = [Kacc 1; Kpush; Kacc 1; Kznative (op, kn); Kreturn arity] in
+  let fun_code = add_grab arity lbl_fun (ensure_stack_capacity r_fun body) in
+  let cenv = empty_comp_env () in
+  let init_code = ensure_stack_capacity cenv [Kclosure (lbl_fun, 0); Kstop] in
+  to_memory [||] (init_code @ [Ksequence fun_code])
+
+let compile ~fail_on_error ?(inline_limit = 0) env sigma c =
+  compile ~fail_on_error ~inline_limit ~uinstance:Global env sigma c
 
 (* Shortcut of the previous function used during module strengthening *)
 

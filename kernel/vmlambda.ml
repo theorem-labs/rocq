@@ -89,8 +89,8 @@ module Lambda = Genlambda.Make(Val)
 (*********************************)
 let dump_lambda_flag, dump_lambda = CDebug.create_full ~name:"vmlambda" ()
 
-let lambda_of_constr env sigma c =
-  let lam = Lambda.lambda_of_constr env sigma c in
+let lambda_of_constr ~inline_limit env sigma c =
+  let lam = Lambda.lambda_of_constr ~inline_limit env sigma c in
   let lam = optimize lam in
   dump_lambda (fun () -> pp_lam lam);
   lam

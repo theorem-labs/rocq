@@ -83,9 +83,21 @@ sig
   val check_inductive : inductive -> Declarations.mutual_inductive_body -> unit
 end
 
+(** [inlinable_body ~limit body] says whether an application of a constant with this body may be
+    compiled as the body applied to the arguments instead of a call: the body must be a function
+    ([Lambda]) of at most [limit] nodes, and hold no [Fix] or [CoFix], because expanding a loop
+    would copy it rather than remove a call. Expanding such a body is the delta and beta step the
+    compiler already takes for a constant declared with inline code, so the compiled code computes
+    the same value. *)
+val inlinable_body : limit:int -> Constr.t -> bool
+
 module Make (Val : S) :
 sig
-  val lambda_of_constr : Environ.env -> evars -> Constr.constr -> Val.value lambda
+  (** [lambda_of_constr ~inline_limit env sigma c]: with [inline_limit > 0] an application of a
+      constant whose body passes [inlinable_body ~limit:inline_limit] is expanded, up to a budget on
+      the nodes expanded in one call. Code compiled into a library file is compiled with
+      [inline_limit = 0], so a library's bytes do not depend on this. *)
+  val lambda_of_constr : inline_limit:int -> Environ.env -> evars -> Constr.constr -> Val.value lambda
 end
 
 (** {5 Printing} *)

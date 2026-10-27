@@ -602,6 +602,34 @@ sig
   val check_inductive : inductive -> mutual_inductive_body -> unit
 end
 
+(* Inlining of a small constant body at an application site.
+
+   The compiler already expands the body of a constant declared with inline code
+   ([const_inline_code], below). [inlinable_body] widens that to any small function body: the
+   compiled code is the compilation of the body applied to the arguments, which is the delta step
+   followed by beta, so it computes the same value as the call it replaces. A [Fix] or [CoFix] is
+   left alone: expanding it copies a loop instead of removing a call, and its recursive calls would
+   then run from a second copy of the code.
+
+   One compilation expands at most [inline_node_budget] nodes, so a term that applies small
+   constants in many places cannot make the compiler produce code of unbounded size. *)
+let inline_node_budget = 100_000
+
+let inlinable_body ~limit body =
+  match kind body with
+  | Lambda _ ->
+    let n = ref 0 in
+    let exception Over in
+    let rec aux c =
+      incr n;
+      if !n > limit then raise Over;
+      match kind c with
+      | Fix _ | CoFix _ -> raise Over
+      | _ -> Constr.iter aux c
+    in
+    (try aux body; true with Over -> false)
+  | _ -> false
+
 module Make (Val : S) =
 struct
 
@@ -653,6 +681,12 @@ let rec get_fix_struct env i t = match kind (Reduction.whd_all env t) with
     let env = Environ.push_rel (RelDecl.LocalAssum (na, dom)) env in
     get_fix_struct env (i - 1) t
 | _ -> assert false
+
+(* [inline_limit] and [inline_budget] hold for one [lambda_of_constr] call, which sets and restores
+   them; compilations never nest (a compilation runs no code). With [inline_limit = 0], the stock
+   value, [inline_budget] stays 0 and nothing but a constant with inline code is expanded. *)
+let inline_limit = ref 0
+let inline_budget = ref 0
 
 let rec lambda_of_constr cache env sigma c =
   match kind c with
@@ -782,7 +816,13 @@ and lambda_of_app cache env sigma f args =
       begin match cb.const_body with
       | Primitive op -> lambda_of_prim env c op (lambda_of_args cache env sigma 0 args)
       | Def csubst -> (* TODO optimize if f is a proj and argument is known *)
-        if cb.const_inline_code then
+        if cb.const_inline_code
+           || (!inline_budget > 0 && inlinable_body ~limit:!inline_limit csubst)
+        then
+          let () =
+            if not cb.const_inline_code then
+              inline_budget := !inline_budget - !inline_limit
+          in
           let csubst = Vars.subst_instance_constr u csubst in
           lambda_of_app cache env sigma csubst args
         else
@@ -816,8 +856,13 @@ and lambda_of_args cache env sigma start args =
       (fun i -> lambda_of_constr cache env sigma args.(start + i))
   else empty_args
 
-let lambda_of_constr env sigma c =
+let lambda_of_constr ~inline_limit:limit env sigma c =
   let cache = Cache.ConstrTable.create 91 in
-  lambda_of_constr cache env sigma c
+  let saved_limit = !inline_limit and saved_budget = !inline_budget in
+  inline_limit := limit;
+  inline_budget := if limit > 0 then inline_node_budget else 0;
+  Fun.protect
+    ~finally:(fun () -> inline_limit := saved_limit; inline_budget := saved_budget)
+    (fun () -> lambda_of_constr cache env sigma c)
 
 end

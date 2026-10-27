@@ -1,0 +1,15 @@
+first
+File "./output/ltac2_direct_prims_exn.v", line 10, characters 0-99:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: Out_of_bounds
+first
+File "./output/ltac2_direct_prims_exn.v", line 11, characters 0-82:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: Division_by_zero
+first
+File "./output/ltac2_direct_prims_exn.v", line 12, characters 0-179:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: Invalid_argument (Some message:(arg))
+File "./output/ltac2_direct_prims_exn.v", line 17, characters 0-67:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: Not_found
