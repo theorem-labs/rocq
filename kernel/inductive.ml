@@ -2648,17 +2648,6 @@ let rec codomain_is_coind ?evars env c =
           raise (CoFixGuardError (env, CodomainNotInductiveType b)))
 
 let check_one_cofix cache ?evars env nbfix def deftype =
-  (* [dropped]/[inert] walk a dropped VALUE position, re-reducing with
-     [whd_erasing], so a subst-shared sub-term would be examined once per
-     physical copy. The per-depth memo records sub-terms already checked OK
-     at a depth by physical identity ([List.memq]); the duplicates [subst]
-     leaves behind are the same value at the same depth, so a repeat accepts
-     again (verdict-preserving) and never skips a refusal (a refusal raises
-     before the record). The write re-reads the depth bucket after [inert],
-     so records [inert]'s descendants added at the same depth are not
-     clobbered by a pre-[inert] snapshot. Reset at each top-level
-     [check_erased]. *)
-  let dropped_memo = ref Int.Map.empty in
   let rec check_rec_call env alreadygrd n tree vlra t =
     if not (noccur_with_meta n nbfix t) then
       let () = check_erased env n t in
@@ -2791,8 +2780,19 @@ let check_one_cofix cache ?evars env nbfix def deftype =
      drops is unchecked. A proof that uses rewrite rules names the symbol in
      [Print Assumptions], which is where this is caught. *)
   and check_erased env n t =
-    let () = dropped_memo := Int.Map.empty in
-    let _ : constr = whd_erasing env n t in ()
+    (* [dropped]/[inert] walk a dropped VALUE position, re-reducing with
+       [whd_erasing], so a subst-shared sub-term would be examined once per
+       physical copy. The per-depth memo records sub-terms already checked OK
+       at a depth by physical identity ([List.memq]); the duplicates [subst]
+       leaves behind are the same value at the same depth, so a repeat accepts
+       again (verdict-preserving) and never skips a refusal (a refusal raises
+       before the record). The write re-reads the depth bucket after [inert],
+       so records [inert]'s descendants added at the same depth are not
+       clobbered by a pre-[inert] snapshot. One memo per top-level
+       [check_erased], threaded through the walk: nothing the walk calls
+       re-enters [check_erased] or [check_rec_call]. *)
+    let memo = ref Int.Map.empty in
+    let _ : constr = whd_erasing memo env n t in ()
 
   (* A dropped term whose only mention of the block is the HEAD of its
      application, a function of the block applied to arguments that mention
@@ -2841,66 +2841,66 @@ let check_one_cofix cache ?evars env nbfix def deftype =
      reach a force [coqc] did not. Positions iota CAN still force (match
      parameters, case-inversion indices, constructor arguments when the
      constructor has a let-in) stay with [erased_strict] above. *)
-  and dropped env n t =
+  and dropped memo env n t =
     if not (noccur_with_meta n nbfix t) then begin
-      let seen = Option.default [] (Int.Map.find_opt n !dropped_memo) in
+      let seen = Option.default [] (Int.Map.find_opt n !memo) in
       if not (List.memq t seen) then begin
-        let () = inert env n t in
-        let cur = Option.default [] (Int.Map.find_opt n !dropped_memo) in
-        dropped_memo := Int.Map.add n (t :: cur) !dropped_memo
+        let () = inert memo env n t in
+        let cur = Option.default [] (Int.Map.find_opt n !memo) in
+        memo := Int.Map.add n (t :: cur) !memo
       end
     end
 
-  and inert env n t =
-    let hd, args = decompose_app_list (whd_erasing env n t) in
+  and inert memo env n t =
+    let hd, args = decompose_app_list (whd_erasing memo env n t) in
     match kind hd with
     | Rel p when n <= p && p < n + nbfix ->
       List.iter (erased env n) args
-    | Construct _ -> List.iter (dropped env n) args
+    | Construct _ -> List.iter (dropped memo env n) args
     | Lambda (x, a, b) when List.is_empty args ->
       let () = erased env n a in
-      dropped (push_rel (LocalAssum (x, a)) env) (n + 1) b
+      dropped memo (push_rel (LocalAssum (x, a)) env) (n + 1) b
     | CoFix (_, (_, varit, vdefs as recdef)) ->
       let () = List.iter (erased env n) args in
       let () = Array.iter (erased env n) varit in
       let env' = push_rec_types recdef env in
-      Array.iter (dropped env' (n + Array.length vdefs)) vdefs
+      Array.iter (dropped memo env' (n + Array.length vdefs)) vdefs
     | Case (ci, u, pms, p, iv, tm, br) ->
       let () = erased_strict env n tm in
       let () = List.iter (erased env n) args in
       let (_, (p', _), _, _, brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
       let () = Array.iter (erased env n) pms in
       let () = erased env n p' in
-      Array.iter (dropped env n) brs
+      Array.iter (dropped memo env n) brs
     | Proj (_, _, c) ->
       let () = erased_strict env n c in
       List.iter (erased env n) args
     | Meta _ -> ()
-    | Evar _ -> List.iter (dropped env n) args
+    | Evar _ -> List.iter (dropped memo env n) args
     | _ ->
       if not (noccur_with_meta n nbfix (Term.applist (hd, args))) then
         raise (CoFixGuardError (env, UnguardedRecursiveCall t))
 
-  and whd_erasing env n t =
+  and whd_erasing memo env n t =
     match kind t with
     | Cast (c, _, ty) ->
       let () = erased env n ty in
-      whd_erasing env n c
+      whd_erasing memo env n c
     | LetIn (_, v, ty, b) ->
       let () = erased env n ty in
-      let () = if noccurn 1 b then dropped env n v in
-      whd_erasing env n (subst1 v b)
+      let () = if noccurn 1 b then dropped memo env n v in
+      whd_erasing memo env n (subst1 v b)
     | App (f, args) ->
-      let hd, fargs = decompose_app_list (whd_erasing env n f) in
-      whd_erasing_app env n hd (fargs @ Array.to_list args)
+      let hd, fargs = decompose_app_list (whd_erasing memo env n f) in
+      whd_erasing_app memo env n hd (fargs @ Array.to_list args)
     | Case (ci, u, pms, p, iv, tm, br) ->
       let (ci', (p', _), _, tm', brs) = expand_case env (ci, u, pms, p, iv, tm, br) in
-      let tmr = whd_erasing env n tm' in
+      let tmr = whd_erasing memo env n tm' in
       let hd, cargs = decompose_app_list tmr in
       begin match kind hd with
       | Construct ((_, i), _ as cstr) ->
         let () = erased env n p' in
-        let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then dropped env n b) brs in
+        let () = Array.iteri (fun j b -> if not (Int.equal j (i - 1)) then dropped memo env n b) brs in
         let () = List.iteri (fun j a -> if j < ci'.ci_npar then erased_strict env n a) cargs in
         (* Iota also drops the case-inversion indices. They are not this
            exemption's business, so they keep the strict rule. *)
@@ -2920,13 +2920,13 @@ let check_one_cofix cache ?evars env nbfix def deftype =
           | LocalAssum _ :: decls, a :: args ->
             let () =
               if noccurn (nd - k) body then
-                (if has_letin then erased_strict env n a else dropped env n a) in
+                (if has_letin then erased_strict env n a else dropped memo env n a) in
             unread (k + 1) decls args
         in
         let () = unread 0 (List.rev ctx) (List.skipn_at_best ci'.ci_npar cargs) in
-        whd_erasing env n (apply_branch cstr cargs ci' brs)
+        whd_erasing memo env n (apply_branch cstr cargs ci' brs)
       | CoFix cofix ->
-        whd_erasing env n
+        whd_erasing memo env n
           (mkCase (ci, u, pms, p, iv, mkApp (contract_cofix cofix, Array.of_list cargs), br))
       | _ ->
         begin match iv with
@@ -2935,50 +2935,50 @@ let check_one_cofix cache ?evars env nbfix def deftype =
         end
       end
     | Proj (pr, r, c) ->
-      let cr = whd_erasing env n c in
+      let cr = whd_erasing memo env n c in
       let hd, args = decompose_app_list cr in
       begin match kind hd with
       | Construct _ ->
         let k = Projection.npars pr + Projection.arg pr in
-        let () = List.iteri (fun j a -> if not (Int.equal j k) then dropped env n a) args in
-        whd_erasing env n (List.nth args k)
+        let () = List.iteri (fun j a -> if not (Int.equal j k) then dropped memo env n a) args in
+        whd_erasing memo env n (List.nth args k)
       | CoFix cofix ->
-        whd_erasing env n (mkProj (pr, r, mkApp (contract_cofix cofix, Array.of_list args)))
+        whd_erasing memo env n (mkProj (pr, r, mkApp (contract_cofix cofix, Array.of_list args)))
       | _ -> mkProj (pr, r, cr)
       end
     | Rel k ->
       begin match lookup_rel k env with
-      | LocalDef (_, b, _) -> whd_erasing env n (lift k b)
+      | LocalDef (_, b, _) -> whd_erasing memo env n (lift k b)
       | LocalAssum _ -> t
       end
     | Var id ->
       let open! Context.Named.Declaration in
       begin match lookup_named id env with
-      | LocalDef (_, b, _) -> whd_erasing env n b
+      | LocalDef (_, b, _) -> whd_erasing memo env n b
       | LocalAssum _ -> t
       end
     | Const (c, _ as cu) ->
-      if evaluable_constant c env then whd_erasing env n (constant_value_in env cu)
+      if evaluable_constant c env then whd_erasing memo env n (constant_value_in env cu)
       else if Environ.is_primitive env c || Environ.is_symbol env c then whd_all ?evars env t
       else t
     | Lambda _ | Prod _ | Sort _ | Construct _ | Ind _ | CoFix _ | Fix _
     | Evar _ | Meta _ | Int _ | Float _ | String _ | Array _ -> t
 
-  and whd_erasing_app env n hd args =
+  and whd_erasing_app memo env n hd args =
     match kind hd, args with
     | _, [] -> hd
     | Lambda (_, ty, b), a :: rest ->
       let () = erased env n ty in
-      let () = if noccurn 1 b then dropped env n a in
-      let hd', args' = decompose_app_list (whd_erasing env n (subst1 a b)) in
-      whd_erasing_app env n hd' (args' @ rest)
+      let () = if noccurn 1 b then dropped memo env n a in
+      let hd', args' = decompose_app_list (whd_erasing memo env n (subst1 a b)) in
+      whd_erasing_app memo env n hd' (args' @ rest)
     | Fix ((recindxs, i), _ as fix), _ when List.length args > recindxs.(i) ->
       let k = recindxs.(i) in
-      let ra = whd_erasing env n (List.nth args k) in
+      let ra = whd_erasing memo env n (List.nth args k) in
       let args = List.mapi (fun j a -> if Int.equal j k then ra else a) args in
       if isConstruct (fst (decompose_app ra)) then
-        let hd', args' = decompose_app_list (whd_erasing env n (contract_fix fix)) in
-        whd_erasing_app env n hd' (args' @ args)
+        let hd', args' = decompose_app_list (whd_erasing memo env n (contract_fix fix)) in
+        whd_erasing_app memo env n hd' (args' @ args)
       else Term.applist (hd, args)
     | Const (c, _), _ when Environ.is_primitive env c || Environ.is_symbol env c ->
       let t = Term.applist (hd, args) in
