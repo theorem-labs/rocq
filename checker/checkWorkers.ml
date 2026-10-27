@@ -231,17 +231,29 @@ let rec waitpid_non_intr flags pid =
    system time fell in every pair (medians 328 s and 97 s), the median wall
    by 6.7% (faster in 4 of 5 pairs), and the peak by 15%, probably because
    fewer inherited pages are written. At -j 5 and -j 8 the peak rises
-   instead (r160 -j 5: +25%; r190 and r187 -j 8: +34% and +15%), and a cap
-   that the default fits can then kill a worker, which fails the run (r160
-   -j 8 under 22 GB). OCAMLRUNPARAM can raise this value but not lower it.
-   In production only the final grade (-j 16, 124 GB) runs workers. The
-   main process keeps its own setting: it is the one whose heap the
-   workers inherit. *)
+   instead (r160 -j 5: +25%; r190 and r187 -j 8: +34% and +15%; and,
+   comparing two release builds, speed-3 against speed-4 which contains
+   this setting, on six trees at -j 8 under 44 GB the worst worker grows
+   from 4.1-4.7 to 6.8-11.8 GB), and a cap that the default fits can then
+   kill a worker, which fails the run (r160 -j 8 under 22 GB). Production
+   runs -j 16 for a final grade (124 GB) and -j 5 or -j 8 for a mid-run
+   check, whose memory cap sets its width, so the lazier GC is used only
+   when [!max_workers], which is -j minus 1, is at least
+   [lazy_gc_min_max_workers] (-j 10 and wider): narrower runs keep the
+   default space overhead, the setting their width was sized with; no
+   width from -j 10 to -j 15 has been measured. In a wide run
+   OCAMLRUNPARAM can raise the value but not lower it. The main process
+   keeps its own setting: it is the one whose heap the workers inherit. *)
+let lazy_gc_min_max_workers = 9
+
 let tune_gc () =
   let gc = Gc.get () in
+  let space_overhead =
+    if !max_workers >= lazy_gc_min_max_workers then max gc.Gc.space_overhead 1000
+    else gc.Gc.space_overhead in
   Gc.set { gc with
            Gc.minor_heap_size = max gc.Gc.minor_heap_size (4 * 1024 * 1024);
-           space_overhead = max gc.Gc.space_overhead 1000;
+           space_overhead;
            max_overhead = 1000000 }
 
 (* What a worker tells the main process at the end: the number of checks
