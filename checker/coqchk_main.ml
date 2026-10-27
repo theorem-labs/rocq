@@ -149,6 +149,8 @@ let indices_matter = ref false
 
 let enable_vm = ref false
 
+let statement_report = ref None
+
 let jobs = ref 1
 let set_jobs s =
   match int_of_string_opt s with
@@ -223,6 +225,9 @@ let print_usage_channel co command =
 \n  -worker-budget s            with -j, a worker process stops after s seconds\
 \n                              (default is 20) and its remaining checks are given\
 \n                              to another one; this bounds the memory it uses\
+\n  -statement-report f         print, for each statement named in f, whether its model\
+\n                              constant has its trusted constant's type and the axioms its\
+\n                              closure uses\
 \n\
 \n  -impredicative-set          set sort Set impredicative\
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
@@ -355,9 +360,9 @@ let rec explain_exn = function
   | Mod_checking.BadConstant (cst, why) ->
     hov 0 (Constant.print cst ++ spc() ++ why)
 
-  | CheckWorkers.CheckError (cst, e) ->
+  | CheckWorkers.CheckError (job, e) ->
     explain_exn e ++ fnl () ++
-    hov 0 (str "while checking the opaque proof of" ++ spc () ++ Constant.print cst ++ str ".")
+    hov 0 (str "while " ++ CheckWorkers.pr_doing job ++ str ".")
 
   | CheckWorkers.WorkerFailed (pid, status, batch) ->
     let status = match status with
@@ -446,6 +451,12 @@ let parse_args argv =
     | "-worker-budget" :: s :: rem -> set_worker_budget s; parse rem
     | "-worker-budget" :: [] -> usage 1
 
+    | "-statement-report" :: f :: rem ->
+        (* Read now, so that a malformed file stops the run before any
+           library is loaded. *)
+        statement_report := Some (Check_closure.read_requests f); parse rem
+    | "-statement-report" :: [] -> usage 1
+
     | s :: _ when s<>"" && s.[0]='-' ->
         fatal_error (str "Unknown option " ++ str s) 1
     | s :: rem ->  add_compile s; parse rem
@@ -510,8 +521,20 @@ let run senv =
     if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
     fatal_error (explain_exn e) (exit_code e)
 
+(* The report is evidence beside the verdict, never the verdict: a report
+   that cannot be completed is left without its end marker, which a reader
+   takes as no report, and the exit status is unchanged. It comes before the
+   context summary. *)
+let print_statement_report env requests =
+  try Check_closure.print env CheckLibrary.indirect_accessor requests
+  with e when (match e with Sys.Break | Out_of_memory -> false | _ -> true) ->
+    Feedback.msg_warning (str "Statement report stopped: " ++ explain_exn e)
+
 let main () =
   let senv = init() in
+  Check_stat.start_summary !Check_stat.output_context;
   let senv, opac = run senv in
-  Check_stat.stats (Safe_typing.env_of_safe_env senv) opac;
+  let env = Safe_typing.env_of_safe_env senv in
+  Option.iter (print_statement_report env) !statement_report;
+  Check_stat.stats env opac;
   exit 0
