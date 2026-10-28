@@ -35,6 +35,19 @@
 # type's definition, a kind's name, a segment's schema -- which is a line
 # gone, so it still fails.
 #
+# A new segment is the one other difference that needs no new .vo version,
+# but it still fails until it is recorded. A .vo's segments are looked up by
+# name (lib/objFile.ml: ObjFile.marshal_in_segment), so a build that does not
+# know a segment never reads it, and a build reading a file without it gets
+# Not_found and treats it as absent (vernac/library.ml, the keepfacts
+# segment). Bumping vo_magic for it would move every library label for no
+# safety gain. So when the only difference is one or more [segment] blocks
+# appended after every recorded one, under names the reference does not
+# have, the test fails telling to record the printing, without a bump.
+# Once recorded, the segment's schema is a line like any other: a changed,
+# removed or reordered segment line, or a new segment under a recorded name,
+# is a line gone, and fails as a format change.
+#
 
 set -e
 
@@ -83,6 +96,27 @@ if [ ! -s _test/gone.txt ] && [ "$added_kinds" != 0 ] \
   echo "     a build without a kind refuses a file that names it, so this needs no .vo version"
   echo "     record it: cp $PWD/_test/current.txt $PWD/$REF"
   exit 0
+fi
+
+# New segments appended after every recorded one: the reference must be
+# exactly the current printing with those trailing blocks cut off, and every
+# cut block must name a segment the reference does not have.
+seg_names() { awk '$1 == "segment" { print $2 }' "$1"; }
+first_new=$(awk -v ref="$REF" '
+  BEGIN { while ((getline l < ref) > 0) { split(l, f, " "); if (f[1] == "segment") known[f[2]] = 1 } }
+  $1 == "segment" && !($2 in known) { print NR; exit }' _test/current.txt)
+if [ -n "$first_new" ]; then
+  head -n $((first_new - 1)) _test/current.txt > _test/kept.txt
+  tail -n +"$first_new" _test/current.txt > _test/appended.txt
+  dup=$(seg_names _test/appended.txt | sort | uniq -d)
+  reused=$(seg_names _test/appended.txt | grep -Fxf <(seg_names "$REF") || true)
+  if [ -z "$dup" ] && [ -z "$reused" ] && cmp -s "$REF" _test/kept.txt; then
+    echo "FAIL $(seg_names _test/appended.txt | tr '\n' ' ')is a new .vo segment the reference does not record:"
+    sed 's/^/       /' _test/appended.txt
+    echo "     segments are looked up by name and a build without it never reads it, so this needs no .vo version"
+    echo "     record it (no vo_magic bump): cp $PWD/_test/current.txt $PWD/$REF"
+    exit 1
+  fi
 fi
 
 echo "--- what changed (first 60 lines of the diff)"

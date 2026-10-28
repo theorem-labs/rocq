@@ -137,6 +137,13 @@ type axiom_report = {
   foreign_opaque_libraries : DirPath.Set.t;
   (** The libraries, other than this one, whose opaque table this library's
       compiled form holds an [Indirect] reference into. *)
+  copied_from_libraries : DirPath.Set.t;
+  (** The libraries, other than this one, a declaration of this library's
+      compiled form is COPIED from: every [foreign_opaque_libraries] owner,
+      plus every library that is the canonical origin (through [mod_delta]) of
+      a signature constant or inductive -- an [Include] or module alias keeps a
+      declaration's canonical name pointing at its origin. An over-approximation
+      only makes the keep rule more conservative. (D18 S1.) *)
 }
 
 (* The blinded constants of the module signature a dependent sees, with their
@@ -181,13 +188,69 @@ let foreign_opaque_of ~self mb =
   let _ : Mod_declarations.module_body = Mod_declarations.map_constants note mb in
   !acc
 
+(* The [MPfile] root of a module path, [None] for a bound (functor-parameter)
+   path. *)
+let rec mpfile_root = function
+  | ModPath.MPfile dp -> Some dp
+  | ModPath.MPdot (mp, _) -> mpfile_root mp
+  | ModPath.MPbound _ -> None
+
+(* Every library, other than [self], a declaration of [mb] is copied from: the
+   [foreign_opaque_of] owners, plus the canonical origin of every signature
+   constant and inductive, resolved through the [mod_delta] of the modules on
+   the path. [Include] and module aliases keep a declaration's canonical name
+   pointing at the library it came from, so its canonical [MPfile] is that
+   library; a declaration made here resolves to [self] and is dropped. A
+   functor signature ([MoreFunctor]) and a module type ([SFBmodtype]) declare
+   nothing a dependent names by its origin, so they contribute none (an applied
+   functor's opaque results are caught by [foreign_opaque_of]'s [Indirect]). *)
+let copied_from_of ~self mb =
+  let acc = ref (foreign_opaque_of ~self mb) in
+  let add_mp mp = match mpfile_root mp with
+    | Some dp when not (DirPath.equal dp self) -> acc := DirPath.Set.add dp !acc
+    | _ -> () in
+  (* [deltas] holds the resolver of every module on the path from the
+     library down to [mp]; each one's root prefixes [mp]. A resolver is not
+     joined into its parent's ([Mod_subst.add_delta_resolver] requires one
+     root to extend the other's, which a submodule's does not satisfy for its
+     parent's), so a name is resolved through each of them and every origin
+     found counts: an over-approximation. *)
+  let rec go deltas mp sign =
+    match (sign : Mod_declarations.module_signature) with
+    | Declarations.MoreFunctor _ -> ()
+    | Declarations.NoFunctor struc ->
+      List.iter (fun (lab, sfb) ->
+          match (sfb : Mod_declarations.structure_field_body) with
+          | Declarations.SFBconst _ ->
+            let kn = KerName.make mp lab in
+            List.iter (fun delta ->
+                add_mp (KerName.modpath (Constant.canonical
+                                           (Mod_subst.constant_of_delta_kn delta kn))))
+              deltas
+          | Declarations.SFBmind _ ->
+            let kn = KerName.make mp lab in
+            List.iter (fun delta ->
+                add_mp (KerName.modpath (MutInd.canonical
+                                           (Mod_subst.mind_of_delta_kn delta kn))))
+              deltas
+          | Declarations.SFBmodule submb ->
+            go (Mod_declarations.mod_delta submb :: deltas)
+              (ModPath.MPdot (mp, lab)) (Mod_declarations.mod_type submb)
+          | Declarations.SFBrules _ | Declarations.SFBmodtype _ -> ())
+        struc
+  in
+  go [Mod_declarations.mod_delta mb] (ModPath.MPfile self) (Mod_declarations.mod_type mb);
+  !acc
+
 let axiom_report ~(compiled : Safe_typing.compiled_library) : axiom_report =
   let self = Safe_typing.dirpath_of_library compiled in
   let mb = Safe_typing.module_of_library compiled in
   let blinded =
     List.sort (fun (a, _) (b, _) -> Constant.CanOrd.compare a b)
       (sig_blinded (ModPath.MPfile self) (Mod_declarations.mod_type mb) []) in
-  { blinded; foreign_opaque_libraries = foreign_opaque_of ~self mb }
+  { blinded;
+    foreign_opaque_libraries = foreign_opaque_of ~self mb;
+    copied_from_libraries = copied_from_of ~self mb }
 
 let label_result ~summary ~compiled ~syntax ~objects =
   match strip_segment syntax with

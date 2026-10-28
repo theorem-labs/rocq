@@ -1220,3 +1220,14 @@ segment vmlibrary root #0
   #30 = sum(raw_level,1,2,1:#32;1:#10)
   #31 = sum(constant_quality,3,0,)
   #32 = tuple(Level.Global.t,3,#1,#5,#10)
+segment keepfacts root #0
+  #0 = tuple(keepfacts,2,#1,#2)
+  #1 = opt(#3)
+  #2 = list(#4)
+  #3 = list(#5)
+  #4 = tuple(query,3,#6,#7,#8)
+  #5 = tuple(*,2,#6,#9)
+  #6 = string
+  #7 = opt(#6)
+  #8 = sum(bool,2,0,)
+  #9 = list(#6)

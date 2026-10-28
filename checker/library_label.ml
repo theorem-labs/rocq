@@ -26,10 +26,16 @@
      the schema documented at [Attempts.to_json] (vernac/attempts.mli).
    - [--axiom-report-json FILE.vo]: one JSON document for the keep rule's
      monotone axiom condition (schema "rocq-library-label/axiom-report",
-     version 1): the library name, the label kind and the hex [--check]
+     version 2): the library name, the label kind and the hex [--check]
      prints, the constants whose label contribution the axiom-or-opaque
-     blinding erased (each with its current "axiom" or "proof" status), and
-     the libraries this one holds a foreign opaque reference into.
+     blinding erased (each with its current "axiom" or "proof" status), the
+     libraries this one holds a foreign opaque reference into, the libraries
+     a declaration of it is copied from ("copied_from_libraries"), and its
+     [keepfacts] segment: "assumptions" (an object from each declaration's
+     user name to its sorted assumption closure, empty closures left out; null
+     when absent) and "opacity_queries" (each foreign constant a non-opaque
+     strategy command named, by user name, with the opacity it saw; null when
+     the file has no segment).
    Two modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across
@@ -81,7 +87,7 @@ let axiom_report_json (l : Library.file_label) =
     json_string b k; Buffer.add_char b ':'; f () in
   Buffer.add_char b '{';
   field "schema" (fun () -> json_string b "rocq-library-label/axiom-report");
-  field "version" (fun () -> Buffer.add_string b "1");
+  field "version" (fun () -> Buffer.add_string b "2");
   field "library" (fun () -> json_string b (Names.DirPath.to_string l.name));
   field "label_kind" (fun () -> json_string b kind);
   field "label" (fun () -> json_string b lhex);
@@ -105,6 +111,44 @@ let axiom_report_json (l : Library.file_label) =
           json_string b (Names.DirPath.to_string dp))
         (Names.DirPath.Set.elements r.LibkeyObjects.foreign_opaque_libraries);
       Buffer.add_char b ']');
+  let strings l =
+    Buffer.add_char b '[';
+    List.iteri (fun i s -> if i > 0 then Buffer.add_char b ','; json_string b s) l;
+    Buffer.add_char b ']' in
+  field "copied_from_libraries" (fun () ->
+      strings (List.map Names.DirPath.to_string
+                 (Names.DirPath.Set.elements r.LibkeyObjects.copied_from_libraries)));
+  (* The [keepfacts] segment: null when the file has none (the keep rule then
+     rebuilds), or when the closure could not be computed. *)
+  let facts = l.Library.keep_facts in
+  field "assumptions" (fun () ->
+      match facts with
+      | Some { KeepFacts.assumptions = Some a; _ } ->
+        Buffer.add_char b '{';
+        List.iteri (fun i (name, keys) ->
+            if i > 0 then Buffer.add_char b ',';
+            json_string b name; Buffer.add_char b ':'; strings keys)
+          a;
+        Buffer.add_char b '}'
+      | _ -> Buffer.add_string b "null");
+  field "opacity_queries" (fun () ->
+      match facts with
+      | None -> Buffer.add_string b "null"
+      | Some { KeepFacts.opacity_queries = q; _ } ->
+        Buffer.add_char b '[';
+        List.iteri (fun i { KeepFacts.constant; library; opaque } ->
+            if i > 0 then Buffer.add_char b ',';
+            Buffer.add_char b '{';
+            json_string b "constant"; Buffer.add_char b ':'; json_string b constant;
+            Buffer.add_char b ',';
+            json_string b "library"; Buffer.add_char b ':';
+            (match library with Some d -> json_string b d | None -> Buffer.add_string b "null");
+            Buffer.add_char b ',';
+            json_string b "opaque"; Buffer.add_char b ':';
+            Buffer.add_string b (if opaque then "true" else "false");
+            Buffer.add_char b '}')
+          q;
+        Buffer.add_char b ']');
   Buffer.add_char b '}';
   Buffer.contents b
 

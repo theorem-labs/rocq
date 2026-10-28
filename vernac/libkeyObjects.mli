@@ -136,7 +136,13 @@ open Names
     [Goptions.option_kind] each declared option stores, and the element
     type of each [Goptions] table. A kind only the new build has passes
     there: a build that does not know a kind refuses the file instead of
-    misreading it.
+    misreading it. A segment only the new build writes needs no new version
+    either, but must be recorded: this rests on the assumption that every
+    reader looks a segment up by name ([ObjFile.marshal_in_segment]), so an
+    older build never reads a segment it does not know, and a newer build
+    treats one a file lacks as absent. The one such segment is [keepfacts]
+    ([KeepFacts]), which [rocqchk] never reads and [coqc] writes only under
+    [-location-free-label].
 
     What that payload printing does not reach it names rather than drops,
     and the head of checker/vo_payloads.ml is the one place that list is
@@ -170,9 +176,15 @@ open Names
     terms of opaque constants: a changed proof keeps the label unless it
     changes what the compiled form holds, which is the point of the
     design, so its owning library must still reach the proof checker), the
-    [vm] segment, which the checker regenerates, and the native sidecar
-    files beside the [.vo]. A [.vos] built from a source has the same
-    summary and [library] segments as its [.vo], and so the same label.
+    [vm] segment, which the checker regenerates, the [keepfacts] segment
+    ([KeepFacts]: per-declaration assumption closures and the opacities
+    strategy commands saw, which [coqc] writes only under
+    [-location-free-label] and only for a [.vo], which [rocqchk] never reads,
+    and which the keep rule reads off the CURRENT object, so it needs no
+    digest; were it covered, an [Admitted -> Qed] edit would move the label),
+    and the native sidecar files beside the [.vo]. A [.vos] built from a
+    source has the same summary and [library] segments as its [.vo], and so
+    the same label.
     The OCaml version is in [Libkey]'s header, so it is covered for a file
     whose stored digest has been checked against a label recomputed by a
     tool of the same build, not for one read as it is. The keep rule that
@@ -238,6 +250,13 @@ type axiom_report = {
       object across an edit to such a library only when that library's object
       is byte-identical, because the blinded label no longer pins the opaque
       index the reference reads. *)
+  copied_from_libraries : DirPath.Set.t;
+  (** The libraries, other than this one, a declaration of this library is
+      copied from: every [foreign_opaque_libraries] owner, plus the canonical
+      origin ([mod_delta]) of every signature constant and inductive -- an
+      [Include] or module alias keeps the origin's canonical name. A superset
+      of [foreign_opaque_libraries]; an over-approximation only makes the keep
+      rule more conservative (D18 S1). *)
 }
 
 val axiom_report :
