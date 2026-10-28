@@ -316,6 +316,9 @@ let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 let vm_seg : seg_vm ObjFile.id = Vmlibrary.vm_segment
+(* [-location-free-label] only: the keep rule's facts ([KeepFacts]). No digest
+   covers this segment, and rocqchk does not read it. *)
+let keepfacts_seg : KeepFacts.t ObjFile.id = ObjFile.make_id "keepfacts"
 
 module Intern = struct
   module Provenance = struct
@@ -718,14 +721,15 @@ type 'doc todo_proofs =
 
 (* EJGA: would be nice maybe to have a version that performs extra
    cleanup in the case the computation raises? *)
-let save_library_base f sum lib ~label proofs vmlib =
+let save_library_base f sum lib ~label ?keepfacts proofs vmlib =
   try
     let open Memprof_coq.Resource_bind in
     let& ch = Memprof_coq.Masking.with_resource ~acquire:raw_extern_library ~release:ObjFile.close_out f in
     ObjFile.marshal_out_segment ch ~segment:summary_seg sum;
     ObjFile.marshal_out_segment ?hash:label ch ~segment:library_seg lib;
     ObjFile.marshal_out_segment ch ~segment:opaques_seg proofs;
-    ObjFile.marshal_out_segment ch ~segment:vm_seg vmlib
+    ObjFile.marshal_out_segment ch ~segment:vm_seg vmlib;
+    Option.iter (ObjFile.marshal_out_segment ch ~segment:keepfacts_seg) keepfacts
   with exn ->
     let iexn = Exninfo.capture exn in
     Sys.remove f;
@@ -738,7 +742,8 @@ let location_free_label = ref false
 
 let set_location_free_label b =
   location_free_label := b;
-  Attempts.set_enabled b
+  Attempts.set_enabled b;
+  OpacityLog.set_enabled b
 
 (* This is the basic vo save structure *)
 let save_library_struct ~output_native_objects dir =
@@ -824,9 +829,18 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   let () = assert (not (Future.UUIDSet.is_empty except) ||
     Safe_typing.is_joined_environment (Global.safe_env ()))
   in
+  (* The keep rule's facts, while the library's own constants and opaque
+     proofs are still in the environment. A [.vos] (proofs left out) gets none,
+     since its closure would miss the bodies not compiled. *)
+  let keepfacts =
+    if !location_free_label && Future.UUIDSet.is_empty except
+    then Some (KeepFacts.compute ~access:indirect_accessor ~self:dir)
+    else None
+  in
+  OpacityLog.reset ();
   let sd, md, vmlib, ast = save_library_struct ~output_native_objects dir in
   (* Writing vo payload *)
-  save_library_base f sd md ~label:(library_label sd md) opaque_table vmlib;
+  save_library_base f sd md ~label:(library_label sd md) ?keepfacts opaque_table vmlib;
   (* Writing native code files *)
   if output_native_objects then
     let fn = Filename.dirname f ^"/"^ Nativecode.mod_uid_of_dirpath dir in
@@ -839,14 +853,18 @@ type file_label = {
   label : (string, string) result Lazy.t;
   attempts : Attempts.t option;
   axiom_report : LibkeyObjects.axiom_report Lazy.t;
+  keep_facts : KeepFacts.t option;
 }
 
 let read_file_label f =
   let ch = raw_intern_library f in
-  let sd, md, stored, seg = Fun.protect ~finally:(fun () -> ObjFile.close_in ch) (fun () ->
+  let sd, md, stored, seg, keep_facts = Fun.protect ~finally:(fun () -> ObjFile.close_in ch) (fun () ->
       let sd, _ = ObjFile.marshal_in_segment ch ~segment:summary_seg in
       let md, stored = ObjFile.marshal_in_segment ch ~segment:library_seg in
-      sd, md, stored, ObjFile.get_segment ch ~segment:library_seg)
+      let keep_facts =
+        try Some (fst (ObjFile.marshal_in_segment ch ~segment:keepfacts_seg))
+        with Not_found -> None in
+      sd, md, stored, ObjFile.get_segment ch ~segment:library_seg, keep_facts)
   in
   let segment_md5 = lazy (In_channel.with_open_bin f (fun ic ->
       In_channel.seek ic seg.ObjFile.pos;
@@ -854,7 +872,8 @@ let read_file_label f =
   in
   { name = sd.md_name; stored; segment_md5; label = lazy (label_result sd md);
     attempts = Attempts.find md.md_objects;
-    axiom_report = lazy (LibkeyObjects.axiom_report ~compiled:md.md_compiled) }
+    axiom_report = lazy (LibkeyObjects.axiom_report ~compiled:md.md_compiled);
+    keep_facts }
 
 let get_used_load_paths () =
   String.Set.elements

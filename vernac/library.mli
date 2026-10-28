@@ -107,6 +107,10 @@ type file_label = {
       libraries this one holds a foreign opaque reference into
       ([LibkeyObjects.axiom_report]): what the keep rule reads beside the
       label for its monotone axiom condition. *)
+  keep_facts : KeepFacts.t option;
+  (** Its [keepfacts] segment ([KeepFacts]): the assumption closure and the
+      foreign opacities its strategy commands saw. [None] for a file written
+      without [-location-free-label], or a [.vos]; the keep rule then rebuilds. *)
 }
 
 val read_file_label : CUnix.physical_path -> file_label
