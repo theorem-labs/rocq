@@ -442,6 +442,15 @@ let recheck_library ?(output_context=false) senv ~norec ~admit ~check =
   in
   let needed = List.fold_right (intern_library ~intern_mode:Rec ~validated LibrarySet.empty) ml [] in
   let needed = List.fold_right (intern_library ~intern_mode:Root ~validated LibrarySet.empty) nrl needed in
+  (* Intern the admit list too, in Dep mode so it is loaded but not validated
+     ([validated] already excludes [al]). Without this an admitted library that
+     is a dependency of no checked or norec library is never interned, so it is
+     absent from [depgraph] and the [fold_deps_list ... al] below raises the
+     anomaly "missing dep when computing closure". This matches -admit's
+     documented "load module and dependencies without checking", and it is the
+     shape a -statement-report run produces: the model library is admitted but
+     referenced by constant name, not Require'd by the checked statement library. *)
+  let needed = List.fold_right (intern_library ~intern_mode:Dep ~validated LibrarySet.empty) al needed in
   let needed = List.rev needed in
   (* first compute the closure of norec, remove closure of check,
      add closure of admit, and finally remove norec and check *)
