@@ -169,6 +169,13 @@ type axiom_report = {
       object across an edit to such a library only when that library's object
       is byte-identical, because the blinded label no longer pins the opaque
       index the reference reads. *)
+  copied_from_libraries : DirPath.Set.t;
+  (** The libraries, other than this one, a declaration of this library is
+      copied from: every [foreign_opaque_libraries] owner, plus the canonical
+      origin ([mod_delta]) of every signature constant and inductive -- an
+      [Include] or module alias keeps the origin's canonical name. A superset
+      of [foreign_opaque_libraries]; an over-approximation only makes the keep
+      rule more conservative (D18 S1). *)
 }
 
 val axiom_report :
