@@ -2798,7 +2798,7 @@ let check_one_cofix cache ?evars env nbfix def deftype =
        walk extends the environment only with [LocalAssum] binders, which
        [whd_erasing] never unfolds, so equal terms at one depth reach one
        verdict. *)
-    let memo = (Hashtbl.create 17, Hashtbl.create 17) in
+    let memo = (Hashtbl.create 17, Hashtbl.create 17, ref 4194304) in
     let _ : constr = whd_erasing memo env n t in ()
 
   (* A dropped term whose only mention of the block is the HEAD of its
@@ -2841,8 +2841,10 @@ let check_one_cofix cache ?evars env nbfix def deftype =
      binder read only by a cast type there, so two terms equal up to casts
      can get different verdicts) and case-inversion indices (held to
      [erased_strict] at iota). Physically equal sub-terms compare in one
-     step. [budget] counts the nodes visited; when it runs out the answer is
-     [false], which only costs the memo a skip. *)
+     step. [budget] is shared by every comparison of one [check_erased]; when
+     it runs out a comparison answers [false], which only costs the memo a
+     hit, so the total work the memo spends comparing is bounded while no
+     single comparison is cut off at a fixed size. *)
   and memo_equal budget nargs t u =
     t == u ||
     (decr budget; !budget > 0) &&
@@ -2878,15 +2880,15 @@ let check_one_cofix cache ?evars env nbfix def deftype =
      reach a force [coqc] did not. Positions iota CAN still force (match
      parameters, case-inversion indices, constructor arguments when the
      constructor has a let-in) stay with [erased_strict] above. *)
-  and dropped ((phys, strct) as memo) env n t =
+  and dropped ((phys, strct, budget) as memo) env n t =
     if not (noccur_with_meta n nbfix t) then begin
       let same = Option.default [] (Hashtbl.find_opt phys n) in
       let key = (n, Hashtbl.hash_param 20 200 t) in
       let rec equal_recent k = function
         | [] -> false
-        | u :: l -> k > 0 && (memo_equal (ref 256) 0 t u || equal_recent (k - 1) l)
+        | u :: l -> k > 0 && (memo_equal budget 0 t u || equal_recent (k - 1) l)
       in
-      if not (List.memq t same || equal_recent 8 (Hashtbl.find_all strct key)) then begin
+      if not (List.memq t same || equal_recent 16 (Hashtbl.find_all strct key)) then begin
         let () = inert memo env n t in
         let same = Option.default [] (Hashtbl.find_opt phys n) in
         let () = Hashtbl.replace phys n (t :: same) in
@@ -2960,20 +2962,31 @@ let check_one_cofix cache ?evars env nbfix def deftype =
         (* The constructor arguments whose binder the selected branch does
            not read are dropped by the substitution. When the constructor
            has a let-in, its value may read such an argument and is computed
-           at iota, so the argument is held to the strict rule. *)
+           at iota, so the argument is held to the strict rule.
+
+           The constructor's own let-in VALUES are computed at iota too, by
+           call by value, whether or not the branch reads the binder, and
+           [apply_branch] substitutes them away. So each one, instantiated
+           with the arguments and let-ins to its left, is itself dropped
+           material and must not force the block
+           (test-suite/failure/guard_cofix_dropped_letin_value.v). *)
         let ctx, body = Term.decompose_lambda_n_decls ci'.ci_cstr_ndecls.(i - 1) brs.(i - 1) in
         let nd = List.length ctx in
         let has_letin = List.exists (function LocalDef _ -> true | LocalAssum _ -> false) ctx in
-        let rec unread k decls args = match decls, args with
-          | [], _ | _, [] -> ()
-          | LocalDef _ :: decls, args -> unread (k + 1) decls args
+        let rec unread k subst decls args = match decls, args with
+          | [], _ -> ()
+          | LocalDef (_, v, _) :: decls, args ->
+            let v = Vars.substl subst v in
+            let () = dropped memo env n v in
+            unread (k + 1) (v :: subst) decls args
+          | LocalAssum _ :: _, [] -> ()
           | LocalAssum _ :: decls, a :: args ->
             let () =
               if noccurn (nd - k) body then
                 (if has_letin then erased_strict env n a else dropped memo env n a) in
-            unread (k + 1) decls args
+            unread (k + 1) (a :: subst) decls args
         in
-        let () = unread 0 (List.rev ctx) (List.skipn_at_best ci'.ci_npar cargs) in
+        let () = unread 0 [] (List.rev ctx) (List.skipn_at_best ci'.ci_npar cargs) in
         whd_erasing memo env n (apply_branch cstr cargs ci' brs)
       | CoFix cofix ->
         whd_erasing memo env n
