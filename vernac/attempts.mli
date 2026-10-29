@@ -39,9 +39,11 @@ open Names
     [Declare ML Module], the plugin's files as findlib resolved them.
 
     The object is in the library segment, so the library's label
-    ([LibkeyObjects]), which reads it as it is and which coqc stores as the
-    library's digest, covers the records: a library compiled where an
-    attempt finds something else is a different library.
+    ([LibkeyObjects]), which coqc stores as the library's digest, covers the
+    records: a library compiled where an attempt finds something else is a
+    different library. The one part the label does not read is the SHA-256
+    of the files a [Declare ML Module] resolved to (label version 4, whose
+    paragraph in [LibkeyObjects] says why).
     Paths are absolute, so the same file compiled in another directory has
     other records. *)
 
@@ -88,8 +90,9 @@ val finish : loaded:(DirPath.t -> bool) -> loaded_plugin:(string -> bool) -> t o
     files they read. [None] if there are none. *)
 
 val inject : t -> Libobject.obj
-(** The [ATTEMPTS] object (a [Keep] object that the library label reads as
-    it is). *)
+(** The [ATTEMPTS] object: a [Keep] object that the library label reads as
+    it is but for the digests of the files a [Declare ML Module] resolved
+    to (above). *)
 
 val find : Declaremods.library_objects -> t option
 (** The records a library's object segment holds. *)

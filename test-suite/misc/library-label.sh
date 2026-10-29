@@ -49,14 +49,7 @@ set -e
 export PATH=$BIN:$PATH
 LOAD=${STOCK_BIN:-$BIN}
 
-TOOL=${LIBRARY_LABEL:-}
-for t in "${BIN}rocq-library-label" "$PWD/../_build/default/checker/library_label.exe"; do
-  if [ -z "$TOOL" ] && [ -x "$t" ]; then TOOL=$t; fi
-done
-if [ -z "$TOOL" ]; then
-  echo "rocq-library-label not found: dune build checker/library_label.exe, or set LIBRARY_LABEL"
-  exit 1
-fi
+. misc/library-label-tool.inc
 
 cd misc/library-label
 rm -rf _test

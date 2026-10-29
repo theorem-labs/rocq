@@ -9,7 +9,9 @@
 # A.vo records the attempt (rocq-library-label --attempts, and the same
 # records as JSON with --attempts-json, read by Python's json module and
 # checked against the schema documented in vernac/attempts.mli), and that
-# when what the attempt found changes, A compiled again is another library
+# when what the attempt found changes -- which files it resolved to, not
+# their content, which left the key at label version 4 for a plugin
+# (misc/library-label-plugin.sh) -- A compiled again is another library
 # or no longer compiles: its stored digest, the label, changes
 # (rocq-library-label --stored), and coqc and rocqchk -o refuse Test.B,
 # compiled against the first A, over the new one. Compiling A twice in an
@@ -24,14 +26,7 @@ set -e
 export PATH=$BIN:$PATH
 LOAD=${STOCK_BIN:-$BIN}
 
-TOOL=${LIBRARY_LABEL:-}
-for t in "${BIN}rocq-library-label" "$PWD/../_build/default/checker/library_label.exe"; do
-  if [ -z "$TOOL" ] && [ -x "$t" ]; then TOOL=$t; fi
-done
-if [ -z "$TOOL" ]; then
-  echo "rocq-library-label not found: dune build checker/library_label.exe, or set LIBRARY_LABEL"
-  exit 1
-fi
+. misc/library-label-tool.inc
 
 mkdir -p misc/library-label-attempts
 cd misc/library-label-attempts
@@ -44,11 +39,6 @@ comp() { # comp DIR FILE
 }
 label() { "$TOOL" --stored "_test/$1/A.vo"; }
 attempts() { "$TOOL" --attempts "_test/$1/A.vo"; }
-check() { # check WHAT CONDITION...
-  local what=$1; shift
-  if "$@"; then echo "PASS $what"; else echo "FAIL $what"; fail=1; fi
-}
-has() { grep -q -- "$2" <<< "$1"; }
 setup() { mkdir -p "_test/$1"; printf '%b' "$2" > "_test/$1/A.v"; }
 # dependent DIR: Test.B, compiled against the current Test.A of DIR.
 dependent() {
@@ -208,7 +198,9 @@ OCAMLPATH="$PWD/_test/ocamlpath${OCAMLPATH:+:$OCAMLPATH}" comp failml A
 check "Fail Declare ML Module: the plugin exists now: another label" test "$d1" != "$(label failml)"
 check "Fail Declare ML Module: coqc and rocqchk refuse the dependent" refused failml
 
-# 6. Declare ML Module under Succeed (rolled back): its files change.
+# 6. Declare ML Module under Succeed (rolled back): it resolves to other
+# files. Their content is not in the key at label version 4; the files it
+# resolved to are, and here they are another copy at another findlib path.
 setup succeedml "Succeed Declare ML Module \"zarith\".\nDefinition a := 0.\n"
 comp succeedml A
 check "Succeed Declare ML Module: the plugin's files are recorded" has "$(attempts succeedml)" "zarith.cmxs sha256"
@@ -221,9 +213,8 @@ zdir=$(ocamlfind query zarith)
 mkdir -p _test/zarith-changed
 cp -r "$zdir" _test/zarith-changed/zarith
 chmod -R u+w _test/zarith-changed
-for f in _test/zarith-changed/zarith/*.cmxs _test/zarith-changed/zarith/*.cma; do printf 'x' >> "$f"; done
 OCAMLPATH="$PWD/_test/zarith-changed${OCAMLPATH:+:$OCAMLPATH}" comp succeedml A
-check "Succeed Declare ML Module: the plugin's files changed: another label" test "$d1" != "$(label succeedml)"
+check "Succeed Declare ML Module: it resolved to other files: another label" test "$d1" != "$(label succeedml)"
 check "Succeed Declare ML Module: coqc and rocqchk refuse the dependent" refused succeedml
 
 # 7. The same source compiled three times, each time in a fresh directory at

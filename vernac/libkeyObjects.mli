@@ -38,12 +38,11 @@ open Names
       module, module type, include, keep, escape and export entries, in the
       same order, and each atomic object replaced by its view
       [Libobject.interface_object]: the object itself when its kind declares
-      [Key_as_is], or its copy through the typed stripper of its kind
-      ([Key_stripped]), which sets every source location to a fixed value
-      and changes nothing else. The container entries hold no source
-      location and are kept as they are. An ML-MODULE object is read as it
-      is stored, with the digests of its plugins' files when the library was
-      compiled. The [ATTEMPTS] object ([Attempts]) is read as it is stored;
+      [Key_as_is], or its copy through the stripper of its kind
+      ([Key_stripped]), which erases what the key must not read. The
+      container entries hold no source location and are kept as they are.
+      An ML-MODULE object and the [ATTEMPTS] object ([Attempts]) have their
+      plugin file digests erased: see the version-4 paragraph below;
     - [summary'] is the library's summary, the segment that a dependent's
       [Require] reads first: [(name, deps, safe_deps, (depr, warns))], with
       [name] the library's logical name, [deps] its direct dependencies in
@@ -96,6 +95,56 @@ open Names
     the library's assumption set and which opaque proof a foreign [Indirect]
     reference resolves to -- are the keep rule's monotone axiom condition and
     its foreign-opaque-reference check, fed by [axiom_report].
+
+    {b Plugin files out of the key (version 4, BET-342).} A [Declare ML
+    Module] contributes the plugin names, each with whether it is an
+    implicit dependency (the ML-MODULE object), and the files findlib
+    resolved it to (an [ATTEMPTS] record of a rolled-back one), not the
+    [Digest.file] or SHA-256 of those files, which both objects still store.
+    A plugin's [.cmxs] is rebuilt by any change to the OCaml code it is
+    compiled against: between two builds of this fork whose [plugins/] trees
+    are identical, 26 of 27 installed [.cmxs] files differ, so a key that
+    read those digests moved for every library that declares a plugin and,
+    through the dependency digests, for every library above it (BET-342,
+    measured: 1 of 691 Corelib, Ltac2 and Stdlib labels equal across one such
+    move; with version 4, 691 of 691).
+
+    What this costs. A dependent loads a plugin by name, whatever file
+    findlib finds then ([Mltop.load_ml_objects]; the stored digests are
+    written and never read back), so the digests never decided what a
+    dependent loads. What they did was move the label of a declaring library
+    whenever the plugin's file moved, which carried a plugin's own change to
+    the dependents (upstream 67ac9e9d36, "Put back digests in mltop", fixing
+    rocq-prover/rocq#15649). Version 4 drops that carrier, and what it rests
+    on instead is an obligation on the build: {e a change to the
+    representation of a value a [.vo] stores -- a kernel value or a plugin's
+    marshalled object -- bumps [Coq_config.vo_version], and one value of
+    that number names one representation across every build whose files can
+    meet}, the second half because two branches cut from one base can each
+    bump to the same number for different representations. The number is in
+    [Libkey]'s header and so in every label. [rocqchk] is not exposed either
+    way: it reads both object segments as [Any]; what the obligation
+    protects is the [coqc] that reads an older build's objects.
+
+    The obligation is checked, as far as a build can check it, by
+    test-suite/misc/vo-format.sh, which pins the structure of a [.vo]'s
+    segments as checker/values.ml describes them, and the names of the
+    registered object kinds, against that version (an object kind only the
+    new build has passes there: a build that does not know a kind refuses
+    the file instead of misreading it). What it does not reach, and the
+    reader of this label must carry itself: the payload type of an object
+    kind (no reader in the build describes it, although the typed trees of
+    a build do); the structure of the [vm] segment, which this fork's
+    rocqchk regenerates and never reads, so nothing checks that
+    description against what the kernel writes; the meaning of a string,
+    the bytecode of that segment among them, and the order of a type's
+    constant constructors; a plugin that is not Rocq's own,
+    whose authors cannot bump Rocq's number at all, so a reader that keeps
+    objects across two builds must require the same versions of the
+    packages that install those plugins; and the choice of a number no
+    other branch used. The other thing a plugin rebuild changes -- how the
+    elaboration of a file that uses its objects goes -- is a property of
+    the build that compiles that file, not of this library.
 
     {b What the label does not cover.} The [opaques] segment (the proof
     terms of opaque constants: a changed proof keeps the label unless it

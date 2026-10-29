@@ -243,13 +243,35 @@ let to_json t =
   | () -> Ok (Buffer.contents b)
   | exception Not_utf_8 s -> Error ("not valid UTF-8: " ^ String.escaped s)
 
+(* The records as the library label reads them (label version 4): a record
+   keeps the digest of each file a [Require] or a [Load] read, and no other
+   digest. [finish] hashes the files of every attempt, those a [Declare ML
+   Module] resolved to included; a plugin's .cmxs is rebuilt by every change
+   to the OCaml code it is compiled against, so the label leaves those out,
+   as it leaves out the ML-MODULE object's plugin file digests ([Mltop]).
+   An [ml_module] record still reads differently from one that found no
+   plugin: its request and the files findlib resolved it to stay in the key.
+   [finish] records a digest for every file an attempt found and for no
+   other, so this keeps every digest of a source file a [Require] or a
+   [Load] read, that file being a plugin's as well or not. *)
+let interface_view t =
+  let read =
+    List.concat_map (fun a ->
+        match a.request with
+        | Ml_module _ -> []
+        | Require_qualified _ | Require_absolute _ | Load _ -> a.found)
+      t.attempts
+  in
+  { t with digests = List.filter (fun (f, _) -> List.mem f read) t.digests }
+
 let tag : t Libobject.Dyn.tag =
   let open Libobject in
   declare_object_full
     { (default_object "ATTEMPTS") with
       classify_function = (fun _ -> Keep);
-      (* Paths, names and digests: no source location. *)
-      interface_key = Key_as_is }
+      (* Paths, names and probe results: no source location, and no plugin
+         file digest. *)
+      interface_key = Key_stripped interface_view }
 
 let inject t = Libobject.Dyn.Dyn (tag, t)
 

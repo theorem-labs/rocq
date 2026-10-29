@@ -13,8 +13,12 @@ open Libobject
 
 (* Version 3 (S1b): the label blinds a constant's axiom-or-opaque-proof
    distinction (see [blind_constant]); versions 2 and 3 therefore never
-   produce the same label for a library that has an opaque constant. *)
-let version = 3
+   produce the same label for a library that has an opaque constant.
+   Version 4 (BET-342): the plugin file digests of an ML-MODULE object and
+   of an [ml_module] attempt are out of the key (vernac/mltop.ml,
+   vernac/attempts.ml), so a plugin rebuilt from the same sources leaves
+   the label of the libraries that declare it unchanged. *)
+let version = 4
 
 type summary = {
   name : DirPath.t;

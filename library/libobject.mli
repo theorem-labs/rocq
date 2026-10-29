@@ -101,10 +101,12 @@ type 'a interface_key =
   (** The payload type holds no source location: the payload enters the
       key unchanged. *)
   | Key_stripped of ('a -> 'a)
-  (** The payload enters the key through this function, which must be a
-      typed stripper in the sense of [LocStrip]: every source location set
-      to a fixed value, nothing else changed. It may raise
-      [LocStrip.Unknown]. *)
+  (** The payload enters the key through this function, which erases from
+      it what the key must not read and changes nothing else: every source
+      location, set to a fixed value as a typed stripper of [LocStrip]
+      does, and whatever else the kind documents as outside the key. It may
+      raise [LocStrip.Unknown]. What a stripper erases is part of the key's
+      layout, so a change to it bumps [LibkeyObjects.version]. *)
 
 type ('a,'b,'discharged) object_declaration = {
   object_name : string;

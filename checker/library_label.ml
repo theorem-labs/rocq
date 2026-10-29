@@ -30,6 +30,10 @@
      prints, the constants whose label contribution the axiom-or-opaque
      blinding erased (each with its current "axiom" or "proof" status), and
      the libraries this one holds a foreign opaque reference into.
+   One mode describes this build and takes no file:
+   - [--layout-version]: the label's layout version
+     ([LibkeyObjects.version]), one line. A reader that keeps labels across
+     builds compares them only within one layout version.
    Exit 0; 1 when the file cannot be read as a .vo file; 2 on a usage error;
    3 when --attempts-json meets a string that is not valid UTF-8.
    Every object kind of rocq's own plugins is linked in (-linkall), so the
@@ -40,6 +44,7 @@ let hex s =
 
 let usage () =
   prerr_endline "usage: rocq-library-label (--check | --stored | --attempts | --attempts-json | --axiom-report-json) FILE.vo";
+  prerr_endline "       rocq-library-label --layout-version";
   exit 2
 
 (* The label kind [--check] prints, and the hex it prints beside it: the full
@@ -126,4 +131,5 @@ let () =
     | "--axiom-report-json" -> print_endline (axiom_report_json (read f))
     | _ -> usage ()
     end
+  | ["--layout-version"] -> Printf.printf "%d\n" LibkeyObjects.version
   | _ -> usage ()

@@ -96,17 +96,17 @@ let objects_exn ?(compiled = lib_a) ?(summary = sum_a) (syntax, objects) =
   | Ok b -> b
   | Error what -> failwith ("no label: " ^ what)
 
-(* Version 3 test vector: the label of [vector_input] over [lib_a] and
+(* Version 4 test vector: the label of [vector_input] over [lib_a] and
    [sum_a], without [Libkey]'s header, which holds the OCaml version and so
    differs between switches. It pins the layout of LibkeyObjects (version,
    the blinded compiled form, the segments' tree, the summary's view) and the
    encoding beneath it; a change of either must bump a version and change
    this value. [lib_a] is an empty library, so the axiom-or-opaque blinding
    ([blind_compiled]) is the identity on it. *)
-let vector = "dd34e13f8c5a0d988f276832564586c6cb919849b5719fa7f9c9937849a7ffe2"
+let vector = "e05e3cb2d18ff8a568d550f75468cce69da83792dfb0bbe868a3779e58bd7475"
 
-let () = add_test "layout version 3" (fun () ->
-    assert_equal ~printer:string_of_int 3 LibkeyObjects.version)
+let () = add_test "layout version 4" (fun () ->
+    assert_equal ~printer:string_of_int 4 LibkeyObjects.version)
 
 (* The summary as the layout reads it, written out: the name, the
    dependencies as a list in their order, the safe dependencies in
@@ -116,24 +116,36 @@ let summary_view (s : LibkeyObjects.summary) =
    (Option.map (fun { Deprecation.since; note } -> (since, note)) s.info.UserWarn.depr,
     List.map (fun (w : UserWarn.warn) -> (w.note, w.cats)) s.info.UserWarn.warn))
 
+(* The value the layout encodes, over [lib_a] and [sum_a] with the
+   locations of [vector_input] left out: the version, the blinded compiled
+   form, the two segments and the summary's view. The three tests below read
+   it, so a layout change is written once. *)
+let layout_value ?(version = LibkeyObjects.version) () =
+  let syn, obj = vector_input None None in
+  Obj.repr (version, LibkeyObjects.blind_compiled lib_a, syn, obj, summary_view sum_a)
+
 let () = add_test "test vector" (fun () ->
     let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
     assert_equal ~msg:"32 bytes" ~printer:string_of_int 32 (String.length label);
-    let syn, obj = vector_input None None in
-    let headerless =
-      Libkey.sha256 (Libkey.encode (Obj.repr
-        (LibkeyObjects.version, LibkeyObjects.blind_compiled lib_a, syn, obj, summary_view sum_a))) in
+    let headerless = Libkey.sha256 (Libkey.encode (layout_value ())) in
     assert_equal ~msg:"label without the header" ~printer:(fun s -> s) vector (hex headerless))
 
-(* The reference reading of the layout: Libkey.label of the version, the
-   compiled form, the two segments as they would be with no location in
-   them, and the summary's view. Independent of the pinned value above. *)
+(* The reference reading of the layout: Libkey.label of that value.
+   Independent of the pinned value above. *)
 let () = add_test "layout" (fun () ->
     let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
-    let syn, obj = vector_input None None in
-    assert_equal ~printer:hex
-      (Libkey.label (Obj.repr
-        (LibkeyObjects.version, LibkeyObjects.blind_compiled lib_a, syn, obj, summary_view sum_a))) label)
+    assert_equal ~printer:hex (Libkey.label (layout_value ())) label)
+
+(* M12 (BET-342): the layout version is part of the encoded value, so a
+   label made by an older layout is never a label of this one. A reader
+   that keeps a library across two builds must require the version it
+   knows ([rocq-library-label --layout-version]). *)
+let () = add_test "a label of another layout version is another label" (fun () ->
+    let current = Libkey.label (layout_value ()) in
+    List.iter (fun version ->
+        assert_bool ("layout version " ^ string_of_int version)
+          (not (String.equal (Libkey.label (layout_value ~version ())) current)))
+      [1; 2; 3])
 
 let () = add_test "the compiled form counts" (fun () ->
     let input = vector_input None None in

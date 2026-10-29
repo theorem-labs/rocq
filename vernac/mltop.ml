@@ -461,10 +461,11 @@ let inMLModule : ml_module_object -> Libobject.obj =
       load_function = load_ml_objects;
       subst_function = (fun (_,o) -> o);
       classify_function = classify_ml_objects;
-      (* The library label reads the object as stored: the plugin names and
-         the digests of their files when the library was compiled
-         (LibkeyObjects). *)
-      interface_key = Key_as_is }
+      (* The library label reads the plugin names and whether each is an
+         implicit dependency, not the digests of the plugins' files
+         ([mdigests], which the object still stores and which a rebuild of
+         the plugin moves: LibkeyObjects, label version 4). *)
+      interface_key = Key_stripped (fun o -> { o with mdigests = [] }) }
 
 (* The plugins' files as findlib resolves them, for the attempted-resolution
    records ([Attempts]). *)
