@@ -1,0 +1,17 @@
+{
+  "doc": "a plugin load after the first proof in both trees: the proof before it runs, the proof after it replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}, "PR.A.q": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "refused_detail": "Declare at line 6; proofs before byte 217 run",
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.p", "ineligible", "rebind", "before_late_command"], ["PR.A.q", "hit"]]
+    }
+  }
+}

@@ -69,6 +69,13 @@ val sort_context_set : t -> UnivGen.sort_context_set
 (** The local context of the state, i.e. a set of bound variables together
     with their associated constraints. *)
 
+type replay_view
+
+val replay_view : t -> replay_view
+(** The local levels and constraints, the unification variables, the local
+    qualities and the minimization hints, without the universe graphs: what a
+    proof's statement key digests of its starting state (BET-84). *)
+
 type universe_opt_subst = UnivFlex.t
 (* Reexport because UnivSubst is private *)
 

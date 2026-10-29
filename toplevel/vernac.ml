@@ -109,6 +109,9 @@ let load_vernac_core ~echo ~check ~state ?source file =
      AST. The replay path below runs buffered sentences through it too, so
      a proof that is not replayed is interpreted exactly as stock. *)
   let interp_one ~tstart state ast =
+    (* BET-84: replay compares where a proof opens with the file's last late
+       command (Proof_replay.start), so it is told where each sentence is. *)
+    Option.iter (fun loc -> Proof_replay.at_sentence loc.Loc.bp) ast.CAst.loc;
     (* BET-84 P3: the charge for the proofs replay did not run is part of
        the file's clock, so a sentence that would carry the clock past the
        budget is stopped inside it, as stock's own timeout stops it, not
@@ -156,7 +159,10 @@ let load_vernac_core ~echo ~check ~state ?source file =
                    | None -> ()
                    | Some held ->
                      match Vernacstate.Declare.get_all_proof_names () with
-                     | [] -> Proof_recorder.drop_all_proofs (); Proof_replay.abandon ()
+                     | [] ->
+                       Proof_recorder.drop_all_proofs ();
+                       Proof_record_env.drop_universe_frames ();
+                       Proof_replay.abandon ()
                      | live ->
                        let base = match String.rindex_opt held '.' with
                          | None -> held
