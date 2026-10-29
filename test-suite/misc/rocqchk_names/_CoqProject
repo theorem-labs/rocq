@@ -1,0 +1,8 @@
+src/META.coq-test-suite
+-Q theories BadNames
+-I src
+
+src/badName.mlg
+src/badNameImpl.ml
+src/badNameImpl.mli
+src/bad_name_plugin.mlpack

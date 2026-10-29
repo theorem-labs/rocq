@@ -336,6 +336,72 @@ let summary_seg : summary_disk ObjFile.id = ObjFile.make_id "summary"
 let library_seg : library_disk ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 
+(* Place 1 of the name check (checkNames.mli): every name of the library that
+   the checker can print, in every intern mode, since [Dep] mode does not
+   validate the file, and before any of them is printed: all the libraries are
+   read before the first is checked. The compiled library's name is the one
+   the kernel imports it under, which coqc writes as the file's name. A
+   mutual inductive block has one label, but a type name for each of its
+   types. *)
+let check_names ~dir ~file sd md =
+  let refuse what name why =
+    CErrors.user_err
+      (str "Library " ++ pr_dirpath dir ++
+       str (" (file " ^ file ^ ") has the " ^ what ^ " " ^ CheckNames.quote name ^
+            ", which is not " ^ why ^ "."))
+  in
+  let check_id what id =
+    if not (CheckNames.valid_id id) then refuse what (Id.to_string id) "an identifier"
+  in
+  let check_dirpath what dp =
+    if not (CheckNames.valid_dirpath dp) then
+      refuse what (DirPath.to_string dp) "made of identifiers"
+  in
+  let compiled = md.md_compiled in
+  let comp_name = Safe_typing.dirpath_of_library compiled in
+  if not (DirPath.equal comp_name dir) then
+    CErrors.user_err
+      (str ("The file " ^ file ^ " contains compiled library " ^
+            CheckNames.quote (DirPath.to_string comp_name) ^ " and not library ") ++
+       pr_dirpath dir ++ str ".");
+  check_dirpath "library name" sd.md_name;
+  Array.iter (fun (dp, _) -> check_dirpath "dependency" dp) sd.md_deps;
+  Array.iter (fun (dp, _) -> check_dirpath "dependency" dp)
+    (Safe_typing.deps_of_library compiled);
+  let open Declarations in
+  let open Mod_declarations in
+  let check_mind mib =
+    Array.iter (fun mip ->
+        check_id "inductive type name" mip.mind_typename;
+        Array.iter (check_id "constructor name") mip.mind_consnames)
+      mib.mind_packets
+  in
+  let rec check_signature = function
+    | MoreFunctor (mbid, mtb, sign) ->
+      if not (CheckNames.valid_mbid mbid) then
+        refuse "functor parameter" (MBId.to_string mbid) "made of identifiers";
+      check_signature (mod_type mtb);
+      check_signature sign
+    | NoFunctor struc -> check_structure struc
+  and check_structure struc =
+    List.iter (fun (label, field) ->
+        check_id "label" label;
+        match field with
+        | SFBconst _ | SFBrules _ -> ()
+        | SFBmind mib -> check_mind mib
+        | SFBmodule mb -> check_module mb
+        | SFBmodtype mtb -> check_signature (mod_type mtb))
+      struc
+  and check_module mb =
+    check_signature (mod_type mb);
+    (* A module sealed by a signature has an implementation of its own, whose
+       objects the checker announces too (mod_checking.ml). *)
+    match mod_expr mb with
+    | Struct (_, struc) -> check_structure struc
+    | Algebraic _ | Abstract | FullStruct -> ()
+  in
+  check_module (Safe_typing.module_of_library compiled)
+
 (* [validated] is the set of libraries which must be validated when read even
    if they are interned as a dependency, namely those named on the command
    line and not admitted. *)
@@ -362,6 +428,7 @@ let intern_from_file ~intern_mode ~validated (dir, f) =
       (* Verification of the final checksum *)
       let () = close_in ch in
       let () = System.check_caml_version ~caml:sd.md_ocaml ~file:f in
+      let () = check_names ~dir ~file:f sd md in
       if dir <> sd.md_name then
         CErrors.user_err
           (name_clash_message dir sd.md_name f);

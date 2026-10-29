@@ -524,11 +524,16 @@ let run senv =
 (* The report is evidence beside the verdict, never the verdict: a report
    that cannot be completed is left without its end marker, which a reader
    takes as no report, and the exit status is unchanged. It comes before the
-   context summary. *)
+   context summary. The run goes on to exit 0, so the warning escapes the text
+   of the exception, which can quote a name read from a library (checkNames.mli).
+   The text is the one [explain_exn] returns: it prints the terms of a
+   [CantApplyBadType] type error itself, but nothing in the report raises one. *)
 let print_statement_report env requests =
   try Check_closure.print env CheckLibrary.indirect_accessor requests
   with e when (match e with Sys.Break | Out_of_memory -> false | _ -> true) ->
-    Feedback.msg_warning (str "Statement report stopped: " ++ explain_exn e)
+    Feedback.msg_warning
+      (str "Statement report stopped: " ++
+       str (String.escaped (Pp.string_of_ppcmds (explain_exn e))))
 
 let main () =
   let senv = init() in

@@ -709,6 +709,13 @@ It excludes for instance anything related to the concrete syntax of
 objects (customized syntax rules, association between short and long
 names), implicit arguments, etc.
 
+``rocqchk`` refuses a library that holds a name it may print, such as the
+name of the library, of a constant, of an inductive type, of a constructor or
+of a functor parameter, when that name is not made of identifiers, for
+instance when it holds a blank or a line break. Rocq's own commands never
+write such a name: only a plugin, or a modified ``.vo`` file, can. Printed,
+such a name could forge a line of the checker's output.
+
 This tool can be used for several purposes. One is to check that a
 compiled library provided by a third-party has not been forged and
 that loading it cannot introduce inconsistencies [#]_. Another point is
@@ -792,7 +799,9 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   It does not change the exit status. If the report stops after its start
   line, it has no ``END STATEMENT REPORT`` line and the checker emits a
   warning. A program that reads the report must treat such a stream as no
-  report, not as partial evidence.
+  report, not as partial evidence. The report stops this way at a name it
+  would print that is not made of identifiers, for instance the name of a
+  constant that a term of an admitted library names but no library declares.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
