@@ -33,6 +33,8 @@ type 'v node =
 | Lcase         of case_annot * 'v lambda * 'v lambda * 'v lam_branches
   (* annotations, term being matched, accu, branches *)
 | Lfix          of (int array * inductive array * int) * 'v fix_decl
+  (* after [optimize], each body starts with Llam and binds its recursive argument among its
+     leading Llam binders, Llet crossed (see eta_fix_body) *)
 | Lcofix        of int * 'v fix_decl
 | Lint          of int
 | Lparray       of 'v lambda array * 'v lambda

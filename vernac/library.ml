@@ -154,8 +154,7 @@ let library_full_filename dir =
   with Not_found -> "<unavailable filename>"
 
 let library_is_loaded dir =
-  try let _ = find_library dir in true
-  with Not_found -> false
+  Option.has_some (find_library dir)
 
   (* If a library is loaded several time, then the first occurrence must
      be performed first, thus the libraries_loaded_list ... *)
@@ -198,11 +197,67 @@ let opaque_tables =
    returns. *)
 let opaque_generation = ref 0
 
-let add_opaque_table dp st =
+(* The digest of the segment each table in [opaque_tables] was read from, as
+   the file records it: what [content_digests] covers of a library's opaque
+   proofs. Written with the table, so a Require that replaces the table of a
+   loaded library replaces it too.
+
+   A library whose table was REPLACED gets no digest at all. Its proofs then
+   come from another file, which may read libraries that this library's own
+   recorded dependencies do not name, and a digest built from those
+   dependencies would not cover what a walk of its objects now reads
+   (AstraSoundness, 2026-10-27). Refusing a digest costs the sharing of that
+   library's objects, and of every library whose digest names it, and nothing
+   else. *)
+let opaque_digests = ref (DirPath.Map.empty : Digest.t DirPath.Map.t)
+let opaque_replaced = ref DirPath.Set.empty
+
+let add_opaque_table dp digest st =
   incr opaque_generation;
+  if DirPath.Map.mem dp !opaque_tables then
+    opaque_replaced := DirPath.Set.add dp !opaque_replaced;
+  opaque_digests := DirPath.Map.add dp digest !opaque_digests;
   opaque_tables := DirPath.Map.add dp st !opaque_tables
 
 let opaque_tables_generation () = !opaque_generation
+
+let content_digests () =
+  let memo = ref DirPath.Map.empty in
+  let add_dirpath b dp =
+    List.iter (fun id ->
+        let s = Id.to_string id in
+        Buffer.add_string b (string_of_int (String.length s));
+        Buffer.add_char b ':';
+        Buffer.add_string b s)
+      (DirPath.repr dp);
+    Buffer.add_char b ';'
+  in
+  (* Library dependencies form a DAG ([error_recursively_dependent_library]),
+     so this terminates, at the depth of that DAG. *)
+  let rec digest dp =
+    match DirPath.Map.find_opt dp !memo with
+    | Some d -> d
+    | None ->
+      let d = match find_library dp, DirPath.Map.find_opt dp !opaque_digests with
+        | Some (_, lib), Some opaque when not (DirPath.Set.mem dp !opaque_replaced) ->
+          let Safe_typing.Dvo_or_vi library = lib.library_digests in
+          let deps = List.sort DirPath.compare (Array.to_list (Array.map fst lib.library_deps)) in
+          (* a dependency with no digest leaves the library without one *)
+          (match Option.List.map digest deps with
+           | None -> None
+           | Some deps ->
+             let b = Buffer.create 256 in
+             add_dirpath b dp;
+             Buffer.add_string b library;
+             Buffer.add_string b opaque;
+             List.iter (Buffer.add_string b) deps;
+             Some (Digest.string (Buffer.contents b)))
+        | _ -> None
+      in
+      memo := DirPath.Map.add dp d !memo;
+      d
+  in
+  digest
 
 let access_table what tables dp i =
   let t = match DirPath.Map.find dp !tables with
@@ -235,7 +290,10 @@ let access_opaque_table o =
   match stored_opaque o with
   | None -> None
   | Some ((c, ctx), _) ->
-    let (c, ctx) = Discharge.cook_opaque_proofterm ci (c, ctx) in
+    (* The cooked term keeps the sharing of the stored one: cooking costs
+       about the stored term's size, not its tree unfolding, and a caller that
+       walks it, such as Print Assumptions, visits each shared subterm once. *)
+    let (c, ctx) = Discharge.cook_opaque_proofterm_shared ci (c, ctx) in
     let c = Mod_subst.subst_mps_list sub c in
     Some (c, ctx)
 
@@ -326,8 +384,8 @@ let mk_library sd md digests vm =
     library_vm = vm;
   }
 
-let mk_intern_library sum lib digest_lib proofs vm =
-  add_opaque_table sum.md_name (ToFetch proofs);
+let mk_intern_library sum lib digest_lib proofs digest_proofs vm =
+  add_opaque_table sum.md_name digest_proofs (ToFetch proofs);
   let open Safe_typing in
   mk_library sum lib (Dvo_or_vi digest_lib) vm
 
@@ -350,13 +408,13 @@ let intern_from_file file =
   let ch = raw_intern_library file in
   let lsd, digest_lsd = ObjFile.marshal_in_segment ch ~segment:summary_seg in
   let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
-  let del_opaque, _ = in_delayed file ch ~segment:opaques_seg in
+  let del_opaque, digest_opaque = in_delayed file ch ~segment:opaques_seg in
   let vmlib = Vmlibrary.load lsd.md_name ~file ch in
   ObjFile.close_in ch;
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
   register_library_filename lsd.md_name file;
   Library_info.warn_library_info ~transitive:true lsd.md_name lsd.md_info;
-  mk_intern_library lsd lmd digest_lmd del_opaque vmlib
+  mk_intern_library lsd lmd digest_lmd del_opaque digest_opaque vmlib
 
 let intern_from_file file =
   let provenance = ("file", file) in

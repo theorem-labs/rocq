@@ -13,7 +13,10 @@
     It is used to generate the files [rocq_instruct.h], [rocq_jumptbl.h],
     [rocq_arity.h], and [vmopcodes.ml].
 
-    [STOP] needs to be the last opcode.
+    New opcodes go at the end: the opcode numbers are stored in the bytecode
+    of [.vo] files, and a build must keep loading the code that stock builds
+    wrote. [rocq_instruct.h] names the last opcode [LAST_OPCODE], which bounds
+    the opcodes that [rocq_tcode_of_code] accepts.
 
     Arity -1 designates opcodes that need special handling in [rocq_fix_code.c].
 *)
@@ -162,9 +165,11 @@ let opcodes =
     "STOP", 0;
     (* A new opcode goes after [STOP], never before it: a .vo file holds the
        bytecode of its constants as these numbers, so moving one changes what
-       every library compiled before means. The bound check in
-       kernel/byterun/rocq_fix_code.c reads the length of the arity table, so it
-       follows this list. *)
+       every library compiled before means. [LAST_OPCODE] in
+       [rocq_instruct.h] follows the last entry of this list, and
+       [rocq_fix_code.c] bounds the opcodes it accepts by it. *)
+    "BINNUM", 2;
+    "BINNUMCALL", 3;
     "CHECKZADD", 1;
     "CHECKZPOSSUB", 1;
     "CHECKPOSADD", 1
@@ -187,6 +192,7 @@ let pp_rocq_instruct_h fmt =
   Array.iter (fun (name, _) ->
       Format.fprintf fmt "  %s,@." name
     ) opcodes;
+  Format.fprintf fmt "  LAST_OPCODE = %s@." (fst opcodes.(Array.length opcodes - 1));
   Format.fprintf fmt "};@."
 
 let pp_rocq_jumptbl_h fmt =

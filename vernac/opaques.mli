@@ -11,7 +11,9 @@
 type 'a const_entry_body = 'a Entries.proof_output Future.computation
 
 (** When set, {!declare_defined_opaque} does not let the kernel check the
-    proof, and records it as not checked. Default [false]. *)
+    proof, and records it as not checked. Default [false]. The
+    [-skip-qed-typecheck] option sets it. The [Skip Qed Typecheck] flag has
+    the same effect on each proof declared while it is on. *)
 val skip_qed_typecheck : bool ref
 
 val declare_defined_opaque : ?feedback_id:Stateid.t -> poly:bool ->
