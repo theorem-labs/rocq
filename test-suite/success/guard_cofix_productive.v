@@ -1,8 +1,8 @@
 (* The erased-material rule in [check_one_cofix] must not touch an ordinary
    productive cofixpoint, including one whose body needs a delta step and a
    beta step before a constructor shows (every argument of that redex is
-   read, so nothing is erased), one that destructs its argument, and a
-   prefix whose erased material holds no recursive occurrence at all. *)
+   read, so nothing is erased), one that destructs its argument, and a body
+   whose erased material holds no recursive occurrence at all. *)
 CoInductive SP : Type := consP : nat -> SP -> SP.
 
 CoFixpoint onesP : SP := consP 1 onesP.
@@ -14,7 +14,7 @@ CoFixpoint mapP (f : nat -> nat) (s : SP) : SP :=
   match s with consP n t => consP (f n) (mapP f t) end.
 
 (* an erased let and an erased beta argument that mention nothing of the
-   block: both are submitted to the analysis and both pass *)
+   block: the rule only refuses erased material that mentions the block *)
 CoFixpoint deadharmlessP : SP := let dead := 1 + 1 in consP 3 deadharmlessP.
 CoFixpoint deadbetaP : SP := (fun _ : nat => consP 4 deadbetaP) (2 + 2).
 
