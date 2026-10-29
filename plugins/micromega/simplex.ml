@@ -60,6 +60,23 @@ let get_profile_info () =
       ( try (p.success_pivots + p.failure_pivots) / p.average_pivots
         with Division_by_zero -> 0 ) }
 
+type profile_trace = (bool * int) list
+
+(** [traced f] is [(f (), t)], [t] the entries that [integer_solver] added to the profile during
+    [f ()], newest first ([integer_solver] adds each at the front). *)
+let traced f =
+  let before = !profile_info in
+  let r = f () in
+  let rec added acc l =
+    if l == before then List.rev acc
+    else match l with [] -> List.rev acc | e :: l -> added (e :: acc) l
+  in
+  (r, added [] !profile_info)
+
+(** [replay t] adds the entries of [t] to the profile, as the calls of [integer_solver] that made
+    them did. *)
+let replay t = profile_info := t @ !profile_info
+
 (* SMT output for debugging *)
 
 (*
@@ -904,3 +921,14 @@ let integer_solver lp =
     if debug then
       Printf.fprintf stdout "Proof %a\n" ProofFormat.output_proof prf;
     Some prf
+
+(** [relaxed_point lp] solves the rational relaxation of [lp] once, with the environment that
+    [integer_solver] builds, but only up to feasibility ([solve false], as [find_point]).
+    @return [Some sol], a point of [lp] (the values of the variables of [lp], 0 when absent), or [None]
+    if it is infeasible. It does not count in [get_profile_info]. *)
+let relaxed_point lp =
+  let vr0 = LinPoly.MonT.get_fresh () in
+  let l', _ = PrfEnv.of_list [] PrfEnv.empty (List.rev lp) in
+  match solve false l' (Restricted.make vr0) IMap.empty with
+  | Inr _ -> None
+  | Inl (rst, t, _) -> Some (find_solution rst t)

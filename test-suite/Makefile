@@ -347,10 +347,13 @@ unit-tests/src/utest.cmi: unit-tests/src/utest.mli
 
 unit-tests: $(UNIT_LOGFILES)
 
+
 # Build executable, run it to generate log file
 UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2
 # The micromega unit tests also need the micromega plugin (Polynomial, Vect, ...).
 unit-tests/micromega/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.plugins.micromega
+# The sysinit unit tests call Coqinit and Unix.putenv.
+unit-tests/sysinit/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.sysinit,unix
 unit-tests/%.ml.log: unit-tests/%.ml unit-tests/src/$(UNIT_LINK)
 	$(SHOW) 'TEST      $<'
 	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package $(UNIT_PKGS) \
@@ -503,7 +506,10 @@ $(addsuffix .log,$(wildcard output-coqchk/*.v)): %.v.log: %.v %.out $(PREREQUISI
 	  output=$*.out.real; \
 	  export LC_CTYPE=C; \
 	  export LANG=C; \
-	  $(call WITH_TIMER,$(patsubst %.v.log,%.chk.log,$@),$(coqchk) -o -silent $(call get_coqchk_prog_args,"$<") -Q $(shell dirname $<) "" -norec $(shell basename $< .v) > $$output 2>&1) ; \
+	  { $(call WITH_TIMER,$(patsubst %.v.log,%.chk.log,$@),$(coqchk) -o -silent $(call get_coqchk_prog_args,"$<") -Q $(shell dirname $<) "" -norec $(shell basename $< .v) 2>&1); \
+	      R=$$?; \
+	      if ! [ $$R = 0 ]; then printf '\nrocqchk exited with code %s\n' "$$R"; fi; \
+	  } > $$output; \
 	  diff -a -u --strip-trailing-cr $*.out $$output 2>&1; R=$$?; times; \
 	  if [ $$R = 0 ]; then \
 	    echo $(log_success); \
