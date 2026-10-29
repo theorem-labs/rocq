@@ -238,6 +238,130 @@ if (sp - num_args < rocq_stack_threshold) {                                     
 #define CheckFloat1() CheckPrimArgs(Is_double(accu), apply1)
 #define CheckFloat2() CheckPrimArgs(Is_double(accu) && Is_double(sp[0]), apply2)
 
+/* --- Native binary-number arithmetic ------------------------------------- *
+
+   The standard library's [positive] is xI | xO | xH and its [Z] is
+   Z0 | Zpos | Zneg. The machine represents a constant constructor by its rank
+   among the constant constructors, and a non-constant one by a one-field block
+   whose tag is one above its rank among the non-constant ones, tag 0 being kept
+   for accumulators. So a closed [Z] is Val_int(0) for Z0, or a block of tag 1
+   (Zpos) or 2 (Zneg) holding a chain of blocks of tag 1 (xI) and 2 (xO) that
+   ends in Val_int(0) (xH), least significant bit first. kernel/vmznative.ml
+   admits a definition only after checking that the inductive types it matches
+   on are declared exactly that way, so these two routines and that check are
+   one unit: neither is right without the other.
+
+   rocq_z_decode writes the integer of such a value and returns 1. It returns 1
+   only for a closed chain whose magnitude is below 2^ROCQ_Z_MAXBITS (bits
+   0..ROCQ_Z_MAXBITS-1); an accumulator (a stuck term) at any depth, and any
+   larger number, return 0, and the caller then applies the constant's own
+   value, which is what the machine does without the native path. The integer
+   is held in int64_t, not intnat, so the 60-bit magnitudes and the sum below
+   2^61 are exact on a 32-bit build too (where intnat is 32-bit). */
+
+#define ROCQ_Z_MAXBITS 60
+
+static int rocq_z_decode(value v, int64_t *res)
+{
+  int64_t acc = 0;
+  int bit = 0;
+  int neg;
+  if (Is_long(v)) { if (v == Val_int(0)) { *res = 0; return 1; } return 0; }
+  switch (Tag_val(v)) {
+  case 1: neg = 0; break;
+  case 2: neg = 1; break;
+  default: return 0;
+  }
+  v = Field(v, 0);
+  for (;;) {
+    if (bit >= ROCQ_Z_MAXBITS) return 0;
+    if (Is_long(v)) {
+      if (v != Val_int(0)) return 0;
+      acc |= (int64_t)1 << bit;
+      break;
+    }
+    switch (Tag_val(v)) {
+    case 1: acc |= (int64_t)1 << bit; bit++; v = Field(v, 0); break;
+    case 2: bit++; v = Field(v, 0); break;
+    default: return 0;
+    }
+  }
+  *res = neg ? -acc : acc;
+  return 1;
+}
+
+/* accu := the [Z] value of the integer n, whose absolute value must be below
+   2^61 so the chain fits int64_t arithmetic. The chain it builds round-trips
+   through rocq_z_decode only when |n| < 2^ROCQ_Z_MAXBITS; for a larger |n| the
+   chain is still a valid [Z], and a later decode of it simply takes the
+   fallback. The chain under construction is kept in accu, which Setup_for_gc
+   saves, so the allocations may run the minor collector. */
+#define Rocq_encode_Z(n) do {                                           \
+  int64_t rez_n = (n);                                                  \
+  if (rez_n == 0) accu = Val_int(0);                                    \
+  else {                                                                \
+    int64_t rez_a = rez_n < 0 ? -rez_n : rez_n;                         \
+    int rez_h = 0, rez_i;                                               \
+    value rez_b;                                                        \
+    while ((rez_a >> (rez_h + 1)) != 0) rez_h++;                        \
+    accu = Val_int(0);                                                  \
+    for (rez_i = rez_h - 1; rez_i >= 0; rez_i--) {                      \
+      Rocq_alloc_small(rez_b, 1, ((rez_a >> rez_i) & 1) ? 1 : 2);       \
+      Field(rez_b, 0) = accu;                                           \
+      accu = rez_b;                                                     \
+    }                                                                   \
+    Rocq_alloc_small(rez_b, 1, rez_n < 0 ? 2 : 1);                      \
+    Field(rez_b, 0) = accu;                                             \
+    accu = rez_b;                                                       \
+  }                                                                     \
+} while (0)
+
+/* A closed [positive] (xI | xO | xH) is a chain of blocks of tag 1 (xI) and
+   tag 2 (xO) that ends in Val_int(0) (xH), least significant bit first, and
+   always denotes a value of at least 1 because of the terminating xH. This
+   writes its integer and returns 1 only for a closed chain whose value is below
+   2^ROCQ_Z_MAXBITS; a stuck term at any depth, and any larger number, return 0.
+   It is the magnitude loop of rocq_z_decode without the [Z] sign wrapper. */
+static int rocq_pos_decode(value v, int64_t *res)
+{
+  int64_t acc = 0;
+  int bit = 0;
+  for (;;) {
+    if (bit >= ROCQ_Z_MAXBITS) return 0;
+    if (Is_long(v)) {
+      if (v != Val_int(0)) return 0;
+      acc |= (int64_t)1 << bit;
+      break;
+    }
+    switch (Tag_val(v)) {
+    case 1: acc |= (int64_t)1 << bit; bit++; v = Field(v, 0); break;
+    case 2: bit++; v = Field(v, 0); break;
+    default: return 0;
+    }
+  }
+  *res = acc;
+  return 1;
+}
+
+/* accu := the [positive] value of the integer n, which must be at least 1 and
+   below 2^61. The chain it builds round-trips through rocq_pos_decode only when
+   n < 2^ROCQ_Z_MAXBITS; a larger n still builds a valid [positive] that a later
+   decode refuses, taking the fallback. The most significant bit is the
+   terminating xH; the rest are xI (set) or xO (clear), least significant first.
+   The chain under construction is kept in accu, which Setup_for_gc saves. */
+#define Rocq_encode_pos(n) do {                                         \
+  int64_t rep_n = (n);                                                  \
+  int rep_h = 0, rep_i;                                                 \
+  value rep_b;                                                          \
+  while ((rep_n >> (rep_h + 1)) != 0) rep_h++;                          \
+  accu = Val_int(0);                                                    \
+  for (rep_i = rep_h - 1; rep_i >= 0; rep_i--) {                        \
+    Rocq_alloc_small(rep_b, 1, ((rep_n >> rep_i) & 1) ? 1 : 2);         \
+    Field(rep_b, 0) = accu;                                             \
+    accu = rep_b;                                                       \
+  }                                                                     \
+} while (0)
+
 #define AllocCarry(cond) Rocq_alloc_small(accu, 1, (cond)? rocq_tag_C1 : rocq_tag_C0)
 #define AllocPair() Rocq_alloc_small(accu, 2, rocq_tag_pair)
 
@@ -2211,6 +2335,49 @@ value rocq_interprete
           sp += 2;
           pc++;
         } else pc += *pc;
+        Next;
+      }
+
+      /* accu + sp[0], both standard-library [Z] values; see the comment on
+         rocq_z_decode. When either is not a closed number of fewer than
+         ROCQ_Z_MAXBITS bits, CheckPrimArgs applies the value of the constant
+         the operand names, which is the constant's own code. */
+      Instruct (CHECKZADD) {
+        int64_t zx, zy;
+        print_instr("CHECKZADD");
+        CheckPrimArgs(rocq_z_decode(accu, &zx) && rocq_z_decode(sp[0], &zy),
+                      apply2);
+        sp++;
+        Rocq_encode_Z(zx + zy);
+        Next;
+      }
+
+      /* Z.pos_sub accu sp[0], both standard-library [positive] values: their
+         difference as a [Z]. When either is not a closed positive of fewer than
+         ROCQ_Z_MAXBITS bits, CheckPrimArgs applies the value of the constant the
+         operand names, which is the constant's own code. The result is in
+         (-2^60, 2^60), which Rocq_encode_Z's 2^61 bound covers. */
+      Instruct (CHECKZPOSSUB) {
+        int64_t px, py;
+        print_instr("CHECKZPOSSUB");
+        CheckPrimArgs(rocq_pos_decode(accu, &px) && rocq_pos_decode(sp[0], &py),
+                      apply2);
+        sp++;
+        Rocq_encode_Z(px - py);
+        Next;
+      }
+
+      /* Pos.add accu sp[0], both standard-library [positive] values: their sum
+         as a [positive]. Each operand is below 2^60, so the sum is at least 2
+         and below 2^61, which Rocq_encode_pos covers; a sum of 2^60 or more is
+         simply refused by a later decode, which then takes the fallback. */
+      Instruct (CHECKPOSADD) {
+        int64_t px, py;
+        print_instr("CHECKPOSADD");
+        CheckPrimArgs(rocq_pos_decode(accu, &px) && rocq_pos_decode(sp[0], &py),
+                      apply2);
+        sp++;
+        Rocq_encode_pos(px + py);
         Next;
       }
 

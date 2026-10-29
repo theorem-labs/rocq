@@ -163,8 +163,16 @@ let opcodes =
     "CHECKCAMLCALL3", 2;
     "CHECKCAMLCALL3_1", 2;
     "STOP", 0;
+    (* A new opcode goes after [STOP], never before it: a .vo file holds the
+       bytecode of its constants as these numbers, so moving one changes what
+       every library compiled before means. [LAST_OPCODE] in
+       [rocq_instruct.h] follows the last entry of this list, and
+       [rocq_fix_code.c] bounds the opcodes it accepts by it. *)
     "BINNUM", 2;
-    "BINNUMCALL", 3
+    "BINNUMCALL", 3;
+    "CHECKZADD", 1;
+    "CHECKZPOSSUB", 1;
+    "CHECKPOSADD", 1
   |]
 
 let pp_c_comment fmt =

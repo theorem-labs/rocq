@@ -41,6 +41,11 @@ type caml_prim =
 | CAML_Stringcat
 | CAML_Stringcompare
 
+type znative_op =
+| ZNadd
+| ZNpossub
+| ZNposadd
+
 type instruction =
   | Klabel of Label.t
   | Kacc of int
@@ -79,6 +84,7 @@ type instruction =
   | Kbranch of Label.t                  (* jump to label *)
   | Kprim of CPrimitives.t * pconstant
   | Kcamlprim of caml_prim * Label.t
+  | Kznative of znative_op * Constant.t
 
 and bytecodes = instruction list
 
@@ -185,6 +191,11 @@ let rec pp_instr i =
   | Kcamlprim (op, lbl) ->
     str "camlcall " ++ str (CPrimitives.to_string (caml_prim_to_prim op)) ++ str ", branch " ++
     pp_lbl lbl ++ str " on accu"
+
+  | Kznative (op, kn) ->
+    let name = match op with
+      | ZNadd -> "add" | ZNpossub -> "pos_sub" | ZNposadd -> "pos_add" in
+    str "znative " ++ str name ++ str " " ++ Constant.print kn
 
 and pp_bytecodes c =
   match c with

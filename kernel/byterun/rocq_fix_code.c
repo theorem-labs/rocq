@@ -129,6 +129,9 @@ value rocq_tcode_of_code (value code) {
     opcode_t instr;
     COPY32(&instr,p);
     p++;
+    /* The bound is the last generated opcode, not STOP: an opcode added
+       after STOP leaves the number of every earlier one alone, which is what
+       keeps the bytecode already stored in .vo files readable. */
     if (instr < 0 || instr > LAST_OPCODE) abort();
     *q++ = VALINSTR(instr);
     if (instr == SWITCH) {
