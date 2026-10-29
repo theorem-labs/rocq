@@ -328,8 +328,13 @@ let rec slot_for_getglobal env sigma kn envcache table =
        [Reloc_getglobal kn] resolves to, so an argument the native code cannot
        read reduces through the constant's own code. A constant [Vmznative] does
        not recognise, including one that only carries the name of a standard
-       operation, keeps the value computed above. *)
-    let pos = match Vmznative.pin_of_constant env kn with
+       operation, keeps the value computed above.
+
+       A constant that [Vmbinnum] also binds keeps its own value: BINNUM at the
+       function's entry accepts every argument the wrapper accepts and more, so
+       the wrapper would only add a call frame and a decode that fails. *)
+    let pos = match (if Option.has_some (Vmbinnum.recognize_call env kn) then None
+                     else Vmznative.pin_of_constant env kn) with
       | None -> pos
       | Some op ->
         let code = Vmbytegen.compile_znative_wrapper kn op in
