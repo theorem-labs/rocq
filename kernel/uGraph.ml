@@ -52,7 +52,33 @@ type 'a check_function = t -> 'a -> 'a -> bool
 
 let set_type_in_type b g = {g with type_in_type=b}
 
-let type_in_type g = g.type_in_type
+(* BET-84: a proof's universe input is the part of the global graph its
+   queries actually inspect. The recorder installs this hook only while a
+   proof is open; regular Rocq runs pay one branch and allocate nothing. *)
+type query =
+  | Constraints of Level.Set.t
+  | Declared of Level.Set.t
+  | Domain
+  | All_constraints
+  | Graph
+  | Type_in_type
+  | Opaque of string
+
+let query_hook : (t -> query -> unit) option ref = ref None
+
+let set_query_hook hook = query_hook := hook
+
+let without_query_hook f =
+  match !query_hook with
+  | None -> f ()
+  | Some hook ->
+    query_hook := None;
+    Fun.protect ~finally:(fun () -> query_hook := Some hook) f
+
+let type_in_type g =
+  match !query_hook with
+  | None -> g.type_in_type
+  | Some hook -> hook g Type_in_type; g.type_in_type
 
 let check_smaller_expr g (u,n) (v,m) =
   let diff = n - m in
@@ -69,15 +95,32 @@ let exists_bigger g ul l =
 let real_check_leq g u v =
   Universe.for_all (fun ul -> exists_bigger g ul v) u
 
+let levels_of_universes u v =
+  Universe.levels ~init:(Universe.levels u) v
+
+let levels_of_constraint (u, _, v) =
+  Level.Set.add u (Level.Set.singleton v)
+
 let check_leq g u v =
-  type_in_type g || Universe.equal u v || (real_check_leq g u v)
+  let answer = g.type_in_type || Universe.equal u v || real_check_leq g u v in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g (Constraints (levels_of_universes u v)); answer
 
 let check_eq g u v =
-  type_in_type g || Universe.equal u v ||
-    (real_check_leq g u v && real_check_leq g v u)
+  let answer =
+    g.type_in_type || Universe.equal u v
+    || (real_check_leq g u v && real_check_leq g v u)
+  in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g (Constraints (levels_of_universes u v)); answer
 
 let check_eq_level g u v =
-  u == v || type_in_type g || G.check_eq g.graph u v
+  let answer = u == v || g.type_in_type || G.check_eq g.graph u v in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g (Constraints (levels_of_constraint (u, Eq, v))); answer
 
 let empty_universes = {
   graph=G.empty;
@@ -105,29 +148,40 @@ let enforce_constraint0 cst g = match enforce_constraint cst g.graph with
   if g' == g.graph then Some g
   else Some { g with graph = g' }
 
-let enforce_constraint cst g = match enforce_constraint0 cst g with
-| None ->
-  if not (type_in_type g) then
-    let (u, c, v) = cst in
-    let e = lazy (G.get_explanation cst g.graph) in
-    let mk u = Sorts.sort_of_univ @@ Universe.make u in
-    raise (UniverseInconsistency (None, (c, mk u, mk v, Some (Path e))))
-  else g
-| Some g -> g
+let enforce_constraint cst g =
+  (match !query_hook with
+   | None -> ()
+   | Some hook -> hook g (Constraints (levels_of_constraint cst)));
+  match enforce_constraint0 cst g with
+  | None ->
+    if not (type_in_type g) then
+      let (u, c, v) = cst in
+      let e = lazy (G.get_explanation cst g.graph) in
+      let mk u = Sorts.sort_of_univ @@ Universe.make u in
+      raise (UniverseInconsistency (None, (c, mk u, mk v, Some (Path e))))
+    else g
+  | Some g -> g
 
 let merge_constraints csts g = UnivConstraints.fold enforce_constraint csts g
 
-let check_constraint { graph = g; type_in_type; _ } (u,d,v) =
-  type_in_type
-  || match d with
-  | Le -> G.check_leq g u v
-  | Lt -> G.check_lt g u v
-  | Eq -> G.check_eq g u v
+let check_constraint ({ graph; type_in_type; _ } as ugraph) ((u,d,v) as cst) =
+  let answer =
+    type_in_type
+    || match d with
+       | Le -> G.check_leq graph u v
+       | Lt -> G.check_lt graph u v
+       | Eq -> G.check_eq graph u v
+  in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook ugraph (Constraints (levels_of_constraint cst)); answer
 
 let check_constraints csts g = UnivConstraints.for_all (check_constraint g) csts
 
 let is_above_prop ugraph q =
   Sorts.QVar.Set.mem q ugraph.above_prop_qvars
+
+let above_prop_qvars ugraph = ugraph.above_prop_qvars
 
 let check_eq_sort qeq univs s1 s2 =
   let u1 = Sorts.univ_of_sort s1 in
@@ -162,6 +216,9 @@ let leq_expr (u,m) (v,n) =
   (u,d,v)
 
 let enforce_leq_alg u v g =
+  (match !query_hook with
+   | None -> ()
+   | Some hook -> hook g (Constraints (levels_of_universes u v)));
   let open Util in
   let enforce_one (u,v) = function
     | Inr _ as orig -> orig
@@ -194,19 +251,32 @@ let enforce_leq_alg u v g =
 
 exception AlreadyDeclared = G.AlreadyDeclared
 let add_universe u ~strict g =
+  (match !query_hook with
+   | None -> ()
+   | Some hook -> hook g (Constraints (levels_of_constraint (Level.set, Le, u))));
   let graph = G.add u g.graph in
   let d = if strict then Lt else Le in
   enforce_constraint (Level.set, d, u) { g with graph }
 
 let check_declared_universes g l =
-  G.check_declared g.graph l
+  let answer = G.check_declared g.graph l in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g (Declared l); answer
 
 let constraints_of_universes g =
   let add cst accu = UnivConstraints.add cst accu in
-  G.constraints_of g.graph add UnivConstraints.empty
+  let answer = G.constraints_of g.graph add UnivConstraints.empty in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g All_constraints; answer
+
 let constraints_for ~kept g =
   let add cst accu = UnivConstraints.add cst accu in
-  G.constraints_for ~kept g.graph add UnivConstraints.empty
+  let answer = G.constraints_for ~kept g.graph add UnivConstraints.empty in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g (Constraints kept); answer
 
 (** Instances *)
 
@@ -216,8 +286,17 @@ let check_eq_instances qeq univs t1 t2 =
   CArray.equal qeq qt1 qt2
   && CArray.equal (check_eq_level univs) ut1 ut2
 
-let domain g = G.domain g.graph
-let choose p g u = G.choose p g.graph u
+let domain g =
+  let answer = G.domain g.graph in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g Domain; answer
+
+let choose p g u =
+  let answer = G.choose p g.graph u in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g (Opaque "choose"); answer
 
 let check_universes_invariants g = G.check_invariants ~required_canonical:Level.is_set g.graph
 
@@ -245,7 +324,11 @@ type node = G.node =
 | Alias of Level.t
 | Node of bool Level.Map.t
 
-let repr g = G.repr g.graph
+let repr g =
+  let answer = G.repr g.graph in
+  match !query_hook with
+  | None -> answer
+  | Some hook -> hook g Graph; answer
 
 let pr_universes prl g = pr_pmap Pp.mt (pr_arc prl) g
 

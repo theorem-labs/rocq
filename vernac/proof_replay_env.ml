@@ -94,11 +94,22 @@ let row1 () =
    recorder and the evaluator cannot call two implementations. *)
 let tables () = ()
 
-(* The reads that have no single read point: the universe and quality
-   graphs, the named context, the typing flags, the options, and, with
-   -proof-record-tables, every hint database and typeclass table at the
-   proof's start. Both sides take them from the same function, so they
-   cannot drift apart. *)
+(* Row 2: the trusted record carries the proof's universe footprint as a
+   base64 Marshal blob, as it carries the stored proof term. The value is the
+   order the current global graph induces on it, made by the recorder's own
+   function. A malformed key is an ordinary safe miss. *)
+let universe_queries () =
+  Proof_replay.register_evaluator "universe_constraint" (fun key ->
+      match Proof_record_env.universe_footprint_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some fp ->
+        Proof_replay.Value
+          (Some (Proof_record_env.universe_footprint_value (Environ.universes (Global.env ())) fp)))
+
+(* The reads that have no single read point: the quality graph, the named
+   context, the typing flags, the options, and, with [-proof-record-tables],
+   every hint database and typeclass table at the proof's start. Both sides
+   take them from the same function, so they cannot drift apart. *)
 let providers () =
   Proof_replay.register_provider Proof_record_env.start_reads;
   Proof_replay.register_provider Proof_recorder.table_reads
@@ -106,4 +117,5 @@ let providers () =
 let init () =
   row1 ();
   tables ();
+  universe_queries ();
   providers ()

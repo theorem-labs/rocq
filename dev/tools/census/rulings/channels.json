@@ -26,11 +26,12 @@
     "rocqlib_rebound": "Row 15: a Rocqlib key whose answer changed after a process-wide lazy may have cached the first one (a re-registration, a registration after a miss, a section end that restores the table). Every proof from then on in the process is ineligible, in the registration and in the replay (library/rocqlib.ml observe, lib/proof_recorder.ml trip_fence; cross-model delta review D4).",
     "subproof": "Row 21: an abstract or other sub-proof, whose result depends on the names already taken (proofs/subproof.ml).",
     "timeout": "Row 22: every Control.timeout, the one point that Timeout, timeout and Ltac2 timeout pass through (lib/control.ml timeout).",
-    "unhashable": "Any row: a value the recorder cannot digest (a closure, an unforced lazy, an object or an abstract block). Proof_recorder.digest returns \"unhashable\" and marks the proof, and digest_cached and digest_slot mark every proof that reuses a kept \"unhashable\" (lib/proof_recorder.ml digest, digest_cached, digest_slot)."
+    "unhashable": "Any row: a value the recorder cannot digest (a closure, an unforced lazy, an object or an abstract block). Proof_recorder.digest returns \"unhashable\" and marks the proof, and digest_cached and digest_slot mark every proof that reuses a kept \"unhashable\" (lib/proof_recorder.ml digest, digest_cached, digest_slot).",
+    "universe_footprint_missing": "Row 2: the recorder holds a proof with no universe footprint, so its universe reads are unknown. The proof runs stock (vernac/proof_record_env.ml record_universe_footprint)."
   },
   "sites": {
     "ineligible:vernac/declare.ml:unmarshallable": {"ineligible": "@unmarshallable"},
-    "read:vernac/proof_record_env.ml:read_at_start/row/channel": {"ruling": "BET-84 P3: read_at_start records the list start_reads builds, one Proof_record.read per start-of-proof channel; each element is built by a literal `one <row> <channel>` call that has its own entry here (rows 2, 3, 4, 13, M3, M7), and replay evaluates the same list (vernac/proof_replay_env.ml providers)."},
+    "read:vernac/proof_record_env.ml:read_at_start/row/channel": {"ruling": "BET-84 P3: read_at_start records the list start_reads builds, one Proof_record.read per start-of-proof channel; each element is built by a literal `one <row> <channel>` call that has its own entry here (rows 3, 4, 13, M3, M7), and replay evaluates the same list (vernac/proof_replay_env.ml providers)."},
 
     "read:engine/evarutil.ml:18/counter_start": {"row": "18"},
     "read:engine/evd.ml:18/counter_start": {"row": "18"},
@@ -129,7 +130,8 @@
     "read:vernac/declare.ml:19/proof_using_set": {"row": "19"},
     "ineligible:vernac/declare.ml:mutual": {"ineligible": "@mutual"},
     "ineligible:vernac/declare.ml:dependent_start": {"ineligible": "@dependent_start"},
-    "read:vernac/proof_record_env.ml:2/universe_graph": {"row": "2"},
+    "read:vernac/proof_record_env.ml:2/universe_constraint": {"row": "2"},
+    "ineligible:vernac/proof_record_env.ml:universe_footprint_missing": {"ineligible": "@universe_footprint_missing"},
     "read:vernac/proof_record_env.ml:2/quality_graph": {"row": "2"},
     "read:vernac/proof_record_env.ml:3/named_context": {"row": "3"},
     "read:vernac/proof_record_env.ml:3/variable_opacity": {"row": "3"},

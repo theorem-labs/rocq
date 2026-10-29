@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-let format_version = 2
+let format_version = 3
 
 type toolchain = {
   binary : string;

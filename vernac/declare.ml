@@ -1907,7 +1907,10 @@ let start_proof_core ~name ~pinfo ?using sigma goals =
   let goals = List.map (fun (sign, typ) ->
       let sign = match sign with None -> initialize_named_context_for_proof () | Some sign -> sign in
       (Global.env_of_context sign, typ)) goals in
-  let () = record_open_proof name ~statement:(fun () -> List.map snd goals) in
+  (* The statement key also holds the starting universe state: the
+     constraints elaborating the statement added depend on the global graph,
+     and the tactics read them. *)
+  let () = record_open_proof name ~statement:(fun () -> (List.map snd goals, UState.replay_view (Evd.ustate sigma))) in
   let () = record_using using in
   let proof = Proof.start ~name ~poly ?typing_flags sigma goals in
   let initial_euctx = Evd.ustate Proof.((data proof).sigma) in
@@ -2453,8 +2456,11 @@ let finish_admitted ~pm ~pinfo ~sec_vars typs =
    registration compile types the proof and a grade compile does not
    (-skip-qed-typecheck), and the two read sets must be equal. *)
 let record_close ?(replay = None) ~closer ~kernel_check declare =
+  let held = Proof_recorder.writing () in
+  Proof_record_env.record_universe_footprint ();
   let res = Proof_recorder.without_recording declare in
   Proof_recorder.close_proof ~closer ~kernel_check ~replay;
+  if held then Proof_record_env.drop_universe_frame ();
   res
 
 let record_close_with_info ?(replay = None) ~closer ~kernel_check ~pinfo declare =

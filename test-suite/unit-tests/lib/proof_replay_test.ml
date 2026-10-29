@@ -330,6 +330,18 @@ let rebind_scan =
      && s "Lemma Requires : True. Qed." = None
      && s "" = None)
 
+(* The scan also gives the offset of the LAST late command: every proof that
+   opens before it runs, every proof after it may replay. *)
+let late_events_scan =
+  let s = Replay.scan_late_events in
+  mk_bool_test "proof-replay-late-events-scan"
+    "the first late command keeps its line, and the last one's offset is the start of its word"
+    (s "Lemma a : True. Qed. Import M. Lemma b : True. Qed. Export N. Lemma c : True. Qed."
+     = (Some ("Import", 1), Some 52)
+     && s "Lemma a : True. Qed. Lemma b : True. Qed." = (None, None)
+     && s "Require Import M. Lemma a : True. Qed." = (None, None)
+     && s "Lemma a : True. Qed. Register x as core.eq.type." = (Some ("Register", 1), Some 21))
+
 (* The hit hooks see the replayed proof's reads, and only on a hit (Rocqlib
    marks the lib_ref keys observed through one). *)
 let hit_hook_seen : R.read list option ref = ref None
@@ -451,7 +463,7 @@ let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
     binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
-    rebind_scan; hit_hook_runs; miss_reason; plugin_audit_refuses; plugin_allowlist;
+    rebind_scan; late_events_scan; hit_hook_runs; miss_reason; plugin_audit_refuses; plugin_allowlist;
     (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]
 
