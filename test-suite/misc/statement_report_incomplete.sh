@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 # Deliberately fault after the report start marker. The checker must retain the
-# underlying successful-check exit status, warn, and omit END STATEMENT REPORT
-# so a downstream parser cannot treat the partial stream as evidence.
+# underlying successful-check exit status, warn, and omit END STATEMENT REPORT,
+# so a reader keeps only the statements that a later statement line closes:
+# here, none.
 set -eu
 
 D=misc/statement_report_view

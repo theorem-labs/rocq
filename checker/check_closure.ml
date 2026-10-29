@@ -474,26 +474,29 @@ let closure st root =
    monomorphic [Parameter f : <type>] of a sealing module type makes (the
    inference mode of kernel/subtyping.ml's [check_constant]): a comparison that
    does not hold yet adds the constraints it needs, if they are consistent with
-   the environment. The state is the universe graph with those constraints; the
-   error marks a needed constraint that is inconsistent. *)
-let infer_universes : (UGraph.t, unit) Conversion.universe_compare =
-  let merge csts g =
+   the environment. The state is a pair: the universe graph with those
+   constraints, and the set of those constraints alone, which is what the
+   sealing adds to the global universes. A graph cannot be diffed or unioned,
+   so the set is kept beside it. The error marks a needed constraint that is
+   inconsistent. *)
+let infer_universes : (UGraph.t * Univ.UnivConstraints.t, unit) Conversion.universe_compare =
+  let merge csts (g, added) =
     match UGraph.merge_constraints csts g with
-    | g -> Result.Ok g
+    | g -> Result.Ok (g, Univ.UnivConstraints.union csts added)
     | exception UGraph.UniverseInconsistency _ -> Result.Error (Some ())
   in
-  let leq u v g =
+  let leq u v (g, added) =
     match UGraph.enforce_leq_alg u v g with
-    | _, g -> Result.Ok g
+    | csts, g -> Result.Ok (g, Univ.UnivConstraints.union csts added)
     | exception UGraph.UniverseInconsistency _ -> Result.Error (Some ())
   in
   let same_qualities qcsts = UVars.QPairSet.for_all (fun (q1, q2) -> Sorts.Quality.equal q1 q2) qcsts in
-  let compare_sorts pb s1 s2 g =
+  let compare_sorts pb s1 s2 (g, _ as state) =
     let holds = match pb with
       | Conversion.CUMUL -> UGraph.check_leq_sort Sorts.Quality.equal g s1 s2
       | Conversion.CONV -> UGraph.check_eq_sort Sorts.Quality.equal g s1 s2
     in
-    if holds then Result.Ok g
+    if holds then Result.Ok state
     (* As pretyping/reductionops.ml's [Infer]: the qualities must already
        compare, and only the universe constraint is inferred. The checked
        comparison above has decided every case with an impredicative sort. *)
@@ -503,26 +506,37 @@ let infer_universes : (UGraph.t, unit) Conversion.universe_compare =
       | _ ->
         let u1 = Sorts.univ_of_sort s1 and u2 = Sorts.univ_of_sort s2 in
         match pb with
-        | Conversion.CUMUL -> leq u1 u2 g
+        | Conversion.CUMUL -> leq u1 u2 state
         | Conversion.CONV ->
           (* As engine/univSubst.ml's [enforce_eq]: only two levels can be made equal. *)
           match Univ.Universe.level u1, Univ.Universe.level u2 with
-          | Some _, Some _ -> Result.bind (leq u1 u2 g) (leq u2 u1)
+          | Some _, Some _ -> Result.bind (leq u1 u2 state) (leq u2 u1)
           | _ -> Result.Error (Some ())
   in
-  let compare_instances ~flex u1 u2 g =
-    if UGraph.check_eq_instances Sorts.Quality.equal g u1 u2 then Result.Ok g
+  let compare_instances ~flex u1 u2 (g, _ as state) =
+    if UGraph.check_eq_instances Sorts.Quality.equal g u1 u2 then Result.Ok state
     else if flex then Result.Error None
     else
       let qcsts, ucsts =
         UVars.enforce_eq_instances u1 u2 (UVars.QPairSet.empty, Univ.UnivConstraints.empty) in
-      if same_qualities qcsts then merge ucsts g else Result.Error None
+      if same_qualities qcsts then merge ucsts state else Result.Error None
   in
-  let compare_cumul_instances pb variances u1 u2 g =
+  let compare_cumul_instances pb variances u1 u2 state =
     let qcsts, ucsts = Conversion.get_cumulativity_constraints pb variances u1 u2 in
-    if same_qualities qcsts then merge ucsts g else Result.Error None
+    if same_qualities qcsts then merge ucsts state else Result.Error None
   in
   { Conversion.compare_sorts; compare_instances; compare_cumul_instances }
+
+(* What the sealing of a model that reads [match] adds to the global
+   universes: [fresh] universes strictly above Set, the instance it declares
+   for a polymorphic model ([Univ.Level.var 0] to [fresh - 1] in
+   [constraints]), and the constraints its comparison needed. For a
+   polymorphic model this is complete only because [type_verdict] compares
+   no model whose universe context has constraints: such a context's own
+   constraints would be in the comparison's graph but not in [constraints]. *)
+type sealing = { fresh : int; constraints : Univ.UnivConstraints.t }
+
+let adds_nothing = { fresh = 0; constraints = Univ.UnivConstraints.empty }
 
 (* Whether the model constant can stand for the trusted constant in a module
    sealed by a signature that declares the trusted type T: whether [Definition
@@ -534,16 +548,18 @@ let infer_universes : (UGraph.t, unit) Conversion.universe_compare =
    Elaborating the definition takes a polymorphic model at fresh universes,
    and can minimize them when the model's universe context has sort variables
    or constraints; this check does not replay that, so it answers
-   [universes-differ] for such a model, which the sealing may still accept. *)
-let type_verdict env model trusted =
+   [universes-differ] for such a model, which the sealing may still accept.
+   [Ok] is [match], with what the sealing adds to the global universes;
+   [Error] is any other verdict. *)
+let type_verdict env model trusted : (sealing, string) result =
   let cm = Environ.lookup_constant model env and ct = Environ.lookup_constant trusted env in
-  let infer env =
-    let state = Environ.universes env, infer_universes in
+  let infer ~fresh env =
+    let state = (Environ.universes env, Univ.UnivConstraints.empty), infer_universes in
     match Conversion.generic_conv Conversion.CUMUL ~l2r:false TransparentState.full env state
             cm.const_type ct.const_type with
-    | Result.Ok _ -> "match"
-    | Result.Error None -> "mismatch"
-    | Result.Error (Some ()) -> "universes-differ"
+    | Result.Ok (_, constraints) -> Ok { fresh; constraints }
+    | Result.Error None -> Error "mismatch"
+    | Result.Error (Some ()) -> Error "universes-differ"
   in
   (* The definition's context [am] must be T's context [at]; the types are
      compared under [at]. A failure that ignoring universe levels removes needs a
@@ -552,28 +568,57 @@ let type_verdict env model trusted =
     if Subtyping.check_polymorphic_universes env at am then
       let env = Environ.push_context ~strict:false (UVars.AbstractContext.repr at) env in
       match Conversion.default_conv_leq env cm.const_type ct.const_type with
-      | Result.Ok () -> "match"
+      | Result.Ok () -> Ok adds_nothing
       | Result.Error () ->
         match Conversion.default_conv_leq (Environ.set_type_in_type true env)
                 cm.const_type ct.const_type with
-        | Result.Ok () -> "universes-differ"
-        | Result.Error () -> "mismatch"
-    else "universes-differ"
+        | Result.Ok () -> Error "universes-differ"
+        | Result.Error () -> Error "mismatch"
+    else Error "universes-differ"
   in
   let minimizable am =
     fst (UVars.AbstractContext.size am) > 0
     || not (PConstraints.is_empty (UVars.UContext.constraints (UVars.AbstractContext.repr am)))
   in
   match cm.const_universes, ct.const_universes with
-  | Monomorphic, Monomorphic -> infer env
+  | Monomorphic, Monomorphic -> infer ~fresh:0 env
   | Monomorphic, Polymorphic at -> against_polymorphic UVars.AbstractContext.empty at
-  | Polymorphic am, _ when minimizable am -> "universes-differ"
+  | Polymorphic am, _ when minimizable am -> Error "universes-differ"
   | Polymorphic am, Monomorphic ->
     (* The model's bound universes are fresh in [env]: they are its instance. The
        definition declares them as global universes, which [Global.push_context_set]
-       does with [~strict:true], so each is above [Set] and cannot be taken as it. *)
-    infer (Environ.push_context ~strict:true (UVars.AbstractContext.repr am) env)
+       does with [~strict:true], so each is above [Set] and cannot be taken as it.
+       The arm above leaves [am] without constraints, so the sealing adds only
+       these fresh universes and the comparison's constraints; relaxing that arm
+       would leave the context's own constraints out of the sealing. *)
+    infer ~fresh:(snd (UVars.AbstractContext.size am))
+      (Environ.push_context ~strict:true (UVars.AbstractContext.repr am) env)
   | Polymorphic am, Polymorphic at -> against_polymorphic am at
+
+(* Whether the sealings can be loaded together. One rocqchk run over the
+   libraries of all the sealings loads them at once, each adding its
+   constraints to the global universes, so constraints that are consistent
+   with the environment one sealing at a time must also be consistent
+   together. Each sealing declares its own fresh universes: they are renamed
+   apart. The answer does not depend on the order of [sealings]. *)
+let load_together env sealings =
+  let add (g, next) { fresh; constraints } =
+    let rename l = match Univ.Level.var_index l with
+      | Some i -> Univ.Level.var (next + i)
+      | None -> l
+    in
+    let rec declare g i =
+      if Int.equal i fresh then g
+      else declare (UGraph.add_universe (Univ.Level.var (next + i)) ~strict:true g) (i + 1)
+    in
+    let constraints =
+      Univ.UnivConstraints.map (fun (u, d, v) -> rename u, d, rename v) constraints
+    in
+    UGraph.merge_constraints constraints (declare g 0), next + fresh
+  in
+  match List.fold_left add (Environ.universes env, 0) sealings with
+  | _ -> true
+  | exception UGraph.UniverseInconsistency _ -> false
 
 (** {6 The report} *)
 
@@ -588,6 +633,16 @@ let test_fault () =
   | Some "1" -> CErrors.user_err Pp.(str "test statement-report failure")
   | None | Some _ -> ()
 
+(* Every verdict is decided before the first statement is printed: when the
+   sealings of the statements that read [match] cannot be loaded together, the
+   report stops with no statement line. A reader keeps each statement that the
+   next statement line closes, so every statement printed before the stop but
+   the last would still count. Like rocqchk's refusal to load those sealings,
+   the stop takes every statement of the report with it, whatever their
+   verdicts. The message of that stop gives the position among the requests of
+   each statement that reads [match], never a name: the warning prints the
+   message unescaped, and a name can hold a character that a reader takes as a
+   line break, which would put a statement line back into a refused report. *)
 let print env access requests =
   let index =
     Environ.fold_constants (fun c _ acc -> CString.Map.add (Constant.to_string c) c acc)
@@ -600,22 +655,49 @@ let print env access requests =
   } in
   line "STATEMENT REPORT";
   test_fault ();
-  List.iter (fun r ->
+  let judged = List.map (fun r ->
+      let model = CString.Map.find_opt r.req_model index in
+      let verdict = match model, r.req_trusted with
+        | None, _ -> Error "model-missing"
+        | Some _, None -> Error "not-requested"
+        | Some model, Some t ->
+          match CString.Map.find_opt t index with
+          | None -> Error "trusted-missing"
+          | Some t -> type_verdict env model t
+      in
+      (* Only [Ok] reads match, with what its sealing adds: a verdict string
+         match on the [Error] side would escape the check that the sealings
+         load together. Every other verdict passes here, and
+         misc/statement_report_sealing.sh asks for a report with each of them,
+         so a new verdict that reads match on this side stops that report. *)
+      (match verdict with
+       | Error "match" -> CErrors.anomaly Pp.(str "statement report: match without its sealing.")
+       | Ok _ | Error _ -> ());
+      r, model, verdict)
+      requests
+  in
+  (* The position of each statement that reads [match] among the requests,
+     counted from 1, with what its sealing adds. *)
+  let sealings = List.map_filter_i (fun i (_, _, verdict) ->
+      Option.map (fun s -> i + 1, s) (Result.to_option verdict)) judged
+  in
+  if not (load_together env (List.map snd sealings)) then begin
+    let positions = String.concat ", " (List.map (fun (i, _) -> string_of_int i) sealings) in
+    CErrors.user_err (Pp.str (Printf.sprintf
+      "the %d statements that read match (requests %s) need universe constraints \
+       that are inconsistent together, so their sealings cannot all be loaded"
+      (List.length sealings) positions))
+  end;
+  List.iter (fun (r, model, verdict) ->
+      let verdict = match verdict with Ok _ -> "match" | Error v -> v in
       let trusted = Option.default "-" r.req_trusted in
-      match CString.Map.find_opt r.req_model index with
-      | None -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
+      match model with
+      | None -> line "statement %s %s %s %s 0 0" r.req_name r.req_model trusted verdict
       | Some model ->
         let axioms, flags = closure st (GlobRef.ConstRef model) in
-        let verdict = match r.req_trusted with
-          | None -> "not-requested"
-          | Some t ->
-            match CString.Map.find_opt t index with
-            | None -> "trusted-missing"
-            | Some t -> type_verdict env model t
-        in
         line "statement %s %s %s %s %d %d" r.req_name r.req_model trusted verdict
           (CString.Set.cardinal axioms) (FlagSet.cardinal flags);
         CString.Set.iter (line "axiom %s %s" r.req_name) axioms;
         FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) flags)
-    requests;
+    judged;
   line "END STATEMENT REPORT"
