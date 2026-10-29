@@ -11,5 +11,8 @@
       "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
       "refused": null, "killed": false,
       "outcomes": [["PR.A.writer", "hit"], ["PR.A.later_reader", "hit"]]}
+  },
+  "vo_exempt": {
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of the identifier strings \"A\" and \"PR\" in the library segment (vodiff on 2026-10-30: 0 value differences and 4 sharing differences, every other segment equal). GRADE retired byte identity as a correctness gate on 2026-10-26; the contract is value equality."
   }
 }

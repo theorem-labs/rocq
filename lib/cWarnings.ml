@@ -129,15 +129,34 @@ let warn { Msg.tag; warning } ?loc v =
   let tag = DMap.tag_of_onetag tag in
   let w = W (loc,tag,v) in
   let status = warning_status warning in
-  (* BET-84: a warning a proof raised is a write, because [Set Warnings
-     "+name"] can turn it into an error for a later proof. A disabled
+  (* BET-84: a warning a proof raised is a write: replay raises it again,
+     at the same place relative to the proof, with the same text (the
+     printed document itself, so it lays out as stock lays it out). Only a
+     warning the proof's own sentences raise is kept: the declaration at the
+     closer raises its own again when it declares a stored term. A disabled
      warning changes nothing and is not recorded. *)
-  if status <> Disabled && Proof_recorder.writing () then
-    Proof_recorder.write_warning ~name:warning.wname ~message:(Pp.string_of_ppcmds (print w));
+  if status <> Disabled && Proof_recorder.active () then
+    Proof_recorder.write_warning ?loc ~name:warning.wname
+      ~message:(Proof_record.encode_blob (Marshal.to_string (print w) [])) ();
   match status with
   | Disabled -> ()
   | AsError -> Loc.raise ?loc (WarnError w)
   | Enabled -> Feedback.msg_warning ?loc ~quickfix:(quickfix w) (print w)
+
+let warn_again ?loc ~name ~message () =
+  let status = match String.Map.find_opt name !graph with
+    | Some { warning = Some w; _ } -> warning_status w
+    | Some { warning = None; _ } | None -> Enabled
+  in
+  let pp =
+    match Option.map (fun s -> (Marshal.from_string s 0 : Pp.t)) (Proof_record.decode_blob message) with
+    | Some pp -> pp
+    | None | exception (Failure _ | Invalid_argument _ | End_of_file) -> Pp.str message
+  in
+  match status with
+  | Disabled -> ()
+  | AsError -> CErrors.user_err ?loc pp
+  | Enabled -> Feedback.msg_warning ?loc pp
 
 (** Flag handling *)
 

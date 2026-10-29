@@ -136,6 +136,7 @@ type candidate = {
       (** the provided channels, read where the record read them: at the
           proof's start, not at its closer *)
   c_counters : (string * int * (int -> unit)) list;  (** each counter at the proof's start *)
+  c_base : Loc.t option;  (** the statement's sentence, for the warnings raised again *)
 }
 
 type counts = {
@@ -174,6 +175,10 @@ let counts = {
 }
 
 let channel_miss : (string, int) Hashtbl.t = Hashtbl.create 16
+
+(* For each proof that missed on a read: the read's key, its recorded value
+   and its value now (absent when nothing answered), for the summary. *)
+let miss_detail : (string, string * string option * string option) Hashtbl.t = Hashtbl.create 64
 
 let configure ~source ~ratio ~budget ~peak_limit_kb ~digest =
   options :=
@@ -567,12 +572,21 @@ let source_rebind = function
        | _ -> No_late_event)
     | exception (Sys_error _ | End_of_file) -> Unreadable_source
 
-(* The byte offset, in the file being compiled, of the sentence being run.
+(* The location, in the file being compiled, of the sentence being run.
    The toplevel sets it before each sentence; a driver that does not leaves
    it before every late command, so no proof of such a file replays. *)
-let sentence_offset = ref (-1)
+let sentence_loc : Loc.t option ref = ref None
 
-let at_sentence offset = sentence_offset := offset
+let sentence_offset () = match !sentence_loc with Some l -> l.Loc.bp | None -> -1
+
+let at_sentence loc = sentence_loc := Some loc
+
+(* How many proofs are open: a proof opened inside another one is part of
+   it (the recorder keeps no entry of its own for it), so it is neither
+   counted nor looked up. *)
+let open_depth = ref 0
+
+let close_proof () = if !open_depth > 0 then decr open_depth
 
 let start ~library ~source ~toolchain =
   match !options with
@@ -592,6 +606,7 @@ let start ~library ~source ~toolchain =
     counts.outcomes <- [];
     counts.fence <- None;
     Hashtbl.reset channel_miss;
+    Hashtbl.reset miss_detail;
     Hashtbl.reset proof_provided;
     pending_counters := [];
     let index = Hashtbl.create 256 in
@@ -637,7 +652,8 @@ let start ~library ~source ~toolchain =
     in
     if refusal = None then Proof_recorder.start_tracking ();
     toolchain_now := Some toolchain;
-    sentence_offset := -1;
+    sentence_loc := None;
+    open_depth := 0;
     state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal;
                     f_refused_detail = refused_detail; f_replay_from = replay_from;
                     f_candidate = None }
@@ -692,29 +708,47 @@ let abandon () =
   | Some _ | None -> ()
 
 (* A write the declaration of the stored term does not make by itself: a
-   warning the proof raised, which [Set Warnings "+..."] can turn into an
-   error, and a counter that no [register_counter] can move. The
-   declaration makes the rest — the levels and constraints, the constraint
-   sources, and the schemes, which travel with the term's side effects.
+   counter that no [register_counter] can move. The declaration makes the
+   rest — the levels and constraints, the constraint sources, and the
+   schemes, which travel with the term's side effects — and a warning the
+   proof raised is raised again at the hit ({!warn_again}).
 
    The universe and sort counters are not here: the stored term carries
    them, and the precheck compares them. Every other registered counter is
    moved at the closer by [advance_counters]. *)
 let unreplayable_writes (p : R.proof) =
-  p.R.writes.R.warnings_raised <> []
-  || List.exists
-       (fun (name, n) ->
-          n > 0 && name <> "univ_level" && name <> "sort_quality" && not (can_advance name))
-       p.R.writes.R.counters
+  List.exists
+    (fun (name, n) ->
+       n > 0 && name <> "univ_level" && name <> "sort_quality" && not (can_advance name))
+    p.R.writes.R.counters
+
+(* The warnings of a replayed proof, raised again where its tactics raised
+   them: each location moves with the statement's sentence. Their status
+   now decides, as it decided then; the [warnings] read (row 13) makes it
+   the same one. *)
+let warn_again (base : Loc.t option) (p : R.proof) =
+  let at rel =
+    match base, List.map int_of_string_opt (String.split_on_char ',' rel) with
+    | Some b, [ Some dl; Some dbp; Some dep; Some dbol; Some dll; Some dbl ] ->
+      Some { b with Loc.line_nb = b.Loc.line_nb + dl; bp = b.Loc.bp + dbp; ep = b.Loc.bp + dep;
+                    bol_pos = b.Loc.bp + dbol; line_nb_last = b.Loc.line_nb + dll;
+                    bol_pos_last = b.Loc.bp + dbl }
+    | _ -> None
+  in
+  List.iter (fun (name, message, rel) -> CWarnings.warn_again ?loc:(at rel) ~name ~message ())
+    p.R.writes.R.warnings_raised
 
 let opens_before_late_command st =
   match st.f_replay_from with
   | None -> false
-  | Some last -> !sentence_offset <= last
+  | Some last -> sentence_offset () <= last
 
 let open_proof ~name ~statement ~position ~toolchain_key =
+  let nested = !open_depth > 0 in
+  incr open_depth;
   match !state with
   | None | Some { f_refused = Some _; _ } -> ()
+  | Some _ when nested -> ()
   | Some st ->
     st.f_candidate <- None;
     Hashtbl.reset proof_provided;
@@ -738,7 +772,34 @@ let open_proof ~name ~statement ~position ~toolchain_key =
             past it (opening the proof makes evars and levels of its own).
             So they are read here, where the record read them. *)
          st.f_candidate <-
-           Some { c_name = name; c_proof = p; c_provided = provided (); c_counters = counter_starts () })
+           Some { c_name = name; c_proof = p; c_provided = provided (); c_counters = counter_starts ();
+                  c_base = !sentence_loc })
+
+(* A counter's start (row 18) matters to a proof only through the fresh
+   names it makes from it: a proof whose record shows no advance of a
+   counter made none, so where that counter stood is not an input of the
+   proof (fixture hint_added: a hint declared earlier moves the hint
+   counter, and a later proof that declares no hint must still replay).
+   The next proof that does advance the counter still reads its start, so a
+   counter left elsewhere than stock leaves it is still caught there. The
+   start keys are the counters' Summary names; the advances, the names the
+   recorder writes. *)
+let write_name_of_counter_start = function
+  | "HINT-COUNTER" -> Some "hint_counter"
+  | "REWHINT-COUNTER" -> Some "rewrite_hint_counter"
+  | "evar counter" -> Some "evar"
+  | "meta counter" -> Some "meta"
+  | "univ_level" | "sort_quality" | "ssr_abstract_id" as k -> Some k
+  | _ -> None
+
+let counter_unmoved (p : R.proof) (r : R.read) =
+  String.equal r.R.channel "counter_start"
+  && (match write_name_of_counter_start r.R.key with
+      | None -> false
+      | Some name ->
+        match List.assoc_opt name p.R.writes.R.counters with
+        | None -> true
+        | Some n -> n = 0)
 
 (* Every read the registration made must give the same value now.
 
@@ -772,11 +833,13 @@ let first_read_mismatch (p : R.proof) ~at_start =
   in
   let rec loop = function
     | [] -> None
+    | (r : R.read) :: rest when counter_unmoved p r -> loop rest
     | (r : R.read) :: rest ->
       (match now r with
-       | None -> Some (r.R.channel, "no_evaluator")
-       | Some Unknown -> Some (r.R.channel, "unknown")
-       | Some (Value v) -> if v = r.R.value then loop rest else Some (r.R.channel, "changed"))
+       | None -> Some (r.R.channel, "no_evaluator", (r.R.key, r.R.value, None))
+       | Some Unknown -> Some (r.R.channel, "unknown", (r.R.key, r.R.value, None))
+       | Some (Value v) ->
+         if v = r.R.value then loop rest else Some (r.R.channel, "changed", (r.R.key, r.R.value, v)))
   in
   loop (p.R.start_tables @ p.R.reads)
 
@@ -791,7 +854,8 @@ let rec decide ~sentences ~closer =
 and decide_once ~sentences ~closer =
   match !state with
   | None | Some { f_candidate = None; _ } | Some { f_refused = Some _; _ } -> None
-  | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_provided = at_start; c_counters = starts };
+  | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_provided = at_start; c_counters = starts;
+                                 c_base = base };
             _ } as st) ->
     st.f_candidate <- None;
     (* A process-wide fence this process tripped (a stale Rocqlib cache, a
@@ -824,10 +888,11 @@ and decide_once ~sentences ~closer =
         if not (!precheck blob) then (miss_key name; None)
         else
           match first_read_mismatch p ~at_start with
-          | Some (channel, why) -> miss_read name channel why; None
+          | Some (channel, why, detail) -> Hashtbl.replace miss_detail name detail; miss_read name channel why; None
           | None ->
             counts.n_hits <- counts.n_hits + 1;
             outcome name "hit" None;
+            warn_again base p;
             Queue.iter (fun f -> f (p.R.start_tables @ p.R.reads)) hit_hooks;
             take_counters ~starts ~recorded:p.R.writes.R.counters;
             counts.registered <- counts.registered +. p.R.wall_s;
@@ -871,8 +936,15 @@ let summary ~killed =
             match channel with
             | None -> Printf.sprintf "{\"name\":%s,\"outcome\":%s}" (quote name) (quote kind)
             | Some (c, why) ->
-              Printf.sprintf "{\"name\":%s,\"outcome\":%s,\"channel\":%s,\"why\":%s}"
-                (quote name) (quote kind) (quote c) (quote why))
+              let detail = match Hashtbl.find_opt miss_detail name with
+                | None -> ""
+                | Some (key, was, now) ->
+                  let cut s = if String.length s > 300 then String.sub s 0 300 ^ "..." else s in
+                  let opt = function None -> "null" | Some v -> quote (cut v) in
+                  Printf.sprintf ",\"key\":%s,\"recorded\":%s,\"now\":%s" (quote (cut key)) (opt was) (opt now)
+              in
+              Printf.sprintf "{\"name\":%s,\"outcome\":%s,\"channel\":%s,\"why\":%s%s}"
+                (quote name) (quote kind) (quote c) (quote why) detail)
          counts.outcomes)
   in
   Printf.sprintf
@@ -908,48 +980,3 @@ let set_pending v = pending := v
 
 let take_pending () = let v = !pending in pending := None; v
 
-let b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-
-let encode_blob s =
-  let n = String.length s in
-  let b = Buffer.create (4 * ((n + 2) / 3)) in
-  let byte i = if i < n then Char.code s.[i] else 0 in
-  let rec loop i =
-    if i < n then begin
-      let x = (byte i lsl 16) lor (byte (i + 1) lsl 8) lor byte (i + 2) in
-      Buffer.add_char b b64_alphabet.[(x lsr 18) land 63];
-      Buffer.add_char b b64_alphabet.[(x lsr 12) land 63];
-      Buffer.add_char b (if i + 1 < n then b64_alphabet.[(x lsr 6) land 63] else '=');
-      Buffer.add_char b (if i + 2 < n then b64_alphabet.[x land 63] else '=');
-      loop (i + 3)
-    end
-  in
-  loop 0;
-  Buffer.contents b
-
-let b64_value =
-  lazy
-    (let t = Array.make 256 (-1) in
-     String.iteri (fun i c -> t.(Char.code c) <- i) b64_alphabet;
-     t)
-
-let decode_blob s =
-  let t = Lazy.force b64_value in
-  let b = Buffer.create (3 * (String.length s / 4)) in
-  let acc = ref 0 and bits = ref 0 in
-  try
-    String.iter
-      (fun c ->
-         if c <> '=' then begin
-           let v = t.(Char.code c) in
-           if v < 0 then raise Exit;
-           acc := (!acc lsl 6) lor v;
-           bits := !bits + 6;
-           if !bits >= 8 then begin
-             bits := !bits - 8;
-             Buffer.add_char b (Char.chr ((!acc lsr !bits) land 0xff))
-           end
-         end)
-      s;
-    Some (Buffer.contents b)
-  with Exit -> None

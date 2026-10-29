@@ -302,8 +302,29 @@ end
    channel is the defect class that would let a replay accept a changed
    input, and dev/tools/census/replay_channels.py fails on one. *)
 let recorded_constant kn env =
-  Recorded.of_value "constant" (Constant.modpath kn)
-    (match Cmap_env.find_opt kn env.env_constants with None -> None | Some (cb, _, _) -> Some cb)
+  match Cmap_env.find_opt kn env.env_constants with
+  | None -> None
+  | Some (cb, _, _) ->
+    match Recorded.library_of (Constant.modpath kn) with
+    | Some d -> Some ("library " ^ d)
+    | None ->
+      (* Two fields are positions in this library, not values: the bytecode
+         field indexes the library's VM code table, and an opaque body
+         indexes its opaque table, so a definition added or deleted earlier
+         in the file moves both (fixture const_deleted). The bytecode is a
+         function of the body, and a proof sees an opaque constant only
+         through its type, so the view keeps every other field and drops
+         those two. *)
+      let body = match cb.const_body with
+        | Undef inline -> `Undef inline
+        | Def c -> `Def c
+        | OpaqueDef _ -> `Opaque
+        | Primitive p -> `Primitive p
+        | Symbol rules -> `Symbol rules
+      in
+      Some (Proof_recorder.digest_cached_by ~what:"constant" ~key:cb (fun () ->
+          (cb.const_hyps, cb.const_univ_hyps, body, cb.const_type, cb.const_relevance,
+           cb.const_universes, cb.const_inline_code, cb.const_typing_flags)))
 
 let recorded_constant_exists kn env = Some (string_of_bool (Cmap_env.mem kn env.env_constants))
 

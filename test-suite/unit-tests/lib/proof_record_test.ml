@@ -49,7 +49,7 @@ let proof : R.proof = R.{
     constraints = [ "Top.File.12 < Top.File.13" ];
     schemes = [ "Top.File.t_rect" ];
     constraint_sources = [ "Top.File.lemma" ];
-    warnings_raised = [ ("deprecated-reference", "Reference foo is deprecated.") ];
+    warnings_raised = [ ("deprecated-reference", "Reference foo is deprecated.", "1,12,15,10,1,10") ];
   };
   kernel_check = false;
   wall_s = 1.5;

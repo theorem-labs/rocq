@@ -2278,7 +2278,7 @@ let stored_term (proof_obj : Proof_object.t) =
         { rb_output = proof; rb_univ_start = !open_counters; rb_univ_end = UnivGen.counters () }
       in
       (match Marshal.to_string blob [] with
-       | s -> Some (Proof_replay.encode_blob s)
+       | s -> Some (Proof_record.encode_blob s)
        | exception e ->
          (* The record says why, so a proof that never replays is visible. *)
          Proof_recorder.ineligible ~reason:"unmarshallable" ~detail:(Printexc.to_string e);
@@ -2286,7 +2286,7 @@ let stored_term (proof_obj : Proof_object.t) =
     | DefaultProof _ | DeferredOpaqueProof _ -> None
 
 let decode_replay blob =
-  match Proof_replay.decode_blob blob with
+  match Proof_record.decode_blob blob with
   | None -> None
   | Some s -> (match (Marshal.from_string s 0 : replay_blob) with b -> Some b | exception _ -> None)
 
@@ -2460,15 +2460,20 @@ let record_close ?(replay = None) ~closer ~kernel_check declare =
   Proof_record_env.record_universe_footprint ();
   let res = Proof_recorder.without_recording declare in
   Proof_recorder.close_proof ~closer ~kernel_check ~replay;
+  Proof_replay.close_proof ();
   if held then Proof_record_env.drop_universe_frame ();
   res
 
 let record_close_with_info ?(replay = None) ~closer ~kernel_check ~pinfo declare =
   (* [writing] is exactly the state in which [set_name] does something (a
      proof is open, suspended or not), so the path and the string are built
-     at a [Qed] only with the recorder on. *)
+     at a [Qed] only with the recorder on. Only a proof that declares one
+     constant is renamed ([Save id]): a telescope ([Derive f ... as f_eq])
+     declares [f] first and is still the proof [f_eq] that it opened as,
+     which is the name replay looks it up by (fixture
+     ineligible_dependent_start). *)
   let () = match pinfo.Proof_info.cinfo with
-    | { CInfo.name; _ } :: _ when Proof_recorder.writing () ->
+    | [ { CInfo.name; _ } ] when Proof_recorder.writing () ->
       Proof_recorder.set_name (Libnames.string_of_path (Lib.make_path name))
     | _ -> ()
   in
