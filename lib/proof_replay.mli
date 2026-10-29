@@ -69,13 +69,12 @@ val start :
     runs without replay, and why. [toolchain] is this compile's: a record
     whose header names another binary, plugin set, load order,
     safe-dependency set or stack limit is refused for the whole file, before
-    any of its proofs is declared (reason ["toolchain"]). A file that is not
-    refused turns on {!Proof_recorder.start_tracking}, so the process-wide
-    cache fences run here as they ran in the registration. [source] is the
-    [.v] file: a file whose text, after its first [Qed] or [Save], can rebind
-    a Rocqlib name or load code ({!scan_late_rebind}) runs without replay
-    (reason ["rebind"], with the command and its line in the summary's
-    [refused_detail]). *)
+    any of its proofs is declared (reason ["toolchain"]). In a file with a
+    command after its first [Qed] or [Save] that can rebind a Rocqlib name or
+    load code, every proof that opens before the last such command runs its
+    tactics (outcome [ineligible], channel ["rebind"]), and [refused_detail]
+    names the first command and its line; an unreadable source is refused
+    whole (reason ["rebind"]). *)
 
 val scan_late_rebind : string -> (string * int) option
 (** The first command in this source text, after its first [Qed] or [Save],
@@ -85,6 +84,13 @@ val scan_late_rebind : string -> (string * int) option
     with its line; [None] if there is none. Comments and strings are
     skipped; a number is read as Rocq's lexer reads it, and a late word also
     counts at the end of a longer identifier. *)
+
+val scan_late_events : string -> (string * int) option * int option
+(** {!scan_late_rebind}, and the byte offset of the LAST such command's
+    word. *)
+
+val at_sentence : int -> unit
+(** The byte offset of the sentence the toplevel is about to run. *)
 
 val register_plugin_audit : (string -> bool) -> unit
 (** [f name] says whether the loaded ML plugin [name] (a findlib package) is
@@ -120,9 +126,9 @@ val enabled : unit -> bool
 
 val refused : unit -> string option
 (** The reason the whole file runs without replay: ["memory"] (the recorded
-    peak is above the limit), ["rlimit"], ["overcommit"], ["bad_record"]
-    (missing or unreadable), ["rebind"] ({!start}), or [None]. *)
-
+    peak is above the limit), ["rlimit"], ["overcommit"], ["bad_record"], or
+    ["rebind"] for a source the late-command scan cannot read. A late
+    command keeps only the proofs before it from replaying. *)
 val check_budget : unit -> unit
 (** Raises {!Budget_exhausted} when the elapsed time plus the charge has
     reached the budget. Call it at each sentence. *)

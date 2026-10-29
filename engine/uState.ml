@@ -555,6 +555,13 @@ let sort_context_set uctx =
   let us, csts = uctx.local in
   (QState.undefined uctx.sort_variables, us), csts
 
+(* BET-84 key item 1: everything in a proof's starting state that its tactics
+   read besides the global graph. The two graphs are left out: the proof's
+   universe footprint (row 2) covers what it reads of them. *)
+type replay_view = PContextSet.t * UnivFlex.t * QState.t * UnivMinim.extra
+
+let replay_view uctx = (uctx.local, uctx.univ_variables, uctx.sort_variables, uctx.minim_extra)
+
 let constraints uctx = snd uctx.local
 
 let compute_instance_binders uctx inst =

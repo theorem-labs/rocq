@@ -22,10 +22,33 @@ val position : unit -> Proof_record.position
 
 val read_at_start : unit -> unit
 (** Records, as reads of the open proof, the channels that have no single
-    read point: the universe and quality graphs (row 2), the named context
-    and variable opacity (row 3), the typing flags (row 4), every option
-    and the warning flags (row 13), the generalizable identifiers (M3) and
-    the template default levels (M7). A no-op when no proof is open. *)
+    read point: the quality graph (row 2), the named context and variable
+    opacity (row 3), the typing flags (row 4), every option and the warning
+    flags (row 13), the generalizable identifiers (M3) and the template
+    default levels (M7). It also starts the proof's universe footprint: the
+    levels every universe-graph operation names until the proof ends. A no-op
+    when no proof is recorded. *)
+
+val record_universe_footprint : unit -> unit
+(** Records row 2 for the open proof: the order the start-of-proof global
+    graph induces on the footprint's global levels, or the whole graph's
+    digest. Call it while the proof is still recorded, before [Qed]'s
+    declaration. *)
+
+val drop_universe_frame : unit -> unit
+(** Ends the footprint of the innermost proof the recorder holds (its [Qed],
+    [Admitted] or [Abort]). *)
+
+val drop_universe_frames : unit -> unit
+(** Ends every footprint ([Abort All], a reset). *)
+
+type universe_footprint
+
+val universe_footprint_of_key : string -> universe_footprint option
+
+val universe_footprint_value : UGraph.t -> universe_footprint -> string
+(** The row 2 value of a footprint against a global graph, for the recorder
+    and for {!Proof_replay_env}. *)
 
 val start_reads : unit -> Proof_record.read list
 (** The same reads as values, for the side that checks them again:

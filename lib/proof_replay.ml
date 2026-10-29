@@ -158,7 +158,10 @@ type file_state = {
   f_index : (string, R.proof) Hashtbl.t;
   f_wall0 : float;
   f_refused : string option;
-  f_refused_detail : string option;  (** for ["rebind"]: the command and its line *)
+  f_refused_detail : string option;
+      (** for ["rebind"], and for a file with a late command: the command and its line *)
+  f_replay_from : int option;
+      (** the last late command's offset: a proof that opens before it runs *)
   mutable f_candidate : candidate option;
 }
 
@@ -317,40 +320,40 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    they would have installed is not installed. A later command that rebinds
    a Rocqlib name, or loads code, then makes a later proof see what stock
    would not have seen: stock's lazy holds the old answer, replay's is forced
-   after the rebinding (Claude review of c2190e74e0, P1: a [congruence] proof
-   replayed, then [Register myeq as core.eq.type.], then a [congruence] proof
-   that fails under replay and passes in stock). The trip of a fence comes too
-   late to help: the proofs already replayed cannot be taken back.
+   after the rebinding (Claude review of c2190e74e0, P1). Which lazies are
+   already forced when a proof starts is an input no read records: a proof
+   whose registration found a lazy forced reads nothing, and the same proof
+   in an edited file can be the one that forces it. So the hazard is decided
+   by position, not per proof.
 
-   So the whole file runs without replay when, after its first [Qed] or
-   [Save] (no proof can be replayed before it), its text holds a command that
-   can rebind a Rocqlib name or load code. A [Register] object is applied
-   when it is declared, when its library or module is loaded (a superglobal
-   object, Libobject.object_with_locality), when its module is opened (an
-   export one), when a module is sealed by a signature that holds one, and a
-   section's end takes back what was applied inside it. So, after the first
-   closer: [Register]; [Require] (a library brings its own [Register]
-   objects and plugins, which the text does not show); [Load]; [Declare] (ML
-   Module, Module); [Import]; [Export]; [Include]; any [Module]; and an [End]
-   that closes a module (a sealed one applies its signature's objects there)
-   or a section inside which one of those commands appeared, before or after
-   the first closer (Claude delta review of 7b2a60f377, P1-2 to P1-4).
-   Decided from the source text, before any proof is replayed. The scan
-   skips nested comments and strings, and reads a number as Rocq's lexer
-   reads one ([0-9][0-9_]*, a fraction and an exponent only when a digit
-   follows, or [0x] and hexadecimal digits), so in [1Register],
-   [0xaRegister] or [1End] the rest is a word (Claude delta reviews of
-   7b2a60f377 and a158379eb4, P1-1). It is meant to err toward refusing: a
-   late word inside a quotation, a notation's text or an identifier ending
-   in one ([x_Register]) refuses too. A command a [Load]ed file builds is
-   covered because [Load] refuses; one a plugin adds is covered by the
-   plugin audit below ({!unaudited_plugin}), not by this scan. Main's
-   ruling, 2026-10-26 18:10Z, asked for [Register], [Declare ML Module], a
-   plugin-loading [Require] and [Load]; the rest are the other ways a
-   [Register] object is applied. *)
+   A proof that opens after the last such command in the file meets a
+   process whose state equals stock's: every proof before that command ran
+   its tactics, and from there on no command rebinds a name or loads code,
+   which is the state of a file with no such command at all. So those proofs
+   may replay, and every proof that opens before the last such command runs
+   (outcome [ineligible], channel ["rebind"]). The commands, after the
+   file's first [Qed] or [Save] (no proof can be replayed before it), are:
+   [Register]; [Require] (a library brings its own [Register] objects and
+   plugins, which the text does not show); [Load]; [Declare] (ML Module,
+   Module); [Import]; [Export]; [Include]; any [Module]; and an [End] that
+   closes a module (a sealed one applies its signature's objects there) or
+   a section inside which one of those commands appeared (Claude delta
+   review of 7b2a60f377, P1-2 to P1-4). Decided from the source text, before
+   any proof is replayed. The scan skips nested comments and strings, and
+   reads a number as Rocq's lexer reads one ([0-9][0-9_]*, a fraction and an
+   exponent only when a digit follows, or [0x] and hexadecimal digits), so
+   in [1Register], [0xaRegister] or [1End] the rest is a word (Claude delta
+   reviews of 7b2a60f377 and a158379eb4, P1-1). It is meant to err toward a
+   later position: a late word inside a quotation, a notation's text or an
+   identifier ending in one ([x_Register]) counts too. A command a [Load]ed
+   file builds is covered because [Load] counts; one a plugin adds is
+   covered by the plugin audit below ({!unaudited_plugin}), not by this
+   scan. *)
 let late_words = [ "Register"; "Require"; "Load"; "Declare"; "Import"; "Export"; "Include"; "Module" ]
 
-let scan_late_rebind text =
+(* The first late command with its line, and the byte offset of the last
+   one's word. *)
+let scan_late_events text =
   let n = String.length text in
   let line = ref 1 and i = ref 0 in
   let closed = ref false in
@@ -360,7 +363,7 @@ let scan_late_rebind text =
      word opens or closes one: [Print Section S.] opens nothing, [Fail End S.]
      closes nothing (Claude delta review of 2daae0ed39, P1-2). *)
   let frames : bool ref list ref = ref [] in
-  let result = ref None in
+  let result = ref None and last = ref None in
   let is_letter c = match c with
     | 'a'..'z' | 'A'..'Z' -> true
     | c -> Char.code c >= 128
@@ -403,7 +406,10 @@ let scan_late_rebind text =
     i := i0; line := l0;
     !res = Some true
   in
-  let found w = result := Some (w, !line) in
+  let found w =
+    if !result = None then result := Some (w, !line);
+    last := Some !i
+  in
   (* A late word is found wherever its letters end a run that is not part of
      a longer word: Rocq's lexer reads [1Register], [1_Register] and
      [0x1Register] as a number then [Register] (P1-1), so a late word counts
@@ -422,7 +428,7 @@ let scan_late_rebind text =
     [ "Local"; "Global"; "Time"; "Timeout"; "Redirect"; "Instructions"; "Profile"; "Polymorphic";
       "Monomorphic"; "Cumulative"; "NonCumulative"; "Private"; "Program"; "Fail"; "Succeed" ] in
   let at_start = ref true and under_fail = ref false and cmd_module = ref false in
-  while !result = None && !i < n do
+  while !i < n do
     let c = text.[!i] in
     if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
     else if c = '"' then (skip_string ())
@@ -468,7 +474,7 @@ let scan_late_rebind text =
          List.iter (fun f -> f := true) !frames;
          if !closed then found w
        | None -> ());
-      if !result = None then begin
+      begin
         if !at_start && lead_letter && List.mem run prefixes then begin
           if String.equal run "Fail" || String.equal run "Succeed" then under_fail := true
         end
@@ -507,7 +513,9 @@ let scan_late_rebind text =
       step ()
     end
   done;
-  !result
+  !result, !last
+
+let scan_late_rebind text = fst (scan_late_events text)
 
 (* A plugin outside the audited set (the plugins this tree builds) can add
    commands the source scan cannot read (one could rebind a Rocqlib name after
@@ -544,12 +552,27 @@ let unaudited_plugin () =
       (fun (name, _) -> not (!plugin_audit name || List.mem name audited_outside_tree))
       (tc ()).R.plugins
 
+type source_rebind =
+  | No_late_event
+  | Late_events of string * int * int  (** the first command, its line, the last one's offset *)
+  | Unreadable_source
+
 let source_rebind = function
-  | None -> None
+  | None -> No_late_event
   | Some path ->
     match read_file path with
-    | text -> scan_late_rebind text
-    | exception (Sys_error _ | End_of_file) -> Some ("an unreadable source", 0)
+    | text ->
+      (match scan_late_events text with
+       | Some (cmd, line), Some last -> Late_events (cmd, line, last)
+       | _ -> No_late_event)
+    | exception (Sys_error _ | End_of_file) -> Unreadable_source
+
+(* The byte offset, in the file being compiled, of the sentence being run.
+   The toplevel sets it before each sentence; a driver that does not leaves
+   it before every late command, so no proof of such a file replays. *)
+let sentence_offset = ref (-1)
+
+let at_sentence offset = sentence_offset := offset
 
 let start ~library ~source ~toolchain =
   match !options with
@@ -602,18 +625,22 @@ let start ~library ~source ~toolchain =
        ([Proof_recorder.start]); a replay that does not run them would let
        a dirty history here match the clean one recorded there. From here
        on they run at each decision ({!decide}). *)
-    let refusal, refused_detail =
+    let refusal, refused_detail, replay_from =
       match refusal with
-      | Some _ -> refusal, None
+      | Some _ -> refusal, None, None
       | None ->
         match source_rebind source with
-        | Some (cmd, line) -> Some "rebind", Some (Printf.sprintf "%s at line %d" cmd line)
-        | None -> None, None
+        | Unreadable_source -> Some "rebind", Some "an unreadable source", None
+        | Late_events (cmd, line, last) ->
+          None, Some (Printf.sprintf "%s at line %d; proofs before byte %d run" cmd line last), Some last
+        | No_late_event -> None, None, None
     in
     if refusal = None then Proof_recorder.start_tracking ();
     toolchain_now := Some toolchain;
+    sentence_offset := -1;
     state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal;
-                    f_refused_detail = refused_detail; f_candidate = None }
+                    f_refused_detail = refused_detail; f_replay_from = replay_from;
+                    f_candidate = None }
 
 let check_budget () =
   match !options, !state with
@@ -647,8 +674,8 @@ let miss_read name channel why =
    process-wide cache can treat what the proof read as looked up (Rocqlib
    marks its [lib_ref] keys observed, so a later rebinding of one trips its
    fence and no later proof is replayed). It stops later replays only; the
-   whole-file refusal above is what keeps later tactics seeing what stock
-   sees. *)
+   late-command rule above (no proof replays before the file's last late
+   command) is what keeps later tactics seeing what stock sees. *)
 let hit_hooks : (R.read list -> unit) Queue.t = Queue.create ()
 
 let register_hit_hook f = Queue.add f hit_hooks
@@ -680,6 +707,11 @@ let unreplayable_writes (p : R.proof) =
           n > 0 && name <> "univ_level" && name <> "sort_quality" && not (can_advance name))
        p.R.writes.R.counters
 
+let opens_before_late_command st =
+  match st.f_replay_from with
+  | None -> false
+  | Some last -> !sentence_offset <= last
+
 let open_proof ~name ~statement ~position ~toolchain_key =
   match !state with
   | None | Some { f_refused = Some _; _ } -> ()
@@ -689,6 +721,9 @@ let open_proof ~name ~statement ~position ~toolchain_key =
     counts.n_proofs <- counts.n_proofs + 1;
     (match Hashtbl.find_opt st.f_index name with
      | None -> counts.m_missing <- counts.m_missing + 1; outcome name "missing_record" None
+     | Some _ when opens_before_late_command st ->
+       counts.m_ineligible <- counts.m_ineligible + 1;
+       outcome name "ineligible" (Some ("rebind", "before_late_command"))
      | Some p ->
        if p.R.ineligible <> [] || p.R.replay = None || unreplayable_writes p then begin
          counts.m_ineligible <- counts.m_ineligible + 1;
