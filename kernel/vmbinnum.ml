@@ -999,7 +999,14 @@ let timed time f =
   end
   else f ()
 
-let recognize ?name env body =
+(* [count] is false when a body that a declaration already recognized is
+   recognized again, because the code it was compiled to is being compiled
+   again in this process ([Vmsymtable.compile_again]). The statistics count
+   the declarations the recognizer reads, not the compilations a process
+   makes of them: a process that compiles a bound constant again would
+   otherwise count one bind more per constant it evaluates, and a run at
+   -j 2 one more per worker. *)
+let recognize ?name ?(count = true) env body =
   if not any_enabled then no_binnum
   else
     let name () = match name with
@@ -1007,23 +1014,27 @@ let recognize ?name env body =
       | None -> "<anonymous>"
     in
     match timed entry_time (fun () -> match_body ~detail:(stats_level >= 2) env body) with
-    | Error [] -> incr nothers; no_binnum
+    | Error [] -> if count then incr nothers; no_binnum
     | Error misses ->
-      incr nnear;
-      if stats_level > 0 then
-        List.iter (fun (r, why, detail) ->
-            near_lines := List.rev_append
-                (Printf.sprintf "near-miss %s: %s: %s" (name ()) r.ref_name why :: detail)
-                !near_lines)
-          misses;
+      if count then begin
+        incr nnear;
+        if stats_level > 0 then
+          List.iter (fun (r, why, detail) ->
+              near_lines := List.rev_append
+                  (Printf.sprintf "near-miss %s: %s: %s" (name ()) r.ref_name why :: detail)
+                  !near_lines)
+            misses
+      end;
       no_binnum
     | Ok funs ->
-      incr nbinds;
-      if stats_level > 0 then begin
-        let bound = List.map_filter (Option.map (fun rk -> routines.(rk).name))
-            (Array.to_list funs) in
-        bind_lines := Printf.sprintf "bind %s: %s" (name ()) (String.concat "," bound)
-                      :: !bind_lines
+      if count then begin
+        incr nbinds;
+        if stats_level > 0 then begin
+          let bound = List.map_filter (Option.map (fun rk -> routines.(rk).name))
+              (Array.to_list funs) in
+          bind_lines := Printf.sprintf "bind %s: %s" (name ()) (String.concat "," bound)
+                        :: !bind_lines
+        end
       end;
       fun i -> if 0 <= i && i < Array.length funs then funs.(i) else None
 

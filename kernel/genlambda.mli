@@ -93,6 +93,12 @@ end
     the same value. *)
 val inlinable_body : limit:int -> Constr.t -> bool
 
+val expansions : unit -> int
+(** How many bodies the expansion above has put at an application site since this process
+    started. A constant declared with inline code is expanded by stock too and is not counted.
+    The difference of this counter across one compilation says whether that compilation expanded
+    anything. *)
+
 module Make (Val : S) :
 sig
   (** [lambda_of_constr ~inline_limit env sigma c]: with [inline_limit > 0] an application of a

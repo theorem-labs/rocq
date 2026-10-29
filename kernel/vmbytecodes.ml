@@ -84,7 +84,7 @@ type instruction =
   | Kbranch of Label.t                  (* jump to label *)
   | Kprim of CPrimitives.t * pconstant
   | Kcamlprim of caml_prim * Label.t
-  | Kznative of znative_op * Constant.t
+  | Kznative of znative_op
 
 and bytecodes = instruction list
 
@@ -192,10 +192,10 @@ let rec pp_instr i =
     str "camlcall " ++ str (CPrimitives.to_string (caml_prim_to_prim op)) ++ str ", branch " ++
     pp_lbl lbl ++ str " on accu"
 
-  | Kznative (op, kn) ->
+  | Kznative op ->
     let name = match op with
       | ZNadd -> "add" | ZNpossub -> "pos_sub" | ZNposadd -> "pos_add" in
-    str "znative " ++ str name ++ str " " ++ Constant.print kn
+    str "znative " ++ str name
 
 and pp_bytecodes c =
   match c with

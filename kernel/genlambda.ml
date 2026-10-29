@@ -675,6 +675,37 @@ let inlinable_body ~limit body =
     walk 0 [body]
   | _ -> false
 
+(* What one [lambda_of_constr] call may expand. It sets and restores [limit], [budget] and
+   [depth]; compilations never nest (a compilation runs no code). With [limit = 0], the stock
+   value, [budget] stays 0 and nothing but a constant with inline code is expanded.
+
+   [max_depth] bounds the NESTING of expansions. An expansion is compiled where the call was, so an
+   expansion inside an expansion nests this module's recursion over a term once more, and
+   [inline_node_budget] bounds no nesting: the review's C07_budget.v builds chains of 2,500 calls
+   of one small constant. With this bound the depth the lever adds is at most [max_depth] bodies of
+   [limit] nodes. The gain is in the ordinary call, which keeps it: a call that no expansion
+   encloses is at depth 0.
+
+   One record, not four [ref]s, because [lambda_of_app] reads [budget] and [depth] in the same
+   test. [lambda_of_app], [lambda_of_args] and [lambda_of_constr] call one another once per node of
+   the term and flambda gives each the frame its largest case needs, so a register more in that
+   test costs 16 bytes in each frame of a recursion 19,000 steps deep: measured, three [ref]s need
+   616 bytes of frame per step where this record needs 536. [expansions] is written only in the
+   branch that already writes [budget], so it adds nothing to that test.
+
+   [expansions] counts, over the life of the process, the bodies this lever expanded; the
+   expansions of a constant with inline code are stock and are not counted. It is not saved and
+   restored, so the difference across a compilation says whether that compilation expanded
+   anything, which is what [Vmsymtable.compile_again] asks before it keeps the code it just made.
+   The state lives outside [Make] so that one counter answers for the compilation that just ran,
+   whichever instance ran it. *)
+type inline_state =
+  { mutable limit : int; mutable budget : int; mutable depth : int; mutable expansions : int }
+let inline_st = { limit = 0; budget = 0; depth = 0; expansions = 0 }
+let inline_max_depth = 8
+
+let expansions () = inline_st.expansions
+
 module Make (Val : S) =
 struct
 
@@ -726,26 +757,6 @@ let rec get_fix_struct env i t = match kind (Reduction.whd_all env t) with
     let env = Environ.push_rel (RelDecl.LocalAssum (na, dom)) env in
     get_fix_struct env (i - 1) t
 | _ -> assert false
-
-(* What one [lambda_of_constr] call may expand. It sets and restores the three fields;
-   compilations never nest (a compilation runs no code). With [limit = 0], the stock value,
-   [budget] stays 0 and nothing but a constant with inline code is expanded.
-
-   [max_depth] bounds the NESTING of expansions. An expansion is compiled where the call was, so an
-   expansion inside an expansion nests this module's recursion over a term once more, and
-   [inline_node_budget] bounds no nesting: the review's C07_budget.v builds chains of 2,500 calls
-   of one small constant. With this bound the depth the lever adds is at most [max_depth] bodies of
-   [limit] nodes. The gain is in the ordinary call, which keeps it: a call that no expansion
-   encloses is at depth 0.
-
-   One record, not three [ref]s, because [lambda_of_app] reads [budget] and [depth] in the same
-   test. [lambda_of_app], [lambda_of_args] and [lambda_of_constr] call one another once per node of
-   the term and flambda gives each the frame its largest case needs, so a register more in that
-   test costs 16 bytes in each frame of a recursion 19,000 steps deep: measured, three [ref]s need
-   616 bytes of frame per step where this record needs 536. *)
-type inline_state = { mutable limit : int; mutable budget : int; mutable depth : int }
-let inline_st = { limit = 0; budget = 0; depth = 0 }
-let inline_max_depth = 8
 
 let rec lambda_of_constr cache env sigma c =
   match kind c with
@@ -886,8 +897,10 @@ and lambda_of_app cache env sigma f args =
                && not (Vmbinnum.binds_call_ignoring_switch env kn))
         then
           let () =
-            if not cb.const_inline_code then
-              inline_st.budget <- inline_st.budget - inline_st.limit
+            if not cb.const_inline_code then begin
+              inline_st.budget <- inline_st.budget - inline_st.limit;
+              inline_st.expansions <- inline_st.expansions + 1
+            end
           in
           let csubst = Vars.subst_instance_constr u csubst in
           (* The expansion is compiled here, so what it holds is one expansion deeper. *)
@@ -941,7 +954,10 @@ and lambda_of_args cache env sigma start args =
 
 let lambda_of_constr ~inline_limit:limit env sigma c =
   let cache = Cache.ConstrTable.create 91 in
-  let saved = { limit = inline_st.limit; budget = inline_st.budget; depth = inline_st.depth } in
+  (* [expansions] counts over the whole process and is never put back. *)
+  let saved_limit = inline_st.limit
+  and saved_budget = inline_st.budget
+  and saved_depth = inline_st.depth in
   inline_st.limit <- limit;
   inline_st.budget <- (if limit > 0 then inline_node_budget else 0);
   (* An exception out of a compilation (a stack overflow, a term the compiler refuses) leaves the
@@ -949,9 +965,9 @@ let lambda_of_constr ~inline_limit:limit env sigma c =
   inline_st.depth <- 0;
   Fun.protect
     ~finally:(fun () ->
-      inline_st.limit <- saved.limit;
-      inline_st.budget <- saved.budget;
-      inline_st.depth <- saved.depth)
+      inline_st.limit <- saved_limit;
+      inline_st.budget <- saved_budget;
+      inline_st.depth <- saved_depth)
     (fun () -> lambda_of_constr cache env sigma c)
 
 end

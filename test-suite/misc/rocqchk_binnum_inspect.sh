@@ -58,9 +58,14 @@ def pos(n):
 
 HEADER = """Require Import Corelib.BinNums.PosDef Corelib.BinNums.IntDef.
 (* A call through a variable is not a call site of the routine: the
-   function runs from its entry. *)
-Definition through2 {A B C} (f : A -> B -> C) (x : A) (y : B) := f x y.
-Definition through3 {A B C D} (f : A -> B -> C -> D) (x : A) (y : B) (z : C) := f x y z.
+   function runs from its entry. The [fix] in each wrapper's body keeps the
+   compiler from expanding the wrapper into its call site (an expanded
+   wrapper would beta-reduce [f] to the constant and make a call site of it,
+   kernel/genlambda.ml); it computes [f x y] either way. *)
+Definition through2 {A B C} (f : A -> B -> C) (x : A) (y : B) : C :=
+  (fix go (n : nat) : C := match n with O => f x y | S m => go m end) O.
+Definition through3 {A B C D} (f : A -> B -> C -> D) (x : A) (y : B) (z : C) : D :=
+  (fix go (n : nat) : D := match n with O => f x y z | S m => go m end) O.
 (* 2^n, built by the bytecode at check time: a chain of n + 1 nodes, which
    no literal packing reaches. *)
 Fixpoint pw (n : nat) : positive := match n with O => xH | S n => xO (pw n) end.

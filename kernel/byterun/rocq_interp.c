@@ -2338,47 +2338,54 @@ value rocq_interprete
         Next;
       }
 
-      /* accu + sp[0], both standard-library [Z] values; see the comment on
-         rocq_z_decode. When either is not a closed number of fewer than
-         ROCQ_Z_MAXBITS bits, CheckPrimArgs applies the value of the constant
-         the operand names, which is the constant's own code. */
+      /* The three instructions below sit at the ENTRY of the function whose
+         definition kernel/vmznative.ml recognised, after its GRAB or GRABREC,
+         where the two arguments are sp[0] and sp[1]. This is where BINNUM
+         sits, and for the same reason: the value of the constant stays the
+         value its body computes, so the kernel's conversion, which compares a
+         fixpoint against a fixpoint and a function against a function
+         (kernel/vconv.ml), sees what it would see without the native path.
+         When an argument is not a closed number of fewer than ROCQ_Z_MAXBITS
+         bits, the instruction falls through to the function's own body, which
+         is what the machine runs without the native path.
+
+         The result is built before the arguments are popped, so a minor
+         collection during the allocation still finds them on the stack. Then
+         the two arguments go and the function returns, as BINNUM does. */
+
+      /* Z.add sp[0] sp[1], both standard-library [Z] values. */
       Instruct (CHECKZADD) {
         int64_t zx, zy;
         print_instr("CHECKZADD");
-        CheckPrimArgs(rocq_z_decode(accu, &zx) && rocq_z_decode(sp[0], &zy),
-                      apply2);
-        sp++;
+        if (!(rocq_z_decode(sp[0], &zx) && rocq_z_decode(sp[1], &zy))) Next;
         Rocq_encode_Z(zx + zy);
-        Next;
+        sp += 2;
+        goto return_after_pop;
       }
 
-      /* Z.pos_sub accu sp[0], both standard-library [positive] values: their
-         difference as a [Z]. When either is not a closed positive of fewer than
-         ROCQ_Z_MAXBITS bits, CheckPrimArgs applies the value of the constant the
-         operand names, which is the constant's own code. The result is in
-         (-2^60, 2^60), which Rocq_encode_Z's 2^61 bound covers. */
+      /* Z.pos_sub sp[0] sp[1], both standard-library [positive] values: their
+         difference as a [Z]. It is in (-2^60, 2^60), which Rocq_encode_Z's
+         2^61 bound covers. */
       Instruct (CHECKZPOSSUB) {
         int64_t px, py;
         print_instr("CHECKZPOSSUB");
-        CheckPrimArgs(rocq_pos_decode(accu, &px) && rocq_pos_decode(sp[0], &py),
-                      apply2);
-        sp++;
+        if (!(rocq_pos_decode(sp[0], &px) && rocq_pos_decode(sp[1], &py))) Next;
         Rocq_encode_Z(px - py);
-        Next;
+        sp += 2;
+        goto return_after_pop;
       }
 
-      /* Pos.add accu sp[0], both standard-library [positive] values: their sum
-         as a [positive]. Each operand is below 2^60, so the sum is at least 2
-         and below 2^61, which Rocq_encode_pos covers; a sum of 2^60 or more is
-         simply refused by a later decode, which then takes the fallback. */
+      /* Pos.add sp[0] sp[1], both standard-library [positive] values: their
+         sum as a [positive]. Each operand is below 2^60, so the sum is at
+         least 2 and below 2^61, which Rocq_encode_pos covers; a sum of 2^60 or
+         more is simply refused by a later decode, which then falls through. */
       Instruct (CHECKPOSADD) {
         int64_t px, py;
         print_instr("CHECKPOSADD");
-        CheckPrimArgs(rocq_pos_decode(accu, &px) && rocq_pos_decode(sp[0], &py),
-                      apply2);
-        sp++;
+        if (!(rocq_pos_decode(sp[0], &px) && rocq_pos_decode(sp[1], &py))) Next;
         Rocq_encode_pos(px + py);
-        Next;
+        sp += 2;
+        goto return_after_pop;
       }
 
 /* Debugging and machine control */

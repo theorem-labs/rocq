@@ -450,6 +450,15 @@ let add_binnum routine arity cont =
   | Some k when Int.equal (Vmbinnum.arity k) arity -> Kbinnum (k, arity) :: cont
   | Some _ | None -> cont
 
+(* The native binary-number operation of a function goes in the same place, where its two
+   arguments are on the stack. A function that BINNUM already guards gets none: BINNUM accepts
+   every argument the native operation accepts and more, so the second check would only read the
+   arguments again ([Vmznative] is consulted only for a function with no routine). *)
+let add_znative op arity cont =
+  match op with
+  | Some o when Int.equal arity 2 -> Kznative o :: cont
+  | Some _ | None -> cont
+
 (* The routine that a call of the constant [kn] to [nargs] arguments can run
    at its call site, if the routine takes exactly [nargs] arguments. The
    decision is taken once per compilation and constant. *)
@@ -590,10 +599,12 @@ let get_caml_prim = let open CPrimitives in function
   | Stringcompare -> Some CAML_Stringcompare
   | _ -> None
 
-(* sz is the size of the local stack. [binnum i] is the BINNUM routine of
-   function [i] of [lam] when [lam] is a function (i = 0) or a fixpoint block;
-   only the top-level call of [compile] passes it. *)
-let rec compile_lam ?(binnum = Vmbinnum.no_binnum) env cenv lam sz cont =
+(* sz is the size of the local stack. [binnum i] is the BINNUM routine, and [znative i] the
+   native binary-number operation, of function [i] of [lam] when [lam] is a function (i = 0) or a
+   fixpoint block; only the top-level call of [compile] passes them. *)
+let no_znative (_ : int) : Vmbytecodes.znative_op option = None
+
+let rec compile_lam ?(binnum = Vmbinnum.no_binnum) ?(znative = no_znative) env cenv lam sz cont =
   let () = set_max_stack_size cenv sz in
   match node lam with
   | Lrel(_, i) -> pos_rel i cenv sz :: cont
@@ -660,7 +671,7 @@ let rec compile_lam ?(binnum = Vmbinnum.no_binnum) env cenv lam sz cont =
      let lbl_fun = Label.create() in
      let cont_fun = compile_lam env r_fun body arity [Kreturn arity] in
      let cont_fun = ensure_stack_capacity r_fun cont_fun in
-     let cont_fun = add_binnum (binnum 0) arity cont_fun in
+     let cont_fun = add_binnum (binnum 0) arity (add_znative (znative 0) arity cont_fun) in
      let () = push_fun env (add_grab arity lbl_fun cont_fun) in
      let fv = fv r_fun in
      compile_fv cenv fv.fv_rev sz (Kclosure(lbl_fun,fv.size) :: cont)
@@ -692,7 +703,7 @@ let rec compile_lam ?(binnum = Vmbinnum.no_binnum) env cenv lam sz cont =
         let env_body = comp_env_fix ndef arity rfv in
         let cont1 = compile_lam env env_body body arity [Kreturn arity] in
         let cont1 = ensure_stack_capacity env_body cont1 in
-        let cont1 = add_binnum (binnum i) arity cont1 in
+        let cont1 = add_binnum (binnum i) arity (add_znative (znative i) arity cont1) in
         let lbl = Label.create () in
         lbl_bodies.(i) <- lbl;
         let fcode =  add_grabrec rec_args.(i) arity lbl cont1 in
@@ -973,7 +984,7 @@ let skip_suffix l =
   in
   match aux l with None -> [] | Some l -> l
 
-let compile ~inline_limit ~uinstance ~binnum env sigma c =
+let compile ~inline_limit ~uinstance ~binnum ~znative env sigma c =
   Label.reset_label_counter ();
   let lam = lambda_of_constr ~inline_limit env sigma c in
   let params, body = decompose_Llam lam in
@@ -993,7 +1004,7 @@ let compile ~inline_limit ~uinstance ~binnum env sigma c =
       if uclosed then
         let cenv = empty_comp_env () in
         let env = { env; fun_code = []; uinstance; binnum_calls = Cmap_env.empty } in
-        let cont = compile_lam ~binnum env cenv lam 0 cont in
+        let cont = compile_lam ~binnum ~znative env cenv lam 0 cont in
         let cont = ensure_stack_capacity cenv cont in
         cenv, cont, env.fun_code
       else
@@ -1027,8 +1038,10 @@ let warn_compile_error =
   CWarnings.create ~name:"bytecode-compiler-failed-compilation" ~category:CWarnings.CoreCategories.bytecode_compiler
     Vmerrors.pr_error
 
-let compile ~fail_on_error ~inline_limit ~uinstance ?(binnum = Vmbinnum.no_binnum) env sigma c =
-  try NewProfile.profile "vm_compile" (fun () -> Some (compile ~inline_limit ~uinstance ~binnum env sigma c)) ()
+let compile ~fail_on_error ~inline_limit ~uinstance ?(binnum = Vmbinnum.no_binnum)
+    ?(znative = no_znative) env sigma c =
+  try NewProfile.profile "vm_compile"
+        (fun () -> Some (compile ~inline_limit ~uinstance ~binnum ~znative env sigma c)) ()
   with Vmerrors.CompileError msg as exn ->
     let exn = Exninfo.capture exn in
     if fail_on_error then
@@ -1038,7 +1051,7 @@ let compile ~fail_on_error ~inline_limit ~uinstance ?(binnum = Vmbinnum.no_binnu
       None
     end
 
-let compile_constant_body ?name ~fail_on_error ?(inline_limit = 0) env univs = function
+let compile_constant_body ?name ?count ~fail_on_error ?(inline_limit = 0) env univs = function
   | Undef _ | OpaqueDef _ -> Some BCconstant
   | Primitive _ | Symbol _ -> None
   | Def body ->
@@ -1060,32 +1073,28 @@ let compile_constant_body ?name ~fail_on_error ?(inline_limit = 0) env univs = f
       | _ ->
         let uinstance = Bound instance_size in
         (* A universe polymorphic body is compiled under one more function
-           (see [compile]), so it gets no BINNUM. *)
+           (see [compile]), so it gets neither BINNUM nor a native operation. *)
         let binnum =
-          if UVars.eq_sizes (0, 0) instance_size then Vmbinnum.recognize ?name env body
+          if UVars.eq_sizes (0, 0) instance_size then Vmbinnum.recognize ?name ?count env body
           else Vmbinnum.no_binnum
         in
-        let res = compile ~fail_on_error ~inline_limit ~uinstance ~binnum env (empty_evars env) body in
+        (* The native operation of [Vmznative] goes at the entry of the function this body
+           defines, which is the one at the init index of a fixpoint block and the body itself
+           otherwise. A function BINNUM already guards gets none, and is not even read for one:
+           BINNUM accepts every argument the native operation accepts and more, so the second
+           check would only read the arguments again. *)
+        let znative =
+          let init = match kind body with Fix ((_, init), _) -> init | _ -> 0 in
+          if not (UVars.eq_sizes (0, 0) instance_size) || Option.has_some (binnum init) then
+            no_znative
+          else match Vmznative.pin_of_body ?name env body with
+            | None -> no_znative
+            | Some op -> fun i -> if Int.equal i init then Some op else None
+        in
+        let res =
+          compile ~fail_on_error ~inline_limit ~uinstance ~binnum ~znative env (empty_evars env) body
+        in
         Option.map (fun (mask, code, patch) -> BCdefined (mask, code, patch)) res
-
-(* Code for [fun x y => op x y]. After GRAB the two arguments are at sp[0] and
-   sp[1]; the operation wants the first in the accumulator and the second on top
-   of the stack, and pops the second. The operand of the instruction is the slot
-   of the value of [kn]: the operation applies it to the two arguments when they
-   are not both closed numbers, which is what the machine does without this
-   wrapper. *)
-let compile_znative_wrapper kn op =
-  let arity = match op with
-    | Vmbytecodes.ZNadd | Vmbytecodes.ZNpossub | Vmbytecodes.ZNposadd -> 2 in
-  Label.reset_label_counter ();
-  let lbl_fun = Label.create () in
-  let r_fun = comp_env_fun arity in
-  let () = set_max_stack_size r_fun (arity + 1) in
-  let body = [Kacc 1; Kpush; Kacc 1; Kznative (op, kn); Kreturn arity] in
-  let fun_code = add_grab arity lbl_fun (ensure_stack_capacity r_fun body) in
-  let cenv = empty_comp_env () in
-  let init_code = ensure_stack_capacity cenv [Kclosure (lbl_fun, 0); Kstop] in
-  to_memory [||] (init_code @ [Ksequence fun_code])
 
 let compile ~fail_on_error ?(inline_limit = 0) env sigma c =
   compile ~fail_on_error ~inline_limit ~uinstance:Global env sigma c

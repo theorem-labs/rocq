@@ -25,21 +25,16 @@ val compile :
     the routine that {!Vmbinnum.recognize_call} gives it goes through
     BINNUMCALL first. *)
 
-val compile_constant_body : ?name:Names.Constant.t -> fail_on_error:bool ->
+val compile_constant_body : ?name:Names.Constant.t -> ?count:bool -> fail_on_error:bool ->
   ?inline_limit:int ->
   env -> universes -> (Constr.t, 'opaque, 'symb) constant_def ->
   body_code option
 (** The code of a constant's body. When {!Vmbinnum.recognize} binds the body
     to routines, the code of each bound function starts with BINNUM; calls
     in the body go through BINNUMCALL as in {!compile}. [name] is only
-    printed in the statistics of {!Vmbinnum}. *)
-
-val compile_znative_wrapper :
-  Names.Constant.t -> Vmbytecodes.znative_op -> to_patch * patches
-(** Code for [fun x y => op x y], the value the machine gives a constant whose
-    definition [Vmznative] recognises. When an argument is not a closed number
-    the operation applies the value of the constant instead, so such a call
-    reduces exactly as it does without the native path. *)
+    printed in the statistics of {!Vmbinnum}, and [count] is passed to
+    {!Vmbinnum.recognize}: a body compiled again in one process is not
+    counted again. *)
 
 (** Shortcut of the previous function used during module strengthening *)
 

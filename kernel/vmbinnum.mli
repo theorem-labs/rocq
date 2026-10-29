@@ -47,12 +47,16 @@
       unset, the routines, [SWITCH], [PROJ], [whd_val] and the packing of
       literals count nothing. *)
 
-val recognize : ?name:Names.Constant.t -> Environ.env -> Constr.t -> int -> int option
+val recognize :
+  ?name:Names.Constant.t -> ?count:bool -> Environ.env -> Constr.t -> int -> int option
 (** [recognize ?name env body] is, for each function index [i] of the
     top-level fixpoint block of [body] (index 0 for a body that is a
     function), the routine of the function, if [body] is equal to a
     reference term and every inductive type in it has the expected shape in
-    [env]. It never raises. [name] is only printed in the statistics. *)
+    [env]. It never raises. [name] is only printed in the statistics.
+    [count:false] keeps this recognition out of the statistics, for a body
+    whose declaration they already counted and whose code one process
+    compiles again ({!Vmsymtable}). *)
 
 val recognize_call : Environ.env -> Names.Constant.t -> int option
 (** [recognize_call env cst] is the routine of the function that [cst]

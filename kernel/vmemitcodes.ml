@@ -558,9 +558,7 @@ let emit_instr env = function
     out_label env lbl;
     slot_for_caml_prim env op
 
-  | Kznative (op, q) ->
-    out env (znative_op_code op);
-    slot_for_getglobal env q
+  | Kznative op -> out env (znative_op_code op)
 
   | Kstop -> out env opSTOP
 

@@ -40,11 +40,12 @@ let dump_channel = lazy (
   match Sys.getenv_opt "ROCQ_VMZNATIVE_DUMP" with
   | None -> None
   | Some f -> Some (open_out_gen [Open_append; Open_creat] 0o644 f))
-let dump kn s =
+let dump name s =
   match Lazy.force dump_channel with
   | None -> ()
   | Some ch ->
-    output_string ch (Constant.to_string kn); output_char ch '\t';
+    output_string ch (match name with Some kn -> Constant.to_string kn | None -> "<anonymous>");
+    output_char ch '\t';
     output_string ch s; output_char ch '\n'; flush ch
 
 (* -------------------------------------------------------------------------- *)
@@ -108,16 +109,43 @@ let check_z env ind pos =
 (* The canonical encoding of a definition closure.                             *)
 
 exception Not_native
-
 type state = {
   env : Environ.env;
   buf : Buffer.t;
   mutable pos_ind : inductive option;
   mutable z_ind : inductive option;
   mutable fuel : int;
+  (* The expected encodings this body can still become, or [None] for a caller
+     that wants the encoding whatever it is. The walk reads the bodies of every
+     constant the body calls, and it runs at every constant's declaration, so a
+     body that no expected encoding has as a prefix must stop at the character
+     where it parts from all of them, not at its end. *)
+  mutable cands : string list option;
 }
 
-let add_int st i = Buffer.add_string st.buf (string_of_int i); Buffer.add_char st.buf ';'
+let keep st pos n at =
+  match st.cands with
+  | None -> ()
+  | Some cs ->
+    (match List.filter (fun c -> String.length c >= pos + n && at c) cs with
+     | [] -> raise Not_native
+     | cs -> st.cands <- Some cs)
+
+let put_char st ch =
+  keep st (Buffer.length st.buf) 1 (fun c -> Char.equal c.[Buffer.length st.buf] ch);
+  Buffer.add_char st.buf ch
+
+let put st s =
+  let pos = Buffer.length st.buf and n = String.length s in
+  let at c =
+    let rec eq i = i >= n || (Char.equal (String.unsafe_get c (pos + i)) (String.unsafe_get s i)
+                              && eq (i + 1)) in
+    eq 0
+  in
+  keep st pos n at;
+  Buffer.add_string st.buf s
+
+let add_int st i = put st (string_of_int i); put_char st ';'
 
 (* 0 for [positive], 1 for [Z]; any other inductive stops the encoding. The
    first inductive of each kind that the body mentions fixes the one the whole
@@ -154,33 +182,33 @@ let rec encode st c =
   st.fuel <- st.fuel - 1;
   if st.fuel <= 0 then raise Not_native;
   match kind c with
-  | Rel i -> Buffer.add_char st.buf 'R'; add_int st i
-  | Lambda (_, _, b) -> Buffer.add_char st.buf 'L'; encode st b
-  | LetIn (_, v, _, b) -> Buffer.add_char st.buf 'E'; encode st v; encode st b
+  | Rel i -> put_char st 'R'; add_int st i
+  | Lambda (_, _, b) -> put_char st 'L'; encode st b
+  | LetIn (_, v, _, b) -> put_char st 'E'; encode st v; encode st b
   | App (f, args) ->
-    Buffer.add_char st.buf 'A'; add_int st (Array.length args);
+    put_char st 'A'; add_int st (Array.length args);
     encode st f; Array.iter (encode st) args
   | Const (kn, u) ->
     if not (UVars.Instance.is_empty u) then raise Not_native;
-    Buffer.add_char st.buf 'C'; encode_const st kn
+    put_char st 'C'; encode_const st kn
   | Ind (ind, u) ->
     if not (UVars.Instance.is_empty u) then raise Not_native;
-    Buffer.add_char st.buf 'I'; add_int st (ind_code st ind)
+    put_char st 'I'; add_int st (ind_code st ind)
   | Construct ((ind, j), u) ->
     if not (UVars.Instance.is_empty u) then raise Not_native;
-    Buffer.add_char st.buf 'K'; add_int st (ind_code st ind); add_int st j
+    put_char st 'K'; add_int st (ind_code st ind); add_int st j
   | Case (ci, u, pms, _, iv, scrut, brs) ->
     if not (UVars.Instance.is_empty u) then raise Not_native;
     if not (Int.equal (Array.length pms) 0) then raise Not_native;
     (match iv with NoInvert -> () | CaseInvert _ -> raise Not_native);
-    Buffer.add_char st.buf 'S';
+    put_char st 'S';
     add_int st (ind_code st ci.ci_ind);
     add_int st ci.ci_npar;
     add_int st (Array.length brs);
     encode st scrut;
     Array.iter (fun (nas, b) -> add_int st (Array.length nas); encode st b) brs
   | Fix ((recidx, i), (_, _, bodies)) ->
-    Buffer.add_char st.buf 'F'; add_int st i; add_int st (Array.length bodies);
+    put_char st 'F'; add_int st i; add_int st (Array.length bodies);
     Array.iter (fun r -> add_int st r) recidx;
     Array.iter (encode st) bodies
   | Var _ | Meta _ | Evar _ | Sort _ | Cast _ | Prod _ | CoFix _ | Proj _
@@ -196,15 +224,17 @@ and encode_const st kn =
      | Def b -> encode st b
      | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> raise Not_native)
 
+let encoding_of_body ?cands env body =
+  let st = { env; buf = Buffer.create 4096; pos_ind = None; z_ind = None;
+             fuel = 200000; cands } in
+  (try encode st body; Some (Buffer.contents st.buf) with Not_native -> None)
+
 let encoding env kn =
   match Environ.lookup_constant kn env with
   | exception Not_found -> None
   | cb ->
     (match cb.const_universes, cb.const_body with
-     | Monomorphic, Def b ->
-       let st = { env; buf = Buffer.create 4096; pos_ind = None; z_ind = None;
-                  fuel = 200000 } in
-       (try encode st b; Some (Buffer.contents st.buf) with Not_native -> None)
+     | Monomorphic, Def b -> encoding_of_body env b
      | _ -> None)
 
 (* -------------------------------------------------------------------------- *)
@@ -218,34 +248,43 @@ let expected = [
   "F0;2;0;0;LLS0;0;3;R2;1;S0;0;3;R2;1;A1;K0;2;A2;R5;R2;R1;1;A1;K0;1;A2;R6;R2;R1;0;A1;K0;2;A1;CF0;1;0;LS0;0;3;R1;1;A1;K0;2;A1;R3;R1;1;A1;K0;1;R1;0;A1;K0;2;K0;3;R1;1;S0;0;3;R2;1;A1;K0;1;A2;R6;R2;R1;1;A1;K0;2;A2;R6;R2;R1;0;A1;K0;1;R1;0;S0;0;3;R1;1;A1;K0;2;A1;CF0;1;0;LS0;0;3;R1;1;A1;K0;2;A1;R3;R1;1;A1;K0;1;R1;0;A1;K0;2;K0;3;R1;1;A1;K0;1;R1;0;A1;K0;2;K0;3;LLS0;0;3;R2;1;S0;0;3;R2;1;A1;K0;1;A2;R5;R2;R1;1;A1;K0;2;A2;R5;R2;R1;0;A1;K0;1;A1;CF0;1;0;LS0;0;3;R1;1;A1;K0;2;A1;R3;R1;1;A1;K0;1;R1;0;A1;K0;2;K0;3;R1;1;S0;0;3;R2;1;A1;K0;2;A2;R5;R2;R1;1;A1;K0;1;A2;R6;R2;R1;0;A1;K0;2;A1;CF0;1;0;LS0;0;3;R1;1;A1;K0;2;A1;R3;R1;1;A1;K0;1;R1;0;A1;K0;2;K0;3;R1;0;S0;0;3;R1;1;A1;K0;1;A1;CF0;1;0;LS0;0;3;R1;1;A1;K0;2;A1;R3;R1;1;A1;K0;1;R1;0;A1;K0;2;K0;3;R1;1;A1;K0;2;A1;CF0;1;0;LS0;0;3;R1;1;A1;K0;2;A1;R3;R1;1;A1;K0;1;R1;0;A1;K0;2;K0;3;R1;0;A1;K0;1;K0;3;", Vmbytecodes.ZNposadd;
 ]
 
-(* No cache of the decision is kept here. [slot_for_getglobal] calls this once
-   per evaluation of a constant's value, guarded by that constant's own
-   retroknowledge key, and a redefinition (after [Reset], or a reused name)
-   gets a fresh key and so a fresh value: a cache keyed by [Constant.t] would
-   outlive the definition it was computed for and pin the wrong body, making the
-   machine disagree with [cbv] on the new constant. The encoding is recomputed
-   from the current environment every time, so the decision always matches the
-   body the machine is about to run. *)
-let pin_of_constant env kn =
-  match encoding env kn with
-  | None ->
-    debug Pp.(fun () ->
-        str "vmznative " ++ Constant.print kn ++ str " interpreted (no encoding)");
-    None
-  | Some s ->
-    dump kn s;
-    let rec find = function
-      | [] -> None
-      | (s', op) :: rest -> if String.equal s s' then Some op else find rest
-    in
-    let r = find expected in
-    debug Pp.(fun () ->
-        str "vmznative " ++ Constant.print kn ++
-        (match r with
-         | Some ZNadd -> str " native add"
-         | Some ZNpossub -> str " native pos_sub"
-         | Some ZNposadd -> str " native pos_add"
-         | None -> str " interpreted") ++
-        str " " ++ str s);
-    (match r with Some _ -> incr pinned_count | None -> ());
-    r
+(* The decision is taken where the body is compiled, so it is the decision for
+   that very body: a redefinition (after [Reset], or a reused name) compiles
+   its own body and gets its own answer. Nothing is cached by name, which
+   would outlive the definition it was computed for.
+
+   Every constant's declaration asks this, so the walk carries the expected
+   encodings and stops at the first character that parts from all of them.
+   With the dump channel on it carries none, because the point of the dump is
+   the encoding of a definition that no longer matches.
+
+   [name] is only printed. The line is one short line per declaration, which
+   test-suite/output/VmNativeArith.v reads; the encoding itself goes to the
+   dump channel, which is the tool for finding out why a definition is not
+   pinned. *)
+let expected_strings = lazy (List.map fst expected)
+
+let pin_of_body ?name env body =
+  let cands =
+    if Option.has_some (Lazy.force dump_channel) then None
+    else Some (Lazy.force expected_strings)
+  in
+  let r = match encoding_of_body ?cands env body with
+    | None -> None
+    | Some s ->
+      dump name s;
+      let rec find = function
+        | [] -> None
+        | (s', op) :: rest -> if String.equal s s' then Some op else find rest
+      in
+      find expected
+  in
+  debug Pp.(fun () ->
+      (match name with Some kn -> Constant.print kn | None -> str "<anonymous>") ++
+      (match r with
+       | Some ZNadd -> str " native add"
+       | Some ZNpossub -> str " native pos_sub"
+       | Some ZNposadd -> str " native pos_add"
+       | None -> str " interpreted"));
+  (match r with Some _ -> incr pinned_count | None -> ());
+  r

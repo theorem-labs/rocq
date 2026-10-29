@@ -284,6 +284,13 @@ let envcache_of_rel i envcache = {
    code compiled again is kept only when its mask is the stored one; otherwise this run uses the
    stored code, as stock does.
 
+   It is also kept only when this compilation actually expanded a body ([Genlambda.expansions]
+   moved). With nothing expanded the code is the compilation the library file already holds, so
+   there is nothing to gain, and replacing the stored code would make this process ignore the
+   bytecode its .vo carries for no reason: test-suite/misc/rocqchk_vm_bytecode.sh builds a .vo
+   whose vmlibrary disagrees with its library, and the compiler must use the bytecode that file
+   carries, as stock does, for the checker to be the thing that refuses it.
+
    ROCQ_VM_INLINE=0 turns the expansion off: no body is expanded, no constant is compiled again,
    and this process generates the code speed-6 generates, which gives a reviewer an arm that
    differs from the base in nothing else. ROCQ_VM_INLINE=1 and an unset variable are the default.
@@ -300,13 +307,17 @@ let inline_limit =
 let compiled_again_count = ref 0
 let compiled_again () = !compiled_again_count
 
+(* [count:false]: the statistics of [Vmbinnum] count the declarations the recognizer reads, and
+   this body's declaration was already counted where it was declared. *)
 let compile_again env cb mask =
   if Int.equal inline_limit 0 then None
   else match cb.const_body with
   | Def _ ->
-    (match Vmbytegen.compile_constant_body ~fail_on_error:false ~inline_limit
+    let before = Genlambda.expansions () in
+    (match Vmbytegen.compile_constant_body ~fail_on_error:false ~count:false ~inline_limit
              env cb.const_universes cb.const_body with
-     | Some (BCdefined (mask', code, patches)) when CArray.equal Bool.equal mask mask' ->
+     | Some (BCdefined (mask', code, patches))
+       when CArray.equal Bool.equal mask mask' && Genlambda.expansions () > before ->
        incr compiled_again_count; Some (code, patches)
      | _ -> None)
   | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> None
@@ -334,28 +345,6 @@ let rec slot_for_getglobal env sigma kn envcache table =
     | BCconstant -> set_global (val_of_constant kn) table
     in
     rk := Some (CEphemeron.create pos);
-    (* The value of a constant is what the machine computes from its body. For a
-       constant whose definition [Vmznative] recognises, that value is replaced
-       by a wrapper that runs the operation natively; the wrapper's fallback is
-       the value just computed, which the line above has made the one
-       [Reloc_getglobal kn] resolves to, so an argument the native code cannot
-       read reduces through the constant's own code. A constant [Vmznative] does
-       not recognise, including one that only carries the name of a standard
-       operation, keeps the value computed above.
-
-       A constant that [Vmbinnum] also binds keeps its own value: BINNUM at the
-       function's entry accepts every argument the wrapper accepts and more, so
-       the wrapper would only add a call frame and a decode that fails. *)
-    let pos = match (if Option.has_some (Vmbinnum.recognize_call env kn) then None
-                     else Vmznative.pin_of_constant env kn) with
-      | None -> pos
-      | Some op ->
-        let code = Vmbytegen.compile_znative_wrapper kn op in
-        let v = eval_to_patch env sigma code envcache table in
-        let pos = set_global v table in
-        rk := Some (CEphemeron.create pos);
-        pos
-    in
     pos
 
 and slot_for_fv env sigma fv envcache table =

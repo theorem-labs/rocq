@@ -95,9 +95,11 @@ type instruction =
   | Kbranch of Label.t                  (** jump to label, is it needed ? *)
   | Kprim of CPrimitives.t * pconstant
   | Kcamlprim of caml_prim * Label.t
-  | Kznative of znative_op * Constant.t
-      (** native binary-number operation; the constant is the one whose value
-          the machine applies instead when an argument is not a closed number *)
+  | Kznative of znative_op
+      (** native binary-number operation, at the entry of the function whose
+          definition carries it, where its two arguments are sp[0] and sp[1];
+          it returns the result, or falls through to the body when an argument
+          is not a closed number *)
 
 and bytecodes = instruction list
 

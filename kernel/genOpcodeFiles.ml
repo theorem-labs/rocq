@@ -170,9 +170,9 @@ let opcodes =
        [rocq_fix_code.c] bounds the opcodes it accepts by it. *)
     "BINNUM", 2;
     "BINNUMCALL", 3;
-    "CHECKZADD", 1;
-    "CHECKZPOSSUB", 1;
-    "CHECKPOSADD", 1
+    "CHECKZADD", 0;
+    "CHECKZPOSSUB", 0;
+    "CHECKPOSADD", 0
   |]
 
 let pp_c_comment fmt =
