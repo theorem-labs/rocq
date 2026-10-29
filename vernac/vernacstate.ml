@@ -231,7 +231,11 @@ module Declare_ = struct
   (* [Abort All] and every other full drop of the proof stack. The recorder is
      not part of this state, so it is told here: an open proof it still holds
      would swallow every proof after it. *)
-  let discard_all () = Proof_recorder.drop_all_proofs (); s_lemmas := None
+  let discard_all () =
+    Proof_recorder.drop_all_proofs ();
+    Proof_record_env.drop_universe_frames ();
+    s_lemmas := None
+
   let update_sigma_univs ugraph = dd (Declare.Proof.update_sigma_univs ugraph)
 
   let get_current_context () = cc Declare.Proof.get_current_context

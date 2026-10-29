@@ -958,6 +958,7 @@ let vernac_end_proof ~lemma ~pm = let open Vernacexpr in function
     in pm
 
 let vernac_abort ~lemma:_ ~pm =
+  if Proof_recorder.writing () then Proof_record_env.drop_universe_frame ();
   Proof_recorder.drop_proof ();
   pm
 

@@ -14,6 +14,29 @@ open UVars
 (** {6 Graphs of universes. } *)
 type t
 
+(** A universe-graph operation, as the proof recorder sees it: the levels a
+    check or an enforcement names, or a read of the whole graph. *)
+type query =
+  | Constraints of Level.Set.t
+  | Declared of Level.Set.t
+  | Domain
+  | All_constraints
+  | Graph
+  | Type_in_type
+  | Opaque of string
+
+val set_query_hook : (t -> query -> unit) option -> unit
+(** Installs the recorder hook while an eligible proof runs. [None] makes
+    graph queries allocation-free. *)
+
+val without_query_hook : (unit -> 'a) -> 'a
+(** Runs a recorder callback's own graph lookup without recursively recording
+    it. *)
+
+val above_prop_qvars : t -> Sorts.QVar.Set.t
+(** The quality variables known to be above [Prop]; part of what a proof's
+    universe read compares. *)
+
 val set_type_in_type : bool -> t -> t
 
 (** When [type_in_type], functions adding level constraints do not fail and

@@ -90,6 +90,11 @@ must HIT), `grain_hint_table` (an unused entry of a searched hint database
 changes: the whole-database digest MISSES, and that is the expected result for
 that grain).
 
+**Universe constraints.** `universe_constraint_unused` adds a constraint over
+levels the proof never queries and must hit. `universe_constraint_changed`
+changes the transitive constraint projection of levels the proof queries and
+must miss on `universe_constraint`.
+
 **Place.**  `place_same_file`, `place_earlier_cone` (the change is in a file the
 proof's file requires; the proof that read the changed constant misses, the
 other hits).
@@ -154,6 +159,16 @@ A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
 one trips, no later proof of the process is replayed, and each is counted as
 `ineligible`.
+
+**Late commands.**  A command after the first closer that can rebind a
+Rocqlib name or load code keeps every proof that opens before the last such
+command from replaying (outcome `ineligible`, channel `rebind`, why
+`before_late_command`); `refused_detail` names the first command, its line and
+the last one's byte offset.  `rebind_after_hit`: the proofs before a late
+`Register` run, and the rebinding trips the Rocqlib fence for the proof after
+it.  `plugin_after_hit`: the proof before a late `Declare ML Module` runs, and
+the proof after it misses on its key (the loaded plugins are in it).
+`late_command_hit`: the same load in both trees, and the proof after it hits.
 
 **The closer.**  `closer_admitted`: a registered `tac. Qed.` against an edited
 `tac. Admitted.` must miss.
