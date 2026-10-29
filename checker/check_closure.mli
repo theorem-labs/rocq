@@ -69,4 +69,17 @@ END STATEMENT REPORT
     typing conditions of what they reach:
     [type-in-type], [unsafe-fixpoint], [unchecked-eliminations],
     [assumed-positive], [uip] and [indices-not-mattering]. Statements keep
-    request order; axioms and flags are sorted. *)
+    request order; axioms and flags are sorted.
+
+    The sealings of the statements that read [match] must also be accepted
+    together, as rocqchk loads them: when the universe constraints they add
+    are consistent one at a time but not together, no statement is printed,
+    whatever its verdict, and the report stops without its end marker. The
+    message gives the number of those statements and their positions among
+    the requests, counted from 1, and never a name. Only the statements that
+    read [match] are in this check: a polymorphic model whose universe
+    context has sort variables or constraints reads [universes-differ]
+    without being compared, adds nothing, and its sealing may still be
+    accepted and clash with theirs.
+    @raise CErrors.UserError when those sealings are not accepted together,
+    after the first line. *)

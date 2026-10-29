@@ -522,12 +522,13 @@ let run senv =
     fatal_error (explain_exn e) (exit_code e)
 
 (* The report is evidence beside the verdict, never the verdict: a report
-   that cannot be completed is left without its end marker, which a reader
-   takes as no report, and the exit status is unchanged. It comes before the
-   context summary. The run goes on to exit 0, so the warning escapes the text
-   of the exception, which can quote a name read from a library (checkNames.mli).
-   The text is the one [explain_exn] returns: it prints the terms of a
-   [CantApplyBadType] type error itself, but nothing in the report raises one. *)
+   that cannot be completed is left without its end marker, so a reader keeps
+   only the statements that a later statement line closes, and the exit status
+   is unchanged. It comes before the context summary. The run goes on to exit
+   0, so the warning escapes the text of the exception, which can quote a name
+   read from a library (checkNames.mli). The text is the one [explain_exn]
+   returns: it prints the terms of a [CantApplyBadType] type error itself, but
+   nothing in the report raises one. *)
 let print_statement_report env requests =
   try Check_closure.print env CheckLibrary.indirect_accessor requests
   with e when (match e with Sys.Break | Out_of_memory -> false | _ -> true) ->

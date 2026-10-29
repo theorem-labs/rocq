@@ -803,6 +803,27 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   would print that is not made of identifiers, for instance the name of a
   constant that a term of an admitted library names but no library declares.
 
+  The statements that read ``match`` must also be accepted together: a
+  check that loads a sealing module for each of them adds all their
+  universe constraints to one graph. When the statements need universe
+  constraints that are consistent alone but not together, the report has
+  no ``statement`` line and no ``END STATEMENT REPORT`` line, and the
+  checker warns, giving the position of each of those statements among the
+  requests. Positions count from 1 and skip blank lines and lines starting
+  with ``#``, so they are not line numbers of *file*. The report then gives
+  no verdict for any of its statements, as the check gives none when it
+  refuses to load those sealing modules.
+
+  This check covers only the statements that read ``match``, so it does
+  not make the report agree with a check that loads every sealing module.
+  A polymorphic *model* with sort variables or constraints in its universe
+  context reads ``universes-differ`` without its type being compared, and
+  adds nothing to the check. Its sealing module may still be accepted, and
+  the universe constraints it adds may clash with those of a ``match``
+  statement. A check that loads every sealing module refuses those two
+  statements together. This report stays complete and gives each of them
+  its own verdict.
+
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
 
