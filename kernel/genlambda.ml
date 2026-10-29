@@ -650,22 +650,29 @@ end
    then run from a second copy of the code.
 
    One compilation expands at most [inline_node_budget] nodes, so a term that applies small
-   constants in many places cannot make the compiler produce code of unbounded size. *)
+   constants in many places cannot make the compiler produce code of unbounded size. The budget
+   bounds the code of one compilation; it bounds no depth, which [max_depth] below does.
+
+   The walk carries the nodes it has still to read in a list and stops by returning. It calls
+   nothing on the machine stack, because it runs inside [lambda_of_app], one step of this module's
+   recursion over a term, and that recursion is as deep as the term: the list literal of
+   test-suite/primitive/float/specs.v is 19,000 cells deep and leaves 68 KiB of the 8 MiB stack the
+   grader gives. A walk that recursed would put the depth of a body on top of the depth of the
+   term. *)
 let inline_node_budget = 100_000
 
 let inlinable_body ~limit body =
   match kind body with
   | Lambda _ ->
-    let n = ref 0 in
-    let exception Over in
-    let rec aux c =
-      incr n;
-      if !n > limit then raise Over;
-      match kind c with
-      | Fix _ | CoFix _ -> raise Over
-      | _ -> Constr.iter aux c
+    let rec walk n todo = match todo with
+      | [] -> true
+      | c :: todo ->
+        if n >= limit then false
+        else match kind c with
+        | Fix _ | CoFix _ -> false
+        | _ -> walk (n + 1) (Constr.fold (fun todo t -> t :: todo) todo c)
     in
-    (try aux body; true with Over -> false)
+    walk 0 [body]
   | _ -> false
 
 module Make (Val : S) =
@@ -720,11 +727,25 @@ let rec get_fix_struct env i t = match kind (Reduction.whd_all env t) with
     get_fix_struct env (i - 1) t
 | _ -> assert false
 
-(* [inline_limit] and [inline_budget] hold for one [lambda_of_constr] call, which sets and restores
-   them; compilations never nest (a compilation runs no code). With [inline_limit = 0], the stock
-   value, [inline_budget] stays 0 and nothing but a constant with inline code is expanded. *)
-let inline_limit = ref 0
-let inline_budget = ref 0
+(* What one [lambda_of_constr] call may expand. It sets and restores the three fields;
+   compilations never nest (a compilation runs no code). With [limit = 0], the stock value,
+   [budget] stays 0 and nothing but a constant with inline code is expanded.
+
+   [max_depth] bounds the NESTING of expansions. An expansion is compiled where the call was, so an
+   expansion inside an expansion nests this module's recursion over a term once more, and
+   [inline_node_budget] bounds no nesting: the review's C07_budget.v builds chains of 2,500 calls
+   of one small constant. With this bound the depth the lever adds is at most [max_depth] bodies of
+   [limit] nodes. The gain is in the ordinary call, which keeps it: a call that no expansion
+   encloses is at depth 0.
+
+   One record, not three [ref]s, because [lambda_of_app] reads [budget] and [depth] in the same
+   test. [lambda_of_app], [lambda_of_args] and [lambda_of_constr] call one another once per node of
+   the term and flambda gives each the frame its largest case needs, so a register more in that
+   test costs 16 bytes in each frame of a recursion 19,000 steps deep: measured, three [ref]s need
+   616 bytes of frame per step where this record needs 536. *)
+type inline_state = { mutable limit : int; mutable budget : int; mutable depth : int }
+let inline_st = { limit = 0; budget = 0; depth = 0 }
+let inline_max_depth = 8
 
 let rec lambda_of_constr cache env sigma c =
   match kind c with
@@ -854,25 +875,28 @@ and lambda_of_app cache env sigma f args =
       begin match cb.const_body with
       | Primitive op -> lambda_of_prim env c op (lambda_of_args cache env sigma 0 args)
       | Def csubst -> (* TODO optimize if f is a proj and argument is known *)
+        (* [Vmbinnum.binds_call_ignoring_switch], not [Vmbinnum.recognize_call]: this decision
+           must not move with ROCQ_VM_BINNUM, which takes BINNUM away and changes nothing else.
+           [recognize_call] answers [None] when the switch is off, which would make
+           ROCQ_VM_BINNUM=0 EXPAND the constants BINNUM binds and leave no arm that only lacks
+           BINNUM. *)
         if cb.const_inline_code
-           || (!inline_budget > 0 && inlinable_body ~limit:!inline_limit csubst
-               && Option.is_empty (Vmbinnum.recognize_call env kn))
+           || (inline_st.budget > 0 && inline_st.depth < inline_max_depth
+               && inlinable_body ~limit:inline_st.limit csubst
+               && not (Vmbinnum.binds_call_ignoring_switch env kn))
         then
           let () =
             if not cb.const_inline_code then
-              inline_budget := !inline_budget - !inline_limit
+              inline_st.budget <- inline_st.budget - inline_st.limit
           in
           let csubst = Vars.subst_instance_constr u csubst in
-          lambda_of_app cache env sigma csubst args
+          (* The expansion is compiled here, so what it holds is one expansion deeper. *)
+          let () = inline_st.depth <- inline_st.depth + 1 in
+          let lam = lambda_of_app cache env sigma csubst args in
+          let () = inline_st.depth <- inline_st.depth - 1 in
+          lam
         else
-          (* Erase unused arguments *)
-          let mapi i arg =
-            let keep = if i < Array.length mask then mask.(i) else true in
-            if keep then lambda_of_constr cache env sigma arg
-            else mknode (Lint 0) (* dummy *)
-          in
-          let args = Array.mapi mapi args in
-          mkLapp (mknode @@ Lconst (kn, u)) args
+          mkLapp (mknode @@ Lconst (kn, u)) (lambda_of_masked_args cache env sigma mask args)
       | OpaqueDef _ | Undef _ | Symbol _ ->
           mkLapp (mknode @@ Lconst (kn, u)) (lambda_of_args cache env sigma 0 args)
       end
@@ -888,20 +912,46 @@ and lambda_of_app cache env sigma f args =
       let args = lambda_of_args cache env sigma 0 args in
       mkLapp f args
 
+(* The arguments a call keeps, the ones the callee's mask does not call unused. A function of its
+   own, and [lambda_of_args] below fills its array with a loop and no closure, for the stack: both
+   run inside [lambda_of_app], one step of the recursion over a term, and flambda gives that
+   function the frame its largest case needs. Written out in [lambda_of_app] and with
+   [Array.init], the three functions of the recursion need 568 bytes of frame per step; this way
+   they need 536, so the lever's test costs that recursion nothing. *)
+and lambda_of_masked_args cache env sigma mask args =
+  let mapi i arg =
+    let keep = if i < Array.length mask then mask.(i) else true in
+    if keep then lambda_of_constr cache env sigma arg
+    else mknode (Lint 0) (* dummy *)
+  in
+  Array.mapi mapi args
+
 and lambda_of_args cache env sigma start args =
   let nargs = Array.length args in
-  if start < nargs then
-    Array.init (nargs - start)
-      (fun i -> lambda_of_constr cache env sigma args.(start + i))
+  if start < nargs then begin
+    let n = nargs - start in
+    let res = Array.make n (lambda_of_constr cache env sigma (Array.unsafe_get args start)) in
+    for i = 1 to n - 1 do
+      Array.unsafe_set res i
+        (lambda_of_constr cache env sigma (Array.unsafe_get args (start + i)))
+    done;
+    res
+  end
   else empty_args
 
 let lambda_of_constr ~inline_limit:limit env sigma c =
   let cache = Cache.ConstrTable.create 91 in
-  let saved_limit = !inline_limit and saved_budget = !inline_budget in
-  inline_limit := limit;
-  inline_budget := if limit > 0 then inline_node_budget else 0;
+  let saved = { limit = inline_st.limit; budget = inline_st.budget; depth = inline_st.depth } in
+  inline_st.limit <- limit;
+  inline_st.budget <- (if limit > 0 then inline_node_budget else 0);
+  (* An exception out of a compilation (a stack overflow, a term the compiler refuses) leaves the
+     nesting where it stopped, so each compilation starts it again. *)
+  inline_st.depth <- 0;
   Fun.protect
-    ~finally:(fun () -> inline_limit := saved_limit; inline_budget := saved_budget)
+    ~finally:(fun () ->
+      inline_st.limit <- saved.limit;
+      inline_st.budget <- saved.budget;
+      inline_st.depth <- saved.depth)
     (fun () -> lambda_of_constr cache env sigma c)
 
 end

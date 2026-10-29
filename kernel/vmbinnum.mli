@@ -61,6 +61,13 @@ val recognize_call : Environ.env -> Names.Constant.t -> int option
     as by {!recognize}. The function is the one at the init index of a
     fixpoint body, or the body itself. It never raises. *)
 
+val binds_call_ignoring_switch : Environ.env -> Names.Constant.t -> bool
+(** [binds_call_ignoring_switch env cst] is whether {!recognize_call} would
+    answer a routine for [cst] were every routine on, so it does not move with
+    [ROCQ_VM_BINNUM]. A compiler decision about the code of a call of [cst]
+    asks this: [ROCQ_VM_BINNUM] takes BINNUM away and changes nothing else.
+    It counts nothing and never raises. *)
+
 val no_binnum : int -> int option
 (** No routine for any function. *)
 

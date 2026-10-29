@@ -282,14 +282,27 @@ let envcache_of_rel i envcache = {
    The one thing a caller must agree with the callee on is which arguments the code reads: a caller
    erases the arguments the callee's stored mask calls unused ([Genlambda.lambda_of_app]). So the
    code compiled again is kept only when its mask is the stored one; otherwise this run uses the
-   stored code, as stock does. *)
-let inline_limit = 50
+   stored code, as stock does.
+
+   ROCQ_VM_INLINE=0 turns the expansion off: no body is expanded, no constant is compiled again,
+   and this process generates the code speed-6 generates, which gives a reviewer an arm that
+   differs from the base in nothing else. ROCQ_VM_INLINE=1 and an unset variable are the default.
+   Any other value stops the process, as a misspelt switch that silently did nothing would be read
+   as a measurement. *)
+let inline_limit =
+  match Sys.getenv_opt "ROCQ_VM_INLINE" with
+  | None | Some "1" -> 50
+  | Some "0" -> 0
+  | Some v ->
+    Printf.eprintf "ROCQ_VM_INLINE=%s: expected 0 (no expansion) or 1.\n%!" v;
+    exit 1
 
 let compiled_again_count = ref 0
 let compiled_again () = !compiled_again_count
 
 let compile_again env cb mask =
-  match cb.const_body with
+  if Int.equal inline_limit 0 then None
+  else match cb.const_body with
   | Def _ ->
     (match Vmbytegen.compile_constant_body ~fail_on_error:false ~inline_limit
              env cb.const_universes cb.const_body with

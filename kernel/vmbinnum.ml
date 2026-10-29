@@ -967,9 +967,10 @@ let any_enabled = Array.exists (fun b -> b) enabled
    the function at index 0), if [body] is equal to a reference; otherwise the
    near misses, as (reference, why, detail). *)
 let match_body ~detail env body =
+  let on k = enabled.(k) in
   let sg = signature body in
   let candidate r =
-    Array.exists (function Some k -> enabled.(k) | None -> false) r.funs
+    Array.exists (function Some k -> on k | None -> false) r.funs
     && (match sg, r.ref_signature with
         | Some s, Some s' -> same_signature s s'
         | (Some _ | None), _ -> false)
@@ -984,7 +985,7 @@ let match_body ~detail env body =
         | Error (false, _, _) -> try_refs (k + 1) misses
         | Ok () ->
           Ok (Array.map (function
-              | Some rk when enabled.(rk) -> Some rk
+              | Some rk when on rk -> Some rk
               | Some _ | None -> None) r.funs)
   in
   try_refs 0 []
@@ -1048,3 +1049,34 @@ let recognize_call env cst =
             if 0 <= index && index < Array.length funs then funs.(index) else None
         end
       | Def _ | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> None
+
+(* Whether a call of [cst] WOULD run a routine, were every routine on. The
+   compiler asks this, not [recognize_call], when it decides what code to
+   generate for a call of [cst] (kernel/genlambda.ml): ROCQ_VM_BINNUM takes
+   BINNUM away and must change nothing else, so the code of a call must not
+   move when the switch moves. It counts nothing: it answers about the module,
+   not about a call this process makes.
+
+   It turns every routine on while it reads the body, rather than passing a
+   flag down, because recognition reads [enabled] in more than one place: the
+   candidate references, the routines a match returns, and the callees a
+   reference requires. The kernel compiles in one thread and the functions
+   below never raise, and the array is put back in any case. *)
+let binds_call_ignoring_switch env cst =
+  match Environ.lookup_constant_opt cst env with
+  | None -> false
+  | Some cb ->
+    let univs = UVars.AbstractContext.size (Declareops.universes_context cb.const_universes) in
+    match cb.const_body with
+    | Def body when UVars.eq_sizes (0, 0) univs ->
+      let index = match kind body with Fix ((_, init), _) -> init | _ -> 0 in
+      let saved = Array.copy enabled in
+      Array.fill enabled 0 (Array.length enabled) true;
+      let r =
+        Fun.protect ~finally:(fun () -> Array.blit saved 0 enabled 0 (Array.length saved))
+          (fun () -> match_body ~detail:false env body)
+      in
+      (match r with
+       | Error _ -> false
+       | Ok funs -> 0 <= index && index < Array.length funs && funs.(index) <> None)
+    | Def _ | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> false
