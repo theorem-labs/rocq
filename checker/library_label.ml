@@ -30,21 +30,25 @@
      prints, the constants whose label contribution the axiom-or-opaque
      blinding erased (each with its current "axiom" or "proof" status), and
      the libraries this one holds a foreign opaque reference into.
-   One mode describes this build and takes no file:
+   Two modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across
      builds compares them only within one layout version.
+   - [--vo-representation]: how this build represents what a .vo stores
+     (see [vo_representation] below), read by test-suite/misc/vo-format.sh.
    Exit 0; 1 when the file cannot be read as a .vo file; 2 on a usage error;
    3 when --attempts-json meets a string that is not valid UTF-8.
-   Every object kind of rocq's own plugins is linked in (-linkall), so the
-   kinds a library uses are registered as they are in [rocq compile]. *)
+   Rocq's toplevel and every one of its plugins are linked in (-linkall),
+   so the object kinds registered here are the ones a library's compile
+   registers; the checker's value schema is linked for
+   [--vo-representation]. *)
 
 let hex s =
   String.concat "" (List.init (String.length s) (fun i -> Printf.sprintf "%02x" (Char.code s.[i])))
 
 let usage () =
   prerr_endline "usage: rocq-library-label (--check | --stored | --attempts | --attempts-json | --axiom-report-json) FILE.vo";
-  prerr_endline "       rocq-library-label --layout-version";
+  prerr_endline "       rocq-library-label (--layout-version | --vo-representation)";
   exit 2
 
 (* The label kind [--check] prints, and the hex it prints beside it: the full
@@ -104,6 +108,149 @@ let axiom_report_json (l : Library.file_label) =
   Buffer.add_char b '}';
   Buffer.contents b
 
+module Values = Coq_checklib.Values
+
+(* The representation of the values this build writes into a .vo
+   ([--vo-representation]), in two halves:
+   - the kernel half: the structure of every segment of a .vo as the
+     checker describes it (checker/values.ml): per type, its constructors
+     with an argument, their arity and their order, and the number of its
+     constant constructors. A constructor with an argument added, removed
+     or moved, or a field added to a record, changes this printing, and a
+     build that reads a .vo written by a build with another printing can
+     read a value as the wrong constructor. Two constant constructors
+     swapped do not change it: the printing counts them. For the summary,
+     library and opaques segments the description is what rocqchk
+     validates a file against at load; for vmlibrary it is a description
+     only, because this fork's rocqchk regenerates the bytecode and never
+     reads that segment (checker/checkLibrary.ml), so nothing checks that
+     description against what the kernel writes: a kernel change that
+     leaves checker/values.ml as it is leaves this printing as it is;
+   - the object half: the name of every object kind registered in this
+     build ([Libobject.dump], with every plugin and the toplevel linked
+     in), which is what the object segments of a .vo can hold. A kind
+     added, removed or renamed changes this printing; a kind only this
+     build has is the one difference misc/vo-format.sh lets pass.
+   What this does NOT reach: the payload type of an object kind (no reader
+   in the build describes it; the checker reads both object segments as
+   [Any], [Values.v_lib]), the meaning of a string, the bytecode of the
+   vmlibrary segment among them, and an order of constant constructors. A
+   change there shows up here only when it moves a kernel type or a kind
+   name. *)
+
+(* The schema is a graph: [Values.fix] makes cyclic values, and a node can
+   be reached from several places. It is printed one node per line, [#n =
+   kind(...)], with every sub-value named by its own [#n].
+
+   Two nodes get one number when they print the same with their children's
+   numbers, computed by refining a partition that starts with every node
+   together. The printing then says what the schema is, not how the build
+   happens to share it: [checker/values.ml] builds equal nodes in several
+   places ([v_set], [v_map]), and whether those are one OCaml value is
+   decided by the compiler's flags rather than by the source -- with
+   [-O3 -unbox-closures], the flags of dune's release profile, flambda
+   shares nodes it leaves apart without them -- so numbering by physical
+   identity would fail this test on a release build alone.
+
+   Numbers follow the order the walk first meets a class, so a changed node
+   whose children all have numbers changes one line, while a node added or
+   removed renumbers every class met after it: in a long diff, the first
+   changed line is the change. *)
+let print_schema b (v : Values.value) =
+  (* The nodes, in the order the walk meets them. [Values.equal], the
+     equality the checker's own walk uses (checker/validate.ml), reads a
+     [Values.fix] proxy as its content, so the walk ends on a cyclic
+     schema. *)
+  let seen = ref [] and count = ref 0 and rev = ref [] in
+  let todo = Queue.create () in
+  let id v =
+    match List.find_opt (fun (w, _) -> Values.equal w v) !seen with
+    | Some (_, n) -> n
+    | None ->
+      let n = !count in
+      incr count; seen := (v, n) :: !seen; rev := v :: !rev; Queue.add v todo; n
+  in
+  let root = id v in
+  while not (Queue.is_empty todo) do
+    let child v = ignore (id v) in
+    match Values.kind (Queue.pop todo) with
+    | Values.Any | Values.Fail _ | Values.Int | Values.Int64 | Values.Float64
+    | Values.String -> ()
+    | Values.Array v | Values.List v | Values.Opt v | Values.Annot (_, v) -> child v
+    | Values.Tuple (_, fields) -> Array.iter child fields
+    | Values.Sum (_, _, variants) -> Array.iter (Array.iter child) variants
+  done;
+  let nodes = Array.of_list (List.rev !rev) in
+  let cls = Array.make (Array.length nodes) 0 in
+  let render out v =
+    let ref_ v = Printf.bprintf out "#%d" cls.(id v) in
+    let refs vs = Array.iteri (fun i v -> if i > 0 then Buffer.add_char out ','; ref_ v) vs in
+    let unary name v = Printf.bprintf out "%s(" name; ref_ v; Buffer.add_char out ')' in
+    match Values.kind v with
+    | Values.Any -> Buffer.add_string out "any"
+    | Values.Fail s -> Printf.bprintf out "fail(%s)" s
+    | Values.Int -> Buffer.add_string out "int"
+    | Values.Int64 -> Buffer.add_string out "int64"
+    | Values.Float64 -> Buffer.add_string out "float64"
+    | Values.String -> Buffer.add_string out "string"
+    | Values.Array v -> unary "array" v
+    | Values.List v -> unary "list" v
+    | Values.Opt v -> unary "opt" v
+    | Values.Annot (s, v) -> Printf.bprintf out "annot(%s," s; ref_ v; Buffer.add_char out ')'
+    | Values.Tuple (name, fields) ->
+      Printf.bprintf out "tuple(%s,%d," name (Array.length fields); refs fields;
+      Buffer.add_char out ')'
+    | Values.Sum (name, nconst, variants) ->
+      Printf.bprintf out "sum(%s,%d,%d," name nconst (Array.length variants);
+      Array.iteri (fun i fields ->
+          if i > 0 then Buffer.add_char out ';';
+          Printf.bprintf out "%d:" (Array.length fields); refs fields)
+        variants;
+      Buffer.add_char out ')'
+  in
+  (* One refinement round. A node's key is its class and its printing with
+     this round's classes, so a class only ever splits and the rounds end.
+     The new classes are numbered in node order, the order the walk met
+     them. *)
+  let refine () =
+    let key i =
+      let out = Buffer.create 64 in
+      Printf.bprintf out "%d|" cls.(i); render out nodes.(i); Buffer.contents out
+    in
+    let tbl = Hashtbl.create 97 and next = ref 0 in
+    let fresh = Array.make (Array.length nodes) 0 in
+    Array.iteri (fun i _ ->
+        let k = key i in
+        fresh.(i) <-
+          (match Hashtbl.find_opt tbl k with
+           | Some c -> c
+           | None -> let c = !next in incr next; Hashtbl.add tbl k c; c))
+      nodes;
+    let changed = fresh <> cls in
+    Array.blit fresh 0 cls 0 (Array.length cls);
+    changed
+  in
+  while refine () do () done;
+  Printf.bprintf b "root #%d\n" cls.(root);
+  let printed = Hashtbl.create 97 in
+  Array.iteri (fun i v ->
+      if not (Hashtbl.mem printed cls.(i)) then begin
+        Hashtbl.add printed cls.(i) ();
+        Printf.bprintf b "  #%d = " cls.(i); render b v; Buffer.add_char b '\n'
+      end)
+    nodes
+
+let vo_representation () =
+  let b = Buffer.create 8192 in
+  Buffer.add_string b "rocq-vo-representation 1\n";
+  Printf.bprintf b "vo_version %ld\n" Coq_config.vo_version;
+  List.iter (fun k -> Printf.bprintf b "object_kind %s\n" k)
+    (List.sort String.compare (List.map snd (Libobject.dump ())));
+  List.iter (fun (segment, v) ->
+      Printf.bprintf b "segment %s " segment; print_schema b v)
+    Values.vo_segments;
+  Buffer.contents b
+
 let read f =
   match Library.read_file_label f with
   | l -> l
@@ -132,4 +279,5 @@ let () =
     | _ -> usage ()
     end
   | ["--layout-version"] -> Printf.printf "%d\n" LibkeyObjects.version
+  | ["--vo-representation"] -> print_string (vo_representation ())
   | _ -> usage ()

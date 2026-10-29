@@ -41,11 +41,14 @@
  (libraries coq_checklib))
 
 ; rocq-library-label: the location-free library label of a .vo file
-; (vernac/libkeyObjects.ml), recomputed from its content, and its
-; attempted-resolution records. A reader of compiled libraries, as votour
-; is, and the oracle of test-suite/misc/library-label*.sh. Every plugin is
-; linked in so that every object kind is registered, as it is in [rocq
-; compile].
+; (vernac/libkeyObjects.ml), recomputed from its content, its
+; attempted-resolution records, and how this build represents what a .vo
+; stores. A reader of compiled libraries, as votour is, and the oracle of
+; test-suite/misc/library-label*.sh and misc/vo-format.sh. It links
+; rocqworker's toplevel and every plugin statically, so that the object
+; kinds registered here are the ones a compile registers once it has
+; loaded its plugins, and the checker's value schema for
+; --vo-representation.
 (executable
  (name library_label)
  (public_name rocq-library-label)
@@ -54,6 +57,8 @@
  (link_flags -linkall)
  (libraries
   rocq-runtime.vernac
+  rocq-runtime.toplevel
+  rocq-runtime.checklib
   rocq-runtime.plugins.ltac
   rocq-runtime.plugins.tauto
   rocq-runtime.plugins.ltac2
