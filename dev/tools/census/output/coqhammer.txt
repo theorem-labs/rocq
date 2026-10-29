@@ -1,0 +1,8 @@
+src/lib/hammer_errors.ml:13	catchall:src/lib/hammer_errors.ml:catch_errors/e -> g e	ruling: @allocation-precondition
+src/lib/hammer_errors.ml:32	catchall:src/lib/hammer_errors.ml:try_bind_fun/e -> g (Pp.str @@ "CoqHammer bug: please report: " ^	ruling: @allocation-precondition
+src/lib/hhlib.ml:105	catchall:src/lib/hhlib.ml:string_begins_with/_ -> false	ruling: @string-prefix
+src/lib/hhpartac.ml:13	catchall:src/lib/hhpartac.ml:partac/_ -> ()	ineligible: @parallel-race
+src/lib/hhpartac.ml:19	catchall:src/lib/hhpartac.ml:partac/_ -> ()#2	ineligible: @parallel-race
+src/lib/hhpartac.ml:20	catchall:src/lib/hhpartac.ml:partac/_ -> ()#3	ineligible: @parallel-race
+src/lib/hhpartac.ml:21	catchall:src/lib/hhpartac.ml:partac/_ -> ()#4	ineligible: @parallel-race
+census_check: 7 sites (catchall 7), 0 problems

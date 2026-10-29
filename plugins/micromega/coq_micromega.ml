@@ -2196,6 +2196,9 @@ let require_csdp =
 let really_call_csdpcert :
     provername -> micromega_polys -> Sos_types.positivstellensatz option =
  fun provername poly ->
+  (* BET-84 census row 23: psatz calls the external prover csdp, so the
+     proof is never replayed. *)
+  Proof_recorder.ineligible ~reason:"external_prover" ~detail:"csdpcert";
   Lazy.force require_csdp;
   let cmdname = "csdpcert" in
   match (command cmdname [|cmdname|] (provername, poly) : csdp_certificate) with

@@ -1461,7 +1461,10 @@ and knht info e t stk =
 
 let conv : (clos_infos -> clos_tab -> fconstr -> fconstr -> bool) ref
   = ref (fun _ _ _ _ -> (assert false : bool))
-let set_conv f = conv := f
+(* BET-84: kernel/conversion.ml installs Rocq's own once, when it loads; a
+   later one is a plugin's (Proof_recorder.closure_setter). *)
+let conv_set = Proof_recorder.closure_setter ~what:"CClosure.set_conv" ~stock:1
+let set_conv f = conv_set (); conv := f
 
 type ('a, 'b) reduction = {
   red_ret : clos_infos -> Table.t -> pat_state:'b -> ?failed:bool -> (fconstr * stack) -> 'a;

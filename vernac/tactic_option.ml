@@ -94,7 +94,13 @@ let declare_tactic_option ?default name =
     in
     Lib.add_leaf (input (local, Some tac))
   in
-  let get () = match !current_tactic with
+  let get () =
+    let tactic = !current_tactic in
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"N4" ~channel:"tactic_option"
+        ~key:(fun () -> name)
+        ~value:(fun () -> Option.map (Proof_recorder.digest ~what:"tactic_option") tactic);
+    match tactic with
     | None -> Proofview.tclUNIT ()
     | Some tac -> Gentactic.interp tac
   in

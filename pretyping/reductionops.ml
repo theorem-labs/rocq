@@ -183,7 +183,40 @@ module ReductionBehaviour = struct
     let all_never_unfold table = fst table
   end
 
-  let get r = get_from_db (Db.get ()) r
+(* BET-84 census row 5: [simpl] reads the whole reduction behaviour table. *)
+let () =
+  Proof_recorder.register_tables (fun () ->
+      [Proof_record.{ row = "5"; channel = "reduction_behaviour"; key = "";
+                      value = Some (Proof_recorder.digest_cached
+                                      ~what:"reduction_behaviour" (Db.get ())) }])
+
+  (* BET-84: ONE value for the per-constant reduction_behaviour reads,
+     called by the recorder below and by the replay evaluator registered
+     here (dev/tools/census/replay_channels.py). The whole-table row above
+     is keyed "" and answers only that key. *)
+  let recorded_reduction_behaviour r =
+    Some (Proof_recorder.digest ~what:"reduction_behaviour" (get_from_db (Db.get ()) r))
+
+  let () =
+    Proof_replay.register_evaluator "reduction_behaviour" (fun key ->
+        if String.equal key "" then Proof_replay.Unknown
+        else
+          match Lib.global_of_kernel_string key with
+          | Names.GlobRef.ConstRef c when String.equal (Names.Constant.to_string c) key ->
+            (match recorded_reduction_behaviour c with
+             | v -> Proof_replay.Value v
+             | exception _ -> Proof_replay.Unknown)
+          | _ -> Proof_replay.Unknown
+          | exception _ -> Proof_replay.Unknown)
+
+  (* BET-84 census row 5: each [simpl] behaviour the proof reads. *)
+  let get r =
+    let res = get_from_db (Db.get ()) r in
+    if Proof_recorder.active () then
+      Proof_recorder.read_by ~row:"5" ~channel:"reduction_behaviour" ~id:r
+        ~key:(fun () -> Names.Constant.to_string r)
+        ~value:(fun () -> recorded_reduction_behaviour r);
+    res
 
   let print c = print_from_db (Db.get ()) c
 

@@ -19,7 +19,17 @@ module NamedDecl = Context.Named.Declaration
 let all_collection_id = Id.of_string "All"
 let known_names = Summary.ref [] ~name:"proofusing-nameset"
 
-let is_known_name id = CList.mem_assoc_f Id.equal id !known_names
+let lookup_known_name id =
+  let expr = List.find_map (fun (name, expr) ->
+      if Id.equal id name then Some expr else None) !known_names
+  in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"19" ~channel:"proof_using_collection"
+      ~key:(fun () -> Id.to_string id)
+      ~value:(fun () -> Option.map (Proof_recorder.digest ~what:"proof_using_collection") expr);
+  expr
+
+let is_known_name id = Option.has_some (lookup_known_name id)
 
 let rec close_fwd env sigma s =
   let s' =
@@ -79,19 +89,18 @@ let process_expr env sigma fixnames e v_ty =
           warn_all_collection_precedence ();
         full_set fixnames env
       end
-    else if is_known_name id then
-      begin
-        if variable_exists id then
-          warn_collection_precedence id;
-        aux (CList.assoc_f Id.equal id !known_names)
-      end
-    else
-    if List.exists (Id.equal id) fixnames then
-      CErrors.user_err Pp.(str "Invalid recursive variable: " ++ Id.print id ++ str ".")
-    else if not (List.exists (NamedDecl.get_id %> Id.equal id) (named_context env)) then
-      CErrors.user_err Pp.(str "Unknown variable: " ++ Id.print id ++ str ".")
-    else
-      Id.Set.singleton id
+    else match lookup_known_name id with
+    | Some expr ->
+      if variable_exists id then
+        warn_collection_precedence id;
+      aux expr
+    | None ->
+      if List.exists (Id.equal id) fixnames then
+        CErrors.user_err Pp.(str "Invalid recursive variable: " ++ Id.print id ++ str ".")
+      else if not (List.exists (NamedDecl.get_id %> Id.equal id) (named_context env)) then
+        CErrors.user_err Pp.(str "Unknown variable: " ++ Id.print id ++ str ".")
+      else
+        Id.Set.singleton id
   in
   aux e
 

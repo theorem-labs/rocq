@@ -1,0 +1,3 @@
+src/smpl.mlg:44	summary:src/smpl.mlg:"smpl"	row: N5
+src/smpl.mlg:105	object:src/smpl.mlg:"SMPL"	row: N5
+census_check: 2 sites (object 1, summary 1), 0 problems

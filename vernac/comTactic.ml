@@ -108,6 +108,12 @@ let par_implementation : parallel_solver ref = ref (fun ~pstate ~info t ~abstrac
 
 let set_par_implementation f = par_implementation := f
 
+(* BET-84 census row 21: under [rocq compile] the STM installs a [par:] that
+   sends each goal to a tactic worker process (stm/partac.ml; two workers by
+   default, whatever the async mode). The tactic's reads then happen in a
+   process with no recorder, and this process only installs the term the
+   worker returns. The proof stores no term, whichever implementation runs. *)
 let solve_parallel ~pstate ~info t ~abstract =
+  Proof_recorder.ineligible ~reason:"par" ~detail:"par:";
   check_par_applicable pstate;
   !par_implementation ~pstate ~info t ~abstract

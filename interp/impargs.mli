@@ -22,6 +22,12 @@ val make_strongly_strict_implicit_args : bool -> unit
 val make_reversible_pattern_implicit_args : bool -> unit
 val make_contextual_implicit_args : bool -> unit
 val make_maximal_implicit_args : bool -> unit
+val refresh_flags : unit -> unit
+(** Replaces the implicit-argument flags record with an equal, fresh one.
+    A declaration puts the record itself into the lib object it adds, so
+    two declarations that read one record share it in the written [.vo].
+    A replayed proof skips the path that replaces it in a full compile, so
+    replay calls this to leave the same structure behind (BET-84 P3). *)
 
 val is_implicit_args : unit -> bool
 val is_strict_implicit_args : unit -> bool

@@ -1,0 +1,9 @@
+{
+  "doc": "native_compute is ineligible because it compiles native code",
+  "files": ["A.v"], "native_compiler": "ondemand", "requires": ["native"],
+  "records": {"A.v": {"PR.A.control": {"eligible": true},
+                       "PR.A.native_proof": {"ineligible": ["native_compute"], "stores_no_term": true}}},
+  "summaries": {"A.v": {"proofs": 2, "hits": 1,
+    "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0}, "refused": null, "killed": false,
+    "outcomes": [["PR.A.control", "hit"], ["PR.A.native_proof", "ineligible"]]}}
+}

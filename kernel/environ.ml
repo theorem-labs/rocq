@@ -215,21 +215,142 @@ let fold_inductives f env acc =
 
 (* Global constants *)
 
+(* BET-84 census row 1. These lookups are on the reduction path, so when a
+   proof is open each key is recorded once: [seen] holds the keys of the
+   open proof, and is emptied when the recorder opens the next one. A
+   compile without -proof-record pays one boolean test per lookup. *)
+module Recorded = struct
+  let gen = ref (-1)
+
+  (* One memo per channel: a constant read both as a body and as rewrite
+     rules is two reads. Each is a map from the key to unit. *)
+  let cst_body = ref Cmap_env.empty
+  let cst_exists = ref Cmap_env.empty
+  let cst_rules = ref Cmap_env.empty
+  let minds = ref Mindmap_env.empty
+  let minds_exists = ref Mindmap_env.empty
+  let modules = ref MPmap.empty
+  let modtypes = ref MPmap.empty
+
+  let fresh () =
+    let g = Proof_recorder.generation () in
+    if g <> !gen then begin
+      gen := g;
+      cst_body := Cmap_env.empty;
+      cst_exists := Cmap_env.empty;
+      cst_rules := Cmap_env.empty;
+      minds := Mindmap_env.empty;
+      minds_exists := Mindmap_env.empty;
+      modules := MPmap.empty;
+      modtypes := MPmap.empty
+    end
+
+  let once tbl mem add print key ~channel value =
+    if Proof_recorder.active () then begin
+      fresh ();
+      if not (mem key !tbl) then begin
+        tbl := add key () !tbl;
+        Proof_recorder.read ~row:"1" ~channel ~key:(fun () -> print key) ~value
+      end
+    end
+
+  let constant tbl = once tbl Cmap_env.mem Cmap_env.add Constant.to_string
+  let mind tbl = once tbl Mindmap_env.mem Mindmap_env.add MutInd.to_string
+  let mpath tbl = once tbl MPmap.mem MPmap.add ModPath.to_string
+
+  (* The library of a kernel name, and that library's .vo digest. A constant
+     of a REQUIRED library is recorded by the digest and not by its body: the
+     digest pins every object the library holds, and one body can be a
+     megabyte of term (a memory image a registration file requires). Only the
+     objects of the library being compiled are digested. *)
+  let lib_digests = ref DirPath.Map.empty
+
+  let rec root_lib = function
+    | MPfile dp -> Some dp
+    | MPbound _ -> None
+    | MPdot (mp, _) -> root_lib mp
+
+  let library_of mp =
+    match root_lib mp with
+    | None -> None
+    | Some dp ->
+      match DirPath.Map.find_opt dp !lib_digests with
+      | Some d -> d
+      | None ->
+        let d = Proof_recorder.library_digest (DirPath.to_string dp) in
+        lib_digests := DirPath.Map.add dp d !lib_digests;
+        d
+
+  let of_value what mp = function
+    | None -> None
+    | Some v ->
+      match library_of mp with
+      | Some d -> Some ("library " ^ d)
+      | None -> Some (Proof_recorder.digest_cached ~what v)
+
+  (* The rewrite rules of a constant are not part of the library that
+     declares it: the file being compiled can add a rule to a symbol of a
+     required library. They are digested. *)
+  let of_rules = function
+    | None -> None
+    | Some v -> Some (Proof_recorder.digest_cached ~what:"rewrite_rules" v)
+end
+
+(* BET-84: ONE value per channel. The recorder's call sites below and the
+   replay evaluators (vernac/proof_replay_env.ml) both call these, so a
+   read's value is never computed two ways. A second implementation of a
+   channel is the defect class that would let a replay accept a changed
+   input, and dev/tools/census/replay_channels.py fails on one. *)
+let recorded_constant kn env =
+  Recorded.of_value "constant" (Constant.modpath kn)
+    (match Cmap_env.find_opt kn env.env_constants with None -> None | Some (cb, _, _) -> Some cb)
+
+let recorded_constant_exists kn env = Some (string_of_bool (Cmap_env.mem kn env.env_constants))
+
+let recorded_rewrite_rules kn env = Recorded.of_rules (Cmap_env.find_opt kn env.symb_pats)
+
+let recorded_inductive kn env =
+  Recorded.of_value "inductive" (MutInd.modpath kn)
+    (match Mindmap_env.find_opt kn env.env_inductives with None -> None | Some (mb, _, _) -> Some mb)
+
+let recorded_inductive_exists kn env = Some (string_of_bool (Mindmap_env.mem kn env.env_inductives))
+
+let recorded_module mp env = Recorded.of_value "module" mp (ModPath.Map.find_opt mp env.env_modules)
+
+let recorded_modtype mp env = Recorded.of_value "modtype" mp (ModPath.Map.find_opt mp env.env_modtypes)
+
 let lookup_constant_opt kn env =
-  match Cmap_env.find_opt kn env.env_constants with
-  | None -> None
-  | Some (cb, _, _) -> Some cb
+  let res = match Cmap_env.find_opt kn env.env_constants with
+    | None -> None
+    | Some (cb, _, _) -> Some cb
+  in
+  if Proof_recorder.active () then
+    Recorded.constant Recorded.cst_body kn ~channel:"constant"
+      (fun () -> recorded_constant kn env);
+  res
 
 let lookup_constant_key kn env =
   match Cmap_env.find_opt kn env.env_constants with
-  | Some v -> v
+  | Some v ->
+    if Proof_recorder.active () then
+      Recorded.constant Recorded.cst_body kn ~channel:"constant"
+        (fun () -> recorded_constant kn env);
+    v
   | None ->
+    if Proof_recorder.active () then
+      Recorded.constant Recorded.cst_body kn ~channel:"constant"
+        (fun () -> recorded_constant kn env);
     anomaly Pp.(str "Constant " ++ Constant.print kn ++ str" does not appear in the environment.")
 
 let lookup_constant kn env =
   pi1 (lookup_constant_key kn env)
 
-let mem_constant kn env = Cmap_env.mem kn env.env_constants
+let mem_constant kn env =
+  let res = Cmap_env.mem kn env.env_constants in
+  if Proof_recorder.active () then
+    Recorded.constant Recorded.cst_exists kn ~channel:"constant_exists"
+      (fun () -> recorded_constant_exists kn env);
+  res
 
 let add_rewrite_rules l env =
   if not env.rewrite_rules_allowed then raise (RewriteRulesNotAllowed Rule);
@@ -242,13 +363,24 @@ let add_rewrite_rules l env =
   }
 
 let lookup_rewrite_rules cst env =
-  Cmap_env.find cst env.symb_pats
+  if Proof_recorder.active () then begin
+    let res = Cmap_env.find_opt cst env.symb_pats in
+    Recorded.constant Recorded.cst_rules cst ~channel:"rewrite_rules"
+      (fun () -> recorded_rewrite_rules cst env);
+    (match res with Some rs -> rs | None -> raise Not_found)
+  end else Cmap_env.find cst env.symb_pats
 
 (* Mutual Inductives *)
 let lookup_mind_key kn env =
   match Mindmap_env.find_opt kn env.env_inductives with
-  | Some v -> v
+  | Some ((mb, _, _) as v) ->
+    if Proof_recorder.active () then
+      Recorded.mind Recorded.minds kn ~channel:"inductive"
+        (fun () -> recorded_inductive kn env);
+    v
   | None ->
+    if Proof_recorder.active () then
+      Recorded.mind Recorded.minds kn ~channel:"inductive" (fun () -> recorded_inductive kn env);
     anomaly Pp.(str "Inductive " ++ MutInd.print kn ++ str" does not appear in the environment.")
 
 let lookup_mind kn env =
@@ -315,7 +447,12 @@ let expand_branch_contexts (mib, mip) u params br =
   Array.map2_i build_one_branch br mip.mind_nf_lc
 
 
-let mem_mind kn env = Mindmap_env.mem kn env.env_inductives
+let mem_mind kn env =
+  let res = Mindmap_env.mem kn env.env_inductives in
+  if Proof_recorder.active () then
+    Recorded.mind Recorded.minds_exists kn ~channel:"inductive_exists"
+      (fun () -> recorded_inductive_exists kn env);
+  res
 
 let mind_context env mind =
   let mib = lookup_mind mind env in
@@ -880,11 +1017,20 @@ let shallow_add_module mp mb env =
   { env with env_modules = new_mods }
 
 let lookup_module mp env =
-    ModPath.Map.find mp env.env_modules
-
+  if Proof_recorder.active () then begin
+    let res = ModPath.Map.find_opt mp env.env_modules in
+    Recorded.mpath Recorded.modules mp ~channel:"module"
+      (fun () -> recorded_module mp env);
+    (match res with Some m -> m | None -> raise Not_found)
+  end else ModPath.Map.find mp env.env_modules
 
 let lookup_modtype mp env =
-  ModPath.Map.find mp env.env_modtypes
+  if Proof_recorder.active () then begin
+    let res = ModPath.Map.find_opt mp env.env_modtypes in
+    Recorded.mpath Recorded.modtypes mp ~channel:"modtype"
+      (fun () -> recorded_modtype mp env);
+    (match res with Some m -> m | None -> raise Not_found)
+  end else ModPath.Map.find mp env.env_modtypes
 
 (*s Judgments. *)
 

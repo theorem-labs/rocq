@@ -562,8 +562,37 @@ let activate_hook ~name =
   deactivate_hook ~name;
   active_hooks := name :: !active_hooks
 
+(* BET-84 census row 14: the active coercion hooks. A hook is a closure from a
+   plugin, and what it returns can depend on state that neither its name nor
+   the plugin's files fix: rocq-elpi's hook runs the elpi program that
+   [Elpi CoercionFallbackTactic] names, with the clauses [Elpi Accumulate]
+   gave it (Claude gate at 0f8d815732, finding 4). Rocq registers no hook, so
+   a stock proof reads the empty list, and a proof that asks an active hook
+   stores no term. *)
+(* BET-84: ONE value for the coercion_hooks channel, read under the fixed key
+   "" as the digest of the active names. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). A registration that read
+   the empty list replays only while the list is still empty. *)
+let recorded_coercion_hooks () =
+  Some (Proof_recorder.digest ~what:"coercion_hooks" !active_hooks)
+
+let () =
+  Proof_replay.register_evaluator "coercion_hooks" (fun _key ->
+      match recorded_coercion_hooks () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let apply_hooks env sigma ~flags body ~inferred ~expected =
-  List.find_map (fun name -> CString.Map.get name !all_hooks env sigma ~flags body ~inferred ~expected) !active_hooks
+  let active = !active_hooks in
+  if Proof_recorder.active () then begin
+    Proof_recorder.read ~row:"14" ~channel:"coercion_hooks" ~key:(fun () -> "")
+      ~value:recorded_coercion_hooks;
+    if not (List.is_empty active) then
+      Proof_recorder.ineligible ~reason:"plugin_hook"
+        ~detail:("coercion_hooks: " ^ String.concat ", " active)
+  end;
+  List.find_map (fun name -> CString.Map.get name !all_hooks env sigma ~flags body ~inferred ~expected) active
 
 let default_flags_of env =
   default_flags_of TransparentState.full

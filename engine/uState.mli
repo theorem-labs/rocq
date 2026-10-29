@@ -52,6 +52,15 @@ val is_empty : t -> bool
 
 val union : t -> t -> t
 
+val hcons_univs : t -> t
+(** Interns this state's universe levels through the global hashcons
+    table, so that a state read back from a [Marshal] blob holds the same
+    physical levels as the ones this process made. A [.vo] marshals the
+    library with its sharing, so without it a replayed proof writes two
+    equal copies of a level where a full compile writes one, and a library
+    compiled against the one object refuses to load against the other
+    (BET-84 P3, measured 2026-10-25). *)
+
 (** {5 Projections and other destructors} *)
 
 val universe_context_set : t -> Univ.ContextSet.t
@@ -313,3 +322,6 @@ val reboot : Environ.env -> t -> t
 end
 
 val add_template_default_univs : Environ.env -> MutInd.t -> unit
+
+(** The default levels of template-polymorphic inductives (BET-84, M7). *)
+val template_default_univs : unit -> Univ.Level.Set.t

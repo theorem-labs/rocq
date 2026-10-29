@@ -583,6 +583,36 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
 
   let the_tab = Summary.ref ~stage:SI.stage ~name:SI.summary_name Tab.empty
 
+  (* BET-84 census row 6: each lookup in this nametab, with the value
+     found, or absent. [channel] is the table's summary name, so each
+     nametab is its own channel. A failed lookup is recorded too: a proof
+     can take a different path because a name is not yet in scope. *)
+  (* Channel names are built once per nametab, so a lookup with the recorder
+     off allocates nothing. *)
+  let ch_locate = SI.summary_name ^ "/locate"
+  let ch_locate_upto = SI.summary_name ^ "/locate_upto"
+  let ch_locate_all = SI.summary_name ^ "/locate_all"
+  let ch_of_path = SI.summary_name ^ "/of_path"
+  let ch_exists = SI.summary_name ^ "/exists"
+
+  (* BET-84: ONE value for each of this nametab's channels. The record sites
+     below and the replay evaluators at the end of this module both call it,
+     so a lookup's value is never computed two ways
+     (dev/tools/census/replay_channels.py). A lookup that finds nothing
+     records [None], which is a value the record can hold. *)
+  let recorded_lookup lookup =
+    match lookup () with
+    | v -> Some (Proof_recorder.digest ~what:SI.summary_name v)
+    | exception Not_found -> None
+
+  let record ~channel ~id key value =
+    Proof_recorder.read_by ~row:"6" ~channel ~id ~key ~value:(fun () -> recorded_lookup value)
+
+  (* The qualid's location is not part of its identity: one name read twice
+     in a proof is one read. *)
+  let record_qid ~channel qid value =
+    record ~channel ~id:(qid.CAst.v) (fun () -> Libnames.string_of_qualid qid) value
+
   let push vis sp v = the_tab := Tab.push vis sp v !the_tab
 
   let remove sp v = the_tab := Tab.remove sp v !the_tab
@@ -593,19 +623,87 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
 
   let pr v = Tab.pr v !the_tab
 
-  let locate qid = Tab.locate qid !the_tab
+  let locate qid =
+    if Proof_recorder.active () then begin
+      let res =
+        try Some (Tab.locate qid !the_tab)
+        with Not_found -> None
+      in
+      record_qid ~channel:ch_locate qid (fun () ->
+          match res with
+          | Some res -> res
+          | None -> raise Not_found);
+      match res with
+      | Some res -> res
+      | None -> raise Not_found
+    end else
+      Tab.locate qid !the_tab
 
-  let locate_upto ~limit qid = Tab.locate_upto ~limit qid !the_tab
+  let locate_upto ~limit qid =
+    if Proof_recorder.active () then
+      record ~channel:ch_locate_upto ~id:(qid.CAst.v, limit)
+        (fun () -> Libnames.string_of_qualid qid ^ "#" ^ string_of_int limit)
+        (fun () -> Tab.locate_upto ~limit qid !the_tab);
+    Tab.locate_upto ~limit qid !the_tab
 
-  let locate_all qid = Tab.locate_all qid !the_tab
+  let locate_all qid =
+    let res = Tab.locate_all qid !the_tab in
+    if Proof_recorder.active () then record_qid ~channel:ch_locate_all qid (fun () -> res);
+    res
 
   let completion_candidates qid = Tab.completion_candidates qid !the_tab
 
   let to_path v = Tab.to_path v !the_tab
 
-  let of_path v = Tab.of_path v !the_tab
+  let of_path v =
+    if Proof_recorder.active () then
+      record ~channel:ch_of_path ~id:v (fun () -> Libnames.string_of_path v) (fun () -> Tab.of_path v !the_tab);
+    Tab.of_path v !the_tab
 
-  let exists v = Tab.exists v !the_tab
+  let exists v =
+    let res = Tab.exists v !the_tab in
+    if Proof_recorder.active () then
+      record ~channel:ch_exists ~id:v (fun () -> Libnames.string_of_path v) (fun () -> res);
+    res
+
+  (* BET-84 P3: the same lookups, evaluated again from the key the record
+     holds. A qualid and a path print and parse back to themselves, so each
+     key names the lookup the proof made. A key that does not parse back
+     answers [Unknown], and the proof runs its tactics. *)
+  let () =
+    let value f =
+      (* The same function the record sites call, so the two sides cannot
+         drift apart. A value this nametab cannot digest answers Unknown,
+         and the proof runs its tactics. *)
+      match recorded_lookup f with
+      | v -> Proof_replay.Value v
+      | exception Proof_record.Unhashable _ -> Proof_replay.Unknown
+    in
+    let qualid key =
+      let qid = Libnames.qualid_of_string key in
+      if String.equal (Libnames.string_of_qualid qid) key then Some qid else None
+    in
+    let path key =
+      let p = Libnames.path_of_string key in
+      if String.equal (Libnames.string_of_path p) key then Some p else None
+    in
+    let on parse f key = match parse key with
+      | Some k -> value (fun () -> f k)
+      | None -> Proof_replay.Unknown
+      | exception _ -> Proof_replay.Unknown
+    in
+    Proof_replay.register_evaluator ch_locate (on qualid (fun qid -> Tab.locate qid !the_tab));
+    Proof_replay.register_evaluator ch_locate_all (on qualid (fun qid -> Tab.locate_all qid !the_tab));
+    Proof_replay.register_evaluator ch_of_path (on path (fun p -> Tab.of_path p !the_tab));
+    Proof_replay.register_evaluator ch_exists (on path (fun p -> Tab.exists p !the_tab));
+    Proof_replay.register_evaluator ch_locate_upto (fun key ->
+        match String.rindex_opt key '#' with
+        | None -> Proof_replay.Unknown
+        | Some i ->
+          (match int_of_string_opt (String.sub key (i + 1) (String.length key - i - 1)) with
+           | None -> Proof_replay.Unknown
+           | Some limit ->
+             on qualid (fun qid -> Tab.locate_upto ~limit qid !the_tab) (String.sub key 0 i)))
 end
 
 module type WarnedTab = sig
@@ -627,6 +725,10 @@ module MakeWarned (M:NAMETAB)
   include M
 
   let warntab = Summary.ref ~stage:W.stage ~name:W.summary_name W.Map.empty
+
+  let () = Proof_recorder.register_tables (fun () ->
+      [ Proof_record.{ row = "6"; channel = W.summary_name; key = "";
+                       value = Some (Proof_recorder.digest_cached ~what:W.summary_name !warntab) } ])
 
   let push ?wdata vis sp elt =
     M.push vis sp elt;

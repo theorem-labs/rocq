@@ -1,0 +1,16 @@
+{
+  "doc": "core.eq.type is rebound after a congruence proof: stock keeps congruence's cached eq, a replay that skipped the first proof would not; the whole file must run without replay",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}, "PR.A.q": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 0,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": "rebind",
+      "refused_detail": "Register at line 11",
+      "killed": false,
+      "fence": null
+    }
+  }
+}
