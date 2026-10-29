@@ -33,12 +33,13 @@ type proof_state = {
   p_constraints : string Queue.t;
   p_schemes : string Queue.t;
   p_sources : string Queue.t;
-  p_warnings : (string * string) Queue.t;
+  p_warnings : (string * string * string) Queue.t;
   p_counters : (string, int) Hashtbl.t;
   p_counter_order : string Queue.t;
   p_wall0 : float;
   p_cpu0 : float;
   mutable p_span_start : int option;  (** first byte of the statement's sentence *)
+  p_base_loc : Loc.t option;  (** the statement's sentence, for warning locations *)
   mutable p_depth : int;  (** 0 for the outermost proof; >0 inside a nested one *)
 }
 
@@ -52,6 +53,10 @@ type file_state = {
   mutable f_proof : proof_state option;
   mutable f_suspended : int;  (** >0 inside [without_recording] *)
   mutable f_pending : ((unit -> string) * (int * int) option) option;  (** the sentence being run *)
+  mutable f_pending_loc : Loc.t option;  (** its location *)
+  mutable f_nested_closed : bool;
+      (** a nested proof closed during the sentence being run, and the proof
+          around it is still open *)
 }
 
 (* The one bit every choke point tests. It is false unless a proof is open
@@ -144,6 +149,8 @@ let start ~library ~source ~source_digest ~toolchain ~skip_qed_typecheck ~tables
       f_proof = None;
       f_suspended = 0;
       f_pending = None;
+      f_pending_loc = None;
+      f_nested_closed = false;
     };
   recording := false
 
@@ -253,6 +260,7 @@ let open_proof ~name ~statement ~position =
           p_wall0 = Unix.gettimeofday ();
           p_cpu0 = cpu_time ();
           p_span_start = span_start;
+          p_base_loc = st.f_pending_loc;
           p_depth = 0;
         };
       set_recording st;
@@ -275,20 +283,28 @@ let take_pending st p =
 (* The span of the sentence being run, for the closer's end byte. *)
 let pending_span st = match st.f_pending with Some (_, span) -> span | None -> None
 
-let sentence ?span digest run =
+let sentence ?span ?loc digest run =
   match !state with
   | None -> run ()
   | Some st ->
-    let outer = st.f_pending in
+    let outer = st.f_pending and outer_loc = st.f_pending_loc in
     st.f_pending <- Some (digest, span);
+    st.f_pending_loc <- loc;
+    st.f_nested_closed <- false;
     let finish () =
       (match st.f_proof with Some p when p.p_depth = 0 -> take_pending st p | Some _ | None -> ());
-      st.f_pending <- outer
+      st.f_pending <- outer;
+      st.f_pending_loc <- outer_loc
     in
     (match run () with
      | v -> finish (); v
      | exception e -> let bt = Printexc.get_raw_backtrace () in
        finish (); Printexc.raise_with_backtrace e bt)
+
+let nested_closed () =
+  match !state with
+  | Some { f_nested_closed; _ } -> f_nested_closed
+  | None -> false
 
 let close_proof ~closer ~kernel_check ~replay =
   match !state with
@@ -296,7 +312,7 @@ let close_proof ~closer ~kernel_check ~replay =
   | Some st ->
     match st.f_proof with
     | None -> ()
-    | Some p when p.p_depth > 0 -> p.p_depth <- p.p_depth - 1
+    | Some p when p.p_depth > 0 -> p.p_depth <- p.p_depth - 1; st.f_nested_closed <- true
     | Some p ->
       let span = match p.p_span_start, pending_span st with
         | Some bp, Some (_, ep) when ep > bp -> Some (bp, ep)
@@ -386,8 +402,31 @@ let write_universes ~levels ~constraints =
       List.iter (fun c -> Queue.add c p.p_constraints) constraints)
 
 let write_scheme s = with_proof (fun p -> Queue.add s p.p_schemes)
+
+let created_in p name =
+  (not (Queue.is_empty p.p_schemes))
+  && (let n = name () in Queue.fold (fun found s -> found || String.equal s n) false p.p_schemes)
+
 let write_constraint_source s = with_proof (fun p -> Queue.add s p.p_sources)
-let write_warning ~name ~message = with_proof (fun p -> Queue.add (name, message) p.p_warnings)
+
+(* A warning's location is kept relative to the statement's sentence: replay
+   raises it again at the same place in a file where the proof moved. A
+   warning raised with no location is printed at the sentence that raised it,
+   so that sentence's location is kept. *)
+let relative_loc (base : Loc.t option) (loc : Loc.t option) =
+  match base, loc with
+  | Some b, Some l when l.Loc.fname = b.Loc.fname && l.Loc.bp >= b.Loc.bp ->
+    Printf.sprintf "%d,%d,%d,%d,%d,%d"
+      (l.Loc.line_nb - b.Loc.line_nb) (l.Loc.bp - b.Loc.bp) (l.Loc.ep - b.Loc.bp)
+      (l.Loc.bol_pos - b.Loc.bp) (l.Loc.line_nb_last - b.Loc.line_nb) (l.Loc.bol_pos_last - b.Loc.bp)
+  | _ -> ""
+
+let write_warning ?loc ~name ~message () =
+  match !state with
+  | Some ({ f_proof = Some p; _ } as st) ->
+    let loc = match loc with Some _ -> loc | None -> st.f_pending_loc in
+    Queue.add (name, message, relative_loc p.p_base_loc loc) p.p_warnings
+  | Some { f_proof = None; _ } | None -> ()
 
 let write_counters l =
   with_proof (fun p ->
@@ -410,8 +449,12 @@ let read ~row ~channel ~key ~value =
          the value again: the global state a tactic reads moves inside a
          proof only through the proof's own writes (a scheme it creates) or
          through a command or sub-proof that already makes it ineligible, so
-         the first value is the one replay sees. *)
-      if not (ReadTbl.mem p.p_seen k) then begin
+         the first value is the one replay sees. A read keyed by a constant
+         the proof created itself is not kept at all: it is not an input of
+         the proof, replay declares the constant again with the stored term,
+         and the state at the proof's start, where replay reads, does not
+         hold it (fixture write_scheme_rewrite). *)
+      if not (ReadTbl.mem p.p_seen k) && not (created_in p (fun () -> key)) then begin
         let v = value () in
         ReadTbl.add p.p_seen k ();
         Queue.add R.{ row; channel; key; value = v } p.p_reads

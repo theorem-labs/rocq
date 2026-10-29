@@ -89,8 +89,12 @@ val scan_late_events : string -> (string * int) option * int option
 (** {!scan_late_rebind}, and the byte offset of the LAST such command's
     word. *)
 
-val at_sentence : int -> unit
-(** The byte offset of the sentence the toplevel is about to run. *)
+val at_sentence : Loc.t -> unit
+(** The location of the sentence the toplevel is about to run. *)
+
+val close_proof : unit -> unit
+(** A proof ended (its closer or its [Abort]). A proof opened inside another
+    one is part of it: it is not counted, and its end only closes it. *)
 
 val register_plugin_audit : (string -> bool) -> unit
 (** [f name] says whether the loaded ML plugin [name] (a findlib package) is
@@ -225,10 +229,3 @@ val set_pending : string option -> unit
     one behind. *)
 
 val take_pending : unit -> string option
-
-val encode_blob : string -> string
-(** Base64 of a [Marshal] blob, for {!Proof_record.proof.replay}: the
-    record is JSON, which carries no arbitrary bytes. *)
-
-val decode_blob : string -> string option
-(** The inverse, [None] on a string that is not base64. *)

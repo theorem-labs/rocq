@@ -960,6 +960,7 @@ let vernac_end_proof ~lemma ~pm = let open Vernacexpr in function
 let vernac_abort ~lemma:_ ~pm =
   if Proof_recorder.writing () then Proof_record_env.drop_universe_frame ();
   Proof_recorder.drop_proof ();
+  Proof_replay.close_proof ();
   pm
 
 let deprecated_exact_proof = CWarnings.create ~name:"deprecated-exact-proof" ~category:Deprecation.Version.v9_2

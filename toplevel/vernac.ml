@@ -110,8 +110,9 @@ let load_vernac_core ~echo ~check ~state ?source file =
      a proof that is not replayed is interpreted exactly as stock. *)
   let interp_one ~tstart state ast =
     (* BET-84: replay compares where a proof opens with the file's last late
-       command (Proof_replay.start), so it is told where each sentence is. *)
-    Option.iter (fun loc -> Proof_replay.at_sentence loc.Loc.bp) ast.CAst.loc;
+       command (Proof_replay.start), and raises a replayed proof's warnings
+       again relative to its statement, so it is told where each sentence is. *)
+    Option.iter Proof_replay.at_sentence ast.CAst.loc;
     (* BET-84 P3: the charge for the proofs replay did not run is part of
        the file's clock, so a sentence that would carry the clock past the
        budget is stopped inside it, as stock's own timeout stops it, not
@@ -134,6 +135,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
                 which replay cannot make again. *)
              Proof_recorder.sentence
                ?span:(Option.map (fun loc -> (loc.Loc.bp, loc.Loc.ep)) ast.CAst.loc)
+               ?loc:ast.CAst.loc
                (fun () -> Proof_recorder.digest ~locs:source ~what:"sentence" ast)
                (fun () ->
                   if Proof_recorder.active () then begin
@@ -159,6 +161,11 @@ let load_vernac_core ~echo ~check ~state ?source file =
                    | None -> ()
                    | Some held ->
                      match Vernacstate.Declare.get_all_proof_names () with
+                     | [] when Proof_recorder.nested_closed () ->
+                       (* The STM empties the stack after a nested proof's
+                          closer and restores the proof around it at the
+                          next command: that proof is still open. *)
+                       ()
                      | [] ->
                        Proof_recorder.drop_all_proofs ();
                        Proof_record_env.drop_universe_frames ();
