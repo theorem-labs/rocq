@@ -214,7 +214,11 @@ and interp_set ist e p r =
 
 and eval_global kn =
   match Tac2env.get_compiled_global kn with
-  | Some (_info,v) -> v
+  | Some (_info,v) ->
+    let () =
+      if Proof_recorder.active () then Tac2env.record_global kn
+    in
+    v
   | None -> match Tac2env.interp_global kn with
     | exception Not_found -> anomaly (str "Unbound reference" ++ KerName.print kn)
     | { gdata_expr = e } -> eval_pure Id.Map.empty (Some kn) e

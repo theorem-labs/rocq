@@ -40,6 +40,51 @@ open Proofview.Notations
 open Context.Named.Declaration
 open Ltac_pretype
 
+(* ML tactic package suffixes built below [plugins/]. Some directories build
+   multiple packages. The compatibility names load the same audited code. An
+   ML tactic from any other package is code the census did not audit, so a
+   proof that runs it is never replayed. *)
+let audited_ml_tactic_plugin_suffixes =
+  [ "btauto";
+    "cc";
+    "cc_core";
+    "derive";
+    "extraction";
+    "firstorder";
+    "firstorder_core";
+    "funind";
+    "ltac";
+    "ltac2";
+    "ltac2_ltac1";
+    "micromega";
+    "micromega_core";
+    "nsatz";
+    "nsatz_core";
+    "number_string_notation";
+    "ring";
+    "rtauto";
+    "ssreflect";
+    "ssrmatching";
+    "tauto";
+    "zify" ]
+
+let audited_ml_tactic_plugins =
+  List.fold_left
+    (fun set suffix ->
+       String.Set.add ("coq-core.plugins." ^ suffix)
+         (String.Set.add ("rocq-runtime.plugins." ^ suffix) set))
+    String.Set.empty audited_ml_tactic_plugin_suffixes
+
+(* BET-84 P3: the same list decides which loaded plugins replay trusts. *)
+let () = Proof_replay.register_plugin_audit (fun name -> String.Set.mem name audited_ml_tactic_plugins)
+
+let fence_ml_tactic { mltac_plugin; mltac_tactic } =
+  if Proof_recorder.active () &&
+     not (String.Set.mem mltac_plugin audited_ml_tactic_plugins)
+  then
+    Proof_recorder.ineligible ~reason:"ml_tactic"
+      ~detail:(mltac_plugin ^ "." ^ mltac_tactic)
+
 let do_profile trace ?count_call tac =
   Profile_tactic.do_profile_gen (function
       | (_, c) :: _ -> Some (Pptactic.pp_ltac_call_kind c)
@@ -512,6 +557,22 @@ let extract_ids ids lfun accu =
 
 let default_fresh_id = Id.of_string "H"
 
+(* BET-84 census row 17: [fresh "s"] gives [s0] when [s] is a keyword, and a
+   [Reserved Notation] that makes [s] one leaves the parsed sentences
+   unchanged, since the string literal is not reparsed (Claude gate at
+   0f8d815732, finding 3). ONE keyword test and ONE value for the keyword
+   channel: the record site in [interp_fresh_id] and the replay evaluator
+   below call the same two functions (dev/tools/census/replay_channels.py). *)
+let fresh_is_keyword s = CLexer.is_keyword (Procq.get_keyword_state ()) s
+
+let recorded_keyword kw = Some (string_of_bool kw)
+
+let () =
+  Proof_replay.register_evaluator "keyword" (fun s ->
+      match recorded_keyword (fresh_is_keyword s) with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let interp_fresh_id ist env sigma l =
   let extract_ident ist env sigma id =
     try try_interp_ltac_var (coerce_to_ident_not_fresh sigma)
@@ -530,7 +591,11 @@ let interp_fresh_id ist env sigma l =
         String.concat "" (List.map (function
           | ArgArg s -> s
           | ArgVar {v=id} -> Id.to_string (extract_ident ist env sigma id)) l) in
-      let s = if CLexer.is_keyword (Procq.get_keyword_state()) s then s^"0" else s in
+      let kw = fresh_is_keyword s in
+      if Proof_recorder.active () then
+        Proof_recorder.read ~row:"17" ~channel:"keyword" ~key:(fun () -> s)
+          ~value:(fun () -> recorded_keyword kw);
+      let s = if kw then s^"0" else s in
       Id.of_string s in
   Tactics.fresh_id_in_env avoid id env
 
@@ -1231,6 +1296,7 @@ and eval_tactic_ist ist tac : unit Proofview.tactic =
   | TacML (opn,l) ->
       let trace = push_trace (Loc.tag ?loc @@ LtacMLCall tac) ist in
       let ist = { ist with extra = TacStore.set ist.extra f_trace trace; } in
+      let () = fence_ml_tactic opn.mltac_name in
       let tac = Tacenv.interp_ml_tactic opn in
       let args = Ftactic.List.map_right (fun a -> interp_tacarg ist a) l in
       let tac args =

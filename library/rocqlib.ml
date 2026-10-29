@@ -25,15 +25,112 @@ let jmeq_module_name = ["Stdlib";"Logic";"JMeq"]
 let table : GlobRef.t CString.Map.t ref =
   Summary.ref ~name:"rocqlib_registered" CString.Map.empty
 
-let get_lib_refs () =
-  CString.Map.bindings !table
+let () = Proof_recorder.register_tables (fun () ->
+    [ Proof_record.{ row = "15"; channel = "rocqlib_table"; key = "";
+                     value = Some (Proof_recorder.digest_cached ~what:"rocqlib_table" !table) } ])
 
-let has_ref s = CString.Map.mem s !table
+(* BET-84, cross-model delta review D4. About 120 process-wide [lazy] values
+   cache a [lib_ref] result once and never ask again, and [register_ref]
+   replaces a binding without telling them. A table that is the same at a
+   proof's start therefore does not prove that the caches agree with it: a
+   re-registration, or a section end that restores the table, leaves a stale
+   reference behind an identical table.
+
+   So, while the compile tracks, each key's FIRST answer is kept here, outside
+   the Summary state on purpose: a cache is not restored with it either. A key
+   whose answer later differs (rebound, registered after a miss, taken back by
+   a restore) trips the fence, and every proof from then on is ineligible.
+   This is coarse, and sound; the start-of-proof table read stays, for the
+   proofs before the fence trips. *)
+(* BET-84: ONE value for the lib_ref channel. The record site below and the
+   replay evaluator call this, so the value is never computed two ways
+   (dev/tools/census/replay_channels.py). *)
+let recorded_lib_ref s =
+  match CString.Map.find_opt s !table with
+  | None -> None
+  | Some r -> Some (Proof_recorder.digest ~what:"lib_ref" r)
+
+let () =
+  Proof_replay.register_evaluator "lib_ref" (fun key ->
+      match recorded_lib_ref key with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let observed : GlobRef.t option CString.Map.t ref = ref CString.Map.empty
+
+let same a b = match a, b with
+  | None, None -> true
+  | Some r, Some r' -> GlobRef.UserOrd.equal r r'
+  | Some _, None | None, Some _ -> false
+
+let observe s res =
+  match CString.Map.find_opt s !observed with
+  | None -> observed := CString.Map.add s res !observed
+  | Some first ->
+    if not (same first res) then
+      Proof_recorder.trip_fence ~reason:"rocqlib_rebound" ~detail:s
+
+let () = Proof_recorder.register_fence_check (fun () ->
+    CString.Map.iter (fun s first ->
+        if not (same first (CString.Map.find_opt s !table)) then
+          Proof_recorder.trip_fence ~reason:"rocqlib_rebound" ~detail:s)
+      !observed)
+
+(* BET-84 P3: a replayed proof's tactics do not run, so the lookups its
+   record holds never reach [observe]. Treat them as looked up, with the
+   answer they have now (the read matched, so it is the registration's): a
+   later rebinding of one of these keys then trips the fence, and no later
+   proof of the process is replayed. *)
+let () = Proof_replay.register_hit_hook (fun reads ->
+    if Proof_recorder.tracking () then
+      List.iter (fun (r : Proof_record.read) ->
+          if String.equal r.channel "lib_ref" then observe r.key (CString.Map.find_opt r.key !table))
+        reads)
+
+let record_ref s res =
+  if Proof_recorder.tracking () then observe s res;
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
+      ~value:(fun () -> ignore res; recorded_lib_ref s)
+
+(* BET-84: ONE value for the lib_ref_domain channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_lib_ref_domain () =
+  Some (Proof_recorder.digest_cached ~what:"rocqlib_table" !table)
+
+let () =
+  Proof_replay.register_evaluator "lib_ref_domain" (fun _key ->
+      match recorded_lib_ref_domain () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let get_lib_refs () =
+  let current = !table in
+  let refs = CString.Map.bindings current in
+  if Proof_recorder.tracking () then List.iter (fun (s, r) -> observe s (Some r)) refs;
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"lib_ref_domain" ~key:(fun () -> "")
+      ~value:recorded_lib_ref_domain;
+  refs
+
+let has_ref s =
+  if Proof_recorder.tracking () then begin
+    let res = CString.Map.find_opt s !table in
+    record_ref s res;
+    match res with None -> false | Some _ -> true
+  end else CString.Map.mem s !table
 
 let check_ref s gr =
-  match CString.Map.find s !table with
-  | r -> GlobRef.UserOrd.equal r gr
-  | exception Not_found -> false
+  if Proof_recorder.tracking () then begin
+    let res = CString.Map.find_opt s !table in
+    record_ref s res;
+    match res with Some r -> GlobRef.UserOrd.equal r gr | None -> false
+  end else
+    match CString.Map.find s !table with
+    | r -> GlobRef.UserOrd.equal r gr
+    | exception Not_found -> false
 
 let check_ind_ref s ind = check_ref s (GlobRef.IndRef ind)
 
@@ -43,11 +140,21 @@ let () = CErrors.register_handler (function
     | NotFoundRef s -> Some Pp.(str "not found in table: " ++ str s)
     | _ -> None)
 
+(* BET-84 census row 15: each registered reference the proof reads. *)
 let lib_ref s =
-  try CString.Map.find s !table
-  with Not_found -> raise (NotFoundRef s)
+  if Proof_recorder.tracking () then begin
+    let res = CString.Map.find_opt s !table in
+    record_ref s res;
+    (match res with Some r -> r | None -> raise (NotFoundRef s))
+  end else
+    match CString.Map.find s !table with
+    | r -> r
+    | exception Not_found -> raise (NotFoundRef s)
 
-let lib_ref_opt s = CString.Map.find_opt s !table
+let lib_ref_opt s =
+  let res = CString.Map.find_opt s !table in
+  if Proof_recorder.tracking () then record_ref s res;
+  res
 
 let add_ref s c =
   table := CString.Map.add s c !table

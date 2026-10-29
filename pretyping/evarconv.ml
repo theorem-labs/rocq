@@ -267,10 +267,40 @@ let activate_hook ~name =
   deactivate_hook ~name;
   active_hooks := name :: !active_hooks
 
+(* BET-84 census row 14: the ordered list of active canonical-solution hooks.
+   A plugin enables or disables a hook with no other recorded change, and a
+   unification problem only that hook solves then changes acceptance (delta
+   review D5). A hook is a closure, and what it returns can depend on state
+   that neither its name nor the plugin's files fix: rocq-elpi's hook runs
+   the elpi program that [Elpi CS] names (Claude gate at 0f8d815732, finding
+   4). Rocq registers no hook, so a stock proof reads the empty list, and a
+   proof that asks an active hook stores no term. *)
+(* BET-84: ONE value for the canonical_hooks channel, read under the fixed key
+   "" as the digest of the active names. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). A registration that read
+   the empty list replays only while the list is still empty. *)
+let recorded_canonical_hooks () =
+  Some (Proof_recorder.digest ~what:"canonical_hooks" !active_hooks)
+
+let () =
+  Proof_replay.register_evaluator "canonical_hooks" (fun _key ->
+      match recorded_canonical_hooks () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let apply_hooks env sigma proj pat =
+  let active = !active_hooks in
+  if Proof_recorder.active () then begin
+    Proof_recorder.read ~row:"14" ~channel:"canonical_hooks" ~key:(fun () -> "")
+      ~value:recorded_canonical_hooks;
+    if not (List.is_empty active) then
+      Proof_recorder.ineligible ~reason:"plugin_hook"
+        ~detail:("canonical_hooks: " ^ String.concat ", " active)
+  end;
   List.find_map (fun name ->
     try CString.Map.get name !all_hooks env sigma proj pat
-    with e when CErrors.noncritical e -> anomaly Pp.(str "CS hook " ++ str name ++ str " exploded")) !active_hooks
+    with e when CErrors.noncritical e -> anomaly Pp.(str "CS hook " ++ str name ++ str " exploded")) active
 
 let decompose_proj ?metas env sigma (t1, sk1) =
    (* I only recognize ConstRef projections since these are the only ones for which
@@ -279,10 +309,19 @@ let decompose_proj ?metas env sigma (t1, sk1) =
     match Termops.global_app_of_constr sigma t1 with
     | (Names.GlobRef.ConstRef proji, u), arg -> (proji, u), arg
     | _ -> raise Not_found
-    | exception _ -> raise Not_found in
+    | exception e ->
+      (* BET-84: a critical exception here takes the fallback path, so the
+         term can differ; the proof is never replayed. *)
+      if not (CErrors.noncritical e) then
+        Proof_recorder.ineligible ~reason:"catchall" ~detail:"pretyping/evarconv.ml:282";
+      raise Not_found in
   (* Given a ConstRef projection, I obtain the structure it is a projection from. *)
-  let structure = try Structures.Structure.find_from_projection env proji
-    with _ -> raise Not_found in
+  let structure =
+    try Structures.Structure.find_from_projection env proji
+    with e ->
+      if not (CErrors.noncritical e) then
+        Proof_recorder.ineligible ~reason:"catchall" ~detail:"pretyping/evarconv.ml:285";
+      raise Not_found in
   (* Knowing the structure and hence its number of arguments, I can cut sk1 into pieces. *)
   let params1, c1, extra_args1 =
     match arg with
@@ -1019,7 +1058,10 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
       (* The projection constant will not change, so there is no point in keeping the keys anymore. *)
       let () = Cs_keys_cache.clear (not l2r) keys in
       match x with | Success _ -> Inl x | _ -> Inr false
-    with _ -> Inr false in
+    with e ->
+      if not (CErrors.noncritical e) then
+        Proof_recorder.ineligible ~reason:"catchall" ~detail:"pretyping/evarconv.ml:1022";
+      Inr false in
   let () = debug_unification (fun () -> Pp.(v 0 (pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
   match (flex_kind_of_term flags env evd term1 sk1,
          flex_kind_of_term flags env evd term2 sk2) with
@@ -1512,7 +1554,11 @@ let evar_conv_hook = ref evar_conv_x
 
 let evar_conv_x flags = !evar_conv_hook flags
 
-let set_evar_conv f = evar_conv_hook := f
+(* BET-84: Rocq never calls this; a plugin's unifier makes every later proof
+   of the process ineligible (Proof_recorder.closure_setter). *)
+let evar_conv_set = Proof_recorder.closure_setter ~what:"Evarconv.set_evar_conv" ~stock:0
+
+let set_evar_conv f = evar_conv_set (); evar_conv_hook := f
 
 
 (* We assume here |l1| <= |l2| *)
@@ -1640,7 +1686,11 @@ let filter_possible_projections evd i0 c ty ctxt args =
     0 ctxt
 
 let solve_evars = ref (fun _ -> failwith "solve_evars not installed")
-let set_solve_evars f = solve_evars := f
+
+(* BET-84: pretyping/typing.ml installs Rocq's own once, when it loads. *)
+let solve_evars_set = Proof_recorder.closure_setter ~what:"Evarconv.set_solve_evars" ~stock:1
+
+let set_solve_evars f = solve_evars_set (); solve_evars := f
 
 (* We solve the problem env_rhs |- ?e[u1..un] = rhs knowing
  * x1:T1 .. xn:Tn |- ev : ty

@@ -51,11 +51,38 @@ let alias_map = Summary.ref ~name:"tactic-alias"
 let register_alias key tac =
   alias_map := KerName.Map.add key tac !alias_map
 
-let interp_alias key =
-  try KerName.Map.find key !alias_map
-  with Not_found -> CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
+(* BET-84 census row 9: each Ltac alias and definition the proof reads.
+   The value comes from the one function per channel below. *)
+let record_hook : (string -> KerName.t -> string option) ref = ref (fun _ _ -> None)
 
-let check_alias key = KerName.Map.mem key !alias_map
+(* The lookup passes what it found, so that it builds no option when the
+   recorder is off; the recorded value still comes from the shared value
+   function through [record_hook], never from that argument. *)
+let record channel k (_found : 'a option) =
+  if Proof_recorder.active () then
+    Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> KerName.to_string k)
+      ~value:(fun () -> !record_hook channel k)
+
+(* The lookup itself must build no option when the recorder is off: these run
+   at every call of a tactic notation. [record] is reached with an already
+   allocated [Some] only under [active]. *)
+let interp_alias key =
+  match KerName.Map.find key !alias_map with
+  | v ->
+    if Proof_recorder.active () then record "tactic_alias" key (Some v);
+    v
+  | exception Not_found ->
+    record "tactic_alias" key None;
+    CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
+
+let check_alias key =
+  match KerName.Map.find key !alias_map with
+  | v ->
+    if Proof_recorder.active () then record "tactic_alias" key (Some v);
+    true
+  | exception Not_found ->
+    record "tactic_alias" key None;
+    false
 
 (** ML tactic extensions (TacML) *)
 
@@ -78,11 +105,21 @@ let pr_tacname t =
 
 let tac_tab = ref MLTacMap.empty
 
+(* BET-84: [~overwrite:true] puts another closure under a name that is
+   already registered, possibly the name of one of this tree's plugins, which
+   [Tacinterp.fence_ml_tactic] trusts by name. Rocq never overwrites, so a
+   replacement makes every later proof of the process ineligible
+   (Proof_recorder.closure_setter; Claude review of 467292ce69, finding 2). *)
+let ml_tactic_overwritten =
+  Proof_recorder.closure_setter ~what:"Tacenv.register_ml_tactic ~overwrite" ~stock:0
+
 let register_ml_tactic ?(overwrite = false) s (t : ml_tactic array) =
   let () =
     if MLTacMap.mem s !tac_tab then
-      if overwrite then
+      if overwrite then begin
+        ml_tactic_overwritten ();
         tac_tab := MLTacMap.remove s !tac_tab
+      end
       else
         CErrors.anomaly (str "Cannot redeclare tactic " ++ pr_tacname s ++ str ".")
   in
@@ -117,9 +154,60 @@ let mactab =
 
 let ltac_entries () = !mactab
 
-let interp_ltac r = (KerName.Map.find r !mactab).tac_body
+let interp_ltac r =
+  match KerName.Map.find r !mactab with
+  | e ->
+    if Proof_recorder.active () then record "tactic_definition" r (Some e);
+    e.tac_body
+  | exception Not_found ->
+    record "tactic_definition" r None;
+    raise Not_found
 
-let is_ltac_for_ml_tactic r = (KerName.Map.find r !mactab).tac_for_ml
+let is_ltac_for_ml_tactic r =
+  match KerName.Map.find r !mactab with
+  | e ->
+    if Proof_recorder.active () then record "tactic_definition" r (Some e);
+    e.tac_for_ml
+  | exception Not_found ->
+    record "tactic_definition" r None;
+    raise Not_found
+
+(* BET-84: ONE value for each of the two Ltac channels. The record sites
+   above and the replay evaluators below call these, so a read's value is
+   never computed two ways (dev/tools/census/replay_channels.py). *)
+let recorded_tactic_alias k =
+  match KerName.Map.find_opt k !alias_map with
+  | None -> None
+  | Some v -> Some (Proof_recorder.digest ~what:"tactic_alias" v)
+
+let recorded_tactic_definition k =
+  match KerName.Map.find_opt k !mactab with
+  | None -> None
+  | Some v -> Some (Proof_recorder.digest ~what:"tactic_definition" v)
+
+(* The record holds the printed kernel name. Both tables are scanned, so a
+   name in neither really is absent, which is what the lookup recorded. *)
+let kername_of_string s =
+  let found = ref None in
+  let look k _ = if Option.is_empty !found && String.equal (KerName.to_string k) s then found := Some k in
+  KerName.Map.iter look !mactab;
+  if Option.is_empty !found then KerName.Map.iter look !alias_map;
+  !found
+
+let () =
+  record_hook :=
+    (fun channel k ->
+       if String.equal channel "tactic_alias" then recorded_tactic_alias k
+       else recorded_tactic_definition k)
+
+let () =
+  let evaluator recorded key =
+    match kername_of_string key with
+    | None -> Proof_replay.Value None
+    | Some k -> (match recorded k with v -> Proof_replay.Value v | exception _ -> Proof_replay.Unknown)
+  in
+  Proof_replay.register_evaluator "tactic_alias" (evaluator recorded_tactic_alias);
+  Proof_replay.register_evaluator "tactic_definition" (evaluator recorded_tactic_definition)
 
 let add ~depr kn b t =
   let entry = {

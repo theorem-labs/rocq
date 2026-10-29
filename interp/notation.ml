@@ -185,7 +185,25 @@ let scope_item_eq s1 s2 = match s1, s2 with
 
 let scope_stack = ref []
 
-let current_scopes () = !scope_stack
+(* BET-84 census row 11: the open scopes, as one value under a fixed key.
+   ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_scope_stack () =
+  Some (Proof_recorder.digest ~what:"scope_stack" !scope_stack)
+
+let () =
+  Proof_replay.register_evaluator "scope_stack" (fun _key ->
+      match recorded_scope_stack () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let current_scopes () =
+  let scopes = !scope_stack in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"scope_stack"
+      ~key:(fun () -> "scopes")
+      ~value:recorded_scope_stack;
+  scopes
 
 let scope_is_open_in_scopes sc l =
   List.exists (function OpenScopeItem sc' -> String.equal sc sc' | _ -> false) l
@@ -204,7 +222,7 @@ let push_scope sc scopes = OpenScopeItem sc :: scopes
 let push_scopes = List.fold_right push_scope
 
 let make_current_scopes (tmp_scopes,scopes) =
-  push_scopes tmp_scopes (push_scopes scopes !scope_stack)
+  push_scopes tmp_scopes (push_scopes scopes (current_scopes ()))
 
 (**********************************************************************)
 (* Delimiters *)
@@ -253,8 +271,18 @@ let remove_delimiters scope =
          CErrors.anomaly ~info (str "A delimiter for scope [scope] should exist")
 
 let find_delimiters_scope ?loc key =
-  try String.Map.find key !delimiters_map
+  try
+    let scope = String.Map.find key !delimiters_map in
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
+        ~key:(fun () -> key)
+        ~value:(fun () -> Some (Proof_recorder.digest ~what:"delimiters_scope" scope));
+    scope
   with Not_found ->
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
+        ~key:(fun () -> key)
+        ~value:(fun () -> None);
     user_err ?loc
       (str "Unknown scope delimiting key " ++ str key ++ str ".")
 
@@ -530,13 +558,43 @@ let find_prim_token check_allowed ?loc p sc =
   check_allowed pat;
   pat
 
-let interp_prim_token_gen ?loc g p local_scopes =
+let notation_query_key (entry, text) scopes =
+  let encode_string s = string_of_int (String.length s) ^ ":" ^ s in
+  let encode_entry = function
+    | InConstrEntry -> "C"
+    | InCustomEntry name -> "U" ^ encode_string (CustomName.to_string name)
+  in
+  let encode_notation (entry, text) =
+    encode_entry entry ^ encode_string text
+  in
+  let encode_scope_item = function
+    | OpenScopeItem scope -> "O" ^ encode_string scope
+    | LonelyNotationItem notation -> "L" ^ encode_notation notation
+  in
+  "N" ^ encode_notation (entry, text)
+  ^ String.concat "" (List.map encode_scope_item scopes)
+
+(* [mode] names the query. A term query accepts every interpretation; a
+   pattern query rejects one that is not a constructor and goes on to an older
+   scope. With the same token and scopes they can find different answers, so
+   each is its own recorded read (cross-model delta review D3). *)
+let interp_prim_token_gen ~mode ?loc g p local_scopes =
   let scopes = make_current_scopes local_scopes in
   let p_as_ntn = try notation_of_prim_token p with Not_found -> InConstrEntry,"" in
+  (* BET-84 census row 11: each number or string notation the proof reads,
+     with the scopes it was read in and the query's mode. *)
   try
     let pat, sc = find_interpretation p_as_ntn (find_prim_token ?loc g p) scopes in
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"prim_token"
+        ~key:(fun () -> mode ^ notation_query_key p_as_ntn scopes)
+        ~value:(fun () -> Some (Proof_recorder.digest ~what:"prim_token" (pat, sc)));
     pat, sc
   with Not_found as exn ->
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"11" ~channel:"prim_token"
+        ~key:(fun () -> mode ^ notation_query_key p_as_ntn scopes)
+        ~value:(fun () -> None);
     let _, info = Exninfo.capture exn in
     user_err ?loc ~info
     ((match p with
@@ -545,10 +603,10 @@ let interp_prim_token_gen ?loc g p local_scopes =
       | String s -> str "No interpretation for string " ++ qs s) ++ str ".")
 
 let interp_prim_token ?loc =
-  interp_prim_token_gen ?loc (fun _ -> ())
+  interp_prim_token_gen ~mode:"T" ?loc (fun _ -> ())
 
 let interp_prim_token_cases_pattern_expr ?loc check_allowed p =
-  interp_prim_token_gen ?loc check_allowed p
+  interp_prim_token_gen ~mode:"P" ?loc check_allowed p
 
 let warn_notation =
   UserWarn.create_depr_and_user_warnings ~object_name:"Notation" ~warning_name_base:"notation"
@@ -604,13 +662,26 @@ let () = CErrors.register_handler @@ function
   | UnknownInterp (ntn,scopes) -> Some (explain_unknown_interp ntn scopes)
   | _ -> None
 
+(* BET-84 census row 11: each notation the proof reads, with the scopes it
+   was read in, because the same notation means different things in
+   different scopes. *)
+let record_notation ntn scopes v =
+  Proof_recorder.read ~row:"11" ~channel:"notation"
+    ~key:(fun () -> notation_query_key ntn scopes)
+    ~value:(fun () -> match v with
+        | None -> None
+        | Some v -> Some (Proof_recorder.digest ~what:"notation" v))
+
 let interp_notation ?loc ntn local_scopes =
   let scopes = make_current_scopes local_scopes in
-  try
-    let (n,sc) = find_interpretation ntn (find_notation ntn) scopes in
+  match find_interpretation ntn (find_notation ntn) scopes with
+  | (n, sc) ->
+    if Proof_recorder.active () then
+      record_notation ntn scopes (Some (n.not_interp, n.not_user_warns, sc));
     Option.iter (fun d -> warn_notation ?loc ntn d) n.not_user_warns;
     n.not_interp, (n.not_location, sc)
-  with Not_found as exn ->
+  | exception (Not_found as exn) ->
+    if Proof_recorder.active () then record_notation ntn scopes None;
     let _, info = Exninfo.capture exn in
     let info = Option.cata (Loc.add_loc info) info loc in
     Exninfo.iraise (UnknownInterp (ntn,scopes), info)
@@ -1131,17 +1202,43 @@ let declare_arguments_scope local r scl =
      re-computations and keep these manually given scopes. *)
   declare_arguments_scope_gen req r (scl,[])
 
-let find_arguments_scope env r =
-  try
-    let (scl,cls,stamp) = GlobRefMap.find env r !arguments_scope in
+(* BET-84 census row 11: the argument scopes of each global the proof
+   reads. The value is computed once, for the recorder at the lookup and
+   for the replay evaluator that checks the record again
+   (dev/tools/census/replay_channels.py). The lookup re-computes a stale
+   entry, so the value function performs the lookup itself. *)
+let find_arguments_scope_raw env r =
+  match GlobRefMap.find env r !arguments_scope with
+  | (scl, cls, stamp) ->
     let cur_stamp = !scope_class_map in
-    if stamp == cur_stamp then scl
-    else
-      (* Recent changes in the Bind Scope base, we re-compute the scopes *)
+    if stamp == cur_stamp then Some scl
+    else begin
       let scl' = update_scopes cls scl in
-      arguments_scope := GlobRefMap.add env r (scl',cls,cur_stamp) !arguments_scope;
-      scl'
-  with Not_found -> []
+      arguments_scope := GlobRefMap.add env r (scl', cls, cur_stamp) !arguments_scope;
+      Some scl'
+    end
+  | exception Not_found -> None
+
+let digest_arguments_scope = Option.map (fun scopes -> Proof_recorder.digest ~what:"arguments_scope" scopes)
+
+let recorded_arguments_scope env r = digest_arguments_scope (find_arguments_scope_raw env r)
+
+let () =
+  Proof_replay.register_evaluator "arguments_scope" (fun key ->
+      match Arguments_renaming.globref_of_string key with
+      | None -> Proof_replay.Unknown
+      | Some r ->
+        (match recorded_arguments_scope (Global.env ()) r with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown))
+
+let find_arguments_scope env r =
+  let res = find_arguments_scope_raw env r in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"arguments_scope"
+      ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
+      ~value:(fun () -> digest_arguments_scope res);
+  Option.default [] res
 
 let declare_ref_arguments_scope ref =
   let env = Global.env () in (* FIXME? *)

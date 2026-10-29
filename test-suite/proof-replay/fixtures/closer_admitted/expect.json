@@ -1,0 +1,7 @@
+{
+  "doc": "a registered Qed is edited to Admitted: its closer is a key miss, never a replay hit",
+  "files": ["A.v"],
+  "summaries": {"A.v": {"proofs": 1, "hits": 0,
+    "misses": {"key": 1, "read": 0, "ineligible": 0, "missing_record": 0}, "refused": null, "killed": false,
+    "outcomes": [["PR.A.closer", "key"]]}}
+}

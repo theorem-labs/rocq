@@ -128,7 +128,13 @@ let () = Quickfix.register (function
 let warn { Msg.tag; warning } ?loc v =
   let tag = DMap.tag_of_onetag tag in
   let w = W (loc,tag,v) in
-  match warning_status warning with
+  let status = warning_status warning in
+  (* BET-84: a warning a proof raised is a write, because [Set Warnings
+     "+name"] can turn it into an error for a later proof. A disabled
+     warning changes nothing and is not recorded. *)
+  if status <> Disabled && Proof_recorder.writing () then
+    Proof_recorder.write_warning ~name:warning.wname ~message:(Pp.string_of_ppcmds (print w));
+  match status with
   | Disabled -> ()
   | AsError -> Loc.raise ?loc (WarnError w)
   | Enabled -> Feedback.msg_warning ?loc ~quickfix:(quickfix w) (print w)

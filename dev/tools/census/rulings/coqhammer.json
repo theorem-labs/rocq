@@ -1,0 +1,23 @@
+{
+  "source": "lukaszcz/coqhammer (opam package coq-hammer-tactics 1.3.2+9.2)",
+  "commit": "1d581299c2a85af175b53bd35370ea074af922ec",
+  "scope": {
+    "include": ["src/lib", "src/tactics"],
+    "exclude": [],
+    "note": "The BET image installs coq-hammer-tactics only (binary-equivalence-taiga harness/toolchains/9.2/rocq-verify-harness.opam:19,56; `opam list --installed` in the image lists no coq-hammer). Its build is `make tactics` (coq-hammer-tactics.opam:18), whose sources are src/lib and src/tactics (_CoqProject.tactics). src/plugin (the hammer plugin with external ATPs) is not installed and not scanned."
+  },
+  "reasons": {
+    "allocation-precondition": "The handler catches every exception except Sys.Break, during the OCaml code that builds a tactic or parses an option (hammer_errors.ml:7-14 catch_errors and :16-33 try_bind_fun, reached from try_tactic, try_usolve and tacopts option checks). Its result can differ between registration and grade only for an exception whose occurrence depends on the compile's limits. Out_of_memory needs a failed allocation: the record states RLIMIT_AS, RLIMIT_DATA and vm.overcommit_memory, and replay is refused when either compile shows an address-space or data limit or strict overcommit (mode 2); otherwise the cgroup cap kills the compile and no handler runs. Stack_overflow happens at the same depth under the same stack limit, which key item 2 holds equal (GRADE, 2026-10-24 12:19Z). Control.Timeout comes only from Timeout, which makes the proof ineligible. Memprof interrupts need memprof-limits, which the image does not install (`opam list --installed memprof-limits` is empty). [INFERENCE: equal stack limit gives equal overflow depth for the same computation; the initial stack offset differs by the size of argv and the environment.]",
+    "string-prefix": "Body is `String.sub s1 0 (String.length s2) = s2` (hhlib.ml:102-106). String.sub raises only Invalid_argument; an allocation failure is excluded as in allocation-precondition.",
+    "parallel-race": "partac forks one process per candidate tactic, kills them after a wall-clock limit (`Unix.sleep time`), and takes the first that succeeds (hhpartac.ml:3-60). The result depends on time and scheduling (CHANNELS.md row 22). Its only caller is Tacbest.try_best (tacbest.ml:456), reached by the tactics `best`, `sbest` and `hbest` (g_hammer_tactics.mlg:318-334). A proof whose parsed sentences contain one of these tactics (TacML from plugin coq-hammer-tactics.plugin, entries Hammer_sauto_best, Hammer_sauto_sbest, Hammer_sauto_hbest) is ineligible."
+  },
+  "sites": {
+    "catchall:src/lib/hammer_errors.ml:catch_errors/e -> g e": {"ruling": "@allocation-precondition"},
+    "catchall:src/lib/hammer_errors.ml:try_bind_fun/e -> g (Pp.str @@ \"CoqHammer bug: please report: \" ^": {"ruling": "@allocation-precondition"},
+    "catchall:src/lib/hhlib.ml:string_begins_with/_ -> false": {"ruling": "@string-prefix"},
+    "catchall:src/lib/hhpartac.ml:partac/_ -> ()": {"ineligible": "@parallel-race"},
+    "catchall:src/lib/hhpartac.ml:partac/_ -> ()#2": {"ineligible": "@parallel-race"},
+    "catchall:src/lib/hhpartac.ml:partac/_ -> ()#3": {"ineligible": "@parallel-race"},
+    "catchall:src/lib/hhpartac.ml:partac/_ -> ()#4": {"ineligible": "@parallel-race"}
+  }
+}

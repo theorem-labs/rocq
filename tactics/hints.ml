@@ -198,20 +198,32 @@ type 'a hints_transparency_target =
 
 let hint_as_term h = (h.hint_uctx, h.hint_term)
 
-let fresh_key =
-  let id = Summary.ref ~name:"HINT-COUNTER" 0 in
-  fun () ->
-    let cur = incr id; !id in
-    let lbl = Id.of_string ("_" ^ string_of_int cur) in
-    let kn = Lib.make_kn lbl in
-    let (mp, _) = KerName.repr kn in
-    (* We embed the full path of the kernel name in the label so that
-       the identifier should be unique. This ensures that including
-       two modules together won't confuse the corresponding labels. *)
-    let lbl = Id.of_string_soft (Printf.sprintf "%s#%i"
-      (ModPath.to_string mp) cur)
-    in
-    KerName.make mp lbl
+let hint_counter = Summary.ref ~name:"HINT-COUNTER" 0
+
+let () =
+  Proof_recorder.register_tables (fun () ->
+      [Proof_record.{ row = "18"; channel = "counter_start"; key = "HINT-COUNTER";
+                      value = Some (string_of_int !hint_counter) }])
+
+(* BET-84 P3: a Summary counter, which the STM rolls back when a proof
+   closes; replay leaves it alone ([Proof_replay.register_summary_counter]).
+   Without this a proof whose tactics made a hint key is refused. *)
+let () = Proof_replay.register_summary_counter "hint_counter"
+
+let fresh_key () =
+  let cur = incr hint_counter; !hint_counter in
+  if Proof_recorder.writing () then
+    Proof_recorder.write_counters [("hint_counter", 1)];
+  let lbl = Id.of_string ("_" ^ string_of_int cur) in
+  let kn = Lib.make_kn lbl in
+  let (mp, _) = KerName.repr kn in
+  (* We embed the full path of the kernel name in the label so that
+     the identifier should be unique. This ensures that including
+     two modules together won't confuse the corresponding labels. *)
+  let lbl = Id.of_string_soft (Printf.sprintf "%s#%i"
+    (ModPath.to_string mp) cur)
+  in
+  KerName.make mp lbl
 
 let pri_order_int (id1, {pri=pri1}) (id2, {pri=pri2}) =
   let d = Int.compare pri1 pri2 in
@@ -317,6 +329,7 @@ sig
   val add : stored_data -> t -> t
   val remove : Environ.env -> GlobRef.Set_env.t -> t -> t
   val elements : t -> StoredSet.t
+  val uids : t -> KerName.Set.t
 end =
 struct
 
@@ -347,6 +360,8 @@ let remove env grs sd =
   else { data = data; set }
 
 let elements v = v.data
+
+let uids v = v.set
 
 end
 
@@ -620,8 +635,50 @@ val modes : t -> hint_mode array list GlobRef.Map.t
 val find_mode : env -> GlobRef.t -> t -> hint_mode array list
 val fold : (GlobRef.t option -> hint_mode array list -> full_hint list -> 'a -> 'a) ->
   t -> 'a -> 'a
+val digest : t -> string
 end =
 struct
+
+  (* BET-84 census row 7. The fingerprint of a database is its ORDERED
+     CONTENTS, not the identifiers of its hints: a uid names an allocation (a
+     module path and a counter), so an earlier [Hint Extern] edited at the same
+     command position keeps its uid, its head and every counter, and a later
+     unchanged [auto] can still fail (cross-model delta review D1). Each
+     stored hint keeps its insertion id too: equal-priority hints are tried
+     newest first by that id, so two [Import]s exchanged re-add the same hints
+     with exchanged ids and change which hint is tried first (D2).
+
+     A hint's clausenv is left out: it is derived from the hint's term and
+     type, and holds an evar map. The discrimination net is left out: it is a
+     cache a lookup fills in place (the earlier finding F10). *)
+  type hint_print = {
+    hp_id : int;
+    hp_uid : KerName.t;
+    hp_pri : int;
+    hp_pat : hint_pattern option;
+    hp_name : GlobRef.t option;
+    hp_db : hint_db_name option;
+    hp_secvars : Id.Pred.t;
+    hp_code : (constr * types * UnivGen.sort_context_set option * int) hint_ast;
+  }
+
+  type entry_summary = {
+    entry_key : GlobRef.t;
+    entry_nopat : hint_print list;
+    entry_pat : hint_print list;
+    entry_modes : hint_mode list list;
+  }
+
+  type summary = {
+    summary_state : TransparentState.t;
+    summary_cut : hints_path;
+    summary_unfolds : Id.Set.t * Cset.t * PRset.t;
+    summary_max_id : int;
+    summary_use_dn : bool;
+    summary_map : entry_summary list;
+    summary_nopat : hint_print list;
+    summary_name : string option;
+  }
 
   type t = {
     hintdb_state : TransparentState.t;
@@ -633,20 +690,75 @@ struct
     (* A list of unindexed entries with no associated pattern. *)
     hintdb_nopat : stored_data list;
     hintdb_name : string option;
+    mutable hintdb_summary : summary option;
+    (* Built the first time a digest is asked for, and kept with this value.
+       Not a [lazy]: a closure would make the database unmarshallable. *)
   }
+
+  let print_code = function
+    | Res_pf h -> Res_pf (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | ERes_pf h -> ERes_pf (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Give_exact h -> Give_exact (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Res_pf_THEN_trivial_fail h ->
+      Res_pf_THEN_trivial_fail (h.hint_term, h.hint_type, h.hint_uctx, h.hint_arty)
+    | Unfold_nth e -> Unfold_nth e
+    | Extern (p, tac) -> Extern (p, tac)
+
+  let print_stored ((id, h) : stored_data) = {
+    hp_id = id;
+    hp_uid = h.code.uid;
+    hp_pri = h.pri;
+    hp_pat = h.pat;
+    hp_name = h.name;
+    hp_db = h.db;
+    hp_secvars = h.secvars;
+    hp_code = print_code h.code.obj;
+  }
+
+  (* In search order: a [StoredSet] is ordered by [pri_order_int]. *)
+  let print_data sd = List.map print_stored (StoredSet.elements (StoredData.elements sd))
+
+  let summary_of db =
+    { summary_state = db.hintdb_state;
+      summary_cut = db.hintdb_cut;
+      summary_unfolds = db.hintdb_unfolds;
+      summary_max_id = db.hintdb_max_id;
+      summary_use_dn = db.use_dn;
+      summary_map =
+        GlobRef.Map.fold (fun entry_key se summaries ->
+            { entry_key;
+              entry_nopat = print_data se.sentry_nopat;
+              entry_pat = print_data se.sentry_pat;
+              entry_modes = List.map Array.to_list se.sentry_mode; } :: summaries)
+          db.hintdb_map [];
+      summary_nopat = List.map print_stored (List.sort pri_order_int db.hintdb_nopat);
+      summary_name = db.hintdb_name; }
+
+  let make hintdb_state hintdb_cut hintdb_unfolds hintdb_max_id use_dn
+      hintdb_map hintdb_nopat hintdb_name =
+    { hintdb_state; hintdb_cut; hintdb_unfolds; hintdb_max_id; use_dn;
+      hintdb_map; hintdb_nopat; hintdb_name; hintdb_summary = None }
+
+  let copy db ?hintdb_state ?hintdb_cut ?hintdb_unfolds ?hintdb_max_id
+      ?use_dn ?hintdb_map ?hintdb_nopat ?hintdb_name () =
+    make
+      (Option.default db.hintdb_state hintdb_state)
+      (Option.default db.hintdb_cut hintdb_cut)
+      (Option.default db.hintdb_unfolds hintdb_unfolds)
+      (Option.default db.hintdb_max_id hintdb_max_id)
+      (Option.default db.use_dn use_dn)
+      (Option.default db.hintdb_map hintdb_map)
+      (Option.default db.hintdb_nopat hintdb_nopat)
+      (Option.default db.hintdb_name hintdb_name)
 
   let next_hint_id db =
     let h = db.hintdb_max_id in
-    { db with hintdb_max_id = succ db.hintdb_max_id }, h
+    let db = copy db ~hintdb_max_id:(succ db.hintdb_max_id) () in
+    db, h
 
-  let empty ?name st use_dn = { hintdb_state = st;
-                          hintdb_cut = PathEmpty;
-                          hintdb_unfolds = (Id.Set.empty, Cset.empty, PRset.empty);
-                          hintdb_max_id = 0;
-                          use_dn = use_dn;
-                          hintdb_map = GlobRef.Map.empty;
-                          hintdb_nopat = [];
-                          hintdb_name = name; }
+  let empty ?name st use_dn =
+    make st PathEmpty (Id.Set.empty, Cset.empty, PRset.empty) 0 use_dn
+      GlobRef.Map.empty [] name
 
   let dn_ts db = if db.use_dn then (Some db.hintdb_state) else None
 
@@ -727,7 +839,7 @@ struct
           let is_present (_, v') = KerName.equal v.code.uid v'.code.uid in
           if not (List.exists is_present db.hintdb_nopat) then
             (* FIXME *)
-            { db with hintdb_nopat = idv :: db.hintdb_nopat }
+            copy db ~hintdb_nopat:(idv :: db.hintdb_nopat) ()
           else db
       | Some gr ->
         let pat =
@@ -735,12 +847,13 @@ struct
           else v.pat
         in
           let oval = find gr db in
-            { db with hintdb_map = GlobRef.Map.add gr (add_tac pat idv oval) db.hintdb_map }
+          copy db ~hintdb_map:(GlobRef.Map.add gr (add_tac pat idv oval) db.hintdb_map) ()
 
   let rebuild_db st' db =
     let db' =
-      { db with hintdb_map = GlobRef.Map.map (rebuild_dn (Some st')) db.hintdb_map;
-        hintdb_state = st'; hintdb_nopat = [] }
+      copy db
+        ~hintdb_map:(GlobRef.Map.map (rebuild_dn (Some st')) db.hintdb_map)
+        ~hintdb_state:st' ~hintdb_nopat:[] ()
     in
       List.fold_left (fun db (id, v) -> addkv None id v db) db' db.hintdb_nopat
 
@@ -759,7 +872,7 @@ struct
       | Evaluable.EvalProjectionRef p ->
         { ts with tr_prj = PRpred.add p ts.tr_prj }, (ids, csts, PRset.add p prjs)
       in
-      let db = { db with hintdb_unfolds = unfs } in
+      let db = copy db ~hintdb_unfolds:unfs () in
       if db.use_dn then rebuild_db state db else db
     | _ -> db
     in
@@ -784,7 +897,7 @@ struct
       match h.name with Some gr -> not (List.mem_f eq gr grs) | None -> true in
     let hintmap = GlobRef.Map.map (fun e -> remove env (dn_ts db) grs e) db.hintdb_map in
     let hintnopat = List.filter filter db.hintdb_nopat in
-      { db with hintdb_map = hintmap; hintdb_nopat = hintnopat }
+    copy db ~hintdb_map:hintmap ~hintdb_nopat:hintnopat ()
 
   let remove_one env gr db = remove_list env [gr] db
 
@@ -805,15 +918,15 @@ struct
 
   let set_transparent_state db st =
     if db.use_dn then rebuild_db st db
-    else { db with hintdb_state = st }
+    else copy db ~hintdb_state:st ()
 
   let add_cut env path db =
-    { db with hintdb_cut = normalize_path env (PathOr (db.hintdb_cut, path)) }
+    copy db ~hintdb_cut:(normalize_path env (PathOr (db.hintdb_cut, path))) ()
 
   let add_mode gr m db =
     let se = find gr db in
     let se = { se with sentry_mode = m :: List.remove (Array.equal hint_mode_eq) m se.sentry_mode } in
-    { db with hintdb_map = GlobRef.Map.add gr se db.hintdb_map }
+    copy db ~hintdb_map:(GlobRef.Map.add gr se db.hintdb_map) ()
 
   let cut db = db.hintdb_cut
 
@@ -824,13 +937,20 @@ struct
       Some { e with sentry_mode = me.sentry_mode @ e.sentry_mode }
     in
     let mode_entries = GlobRef.Map.map (fun m -> { (empty_se (dn_ts db)) with sentry_mode = m }) modes in
-    { db with hintdb_map = GlobRef.Map.union f db.hintdb_map mode_entries }
+    copy db ~hintdb_map:(GlobRef.Map.union f db.hintdb_map mode_entries) ()
 
   let modes db = GlobRef.Map.map (fun se -> se.sentry_mode) db.hintdb_map
 
   let find_mode _env gr db = (GlobRef.Map.find gr db.hintdb_map).sentry_mode
 
   let use_dn db = db.use_dn
+
+  let digest db =
+    let s = match db.hintdb_summary with
+      | Some s -> s
+      | None -> let s = summary_of db in db.hintdb_summary <- Some s; s
+    in
+    Proof_recorder.digest_cached ~what:"hint_db" s
 
 end
 
@@ -840,8 +960,46 @@ type hint_db = Hint_db.t
 
 let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
 
+(* BET-84 census row 7: each database the proof searches, by name, with a
+   digest of its immutable semantic summary. The summary excludes the mutable
+   discrimination net cache and is kept with the persistent database value.
+
+   ONE value function for the channel: the two record sites below and the
+   replay evaluator all call [recorded_hint_db], so the value is never
+   computed two ways (dev/tools/census/replay_channels.py). Under the key
+   ["*domain"] the value is the set of database names, so that a proof which
+   searched every database (`auto with *`) sees a database added or removed. *)
+let domain_key = "*domain"
+
+let recorded_hint_db key =
+  if String.equal key domain_key then
+    Some (Proof_recorder.digest ~what:"hint_db_domain"
+            (String.Set.elements (Hintdbmap.domain !searchtable)))
+  else
+    match Hintdbmap.find_opt key !searchtable with
+    | None -> None
+    | Some db -> Some (Hint_db.digest db)
+
+let () =
+  Proof_replay.register_evaluator "hint_db" (fun key ->
+      match recorded_hint_db key with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let record_db name (_db : Hint_db.t option) =
+  if Proof_recorder.active () then
+    Proof_recorder.read_by ~row:"7" ~channel:"hint_db" ~id:name ~key:(fun () -> name)
+      ~value:(fun () -> recorded_hint_db name)
+
+let record_db_domain () =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> domain_key)
+      ~value:(fun () -> recorded_hint_db domain_key)
+
 let searchtable_map name =
-  Hintdbmap.find name !searchtable
+  let db = Hintdbmap.find_opt name !searchtable in
+  record_db name db;
+  (match db with Some db -> db | None -> raise Not_found)
 let searchtable_add (name, db) =
   (* XXX see #21114 *)
 (*   let () = assert (Hintdbmap.mem name !searchtable) in *)
@@ -849,10 +1007,25 @@ let searchtable_add (name, db) =
 let searchtable_create (name, db) =
 (*   let () = assert (not @@ Hintdbmap.mem name !searchtable) in *)
   searchtable := Hintdbmap.add name db !searchtable
-let current_db_names () = Hintdbmap.domain !searchtable
-let current_db () = Hintdbmap.bindings !searchtable
+let current_db_names () =
+  record_db_domain ();
+  Hintdbmap.domain !searchtable
+let current_db () =
+  record_db_domain ();
+  let all = Hintdbmap.bindings !searchtable in
+  List.iter (fun (name, db) -> record_db name (Some db)) all;
+  all
 
 let current_pure_db () = List.map snd (current_db ())
+
+(* Every hint database at the proof's start, for -proof-record-tables. *)
+let () =
+  Proof_recorder.register_tables (fun () ->
+      List.map
+        (fun (name, db) ->
+           Proof_record.{ row = "7"; channel = "hint_db"; key = name;
+                          value = Some (Hint_db.digest db) })
+        (Hintdbmap.bindings !searchtable))
 
 let error_no_such_hint_database x =
   user_err (str "No such Hint database: " ++ str x ++ str ".")

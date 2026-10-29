@@ -35,7 +35,15 @@ let inPropButDefaultDepElim : inductive -> Libobject.obj =
 let declare_prop_but_default_dependent_elim i =
   Lib.add_leaf (inPropButDefaultDepElim i)
 
-let is_prop_but_default_dependent_elim i = Indset_env.mem i !prop_but_default_dependent_elim
+(* BET-84 row N3: inductives in Prop whose case analysis is dependent by
+   default. [destruct] and [case] read it. *)
+let is_prop_but_default_dependent_elim i =
+  let res = Indset_env.mem i !prop_but_default_dependent_elim in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"N3" ~channel:"prop_dependent_elim"
+      ~key:(fun () -> Names.MutInd.to_string (fst i) ^ "," ^ string_of_int (snd i))
+      ~value:(fun () -> Some (string_of_bool res));
+  res
 
 let pseudo_sort_quality_for_elim ind mip =
   let s = mip.mind_sort in
