@@ -20,15 +20,20 @@
 # reference it does not match except in the one case below: a reference left
 # behind by a version bump would make every later change pass.
 #
-# The one difference that passes is an object kind this build has and the
-# reference does not. A file names a kind by the hash of its name
+# The one difference that passes is a kind this build registers and the
+# reference does not: its [object_kind] line, the [payload] line that gives
+# the OCaml type the kind stores, the [option_payload] line that gives the
+# type a declared option stores, and the [type] and [opaque] lines those
+# reach on their own. A file names a kind by the hash of its name
 # (clib/dyn.ml), and a build that does not know that hash refuses the file
 # (Libobject.load_object, library/libobject.ml, Not_found) rather than
 # reading a value at the wrong type, so a new kind needs no new .vo
 # version. A declared option is one (library/goptions.ml), so a release
 # that adds an option would otherwise be told to bump the version, which
-# moves every library label. A kind the reference has and this build does
-# not, a renamed kind and any other line still fail.
+# moves every library label. Every other change rewrites a line the
+# reference already has -- a payload's type, the type an option stores, a
+# type's definition, a kind's name, a segment's schema -- which is a line
+# gone, so it still fails.
 #
 
 set -e
@@ -66,12 +71,14 @@ version() { awk '$1 == "vo_version" { print $2 }' "$1"; }
 recorded=$(version "$REF")
 current=$(version _test/current.txt)
 
-# Every differing line, by side; an added object kind is the one difference
-# that is not a format change.
+# Every differing line, by side; the lines a kind this build registers adds
+# are the one difference that is not a format change.
 grep '^-[^-]' _test/diff.txt | cut -c2- > _test/gone.txt || true
 grep '^+[^+]' _test/diff.txt | cut -c2- > _test/new.txt || true
-if [ ! -s _test/gone.txt ] && [ -s _test/new.txt ] && ! grep -qv '^object_kind ' _test/new.txt; then
-  echo "PASS what a .vo stores is what $REF records, plus $(wc -l < _test/new.txt) object kind(s) this build registers:"
+added_kinds=$(grep -c '^object_kind ' _test/new.txt || true)
+if [ ! -s _test/gone.txt ] && [ "$added_kinds" != 0 ] \
+   && ! grep -qvE '^(object_kind|payload|payload_unresolved|option_payload|table_payload|type|opaque) ' _test/new.txt; then
+  echo "PASS what a .vo stores is what $REF records, plus $added_kinds object kind(s) this build registers:"
   sed 's/^/       /' _test/new.txt
   echo "     a build without a kind refuses a file that names it, so this needs no .vo version"
   echo "     record it: cp $PWD/_test/current.txt $PWD/$REF"

@@ -111,8 +111,8 @@ let axiom_report_json (l : Library.file_label) =
 module Values = Coq_checklib.Values
 
 (* The representation of the values this build writes into a .vo
-   ([--vo-representation]), in two halves:
-   - the kernel half: the structure of every segment of a .vo as the
+   ([--vo-representation]), in three parts:
+   - the kernel part: the structure of every segment of a .vo as the
      checker describes it (checker/values.ml): per type, its constructors
      with an argument, their arity and their order, and the number of its
      constant constructors. A constructor with an argument added, removed
@@ -126,17 +126,33 @@ module Values = Coq_checklib.Values
      reads that segment (checker/checkLibrary.ml), so nothing checks that
      description against what the kernel writes: a kernel change that
      leaves checker/values.ml as it is leaves this printing as it is;
-   - the object half: the name of every object kind registered in this
+   - the object part: the name of every object kind registered in this
      build ([Libobject.dump], with every plugin and the toplevel linked
      in), which is what the object segments of a .vo can hold. A kind
      added, removed or renamed changes this printing; a kind only this
-     build has is the one difference misc/vo-format.sh lets pass.
-   What this does NOT reach: the payload type of an object kind (no reader
-   in the build describes it; the checker reads both object segments as
-   [Any], [Values.v_lib]), the meaning of a string, the bytecode of the
-   vmlibrary segment among them, and an order of constant constructors. A
-   change there shows up here only when it moves a kernel type or a kind
-   name. *)
+     build has is the one difference misc/vo-format.sh lets pass;
+   - the payload part ([Payload_types.payloads], printed at build time by
+     checker/vo_payloads.ml from the typed trees of those same
+     directories, and embedded here): the OCaml type of the value each of
+     those kinds stores, with the definition of every type it reaches. A
+     field added to a payload's record, a constructor renamed or moved, a
+     type alias changed underneath, all change this printing. What it does
+     not reach it prints rather than drops, each with a token that says
+     why; the list of those tokens, and what each one means, is at the head
+     of checker/vo_payloads.ml, which is the one place it is written down.
+     The element type of each [Goptions] table is one of its lines
+     ([table_payload]), since the functor's body names it only through its
+     parameter;
+   - the option part ([option_payload], from [Goptions.get_tables]): which
+     of the four types of [Goptions.option_kind] each declared option
+     stores, which the payload part cannot say because every option is
+     registered from one reference, at the type its caller chooses.
+   What no part reaches: the value behind a [Dyn] tag (a stored Ltac
+   expression is pinned down to its generic arguments and no further), the
+   meaning of a string, the bytecode of the vmlibrary segment among them,
+   and the order of a type's constant constructors in the kernel part (the
+   payload part prints them in order). A change there shows up here only
+   when it moves a kernel type, a kind name or a payload type. *)
 
 (* The schema is a graph: [Values.fix] makes cyclic values, and a node can
    be reached from several places. It is printed one node per line, [#n =
@@ -240,12 +256,38 @@ let print_schema b (v : Values.value) =
       end)
     nodes
 
+(* Which of the four types of [Goptions.option_kind] each declared option
+   stores. The payload part cannot say: all options are registered from one
+   reference ([Goptions.declare_option]), at a type its caller chooses, so
+   its line is [payload_unresolved]. The option's current value carries its
+   kind, and every option of this build is declared by the time this runs
+   (the same initialisers that register the kinds above), so the two halves
+   together pin what an object of an option kind holds. *)
+let option_payloads b =
+  let stored (state : Goptions.option_state) =
+    match state.Goptions.opt_value with
+    | Goptions.BoolValue _ -> "bool"
+    | Goptions.IntValue _ -> "int option"
+    | Goptions.StringValue _ -> "string"
+    | Goptions.StringOptValue _ -> "string option"
+  in
+  List.iter (fun l -> Buffer.add_string b l; Buffer.add_char b '\n')
+    (List.sort String.compare
+       (Goptions.OptionMap.fold
+          (fun key state acc ->
+             Printf.sprintf "option_payload %s %s"
+               (String.concat " " key) (stored state)
+             :: acc)
+          (Goptions.get_tables ()) []))
+
 let vo_representation () =
   let b = Buffer.create 8192 in
   Buffer.add_string b "rocq-vo-representation 1\n";
   Printf.bprintf b "vo_version %ld\n" Coq_config.vo_version;
   List.iter (fun k -> Printf.bprintf b "object_kind %s\n" k)
     (List.sort String.compare (List.map snd (Libobject.dump ())));
+  Buffer.add_string b Payload_types.payloads;
+  option_payloads b;
   List.iter (fun (segment, v) ->
       Printf.bprintf b "segment %s " segment; print_schema b v)
     Values.vo_segments;

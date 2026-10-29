@@ -262,6 +262,622 @@ object_kind template default univs
 object_kind type classes instances state
 object_kind type classes state
 object_kind univ constraint sources
+object_payloads 1
+payload ? Goptions.MakeTable.inGo#1 (Libobject.locality * (Goptions.MakeTable.option_mark * Goptions.MakeTable.A.Set.elt)) ; in-functor Goptions.MakeTable
+payload ? Goptions.declare_append_only_option.change.options#1 (Goptions.option_locality * string)
+payload ? Tactic_option.declare_tactic_option.input#1 (Tactic_option.tac_option_locality * [`glevel] Genarg.generic_argument option)
+payload ? Zify_plugin__Zify.MakeTable.register_obj#1 (Libobject.locality * Constr.t) ; in-functor Zify_plugin__Zify.MakeTable
+payload ABBREVIATION#1 (string * Abbreviation.abbreviation)
+payload ARGUMENTS-SCOPE#1 (Notation.arguments_scope_discharge_request * Names.GlobRef.t * string list list * Coercionops.cl_typ option list * ((string * bool) list * (string * bool) list) Notation.ScopeClassMap.t)
+payload ATTEMPTS#1 Attempts.t
+payload AUTOHINT#1 Hints.hint_obj
+payload AUTOHINT_DB#1 Hints.db_obj
+payload AUTOREWRITE_DB#1 Autorewrite.db_obj
+payload BIDIRECTIONALITY-HINTS#1 (Names.GlobRef.t * int option)
+payload CANONICAL-STRUCTURE#1 ((Names.GlobRef.t * (Names.KerPair.t * int)) * bool)
+payload COERCION#1 Coercionops.coe_info_typ
+payload CONSTANT#1 (string * Declare.constant_obj)
+payload COQLIBREF#1 (Libobject.locality * (CString.Map.key * Names.GlobRef.t))
+payload CUSTOM-ENTRIES#1 (string * bool)
+payload DELIMITERS#1 (bool * string * Metasyntax.scope_command)
+payload EXPORTNAMES#1 (int * Globnames.extended_global_reference) list
+payload Extraction Blacklist#1 string list
+payload Extraction Callback#1 (string option * Extraction_plugin__Miniml.global)
+payload Extraction Foreign#1 Extraction_plugin__Miniml.global list
+payload Extraction Implicit#1 (Extraction_plugin__Miniml.global * Extraction_plugin__Table.int_or_id list)
+payload Extraction Inline#1 (bool * Extraction_plugin__Miniml.global list)
+payload Extraction Lang#1 Extraction_plugin__Table.lang
+payload FUNCTIONS_DB#1 Funind_plugin__Indfun_common.function_info
+payload GENERALIZED-IDENT#1 (bool * string CAst.t list option)
+payload Global sort name state#1 DeclareUniv.sort_name_decl
+payload Global universe name state#1 (DeclareUniv.universe_source * (string * Univ.UGlobal.t) list)
+payload HINT_REWRITE_GLOBAL#1 (Libobject.locality * (CString.Map.key * Autorewrite.rew_rule list))
+payload IMPLICITS#1 (Impargs.implicit_discharge_request * (Names.GlobRef.t * (Impargs.implicit_side_condition * Impargs.implicit_status_info option list) list) list)
+payload INDUCTIVE#1 (string * DeclareInd.inductive_obj)
+payload KEYS#1 (Keys.key * Keys.key)
+payload Ltac2 custom entry#1 (string * bool)
+payload ML extractions custom matches#1 (Extraction_plugin__Miniml.global * string)
+payload ML extractions#1 (Extraction_plugin__Miniml.global * string list * string)
+payload ML-MODULE#1 Mltop.ml_module_object
+payload NOTATION#1 Metasyntax.notation_obj
+payload NOTATION-TOGGLE#1 (bool * (bool * bool * Libnames.full_path CAst.t Notation.notation_query_pattern_gen))
+payload PRIM-TOKEN-INTERP#1 Notation.prim_token_infos
+payload PRIMPROJS#1 (Names.Projection.Repr.t * Names.KerPair.t)
+payload REDUCTION#1 (bool * CString.Map.key * (Constr.t, Evaluable.t, Util.Empty.t Pattern.constr_pattern_r, int, Evaluable.t Genredexpr.glob_red_flag, [`glevel] Redexpr.User.user_red_expr) Genredexpr.red_expr_gen0)
+payload REDUCTION-EFFECT#1 (Libobject.locality * (Names.Cmap_env.key * CString.Map.key))
+payload REDUCTIONBEHAVIOUR#1 (bool * (Names.Cpred.elt * Reductionops.ReductionBehaviour.t option))
+payload RENAME-ARGUMENTS#1 (Arguments_renaming.req * (Environ.QGlobRef.Map.key * Names.name list))
+payload REQUIRE#1 (Library.require_mode * Library.library_t) list
+payload REQUIRE-SYNTAX#1 (Library.require_mode * bool * Library.library_t) list
+payload Reset Extraction Blacklist#1 unit
+payload Reset Extraction Callback#1 unit
+payload Reset Extraction Foreign#1 unit
+payload Reset Extraction Inline#1 unit
+payload SCHEME#1 (Libobject.locality * (CString.Map.key * ((Names.KerPair.t * int) * Names.GlobRef.t)))
+payload SCOPE#1 (bool * bool * string)
+payload STRATEGY#1 (bool * (Conv_oracle.level * Evaluable.t list) list)
+payload STRUCTURE#1 Structures.Structure.t
+payload SYNTAX-EXTENSION#1 (bool * ((Names.KerName.t Constrexpr.notation_entry_gen * string) * Metasyntax.syntax_extension))
+payload SsrGrammar#1 (Names.KerName.t * Ltac_plugin__Tacenv.alias_tactic * Ltac_plugin__Pptactic.pp_tactic)
+payload TAC-DEFINITION#1 Ltac_plugin__Tacenv.tacdef
+payload TAC-REDEFINITION#1 Ltac_plugin__Tacenv.tacreplace
+payload TAC2-ABBREVIATION#1 (string * Ltac2_plugin__Tac2entries.abbreviation)
+payload TAC2-DEFINITION#1 (string * Ltac2_plugin__Tac2entries.tacdef)
+payload TAC2-IMPORT-TYPE#1 (string * Names.KerName.t)
+payload TAC2-NOTATION#1 Ltac2_plugin__Tac2entries.synext
+payload TAC2-NOTATION-INTERP#1 (bool * Names.KerName.t * Ltac2_plugin__Tac2env.notation_data)
+payload TAC2-REDEFINITION#1 Ltac2_plugin__Tac2entries.redefinition
+payload TAC2-TYPE-DEFINITION#1 (string * Ltac2_plugin__Tac2entries.typdef)
+payload TAC2-TYPE-EXTENSION#1 Ltac2_plugin__Tac2entries.typext
+payload TRANSITIVITY-STEPS#1 (bool * Constr.t)
+payload TacticGrammar#1 (Ltac_plugin__Tacentries.tactic_grammar_obj * Ltac_plugin__Tacenv.alias_tactic)
+payload TacticSyntax#1 Ltac_plugin__Tacentries.tactic_grammar_obj
+payload VARIABLE#1 string
+payload VIEW_ADAPTOR_DB#1 (Ssreflect_plugin__Ssrview.AdaptorDb.AdaptorMap.key * ([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t)
+payload prop_but_default_dependent_elim#1 (Names.KerPair.t * int)
+payload tactic-new-field-theory#1 Ring_plugin__Ring_ast.field_info
+payload tactic-new-ring-theory#1 Ring_plugin__Ring_ast.ring_info
+payload template default univs#1 HMap.Make(Univ.Map.Self).Set.t
+payload type classes instances state#1 Classes.instance
+payload type classes state#1 Typeclasses.typeclass
+payload univ constraint sources#1 (Names.GlobRef.t * Stdlib.Set.Make(Univ.UnivConstraint).t)
+payload_unresolved ? Goptions.declare_option.change.options#1 (Goptions.option_locality * '_) free-variable ; reaches Goptions.option_kind, Goptions.option_sig
+table_payload Coercionops.PrintingCoercion Names.GlobRef.t
+table_payload Detyping.PrintingIf (Names.KerPair.t * int)
+table_payload Detyping.PrintingLet (Names.KerPair.t * int)
+table_payload Equality.KeepEqualitiesTable (Names.KerPair.t * int)
+table_payload PrintingFlags.PrintingConstructor (Names.KerPair.t * int)
+table_payload PrintingFlags.PrintingRecord (Names.KerPair.t * int)
+table_payload Search.SearchBlacklist string
+type 'a CAst.t = record {v : 'a; loc : Loc.t option}
+type 'a CPrimitives.prim_ind = variant PIT_bool : unit CPrimitives.prim_ind | PIT_carry : CPrimitives.ind_or_type CPrimitives.prim_ind | PIT_pair : (CPrimitives.ind_or_type * CPrimitives.ind_or_type) CPrimitives.prim_ind | PIT_cmp : unit CPrimitives.prim_ind | PIT_f_cmp : unit CPrimitives.prim_ind | PIT_f_class : unit CPrimitives.prim_ind
+type 'a CPrimitives.prim_type = variant PT_int63 : unit CPrimitives.prim_type | PT_float64 : unit CPrimitives.prim_type | PT_string : unit CPrimitives.prim_type | PT_array : ((Sorts.Quality.t array * Univ.Level.t array) * CPrimitives.ind_or_type) CPrimitives.prim_type
+type 'a Constr.pcase_invert = variant NoInvert | CaseInvert of {indices : 'a array}
+type 'a Constrexpr.notation_entry_gen = variant InConstrEntry | InCustomEntry of 'a
+type 'a Declarations.functor_alg_expr = variant MENoFunctor of 'a Declarations.module_alg_expr | MEMoreFunctor of 'a Declarations.functor_alg_expr
+type 'a Declarations.module_alg_expr = variant MEident of Names.ModPath.t | MEapply of 'a Declarations.module_alg_expr * Names.ModPath.t | MEwith of 'a Declarations.module_alg_expr * 'a Declarations.with_declaration
+type 'a Declarations.with_declaration = variant WithMod of string list * Names.ModPath.t | WithDef of string list * 'a
+type 'a Deprecation.with_qf = record {depr : Deprecation.t; use_instead : 'a option}
+type 'a Extend.user_symbol = variant Ulist1 of 'a Extend.user_symbol | Ulist1sep of 'a Extend.user_symbol * string | Ulist0 of 'a Extend.user_symbol | Ulist0sep of 'a Extend.user_symbol * string | Uopt of 'a Extend.user_symbol | Uentry of 'a | Uentryl of 'a * int
+type 'a Genarg.generic_argument = variant GenArg of ('e0, 'a) Genarg.abstract_argument_type * 'e0 : 'a Genarg.generic_argument
+type 'a Genredexpr.glob_red_flag = record {rStrength : Genredexpr.strength; rBeta : bool; rMatch : bool; rFix : bool; rCofix : bool; rZeta : bool; rDelta : bool; rConst : 'a list}
+type 'a Glob_term.cases_pattern_r = variant PatVar of Names.Name.t | PatCstr of ((Names.KerPair.t * int) * int) * ('a Glob_term.cases_pattern_r, 'a) DAst.thunk CAst.t list * Names.Name.t
+type 'a Glob_term.glob_constr_r = variant GRef of Names.GlobRef.t * (Glob_term.glob_quality list * Glob_term.glob_sort_name Glob_term.glob_sort_gen list) option | GVar of string | GEvar of string CAst.t * (string CAst.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t) list | GPatVar of Evar_kinds.matching_var_kind | GApp of ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t list | GLambda of Names.Name.t * Glob_term.glob_relevance option * Glob_term.binding_kind * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t | GProd of Names.Name.t * Glob_term.glob_relevance option * Glob_term.binding_kind * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t | GLetIn of Names.Name.t * Glob_term.glob_relevance option * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t option * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t | GCases of Constr.case_style * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t option * (('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * (Names.Name.t * ((Names.KerPair.t * int) * Names.Name.t list) CAst.t option)) list * (string list * ('a Glob_term.cases_pattern_r, 'a) DAst.thunk CAst.t list * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t) CAst.t list | GLetTuple of Names.Name.t list * (Names.Name.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t option) * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t | GIf of ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * (Names.Name.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t option) * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t | GRec of Glob_term.glob_fix_kind * string array * (Names.Name.t * Glob_term.glob_relevance option * Glob_term.binding_kind * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t option * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t) list array * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t array * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t array | GSort of (Glob_term.glob_qvar option * (Glob_term.glob_sort_name * int) list Glob_term.glob_sort_gen) | GHole of Glob_term.glob_evar_kind | GGenarg of [`glevel] Genarg.generic_argument | GCast of ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * Constr.cast_kind option * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t | GProj of (Names.KerPair.t * (Glob_term.glob_quality list * Glob_term.glob_sort_name Glob_term.glob_sort_gen list) option) * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t list * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t | GInt of int | GFloat of float | GString of string | GArray of (Glob_term.glob_quality list * Glob_term.glob_sort_name Glob_term.glob_sort_gen list) option * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t array * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t * ('a Glob_term.glob_constr_r, 'a) DAst.thunk CAst.t
+type 'a Glob_term.glob_sort_gen = variant UAnonymous of {rigid : UState.rigid} | UNamed of 'a
+type 'a Goptions.option_kind = variant BoolKind : bool Goptions.option_kind | IntKind : int option Goptions.option_kind | StringKind : string Goptions.option_kind | StringOptKind : string option Goptions.option_kind
+type 'a Goptions.option_sig = record {optstage : Summary.Stage.t; optdepr : Deprecation.t option; optkey : string list; optread : (unit -> 'a); optwrite : ('a -> unit)}
+type 'a Hints.hint_ast = variant Res_pf of 'a | ERes_pf of 'a | Give_exact of 'a | Res_pf_THEN_trivial_fail of 'a | Unfold_nth of Evaluable.t | Extern of Util.Empty.t Pattern.constr_pattern_r option * [`glevel] Genarg.generic_argument
+type 'a Hints.hints_path_atom_gen = variant PathHints of 'a list | PathAny
+type 'a Hints.hints_path_gen = variant PathAtom of 'a Hints.hints_path_atom_gen | PathStar of 'a Hints.hints_path_gen | PathSeq of 'a Hints.hints_path_gen * 'a Hints.hints_path_gen | PathOr of 'a Hints.hints_path_gen * 'a Hints.hints_path_gen | PathEmpty | PathEpsilon
+type 'a Hints.hints_transparency_target = variant HintsVariables | HintsConstants | HintsProjections | HintsReferences of 'a list
+type 'a Hints.with_uid = record {obj : 'a; uid : Names.KerName.t}
+type 'a Locus.clause_expr = record {onhyps : ((int Locus.or_var Locus.occurrences_gen * 'a) * Locus.hyp_location_flag) list option; concl_occs : int Locus.or_var Locus.occurrences_gen}
+type 'a Locus.occurrences_gen = variant AllOccurrences | AtLeastOneOccurrence | AllOccurrencesBut of 'a list | NoOccurrences | OnlyOccurrences of 'a list
+type 'a Locus.or_var = variant ArgArg of 'a | ArgVar of string CAst.t
+type 'a Ltac2_plugin__Tac2entries.token = variant TacTerm of string | TacNonTerm of Names.Name.t * 'a
+type 'a Ltac2_plugin__Tac2expr.glb_typexpr = variant GTypVar of 'a | GTypArrow of 'a Ltac2_plugin__Tac2expr.glb_typexpr * 'a Ltac2_plugin__Tac2expr.glb_typexpr | GTypRef of Names.KerName.t Ltac2_plugin__Tac2expr.or_tuple * 'a Ltac2_plugin__Tac2expr.glb_typexpr list
+type 'a Ltac2_plugin__Tac2expr.open_match = record {opn_match : 'a; opn_branch : (Names.Name.t * Names.Name.t array * 'a) Names.KerName.Map.t; opn_default : (Names.Name.t * 'a)}
+type 'a Ltac2_plugin__Tac2expr.or_relid = variant RelId of Libnames.full_path CAst.t | AbsKn of 'a
+type 'a Ltac2_plugin__Tac2expr.or_tuple = variant Tuple of int | Other of 'a
+type 'a Ltac_plugin__Pptactic.grammar_tactic_prod_item_expr = variant TacTerm of string | TacNonTerm of (Loc.t option * ('a * string option))
+type 'a Ltac_plugin__Tacexpr.match_context_hyps = variant Hyp of Names.Name.t CAst.t * 'a Ltac_plugin__Tacexpr.match_pattern | Def of Names.Name.t CAst.t * 'a Ltac_plugin__Tacexpr.match_pattern * 'a Ltac_plugin__Tacexpr.match_pattern
+type 'a Ltac_plugin__Tacexpr.match_pattern = variant Term of 'a | Subterm of string option * 'a
+type 'a Ltac_plugin__Tacexpr.message_token = variant MsgString of string | MsgInt of int | MsgIdent of 'a
+type 'a Mod_declarations.generic_module_body = record {mod_expr : ('a, Mod_declarations.module_implementation) Mod_declarations.when_mod_body; mod_type : ([`ModType] Mod_declarations.generic_module_body, (string * ([`ModBody] Mod_declarations.generic_module_body, [`ModType] Mod_declarations.generic_module_body) Declarations.structure_field_body) list) Declarations.functorize; mod_type_alg : (Constr.t * (UVars.bound_names * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t)) option) Declarations.functor_alg_expr option; mod_delta : Mod_subst.Deltamap.t; mod_retroknowledge : ('a, Retroknowledge.action list) Mod_declarations.when_mod_body}
+type 'a Notation.notation_query_pattern_gen = record {notation_entry_pattern : Names.KerName.t Constrexpr.notation_entry_gen list; interp_rule_key_pattern : (string, 'a) Util.union option; use_pattern : Notationextern.notation_use; scope_pattern : Constrexpr.notation_with_optional_scope option; interpretation_pattern : ((string * ((Constrexpr.notation_entry_relative_level * (string list * string list)) * CString.Set.t * Notation_term.notation_var_instance_type)) list * Notation_term.notation_constr) option}
+type 'a Pattern.constr_pattern_r = variant PRef of Names.GlobRef.t | PVar of string | PEvar of (int * 'a Pattern.constr_pattern_r list) | PRel of int | PApp of 'a Pattern.constr_pattern_r * 'a Pattern.constr_pattern_r array | PSoApp of string * 'a Pattern.constr_pattern_r list | PProj of (Names.Projection.Repr.t * bool) * 'a Pattern.constr_pattern_r | PLambda of Names.Name.t * 'a Pattern.constr_pattern_r * 'a Pattern.constr_pattern_r | PProd of Names.Name.t * 'a Pattern.constr_pattern_r * 'a Pattern.constr_pattern_r | PLetIn of Names.Name.t * 'a Pattern.constr_pattern_r * 'a Pattern.constr_pattern_r option * 'a Pattern.constr_pattern_r | PSort of UnivGen.QualityOrSet.t | PMeta of string option | PIf of 'a Pattern.constr_pattern_r * 'a Pattern.constr_pattern_r * 'a Pattern.constr_pattern_r | PCase of Pattern.case_info_pattern * (Names.Name.t array * 'a Pattern.constr_pattern_r) option * 'a Pattern.constr_pattern_r * (int * Names.Name.t array * 'a Pattern.constr_pattern_r) list | PFix of (int array * int) * (Names.Name.t array * 'a Pattern.constr_pattern_r array * 'a Pattern.constr_pattern_r array) | PCoFix of int * (Names.Name.t array * 'a Pattern.constr_pattern_r array * 'a Pattern.constr_pattern_r array) | PInt of int | PFloat of float | PString of string | PArray of 'a Pattern.constr_pattern_r array * 'a Pattern.constr_pattern_r * 'a Pattern.constr_pattern_r | PExtra of 'a
+type 'a Redexpr.User.user_red_expr = variant RawRed of ('e0 * 'e1) Redexpr.User.Dyn.tag * 'e0 : [`rlevel] Redexpr.User.user_red_expr | GlbRed of ('e0 * 'e1) Redexpr.User.Dyn.tag * 'e1 : [`glevel] Redexpr.User.user_red_expr
+type 'a Rtree.t = variant Var of int * int | Node of 'a * 'a Rtree.t array array | Rec of int * 'a Rtree.t array
+type 'a SList.t = variant Nil | Cons of 'a * 'a SList.t | Default of int * 'a SList.t
+type 'a Sorts.Quality.pattern = variant PQVar of 'a | PQConstant of Sorts.Quality.constant
+type 'a Tactics.core_destruction_arg = variant ElimOnConstr of 'a | ElimOnIdent of string CAst.t | ElimOnAnonHyp of int
+type 'a Tactypes.bindings = variant ImplicitBindings of 'a list | ExplicitBindings of (Tactypes.quantified_hypothesis * 'a) CAst.t list | NoBindings
+type 'a Tactypes.intro_pattern_action_expr = variant IntroWildcard | IntroOrAndPattern of 'a Tactypes.or_and_intro_pattern_expr | IntroInjection of 'a Tactypes.intro_pattern_expr CAst.t list | IntroApplyOn of 'a CAst.t * 'a Tactypes.intro_pattern_expr CAst.t | IntroRewrite of bool
+type 'a Tactypes.intro_pattern_expr = variant IntroForthcoming of bool | IntroNaming of Namegen.intro_pattern_naming_expr | IntroAction of 'a Tactypes.intro_pattern_action_expr
+type 'a Tactypes.or_and_intro_pattern_expr = variant IntroOrPattern of 'a Tactypes.intro_pattern_expr CAst.t list list | IntroAndPattern of 'a Tactypes.intro_pattern_expr CAst.t list
+type 'a Typeclasses.hint_info_gen = record {hint_priority : int option; hint_pattern : 'a option}
+type 'a UVars.univ_abstracted = record {univ_abstracted_value : 'a; univ_abstracted_binder : (UVars.bound_names * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t))}
+type 'a UserWarn.with_qf = record {depr_qf : 'a Deprecation.with_qf option; warn_qf : UserWarn.warn list}
+type 'a Vmemitcodes.pbody_code = variant BCdefined of bool array * 'a * Vmemitcodes.patches | BCalias of Names.KerPair.t | BCconstant
+type 'a Vmlibrary.Delayed.delayed = record {del_file : string; del_off : int64; del_digest : Stdlib.Digest.t}
+type 'a Vmlibrary.Delayed.node = variant ToFetch of 'a Vmlibrary.Delayed.delayed | Fetched of 'a
+type ('a, 'b) Context.pbinder_annot = record {binder_name : 'a; binder_relevance : 'b}
+type ('a, 'b) DAst.thunk = variant Value of 'a : ('a, 'b) DAst.thunk | Thunk of 'a Stdlib.Lazy.t : ('a, [`thunk]) DAst.thunk
+type ('a, 'b) Declarations.functorize = variant NoFunctor of 'b | MoreFunctor of (int * string * string list) * 'a * ('a, 'b) Declarations.functorize
+type ('a, 'b) Declarations.pconstant_body = record {const_hyps : (Constr.t, Constr.t, Sorts.relevance) Context.Named.Declaration.pt list; const_univ_hyps : (Sorts.Quality.t array * Univ.Level.t array); const_body : (Constr.t, 'a, bool) Declarations.constant_def; const_type : Constr.t; const_relevance : Sorts.relevance; const_body_code : 'b; const_universes : Declarations.universes; const_inline_code : bool; const_typing_flags : Declarations.typing_flags}
+type ('a, 'b) Declarations.sort_pattern = variant PSProp | PSSProp | PSSet | PSType of 'b | PSQSort of 'a * 'b
+type ('a, 'b) Declarations.structure_field_body = variant SFBconst of (Opaqueproof.opaque, (string list * int) Vmemitcodes.pbody_code option) Declarations.pconstant_body | SFBmind of Declarations.mutual_inductive_body | SFBrules of Declarations.rewrite_rules_body | SFBmodule of 'a | SFBmodtype of 'b
+type ('a, 'b) Extend.constr_entry_key_gen = variant ETIdent | ETName | ETGlobal | ETBigint | ETBinder of bool | ETConstr of 'a Constrexpr.notation_entry_gen * Notation_term.notation_binder_kind option * 'b | ETPattern of bool * int option
+type ('a, 'b) Genarg.abstract_argument_type = variant Rawwit of ('a, 'e0, 'e1) Genarg.genarg_type : ('a, [`rlevel]) Genarg.abstract_argument_type | Glbwit of ('e0, 'a, 'e1) Genarg.genarg_type : ('a, [`glevel]) Genarg.abstract_argument_type | Topwit of ('e0, 'e1, 'a) Genarg.genarg_type : ('a, [`tlevel]) Genarg.abstract_argument_type
+type ('a, 'b) Hints.with_metadata = record {pri : int; pat : Hints.hint_pattern option; name : Names.GlobRef.t option; db : 'b; secvars : CString.Pred.t; code : 'a}
+type ('a, 'b) Ltac_plugin__Tacexpr.match_rule = variant Pat of 'a Ltac_plugin__Tacexpr.match_context_hyps list * 'a Ltac_plugin__Tacexpr.match_pattern * 'b | All of 'b
+type ('a, 'b) Mod_declarations.when_mod_body = variant ModBodyVal of 'b : ([`ModBody], 'b) Mod_declarations.when_mod_body | ModTypeNul : ([`ModType], 'b) Mod_declarations.when_mod_body
+type ('a, 'b) PrimNotations.prim_token_notation_obj = record {to_kind : ('a * PrimNotations.option_kind); to_ty : Names.GlobRef.t; to_post : (Names.GlobRef.t * Names.GlobRef.t * PrimNotations.to_post_arg list) list array; of_kind : ('a * PrimNotations.option_kind); of_ty : Names.GlobRef.t; ty_name : Libnames.full_path CAst.t; warning : 'b}
+type ('a, 'b) Util.union = variant Inl of 'a | Inr of 'b
+type ('a, 'b, 'c) Context.Named.Declaration.pt = variant LocalAssum of (string, 'c) Context.pbinder_annot * 'b | LocalDef of (string, 'c) Context.pbinder_annot * 'a * 'b
+type ('a, 'b, 'c) Context.Rel.Declaration.pt = variant LocalAssum of (Names.Name.t, 'c) Context.pbinder_annot * 'b | LocalDef of (Names.Name.t, 'c) Context.pbinder_annot * 'a * 'b
+type ('a, 'b, 'c) Declarations.constant_def = variant Undef of int option | Def of 'a | OpaqueDef of 'b | Primitive of CPrimitives.t | Symbol of 'c
+type ('a, 'b, 'c) Genarg.genarg_type = variant ExtraArg of ('a * 'b * 'c) Genarg.ArgT.DYN.tag : ('a, 'b, 'c) Genarg.genarg_type | ListArg of ('e0, 'e1, 'e2) Genarg.genarg_type : ('e0 list, 'e1 list, 'e2 list) Genarg.genarg_type | OptArg of ('e0, 'e1, 'e2) Genarg.genarg_type : ('e0 option, 'e1 option, 'e2 option) Genarg.genarg_type | PairArg of ('e0, 'e1, 'e2) Genarg.genarg_type * ('e3, 'e4, 'e5) Genarg.genarg_type : (('e0 * 'e3), ('e1 * 'e4), ('e2 * 'e5)) Genarg.genarg_type
+type ('a, 'b, 'c) Ltac_plugin__Tacexpr.inversion_strength = variant NonDepInversion of Inv.inversion_kind * 'c list * 'b Tactypes.or_and_intro_pattern_expr CAst.t Locus.or_var option | DepInversion of Inv.inversion_kind * 'a option * 'b Tactypes.or_and_intro_pattern_expr CAst.t Locus.or_var option | InversionUsing of 'a * 'c list
+type ('a, 'b, 'c, 'd) Libobject.object_view = variant ModuleObject of string * 'a | ModuleTypeObject of string * 'a | IncludeObject of 'b | KeepObject of string * 'c | EscapeObject of string * 'd | ExportObject of Libobject.ExportObj.t | AtomicObject of Libobject.Dyn.t
+type ('a, 'b, 'c, 'd, 'e) Constr.kind_of_term = variant Rel of int | Var of string | Meta of int | Evar of (int * 'a SList.t) | Sort of 'c | Cast of 'a * Constr.cast_kind * 'b | Prod of (Names.Name.t, 'e) Context.pbinder_annot * 'b * 'b | Lambda of (Names.Name.t, 'e) Context.pbinder_annot * 'b * 'a | LetIn of (Names.Name.t, 'e) Context.pbinder_annot * 'a * 'b * 'a | App of 'a * 'a array | Const of (Names.KerPair.t * 'd) | Ind of ((Names.KerPair.t * int) * 'd) | Construct of (((Names.KerPair.t * int) * int) * 'd) | Case of Constr.case_info * 'd * 'a array * (((Names.Name.t, 'e) Context.pbinder_annot array * 'b) * 'e) * 'a Constr.pcase_invert * 'a * ((Names.Name.t, 'e) Context.pbinder_annot array * 'a) array | Fix of ((int array * int) * ((Names.Name.t, 'e) Context.pbinder_annot array * 'b array * 'a array)) | CoFix of (int * ((Names.Name.t, 'e) Context.pbinder_annot array * 'b array * 'a array)) | Proj of (Names.Projection.Repr.t * bool) * 'e * 'a | Int of int | Float of float | String of string | Array of 'd * 'a array * 'a * 'b
+type ('a, 'b, 'c, 'd, 'e) Ltac_plugin__Tacexpr.may_eval = variant ConstrTerm of 'a | ConstrEval of ('a, 'b, 'c, 'd, 'b Genredexpr.glob_red_flag, 'e) Genredexpr.red_expr_gen0 * 'a | ConstrContext of string CAst.t * 'a | ConstrTypeOf of 'a
+type ('a, 'b, 'c, 'd, 'e, 'f) Genredexpr.red_expr_gen0 = variant Red | Hnf | Simpl of 'e * ('d Locus.occurrences_gen * ('b, 'c) Util.union) option | Cbv of 'e | Cbn of 'e | Lazy of 'e | Unfold of ('d Locus.occurrences_gen * 'b) list | Fold of 'a list | Pattern of ('d Locus.occurrences_gen * 'a) list | ExtraRedExpr of string | CbvVm of ('d Locus.occurrences_gen * ('b, 'c) Util.union) option | CbvNative of ('d Locus.occurrences_gen * ('b, 'c) Util.union) option | UserRed of 'f
+type < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_atomic_tactic_expr = variant TacIntroPattern of bool * 'b Tactypes.intro_pattern_expr CAst.t list | TacApply of bool * bool * (bool option * ('j * 'j Tactypes.bindings)) list * ('d * 'b Tactypes.intro_pattern_expr CAst.t option) list | TacElim of bool * (bool option * ('j * 'j Tactypes.bindings)) * ('j * 'j Tactypes.bindings) option | TacCase of bool * (bool option * ('j * 'j Tactypes.bindings)) | TacMutualFix of string * int * (string * int * 'j) list | TacMutualCofix of string * (string * 'j) list | TacAssert of bool * bool * 'i option option * 'b Tactypes.intro_pattern_expr CAst.t option * 'j | TacGeneralize of (('e Locus.occurrences_gen * 'j) * Names.Name.t) list | TacLetTac of bool * Names.Name.t * 'j * 'd Locus.clause_expr * bool * Namegen.intro_pattern_naming_expr CAst.t option | TacInductionDestruct of bool * bool * (((bool option * ('b * 'b Tactypes.bindings) Tactics.core_destruction_arg) * (Namegen.intro_pattern_naming_expr CAst.t option * 'b Tactypes.or_and_intro_pattern_expr CAst.t Locus.or_var option) * 'd Locus.clause_expr option) list * ('j * 'j Tactypes.bindings) option) | TacReduce of ('j, 'a, 'g, 'e, 'a Genredexpr.glob_red_flag, 'c Redexpr.User.user_red_expr) Genredexpr.red_expr_gen0 * 'd Locus.clause_expr | TacChange of bool * 'g option * 'b * 'd Locus.clause_expr | TacRewrite of bool * (bool * Equality.multi * (bool option * ('b * 'b Tactypes.bindings))) list * 'd Locus.clause_expr * 'i option | TacInversion of ('j, 'b, 'd) Ltac_plugin__Tacexpr.inversion_strength * Tactypes.quantified_hypothesis
+type < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_arg = variant TacGeneric of string option * 'c Genarg.generic_argument | ConstrMayEval of ('j, 'a, 'g, 'e, 'c Redexpr.User.user_red_expr) Ltac_plugin__Tacexpr.may_eval | Reference of 'h | TacCall of ('h * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_arg list) CAst.t | TacFreshId of string Locus.or_var list | Tacexp of 'i | TacPretype of 'j | TacNumgoals
+type < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r = variant TacAtom of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_atomic_tactic_expr | TacThen of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacDispatch of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t list | TacExtendTac of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t array * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t array | TacThens of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t list | TacThens3parts of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t array * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t array | TacFirst of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t list | TacSolve of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t list | TacTry of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacOr of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacOnce of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacExactlyOnce of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacIfThenCatch of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacOrelse of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacDo of int Locus.or_var * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacTimeout of int Locus.or_var * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacTime of string option * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacRepeat of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacProgress of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacAbstract of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * string option | TacId of 'd Ltac_plugin__Tacexpr.message_token list | TacFail of Ltac_plugin__Tacexpr.global_flag * int Locus.or_var * 'd Ltac_plugin__Tacexpr.message_token list | TacLetIn of bool * (Names.Name.t CAst.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_arg) list * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacMatch of Ltac_plugin__Tacexpr.lazy_flag * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t * ('f, < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t) Ltac_plugin__Tacexpr.match_rule list | TacMatchGoal of Ltac_plugin__Tacexpr.lazy_flag * bool * ('f, < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t) Ltac_plugin__Tacexpr.match_rule list | TacFun of (Names.Name.t list * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t) | TacArg of < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_arg | TacSelect of Goal_select.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t | TacML of Ltac_plugin__Tacexpr.ml_tactic_entry * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_arg list | TacAlias of Names.KerName.t * < constant : 'a; dterm : 'b; level : 'c; name : 'd; occvar : 'e; pattern : 'f; red_pattern : 'g; reference : 'h; tacexpr : 'i; term : 'j > Ltac_plugin__Tacexpr.gen_tactic_arg list
+type Abbreviation.abbreviation = record {abbrev_local : Libobject.locality; abbrev_pattern : ((string * ((Constrexpr.notation_entry_relative_level * (string list * string list)) * CString.Set.t * Notation_term.notation_var_instance_type)) list * Notation_term.notation_constr); abbrev_onlyparsing : bool; abbrev_user_warns : Globnames.extended_global_reference UserWarn.with_qf option; abbrev_activated : bool; abbrev_src : Loc.t option}
+type Arguments_renaming.req = variant ReqLocal | ReqGlobal
+type Attempts.attempt = record {request : Attempts.request; probes : Attempts.probe list; library : string list option; found : string list; loadpath : int}
+type Attempts.probe = record {dir : string; file : string; exists : bool}
+type Attempts.request = variant Require_qualified of {root : string option; name : string} | Require_absolute of string | Load of string | Ml_module of string
+type Attempts.scan = variant Unreadable | Not_recursive | Subdirs of string list
+type Attempts.t = record {attempts : Attempts.attempt list; digests : (string * string) list; loadpaths : (string * Attempts.scan) list list}
+type Autorewrite.db_obj = record {db_local : bool; db_name : string}
+type Autorewrite.rew_rule = record {rew_id : Names.KerName.t; rew_lemma : Constr.t; rew_type : Constr.t; rew_pat : Constr.t; rew_ctx : ((Stdlib.Set.Make(Sorts.Self).t * HMap.Make(Univ.Map.Self).Set.t) * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t)); rew_l2r : bool; rew_tac : [`glevel] Genarg.generic_argument option}
+type CPrimitives.ind_or_type = variant PITT_ind of 'e0 CPrimitives.prim_ind * 'e0 : CPrimitives.ind_or_type | PITT_type of 'e0 CPrimitives.prim_type * 'e0 : CPrimitives.ind_or_type | PITT_param of int : CPrimitives.ind_or_type
+type CPrimitives.t = variant Int63head0 | Int63tail0 | Int63add | Int63sub | Int63mul | Int63div | Int63mod | Int63divs | Int63mods | Int63lsr | Int63lsl | Int63asr | Int63land | Int63lor | Int63lxor | Int63addc | Int63subc | Int63addCarryC | Int63subCarryC | Int63mulc | Int63diveucl | Int63div21 | Int63addMulDiv | Int63eq | Int63lt | Int63le | Int63lts | Int63les | Int63compare | Int63compares | Float64opp | Float64abs | Float64eq | Float64lt | Float64le | Float64compare | Float64equal | Float64classify | Float64add | Float64sub | Float64mul | Float64div | Float64sqrt | Float64ofUint63 | Float64normfr_mantissa | Float64frshiftexp | Float64ldshiftexp | Float64next_up | Float64next_down | Arraymake | Arrayget | Arraydefault | Arrayset | Arraycopy | Arraylength | Stringmake | Stringlength | Stringget | Stringsub | Stringcat | Stringcompare
+type Classes.instance = record {class_name : Names.GlobRef.t; instance : Names.GlobRef.t; info : (CString.Set.t * Util.Empty.t Pattern.constr_pattern_r) Typeclasses.hint_info_gen; locality : Hints.hint_locality}
+type Coercionops.cl_typ = variant CL_SORT | CL_FUN | CL_SECVAR of string | CL_CONST of Names.KerPair.t | CL_IND of (Names.KerPair.t * int) | CL_PROJ of Names.Projection.Repr.t
+type Coercionops.coe_info_typ = record {coe_value : Names.GlobRef.t; coe_local : bool; coe_reversible : bool; coe_is_identity : bool; coe_is_projection : Names.Projection.Repr.t option; coe_source : Coercionops.cl_typ; coe_target : Coercionops.cl_typ; coe_param : int}
+type Constr.case_info = record {ci_ind : (Names.KerPair.t * int); ci_npar : int; ci_cstr_ndecls : int array; ci_cstr_nargs : int array; ci_pp_info : Constr.case_printing}
+type Constr.case_printing = record {style : Constr.case_style}
+type Constr.case_style = variant LetStyle | IfStyle | LetPatternStyle | MatchStyle | RegularStyle
+type Constr.cast_kind = variant VMcast | NATIVEcast | DEFAULTcast
+type Constr.t = variant[unboxed] T of (Constr.t, Constr.t, Sorts.t, (Sorts.Quality.t array * Univ.Level.t array), Sorts.relevance) Constr.kind_of_term
+type Constrexpr.binder_kind = variant Default of Glob_term.binding_kind | Generalized of Glob_term.binding_kind * bool
+type Constrexpr.cases_pattern_expr_r = variant CPatAlias of Constrexpr.cases_pattern_expr_r CAst.t * Names.Name.t CAst.t | CPatCstr of Libnames.full_path CAst.t * Constrexpr.cases_pattern_expr_r CAst.t list option * Constrexpr.cases_pattern_expr_r CAst.t list | CPatAtom of Libnames.full_path CAst.t option | CPatOr of Constrexpr.cases_pattern_expr_r CAst.t list | CPatNotation of Constrexpr.notation_with_optional_scope option * (Names.KerName.t Constrexpr.notation_entry_gen * string) * (Constrexpr.cases_pattern_expr_r CAst.t list * Constrexpr.cases_pattern_expr_r CAst.t list list * (Constrexpr.cases_pattern_expr_r CAst.t * Glob_term.binding_kind) list) * Constrexpr.cases_pattern_expr_r CAst.t list | CPatPrim of Constrexpr.prim_token | CPatRecord of (Libnames.full_path CAst.t * Constrexpr.cases_pattern_expr_r CAst.t) list | CPatDelimiters of Constrexpr.delimiter_depth * string * Constrexpr.cases_pattern_expr_r CAst.t | CPatCast of Constrexpr.cases_pattern_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t
+type Constrexpr.constr_expr_r = variant CRef of Libnames.full_path CAst.t * (Constrexpr.quality_expr list * Constrexpr.sort_name_expr Glob_term.glob_sort_gen list) option | CFix of string CAst.t * (string CAst.t * Constrexpr.relevance_expr option * Constrexpr.fixpoint_order_expr_r CAst.t option * Constrexpr.local_binder_expr list * Constrexpr.constr_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t) list | CCoFix of string CAst.t * (string CAst.t * Constrexpr.relevance_expr option * Constrexpr.local_binder_expr list * Constrexpr.constr_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t) list | CProdN of Constrexpr.local_binder_expr list * Constrexpr.constr_expr_r CAst.t | CLambdaN of Constrexpr.local_binder_expr list * Constrexpr.constr_expr_r CAst.t | CLetIn of Names.Name.t CAst.t * Constrexpr.constr_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t option * Constrexpr.constr_expr_r CAst.t | CAppExpl of (Libnames.full_path CAst.t * (Constrexpr.quality_expr list * Constrexpr.sort_name_expr Glob_term.glob_sort_gen list) option) * Constrexpr.constr_expr_r CAst.t list | CApp of Constrexpr.constr_expr_r CAst.t * (Constrexpr.constr_expr_r CAst.t * Constrexpr.explicitation CAst.t option) list | CProj of bool * (Libnames.full_path CAst.t * (Constrexpr.quality_expr list * Constrexpr.sort_name_expr Glob_term.glob_sort_gen list) option) * (Constrexpr.constr_expr_r CAst.t * Constrexpr.explicitation CAst.t option) list * Constrexpr.constr_expr_r CAst.t | CRecord of (Libnames.full_path CAst.t * Constrexpr.constr_expr_r CAst.t) list | CCases of Constr.case_style * Constrexpr.constr_expr_r CAst.t option * (Constrexpr.constr_expr_r CAst.t * Names.Name.t CAst.t option * Constrexpr.cases_pattern_expr_r CAst.t option) list * (Constrexpr.cases_pattern_expr_r CAst.t list list * Constrexpr.constr_expr_r CAst.t) CAst.t list | CLetTuple of Names.Name.t CAst.t list * (Names.Name.t CAst.t option * Constrexpr.constr_expr_r CAst.t option) * Constrexpr.constr_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t | CIf of Constrexpr.constr_expr_r CAst.t * (Names.Name.t CAst.t option * Constrexpr.constr_expr_r CAst.t option) * Constrexpr.constr_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t | CHole of Evar_kinds.glob_evar_kind option | CGenarg of [`rlevel] Genarg.generic_argument | CGenargGlob of [`glevel] Genarg.generic_argument | CPatVar of string | CEvar of string CAst.t * (string CAst.t * Constrexpr.constr_expr_r CAst.t) list | CSort of (Constrexpr.qvar_expr option * (Constrexpr.sort_name_expr * int) list Glob_term.glob_sort_gen) | CCast of Constrexpr.constr_expr_r CAst.t * Constr.cast_kind option * Constrexpr.constr_expr_r CAst.t | CNotation of Constrexpr.notation_with_optional_scope option * (Names.KerName.t Constrexpr.notation_entry_gen * string) * (Constrexpr.constr_expr_r CAst.t list * Constrexpr.constr_expr_r CAst.t list list * (Constrexpr.cases_pattern_expr_r CAst.t * Glob_term.binding_kind) list * Constrexpr.local_binder_expr list list) | CGeneralization of Glob_term.binding_kind * Constrexpr.constr_expr_r CAst.t | CPrim of Constrexpr.prim_token | CDelimiters of Constrexpr.delimiter_depth * string * Constrexpr.constr_expr_r CAst.t | CArray of (Constrexpr.quality_expr list * Constrexpr.sort_name_expr Glob_term.glob_sort_gen list) option * Constrexpr.constr_expr_r CAst.t array * Constrexpr.constr_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t
+type Constrexpr.delimiter_depth = variant DelimOnlyTmpScope | DelimUnboundedScope
+type Constrexpr.entry_relative_level = variant LevelLt of int | LevelLe of int | LevelSome
+type Constrexpr.explicitation = variant ExplByName of string | ExplByPos of int
+type Constrexpr.fixpoint_order_expr_r = variant CStructRec of string CAst.t | CWfRec of string CAst.t * Constrexpr.constr_expr_r CAst.t | CMeasureRec of string CAst.t option * Constrexpr.constr_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t option
+type Constrexpr.local_binder_expr = variant CLocalAssum of Names.Name.t CAst.t list * Constrexpr.relevance_expr option * Constrexpr.binder_kind * Constrexpr.constr_expr_r CAst.t | CLocalDef of Names.Name.t CAst.t * Constrexpr.relevance_expr option * Constrexpr.constr_expr_r CAst.t * Constrexpr.constr_expr_r CAst.t option | CLocalPattern of Constrexpr.cases_pattern_expr_r CAst.t
+type Constrexpr.notation_entry_level = record {notation_entry : Names.KerName.t Constrexpr.notation_entry_gen; notation_level : int}
+type Constrexpr.notation_entry_relative_level = record {notation_subentry : Names.KerName.t Constrexpr.notation_entry_gen; notation_relative_level : Constrexpr.entry_relative_level; notation_position : Constrexpr.side option}
+type Constrexpr.notation_with_optional_scope = variant LastLonelyNotation | NotationInScope of string
+type Constrexpr.prim_token = variant Number of (NumTok.sign * NumTok.Unsigned.t) | String of string
+type Constrexpr.quality_expr = variant CQConstant of Sorts.Quality.constant | CQualVar of Constrexpr.qvar_expr
+type Constrexpr.qvar_expr = variant CQVar of Libnames.full_path CAst.t | CQAnon of Loc.t option | CRawQVar of Sorts.QVar.repr
+type Constrexpr.relevance_expr = variant CRelevant | CIrrelevant | CRelevanceVar of Constrexpr.qvar_expr
+type Constrexpr.side = variant Left | Right
+type Constrexpr.sort_name_expr = variant CSProp | CProp | CSet | CType of Libnames.full_path CAst.t | CRawType of Univ.Level.t
+type Conv_oracle.level = variant Expand | Level of int | Opaque
+type Conv_oracle.oracle = record {var_opacity : Conv_oracle.level CString.Map.t; cst_opacity : Conv_oracle.level Names.Cmap.t; prj_opacity : Conv_oracle.level Names.PRmap.t; var_trstate : CString.Pred.t; cst_trstate : Names.Cpred.t; prj_trstate : Names.PRpred.t}
+type Cooking.abstr_info = record {abstr_ctx : (Constr.t, Constr.t, Sorts.relevance) Context.Named.Declaration.pt list; abstr_auctx : (UVars.bound_names * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t)); abstr_ausubst : (Sorts.Quality.t array * Univ.Level.t array)}
+type Cooking.abstr_inst_info = record {abstr_rev_inst : string list; abstr_uinst : (Sorts.Quality.t array * Univ.Level.t array)}
+type Cooking.cooking_info = record {expand_info : (Cooking.abstr_inst_info Names.Cmap_env.t * Cooking.abstr_inst_info Names.Mindmap_env.t); abstr_info : Cooking.abstr_info}
+type Declarations.has_eta = variant AlwaysEta | NoEta
+type Declarations.head_pattern = variant PHRel of int | PHSort of (int option, int option) Declarations.sort_pattern | PHSymbol of Names.KerPair.t * (int option Sorts.Quality.pattern array * int option array) | PHInd of (Names.KerPair.t * int) * (int option Sorts.Quality.pattern array * int option array) | PHConstr of ((Names.KerPair.t * int) * int) * (int option Sorts.Quality.pattern array * int option array) | PHInt of int | PHFloat of float | PHString of string | PHLambda of Declarations.pattern_argument array * (Declarations.head_pattern * Declarations.pattern_elimination list) | PHProd of Declarations.pattern_argument array * Declarations.pattern_argument
+type Declarations.machine_rewrite_rule = record {nvars : (int * int * int); lhs_pat : ((int option Sorts.Quality.pattern array * int option array) * Declarations.pattern_elimination list); rhs : Constr.t}
+type Declarations.mutual_inductive_body = record {mind_packets : Declarations.one_inductive_body array; mind_finite : Declarations.recursivity_kind; mind_hyps : (Constr.t, Constr.t, Sorts.relevance) Context.Named.Declaration.pt list; mind_univ_hyps : (Sorts.Quality.t array * Univ.Level.t array); mind_nparams : int; mind_nparams_rec : int; mind_params_ctxt : (Constr.t, Constr.t, Sorts.relevance) Context.Rel.Declaration.pt list; mind_universes : Declarations.universes; mind_template : Declarations.template_universes option; mind_variance : (UVars.Variance.t array * UVars.Variance.t array) option; mind_sec_variance : (UVars.Variance.t array * UVars.Variance.t array) option; mind_private : bool option; mind_typing_flags : Declarations.typing_flags}
+type Declarations.one_inductive_body = record {mind_typename : string; mind_arity_ctxt : (Constr.t, Constr.t, Sorts.relevance) Context.Rel.Declaration.pt list; mind_sort : Sorts.t; mind_user_arity : Constr.t; mind_record : Declarations.record_info; mind_consnames : string array; mind_user_lc : Constr.t array; mind_nrealargs : int; mind_nrealdecls : int; mind_squashed : Declarations.squash_info option; mind_nf_lc : ((Constr.t, Constr.t, Sorts.relevance) Context.Rel.Declaration.pt list * Constr.t) array; mind_consnrealargs : int array; mind_consnrealdecls : int array; mind_recargs : Declarations.recarg Rtree.t; mind_relevance : Sorts.relevance; mind_relies_on_indices_not_mattering : bool; mind_nb_constant : int; mind_nb_args : int; mind_reloc_tbl : (int * int) array}
+type Declarations.pattern_argument = variant EHole of int | EHoleIgnored | ERigid of (Declarations.head_pattern * Declarations.pattern_elimination list)
+type Declarations.pattern_elimination = variant PEApp of Declarations.pattern_argument array | PECase of (Names.KerPair.t * int) * Declarations.pattern_argument * Declarations.pattern_argument array | PEProj of Names.Projection.Repr.t
+type Declarations.recarg = variant Norec | Mrec of Declarations.recarg_type
+type Declarations.recarg_type = variant RecArgInd of (Names.KerPair.t * int) | RecArgPrim of Names.KerPair.t
+type Declarations.record_info = variant NotRecord | FakeRecord | PrimRecord of {id : string; projections : string array; relevances : Sorts.relevance array; tys : Constr.t array; has_eta : Declarations.has_eta}
+type Declarations.recursivity_kind = variant Finite | CoFinite | BiFinite
+type Declarations.rewrite_rules_body = record {rewrules_rules : (Names.KerPair.t * Declarations.machine_rewrite_rule) list}
+type Declarations.squash_info = variant AlwaysSquashed | SometimesSquashed of Sorts.Quality.Set.t
+type Declarations.template_universes = record {template_param_arguments : Sorts.t option list; template_concl : Sorts.t; template_context : (UVars.bound_names * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t)); template_defaults : (Sorts.Quality.t array * Univ.Level.t array)}
+type Declarations.typing_flags = record {check_guarded : bool; check_positive : bool; check_universes : bool; check_eliminations : bool; conv_oracle : Conv_oracle.oracle; share_reduction : bool; enable_VM : bool; enable_native_compiler : bool; indices_matter : bool; impredicative_set : bool; sprop_allowed : bool; allow_uip : bool}
+type Declarations.universes = variant Monomorphic | Polymorphic of (UVars.bound_names * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t))
+type Declare.constant_obj = record {cst_kind : Decls.logical_kind; cst_locl : Locality.import_status; cst_warn : Globnames.extended_global_reference UserWarn.with_qf option; cst_loc : Loc.t option}
+type DeclareInd.inductive_obj = record {ind_names : (string CAst.t * string CAst.t list) list}
+type DeclareUniv.sort_name_decl = record {sdecl_src : DeclareUniv.sort_source; sdecl_named : (string * Sorts.QGlobal.t) list}
+type DeclareUniv.sort_source = variant BoundQuality | UnqualifiedQuality
+type DeclareUniv.universe_source = variant BoundUniv | QualifiedUniv of string list | UnqualifiedUniv
+type Decls.assumption_object_kind = variant Definitional | Logical | Conjectural | Context
+type Decls.definition_object_kind = variant Definition | Coercion | SubClass | CanonicalStructure | Example | Fixpoint | CoFixpoint | Scheme | StructureComponent | IdentityCoercion | Instance | Method | Let | LetContext
+type Decls.logical_kind = variant IsPrimitive | IsSymbol | IsAssumption of Decls.assumption_object_kind | IsDefinition of Decls.definition_object_kind | IsProof of Decls.theorem_kind
+type Decls.theorem_kind = variant Theorem | Lemma | Fact | Remark | Property | Proposition | Corollary
+type Deprecation.t = record {since : string option; note : string option}
+type Equality.multi = variant Precisely of int | UpTo of int | RepeatStar | RepeatPlus
+type Evaluable.t = variant EvalVarRef of string | EvalConstRef of Names.KerPair.t | EvalProjectionRef of Names.Projection.Repr.t
+type Evar_kinds.glob_evar_kind = variant GImplicitArg of Names.GlobRef.t * (int * string) * bool | GBinderType of Names.Name.t | GNamedHole of bool * string | GQuestionMark of Evar_kinds.question_mark | GCasesType | GInternalHole | GImpossibleCase
+type Evar_kinds.matching_var_kind = variant FirstOrderPatVar of string | SecondOrderPatVar of string
+type Evar_kinds.obligation_definition_status = variant Define of bool | Expand
+type Evar_kinds.question_mark = record {qm_obligation : Evar_kinds.obligation_definition_status; qm_name : Names.Name.t; qm_record_field : Evar_kinds.record_field option}
+type Evar_kinds.record_field = record {fieldname : Names.KerPair.t; recordname : (Names.KerPair.t * int)}
+type Extend.binder_entry_kind = variant ETBinderOpen | ETBinderClosed of Extend.constr_prod_entry_key option * (bool * string) list
+type Extend.constr_prod_entry_key = variant ETProdIdent | ETProdName | ETProdGlobal | ETProdBigint | ETProdOneBinder of bool | ETProdConstr of Names.KerName.t Constrexpr.notation_entry_gen * (Extend.production_level * Extend.production_position) | ETProdPattern of int | ETProdConstrList of Names.KerName.t Constrexpr.notation_entry_gen * (Extend.production_level * Extend.production_position) * (bool * string) list | ETProdBinderList of Extend.binder_entry_kind
+type Extend.production_level = variant NextLevel | NumLevel of int | DefaultLevel
+type Extend.production_position = variant BorderProd of Constrexpr.side * Gramlib__Gramext.g_assoc option | InternalProd
+type Extraction_plugin__Miniml.global = record {glob : Names.GlobRef.t; inst : bool array}
+type Extraction_plugin__Table.int_or_id = variant ArgInt of int | ArgId of string
+type Extraction_plugin__Table.lang = variant Ocaml | Haskell | Scheme | JSON
+type Funind_plugin__Indfun_common.function_info = record {function_constant : Names.KerPair.t; graph_ind : (Names.KerPair.t * int); equation_lemma : Names.KerPair.t option; correctness_lemma : Names.KerPair.t option; completeness_lemma : Names.KerPair.t option; rect_lemma : Names.KerPair.t option; rec_lemma : Names.KerPair.t option; prop_lemma : Names.KerPair.t option; sprop_lemma : Names.KerPair.t option; is_general : bool}
+type Genarg.ArgT.any = variant Any of ('e0 * 'e1 * 'e2) Genarg.ArgT.DYN.tag : Genarg.ArgT.any
+type Genredexpr.strength = variant Norm | Head
+type Glob_term.binding_kind = variant Explicit | MaxImplicit | NonMaxImplicit
+type Glob_term.glob_evar_kind = variant GImplicitArg of Names.GlobRef.t * (int * string) * bool | GBinderType of Names.Name.t | GNamedHole of bool * string | GQuestionMark of Evar_kinds.question_mark | GCasesType | GInternalHole | GImpossibleCase
+type Glob_term.glob_fix_kind = variant GFix of (int option array * int) | GCoFix of int
+type Glob_term.glob_quality = variant GQConstant of Sorts.Quality.constant | GQualVar of Glob_term.glob_qvar
+type Glob_term.glob_qvar = variant GLocalQVar of Names.Name.t CAst.t | GQVar of Sorts.QVar.repr | GRawQVar of Sorts.QVar.repr
+type Glob_term.glob_relevance = variant GRelevant | GIrrelevant | GRelevanceVar of Glob_term.glob_qvar
+type Glob_term.glob_sort_name = variant GSProp | GProp | GSet | GUniv of Univ.Level.t | GLocalUniv of string CAst.t | GRawUniv of Univ.Level.t
+type Globnames.extended_global_reference = variant TrueGlobal of Names.GlobRef.t | Abbrev of Names.KerName.t
+type Goal_select.t = variant SelectAlreadyFocused | SelectList of Proofview.goal_range_selector list | SelectAll
+type Goptions.MakeTable.option_mark = variant GOadd | GOrmv
+type Goptions.option_locality = variant OptDefault | OptLocal | OptExport | OptGlobal
+type Gramlib__Gramext.g_assoc = variant NonA | RightA | LeftA | BothA
+type Hints.db_obj = record {db_local : bool; db_name : string; db_use_dn : bool; db_ts : TransparentState.t}
+type Hints.hint_action = variant AddTransparency of {grefs : Evaluable.t Hints.hints_transparency_target; state : bool} | AddHints of (Names.GlobRef.t option * (Hints.raw_hint Hints.hint_ast Hints.with_uid, unit) Hints.with_metadata) list | RemoveHints of Names.GlobRef.t list | AddCut of Names.GlobRef.t Hints.hints_path_gen | AddMode of {gref : Names.GlobRef.t; mode : Hints.hint_mode array}
+type Hints.hint_locality = variant Local | Export | SuperGlobal
+type Hints.hint_mode = variant ModeInput | ModeNoHeadEvar | ModeOutput
+type Hints.hint_obj = record {hint_local : Hints.hint_locality; hint_name : string; hint_action : Hints.hint_action}
+type Hints.hint_pattern = variant DefaultPattern | ConstrPattern of Util.Empty.t Pattern.constr_pattern_r | SyntacticPattern of Util.Empty.t Pattern.constr_pattern_r
+type Hints.raw_hint = record {rhint_term : Constr.t; rhint_type : Constr.t; rhint_uctx : ((Stdlib.Set.Make(Sorts.Self).t * HMap.Make(Univ.Map.Self).Set.t) * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t)) option; rhint_arty : int}
+type Impargs.argument_position = variant Conclusion | Hyp of int
+type Impargs.implicit_discharge_request = variant ImplLocal | ImplConstant of Impargs.implicits_flags | ImplMutualInductive of Names.KerPair.t * Impargs.implicits_flags | ImplInteractive of Impargs.implicits_flags * Impargs.implicit_interactive_request
+type Impargs.implicit_explanation = variant DepRigid of Impargs.argument_position | DepFlex of Impargs.argument_position | DepFlexAndRigid of Impargs.argument_position * Impargs.argument_position | Manual
+type Impargs.implicit_interactive_request = variant ImplAuto | ImplManual of int
+type Impargs.implicit_side_condition = variant DefaultImpArgs | LessArgsThan of int
+type Impargs.implicit_status_info = record {impl_pos : (Names.Name.t * int * int option); impl_expl : Impargs.implicit_explanation; impl_max : bool; impl_force : bool}
+type Impargs.implicits_flags = record {auto : bool; strict : bool; strongly_strict : bool; reversible_pattern : bool; contextual : bool; maximal : bool}
+type Inv.inversion_kind = variant SimpleInversion | FullInversion | FullInversionClear
+type Keys.key = variant KGlob of Names.GlobRef.t | KLam | KLet | KProd | KSort | KCase | KFix | KCoFix | KRel | KInt | KFloat | KString | KArray
+type Libnames.full_path = record {dirpath : string list; basename : string}
+type Libobject.ExportObj.t = record[unboxed] {mpl : (Libobject.open_filter * Names.ModPath.t) list}
+type Libobject.algebraic_objects = variant Objs of (((int * string * string list) list * Libobject.algebraic_objects), Libobject.algebraic_objects, Libobject.keep_objects, Libobject.escape_objects) Libobject.object_view list | Ref of Names.ModPath.t * Mod_subst.substitution
+type Libobject.escape_objects = record {escape_objects : (((int * string * string list) list * Libobject.algebraic_objects), Libobject.algebraic_objects, Libobject.keep_objects, Libobject.escape_objects) Libobject.object_view list}
+type Libobject.keep_objects = record {keep_objects : (((int * string * string list) list * Libobject.algebraic_objects), Libobject.algebraic_objects, Libobject.keep_objects, Libobject.escape_objects) Libobject.object_view list}
+type Libobject.locality = variant Local | Export | SuperGlobal
+type Libobject.open_filter = variant Unfiltered | Filtered of CString.Pred.t
+type Library.library_disk = record {md_compiled : Safe_typing.compiled_library; md_syntax_objects : ((((int * string * string list) list * Libobject.algebraic_objects), Libobject.algebraic_objects, Libobject.keep_objects, Libobject.escape_objects) Libobject.object_view list * Libobject.keep_objects * Libobject.escape_objects); md_objects : ((((int * string * string list) list * Libobject.algebraic_objects), Libobject.algebraic_objects, Libobject.keep_objects, Libobject.escape_objects) Libobject.object_view list * Libobject.keep_objects * Libobject.escape_objects)}
+type Library.library_t = record {library_name : string list; library_data : Library.library_disk; library_deps : (string list * Safe_typing.vodigest) array; library_safe_deps : Names.DirPath.Set.t; library_digests : Safe_typing.vodigest; library_info : UserWarn.t; library_vm : (string list * Vmlibrary.compiled_library Vmlibrary.Delayed.node Stdlib.ref)}
+type Library.require_mode = variant ModeFull | ModeSafe
+type Loc.source = variant InFile of {dirpath : string option; file : string} | ToplevelInput
+type Loc.t = record {fname : Loc.source; line_nb : int; bol_pos : int; line_nb_last : int; bol_pos_last : int; bp : int; ep : int}
+type Locality.import_status = variant ImportDefaultBehavior | ImportNeedQualified
+type Locus.hyp_location_flag = variant InHyp | InHypTypeOnly | InHypValueOnly
+type Ltac2_plugin__Tac2entries.abbreviation = record {abbr_body : Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t; abbr_depr : Deprecation.t option}
+type Ltac2_plugin__Tac2entries.extension_data = record {edata_warn : UserWarn.t option; edata_name : string; edata_args : int Ltac2_plugin__Tac2expr.glb_typexpr list}
+type Ltac2_plugin__Tac2entries.redefinition = record {redef_local : Libobject.locality; redef_kn : Names.KerName.t; redef_body : Ltac2_plugin__Tac2expr.glb_tacexpr; redef_old : string option}
+type Ltac2_plugin__Tac2entries.synext = record {synext_kn : Names.KerName.t; synext_raw : Ltac2_plugin__Tac2expr.sexpr list; synext_used : Int.Set.t Names.KerName.Map.t; synext_tok : Ltac2_plugin__Tac2entries.SynclassDyn.t Ltac2_plugin__Tac2entries.token list; synext_entry : (Names.KerName.t option * int); synext_loc : bool; synext_depr : Deprecation.t option}
+type Ltac2_plugin__Tac2entries.tacdef = record {tacdef_local : bool; tacdef_mutable : bool; tacdef_expr : Ltac2_plugin__Tac2expr.glb_tacexpr; tacdef_type : (int * int Ltac2_plugin__Tac2expr.glb_typexpr); tacdef_deprecation : Deprecation.t option}
+type Ltac2_plugin__Tac2entries.typdef = record {typdef_local : bool; typdef_abstract : bool; typdef_expr : (int * Ltac2_plugin__Tac2expr.glb_typedef)}
+type Ltac2_plugin__Tac2entries.typext = record {typext_local : bool; typext_prms : int; typext_type : Names.KerName.t; typext_expr : Ltac2_plugin__Tac2entries.extension_data list}
+type Ltac2_plugin__Tac2env.notation_data = variant UntypedNota of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t | TypedNota of {nota_prms : int; nota_argtys : int Ltac2_plugin__Tac2expr.glb_typexpr CString.Map.t; nota_ty : int Ltac2_plugin__Tac2expr.glb_typexpr; nota_body : Ltac2_plugin__Tac2expr.glb_tacexpr}
+type Ltac2_plugin__Tac2expr.atom = variant AtmInt of int | AtmStr of string
+type Ltac2_plugin__Tac2expr.ctor_data_for_patterns = record {ctyp : Names.KerName.t option; cnargs : int; cindx : Ltac2_plugin__Tac2expr.ctor_indx}
+type Ltac2_plugin__Tac2expr.ctor_indx = variant Closed of int | Open of Names.KerName.t
+type Ltac2_plugin__Tac2expr.glb_alg_type = record {galg_constructors : (UserWarn.t option * string * int Ltac2_plugin__Tac2expr.glb_typexpr list) list; galg_nconst : int; galg_nnonconst : int}
+type Ltac2_plugin__Tac2expr.glb_pat = variant GPatVar of Names.Name.t | GPatAtm of Ltac2_plugin__Tac2expr.atom | GPatRef of Ltac2_plugin__Tac2expr.ctor_data_for_patterns * Ltac2_plugin__Tac2expr.glb_pat list | GPatOr of Ltac2_plugin__Tac2expr.glb_pat list | GPatAs of Ltac2_plugin__Tac2expr.glb_pat * string
+type Ltac2_plugin__Tac2expr.glb_tacexpr = variant GTacAtm of Ltac2_plugin__Tac2expr.atom | GTacVar of string | GTacRef of Names.KerName.t | GTacFun of Names.Name.t list * Ltac2_plugin__Tac2expr.glb_tacexpr | GTacApp of Ltac2_plugin__Tac2expr.glb_tacexpr * Ltac2_plugin__Tac2expr.glb_tacexpr list | GTacLet of bool * (Names.Name.t * Ltac2_plugin__Tac2expr.glb_tacexpr) list * Ltac2_plugin__Tac2expr.glb_tacexpr | GTacCst of Names.KerName.t Ltac2_plugin__Tac2expr.or_tuple * int * Ltac2_plugin__Tac2expr.glb_tacexpr list | GTacCse of Ltac2_plugin__Tac2expr.glb_tacexpr * Names.KerName.t Ltac2_plugin__Tac2expr.or_tuple * Ltac2_plugin__Tac2expr.glb_tacexpr array * (Names.Name.t array * Ltac2_plugin__Tac2expr.glb_tacexpr) array | GTacPrj of Names.KerName.t * Ltac2_plugin__Tac2expr.glb_tacexpr * int | GTacSet of Names.KerName.t * Ltac2_plugin__Tac2expr.glb_tacexpr * int * Ltac2_plugin__Tac2expr.glb_tacexpr | GTacOpn of Names.KerName.t * Ltac2_plugin__Tac2expr.glb_tacexpr list | GTacWth of Ltac2_plugin__Tac2expr.glb_tacexpr Ltac2_plugin__Tac2expr.open_match | GTacFullMatch of Ltac2_plugin__Tac2expr.glb_tacexpr * (Ltac2_plugin__Tac2expr.glb_pat * Ltac2_plugin__Tac2expr.glb_tacexpr) list | GTacExt of ('e0 * 'e1) Ltac2_plugin__Tac2dyn.Arg.DYN.tag * 'e1 : Ltac2_plugin__Tac2expr.glb_tacexpr | GTacPrm of Ltac2_plugin__Tac2expr.ml_tactic_name
+type Ltac2_plugin__Tac2expr.glb_typedef = variant GTydDef of int Ltac2_plugin__Tac2expr.glb_typexpr option | GTydAlg of Ltac2_plugin__Tac2expr.glb_alg_type | GTydRec of (string * bool * int Ltac2_plugin__Tac2expr.glb_typexpr) list | GTydOpn
+type Ltac2_plugin__Tac2expr.ml_tactic_name = record {mltac_plugin : string; mltac_tactic : string}
+type Ltac2_plugin__Tac2expr.raw_patexpr_r = variant CPatVar of Names.Name.t | CPatAtm of Ltac2_plugin__Tac2expr.atom | CPatRef of Names.KerName.t Ltac2_plugin__Tac2expr.or_tuple Ltac2_plugin__Tac2expr.or_relid * Ltac2_plugin__Tac2expr.raw_patexpr_r CAst.t list | CPatRecord of (Names.KerName.t Ltac2_plugin__Tac2expr.or_relid * Ltac2_plugin__Tac2expr.raw_patexpr_r CAst.t) list | CPatCnv of Ltac2_plugin__Tac2expr.raw_patexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_typexpr_r CAst.t | CPatOr of Ltac2_plugin__Tac2expr.raw_patexpr_r CAst.t list | CPatAs of Ltac2_plugin__Tac2expr.raw_patexpr_r CAst.t * string CAst.t
+type Ltac2_plugin__Tac2expr.raw_tacexpr_r = variant CTacAtm of Ltac2_plugin__Tac2expr.atom | CTacRef of Ltac2_plugin__Tac2expr.tacref Ltac2_plugin__Tac2expr.or_relid | CTacCst of Names.KerName.t Ltac2_plugin__Tac2expr.or_tuple Ltac2_plugin__Tac2expr.or_relid | CTacFun of Ltac2_plugin__Tac2expr.raw_patexpr_r CAst.t list * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t | CTacApp of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t list | CTacSyn of (Names.Name.t CAst.t * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t) list * Names.KerName.t | CTacLet of bool * (Ltac2_plugin__Tac2expr.raw_patexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t) list * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t | CTacCnv of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_typexpr_r CAst.t | CTacSeq of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t | CTacIft of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t | CTacCse of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * (Ltac2_plugin__Tac2expr.raw_patexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t) list | CTacRec of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t option * (Names.KerName.t Ltac2_plugin__Tac2expr.or_relid * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t) list | CTacPrj of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * Names.KerName.t Ltac2_plugin__Tac2expr.or_relid | CTacSet of Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * Names.KerName.t Ltac2_plugin__Tac2expr.or_relid * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t | CTacExt of ('e0 * 'e1) Ltac2_plugin__Tac2dyn.Arg.DYN.tag * 'e0 : Ltac2_plugin__Tac2expr.raw_tacexpr_r | CTacGlb of int * (Names.Name.t CAst.t * Ltac2_plugin__Tac2expr.raw_tacexpr_r CAst.t * int Ltac2_plugin__Tac2expr.glb_typexpr option) list * Ltac2_plugin__Tac2expr.glb_tacexpr * int Ltac2_plugin__Tac2expr.glb_typexpr
+type Ltac2_plugin__Tac2expr.raw_typexpr_r = variant CTypVar of Names.Name.t | CTypArrow of Ltac2_plugin__Tac2expr.raw_typexpr_r CAst.t * Ltac2_plugin__Tac2expr.raw_typexpr_r CAst.t | CTypRef of Names.KerName.t Ltac2_plugin__Tac2expr.or_tuple Ltac2_plugin__Tac2expr.or_relid * Ltac2_plugin__Tac2expr.raw_typexpr_r CAst.t list
+type Ltac2_plugin__Tac2expr.sexpr = variant SexprStr of string CAst.t | SexprInt of int CAst.t | SexprRec of Loc.t * Libnames.full_path CAst.t option CAst.t * Ltac2_plugin__Tac2expr.sexpr list
+type Ltac2_plugin__Tac2expr.tacref = variant TacConstant of Names.KerName.t | TacAlias of Names.KerName.t
+type Ltac_plugin__Pptactic.pp_tactic = record {pptac_level : int; pptac_prods : Genarg.ArgT.any Extend.user_symbol Ltac_plugin__Pptactic.grammar_tactic_prod_item_expr list}
+type Ltac_plugin__Tacentries.tactic_grammar = record {tacgram_level : int; tacgram_prods : Genarg.ArgT.any Extend.user_symbol Ltac_plugin__Pptactic.grammar_tactic_prod_item_expr list}
+type Ltac_plugin__Tacentries.tactic_grammar_obj = record {tacobj_key : Names.KerName.t; tacobj_local : bool; tacobj_tacgram : Ltac_plugin__Tacentries.tactic_grammar; tacobj_forml : bool}
+type Ltac_plugin__Tacenv.alias_tactic = record {alias_args : string list; alias_body : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t; alias_deprecation : Deprecation.t option}
+type Ltac_plugin__Tacenv.tacdef = record {local : bool; id : string; for_ml : bool; expr : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t; depr : Deprecation.t option}
+type Ltac_plugin__Tacenv.tacreplace = record {repl_local : Libobject.locality; repl_tac : Names.KerName.t; repl_expr : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t}
+type Ltac_plugin__Tacexpr.global_flag = variant TacGlobal | TacLocal
+type Ltac_plugin__Tacexpr.lazy_flag = variant General | Select | Once
+type Ltac_plugin__Tacexpr.ml_tactic_entry = record {mltac_name : Ltac_plugin__Tacexpr.ml_tactic_name; mltac_index : int}
+type Ltac_plugin__Tacexpr.ml_tactic_name = record {mltac_plugin : string; mltac_tactic : string}
+type Metasyntax.notation_obj = record {notobj_local : bool; notobj_scope : string option; notobj_interp : ((string * ((Constrexpr.notation_entry_relative_level * (string list * string list)) * CString.Set.t * Notation_term.notation_var_instance_type)) list * Notation_term.notation_constr); notobj_coercion : Notation.entry_coercion_kind option; notobj_use : Notationextern.notation_use option; notobj_user_warns : UserWarn.t option; notobj_notation : ((Names.KerName.t Constrexpr.notation_entry_gen * string) * ((string list * string list) * string)); notobj_specific_pp_rules : Ppextend.notation_printing_rules option}
+type Metasyntax.scope_command = variant ScopeDeclare | ScopeDelimAdd of string | ScopeDelimRemove | ScopeClasses of Notation.add_scope_where option * Coercionops.cl_typ list
+type Metasyntax.syntax_extension = record {synext_level : (Constrexpr.notation_entry_level * Constrexpr.entry_relative_level list); synext_nottyps : (Names.KerName.t, (Extend.production_level * Extend.production_position)) Extend.constr_entry_key_gen list; synext_notgram : Notation_gram.one_notation_grammar list option; synext_notprint : Ppextend.generic_notation_printing_rules option}
+type Mltop.PluginSpec.t = record {lib : string}
+type Mltop.ml_module_object = record {mlocal : bool; mnames : (bool * Mltop.PluginSpec.t) list; mdigests : Stdlib.Digest.t list}
+type Mod_declarations.module_implementation = variant Abstract | Algebraic of (Constr.t * (UVars.bound_names * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t)) option) Declarations.functor_alg_expr | Struct of Mod_subst.Deltamap.t * (string * ([`ModBody] Mod_declarations.generic_module_body, [`ModType] Mod_declarations.generic_module_body) Declarations.structure_field_body) list | FullStruct
+type Mod_subst.Deltamap.t = record {root : Names.ModPath.t; mmap : Names.ModPath.t Names.ModPath.Map.t; kmap : Mod_subst.delta_hint Names.KerName.Map.t}
+type Mod_subst.delta_hint = variant Inline of int * Constr.t UVars.univ_abstracted option | Equiv of Names.KerName.t
+type Mod_subst.substitution = variant Flat of Mod_subst.Deltamap.t Names.ModPath.Map.t | Compose of {left : Mod_subst.substitution; right : Mod_subst.substitution; leaves : int}
+type Namegen.intro_pattern_naming_expr = variant IntroIdentifier of string | IntroFresh of string | IntroAnonymous
+type Names.GlobRef.t = variant VarRef of string | ConstRef of Names.KerPair.t | IndRef of (Names.KerPair.t * int) | ConstructRef of ((Names.KerPair.t * int) * int)
+type Names.KerName.t = record {modpath : Names.ModPath.t; knlabel : string; refhash : int}
+type Names.KerPair.t = variant Same of Names.KerName.t | Dual of Names.KerName.t * Names.KerName.t
+type Names.ModPath.t = variant MPfile of string list | MPbound of (int * string * string list) | MPdot of Names.ModPath.t * string
+type Names.Name.t = variant Anonymous | Name of string
+type Names.Projection.Repr.t = record {proj_ind : (Names.KerPair.t * int); proj_npars : int; proj_arg : int; proj_name : Names.KerPair.t}
+type Names.name = variant Anonymous | Name of string
+type Notation.add_scope_where = variant AddScopeTop | AddScopeBottom
+type Notation.arguments_scope_discharge_request = variant ArgsScopeAuto | ArgsScopeManual | ArgsScopeNoDischarge
+type Notation.entry_coercion_kind = variant IsEntryCoercion of Constrexpr.notation_entry_level * Constrexpr.notation_entry_relative_level | IsEntryGlobal of Names.KerName.t * int | IsEntryIdent of Names.KerName.t * int
+type Notation.prim_token_infos = record {pt_local : bool; pt_scope : string; pt_interp_info : PrimNotations.prim_token_interp_info; pt_required : (Libnames.full_path * string list); pt_refs : Names.GlobRef.t list; pt_in_match : bool}
+type Notation_gram.grammar_constr_prod_item = variant GramConstrTerminal of bool * string | GramConstrNonTerminal of Extend.constr_prod_entry_key * string option | GramConstrListMark of int * bool * int
+type Notation_gram.one_notation_grammar = record {notgram_level : (Constrexpr.notation_entry_level * Constrexpr.entry_relative_level list); notgram_assoc : Gramlib__Gramext.g_assoc option; notgram_notation : (Names.KerName.t Constrexpr.notation_entry_gen * string); notgram_prods : Notation_gram.grammar_constr_prod_item list list; notgram_typs : (Names.KerName.t, (Extend.production_level * Extend.production_position)) Extend.constr_entry_key_gen list}
+type Notation_term.notation_binder_kind = variant AsIdent | AsName | AsAnyPattern | AsStrictPattern
+type Notation_term.notation_binder_source = variant NtnBinderParsedAsConstr of Notation_term.notation_binder_kind | NtnBinderParsedAsSomeBinderKind of Notation_term.notation_binder_kind | NtnBinderParsedAsBinder
+type Notation_term.notation_constr = variant NRef of Names.GlobRef.t * (Glob_term.glob_quality list * Glob_term.glob_sort_name Glob_term.glob_sort_gen list) option | NVar of string | NApp of Notation_term.notation_constr * Notation_term.notation_constr list | NProj of (Names.KerPair.t * (Glob_term.glob_quality list * Glob_term.glob_sort_name Glob_term.glob_sort_gen list) option) * Notation_term.notation_constr list * Notation_term.notation_constr | NHole of Glob_term.glob_evar_kind | NGenarg of [`glevel] Genarg.generic_argument | NList of string * string * Notation_term.notation_constr * Notation_term.notation_constr * bool | NLambda of Names.Name.t * Notation_term.notation_constr option * Notation_term.notation_constr | NProd of Names.Name.t * Notation_term.notation_constr option * Notation_term.notation_constr | NBinderList of string * string * Notation_term.notation_constr * Notation_term.notation_constr * bool | NLetIn of Names.Name.t * Notation_term.notation_constr * Notation_term.notation_constr option * Notation_term.notation_constr | NCases of Constr.case_style * Notation_term.notation_constr option * (Notation_term.notation_constr * (Names.Name.t * ((Names.KerPair.t * int) * Names.Name.t list) option)) list * (([`any] Glob_term.cases_pattern_r, [`any]) DAst.thunk CAst.t list * Notation_term.notation_constr) list | NLetTuple of Names.Name.t list * (Names.Name.t * Notation_term.notation_constr option) * Notation_term.notation_constr * Notation_term.notation_constr | NIf of Notation_term.notation_constr * (Names.Name.t * Notation_term.notation_constr option) * Notation_term.notation_constr * Notation_term.notation_constr | NRec of Glob_term.glob_fix_kind * string array * (Names.Name.t * Notation_term.notation_constr option * Notation_term.notation_constr) list array * Notation_term.notation_constr array * Notation_term.notation_constr array | NSort of (Glob_term.glob_qvar option * (Glob_term.glob_sort_name * int) list Glob_term.glob_sort_gen) | NCast of Notation_term.notation_constr * Constr.cast_kind option * Notation_term.notation_constr | NInt of int | NFloat of float | NString of string | NArray of Notation_term.notation_constr array * Notation_term.notation_constr * Notation_term.notation_constr
+type Notation_term.notation_var_instance_type = variant NtnTypeConstr | NtnTypeConstrList | NtnTypeBinder of Notation_term.notation_binder_source | NtnTypeBinderList of Notation_term.notation_binder_source
+type Notationextern.notation_use = variant OnlyPrinting | OnlyParsing | ParsingAndPrinting
+type NumTok.Unsigned.t = record {int : string; frac : string; exp : string}
+type NumTok.sign = variant SPlus | SMinus
+type Opaqueproof.opaque = variant Indirect of Mod_subst.substitution list * Cooking.cooking_info list * string list * int
+type Pattern.case_info_pattern = record {cip_style : Constr.case_style; cip_ind : (Names.KerPair.t * int) option; cip_extensible : bool}
+type Ppextend.generic_notation_printing_rules = record {notation_printing_reserved : bool; notation_printing_rules : Ppextend.notation_printing_rules}
+type Ppextend.notation_printing_rules = record {notation_printing_unparsing : Ppextend.unparsing list; notation_printing_level : int}
+type Ppextend.pattern_quote_style = variant QuotedPattern | NotQuotedPattern
+type Ppextend.ppbox = variant PpHB | PpHOVB of int | PpHVB of int | PpVB of int
+type Ppextend.ppcut = variant PpBrk of int * int | PpFnl
+type Ppextend.unparsing = variant UnpMetaVar of Constrexpr.notation_entry_relative_level | UnpBinderMetaVar of Constrexpr.notation_entry_relative_level * Ppextend.pattern_quote_style | UnpListMetaVar of Constrexpr.notation_entry_relative_level * Ppextend.unparsing list | UnpBinderListMetaVar of bool * bool * Ppextend.unparsing list | UnpTerminal of string | UnpBox of Ppextend.ppbox * (Loc.t option * Ppextend.unparsing) list | UnpCut of Ppextend.ppcut
+type PrimNotations.int_ty = record {dec_uint : (Names.KerPair.t * int); dec_int : (Names.KerPair.t * int); hex_uint : (Names.KerPair.t * int); hex_int : (Names.KerPair.t * int); uint : (Names.KerPair.t * int); int : (Names.KerPair.t * int)}
+type PrimNotations.number_ty = record {int : PrimNotations.int_ty; decimal : (Names.KerPair.t * int); hexadecimal : (Names.KerPair.t * int); number : (Names.KerPair.t * int)}
+type PrimNotations.numnot_option = variant Nop | Warning of string | Abstract of string
+type PrimNotations.option_kind = variant Direct | Option | Error
+type PrimNotations.pos_neg_int63_ty = record {pos_neg_int63_ty : (Names.KerPair.t * int)}
+type PrimNotations.prim_token_interp_info = variant Uid of string | NumberNotation of (PrimNotations.target_kind, PrimNotations.numnot_option) PrimNotations.prim_token_notation_obj | StringNotation of (PrimNotations.string_target_kind, unit) PrimNotations.prim_token_notation_obj
+type PrimNotations.string_target_kind = variant ListByte | Byte | PString
+type PrimNotations.target_kind = variant Int of PrimNotations.int_ty | UInt of PrimNotations.int_ty | Z of PrimNotations.z_pos_ty | Int63 of PrimNotations.pos_neg_int63_ty | Float64 | Number of PrimNotations.number_ty
+type PrimNotations.to_post_arg = variant ToPostCopy | ToPostAs of int | ToPostHole of string | ToPostCheck of Constr.t
+type PrimNotations.z_pos_ty = record {z_ty : (Names.KerPair.t * int); pos_ty : (Names.KerPair.t * int)}
+type Proofview.goal_range_selector = variant NthSelector of int | RangeSelector of (int * int) | IdSelector of Libnames.full_path CAst.t
+type Reductionops.ReductionBehaviour.t = variant NeverUnfold | UnfoldWhen of Reductionops.ReductionBehaviour.when_flags | UnfoldWhenNoMatch of Reductionops.ReductionBehaviour.when_flags
+type Reductionops.ReductionBehaviour.when_flags = record {recargs : int list; nargs : int option}
+type Retroknowledge.action = variant Register_ind of 'e0 CPrimitives.prim_ind * (Names.KerPair.t * int) : Retroknowledge.action | Register_type of 'e0 CPrimitives.prim_type * Names.KerPair.t : Retroknowledge.action
+type Ring_plugin__Ring_ast.field_info = record {field_name : string; field_carrier : Constr.t; field_req : Constr.t; field_cst_tac : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t; field_pow_tac : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t; field_ok : Constr.t; field_simpl_eq_ok : Constr.t; field_simpl_ok : Constr.t; field_simpl_eq_in_ok : Constr.t; field_cond : Constr.t; field_pre_tac : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t; field_post_tac : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t}
+type Ring_plugin__Ring_ast.ring_info = record {ring_name : string; ring_carrier : Constr.t; ring_req : Constr.t; ring_setoid : Constr.t; ring_ext : Constr.t; ring_morph : Constr.t; ring_th : Constr.t; ring_cst_tac : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t; ring_pow_tac : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t; ring_lemma1 : Constr.t; ring_lemma2 : Constr.t; ring_pre_tac : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t; ring_post_tac : < constant : (Evaluable.t * string CAst.t option) Locus.or_var; dterm : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); level : [`glevel]; name : string CAst.t; occvar : int Locus.or_var; pattern : (CString.Set.t * (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) * [`glevel] Genarg.generic_argument Pattern.constr_pattern_r); red_pattern : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option); reference : (Loc.t option * Names.KerName.t) Locus.or_var; tacexpr : Ltac_plugin__Tacexpr.glob_tactic_expr; term : (([`any] Glob_term.glob_constr_r, [`any]) DAst.thunk CAst.t * Constrexpr.constr_expr_r CAst.t option) > Ltac_plugin__Tacexpr.gen_tactic_expr_r CAst.t}
+type Safe_typing.compiled_library = record {comp_name : string list; comp_mod : [`ModBody] Mod_declarations.generic_module_body; comp_univs : (HMap.Make(Univ.Map.Self).Set.t * Stdlib.Set.Make(Univ.UnivConstraint).t); comp_sorts : (Stdlib.Set.Make(Sorts.Self).t * Stdlib__Set.Make(Sorts.ElimConstraint).t); comp_deps : (string list * Safe_typing.vodigest) array; comp_flags : Safe_typing.permanent_flags}
+type Safe_typing.permanent_flags = record {rewrite_rules_allowed : bool}
+type Safe_typing.vodigest = variant Dvo_or_vi of Stdlib.Digest.t
+type Sorts.QGlobal.t = record {library : string list; id : string}
+type Sorts.QVar.repr = variant Var of int | Unif of string * int | Global of Sorts.QGlobal.t
+type Sorts.Quality.constant = variant QProp | QSProp | QType
+type Sorts.Quality.t = variant QVar of Sorts.QVar.repr | QConstant of Sorts.Quality.constant
+type Sorts.relevance = variant Relevant | Irrelevant | RelevanceVar of Sorts.QVar.repr
+type Sorts.t = variant SProp | Prop | Set | Type of (Univ.Level.t * int) list | QSort of Sorts.QVar.repr * (Univ.Level.t * int) list
+type Structures.Structure.projection = record {proj_name : Names.Name.t; proj_true : bool; proj_canonical : bool; proj_body : Names.KerPair.t option}
+type Structures.Structure.t = record {name : (Names.KerPair.t * int); projections : Structures.Structure.projection list; nparams : int}
+type Summary.Stage.t = variant Synterp | Interp
+type Tactic_option.tac_option_locality = variant Default | Global | Local | Export | GlobalAndExport
+type Tactypes.quantified_hypothesis = variant AnonHyp of int | NamedHyp of string CAst.t
+type TransparentState.t = record {tr_var : CString.Pred.t; tr_cst : Names.Cpred.t; tr_prj : Names.PRpred.t}
+type Typeclasses.class_method = record {meth_name : Names.Name.t; meth_const : Names.KerPair.t option}
+type Typeclasses.typeclass = record {cl_univs : (UVars.bound_names * (Stdlib__Set.Make(Sorts.ElimConstraint).t * Stdlib.Set.Make(Univ.UnivConstraint).t)); cl_impl : Names.GlobRef.t; cl_context : (Constr.t, Constr.t, Sorts.relevance) Context.Rel.Declaration.pt list; cl_trivial : bool; cl_props : (Constr.t, Constr.t, Sorts.relevance) Context.Rel.Declaration.pt list; cl_projs : Typeclasses.class_method list; cl_strict : bool; cl_unique : bool}
+type UState.rigid = variant UnivRigid | UnivFlexible of bool
+type UVars.Variance.t = variant Irrelevant | Covariant | Invariant
+type UVars.bound_names = record {quals : Names.Name.t array; univs : Names.Name.t array}
+type Univ.Level.t = record {hash : int; data : Univ.RawLevel.t}
+type Univ.RawLevel.t = variant Set | Level of Univ.UGlobal.t | Var of int
+type Univ.UGlobal.t = record {library : string list; process : string; uid : int}
+type UnivGen.QualityOrSet.t = variant Qual of Sorts.Quality.t | Set
+type UserWarn.t = record {depr : Deprecation.t option; warn : UserWarn.warn list}
+type UserWarn.warn = record {note : string; cats : string}
+type Util.Empty.t = record {abort : 'p0. 'p0}
+type Vmbytecodes.caml_prim = variant CAML_Arraymake | CAML_Arrayget | CAML_Arraydefault | CAML_Arrayset | CAML_Arraycopy | CAML_Arraylength | CAML_Stringmake | CAML_Stringlength | CAML_Stringget | CAML_Stringsub | CAML_Stringcat | CAML_Stringcompare
+type Vmbytecodes.fv_elem = variant FVnamed of string | FVrel of int
+type Vmemitcodes.NonSubstReloc.t = variant SReloc_Const_sort of Sorts.t | SReloc_Const_evar of int | SReloc_Const_b0 of int | SReloc_Const_univ_instance of (Sorts.Quality.t array * Univ.Level.t array) | SReloc_Const_val of Vmvalues.values | SReloc_Const_uint of int | SReloc_Const_float of float | SReloc_Const_string of string | SReloc_annot of Vmvalues.annot_switch | SReloc_caml_prim of Vmbytecodes.caml_prim
+type Vmemitcodes.Reloc.t = variant SReloc_Const_ind of (Names.KerPair.t * int) | SReloc_getglobal of Names.KerPair.t | SReloc_indirect of int
+type Vmemitcodes.patches = record {reloc_infos : Vmemitcodes.Reloc.t array}
+type Vmemitcodes.to_patch = record {tp_code : Stdlib.String.t; tp_fv : Vmbytecodes.fv_elem array; tp_pos : string; tp_reloc : Vmemitcodes.NonSubstReloc.t array}
+type Vmlibrary.compiled_library = record {lib_dp : string list; lib_data : Vmemitcodes.to_patch array}
+type Vmvalues.annot_switch = record {rtbl : (int * int) array; tailcall : bool; max_stack_size : int}
+opaque '_ free-variable
+opaque CString.Map.key functor-result
+opaque CString.Map.t functor-result
+opaque CString.Pred.t functor-result
+opaque CString.Set.t functor-result
+opaque Environ.QGlobRef.Map.key functor-argument-or-local
+opaque Genarg.ArgT.DYN.tag functor-argument-or-local
+opaque Goptions.MakeTable.A.Set.elt functor-argument-or-local
+opaque HMap.Make(Univ.Map.Self).Set.t functor-application
+opaque Int.Set.t functor-result
+opaque Libobject.Dyn.t functor-argument-or-local
+opaque Ltac2_plugin__Tac2dyn.Arg.DYN.tag functor-argument-or-local
+opaque Ltac2_plugin__Tac2entries.SynclassDyn.t functor-argument-or-local
+opaque Ltac_plugin__Tacexpr.glob_tactic_expr alias-holds-itself
+opaque Names.Cmap.t functor-result
+opaque Names.Cmap_env.key functor-result
+opaque Names.Cmap_env.t functor-result
+opaque Names.Cpred.elt functor-result
+opaque Names.Cpred.t functor-result
+opaque Names.DirPath.Set.t functor-result
+opaque Names.KerName.Map.t functor-argument-or-local
+opaque Names.Mindmap_env.t functor-result
+opaque Names.ModPath.Map.t functor-result
+opaque Names.PRmap.t functor-result
+opaque Names.PRpred.t functor-result
+opaque Notation.ScopeClassMap.t functor-argument-or-local
+opaque Redexpr.User.Dyn.tag functor-argument-or-local
+opaque Sorts.Quality.Set.t functor-result
+opaque Ssreflect_plugin__Ssrview.AdaptorDb.AdaptorMap.key functor-argument-or-local
+opaque Stdlib.Digest.t another-package
+opaque Stdlib.Lazy.t another-package
+opaque Stdlib.Set.Make(Sorts.Self).t functor-application
+opaque Stdlib.Set.Make(Univ.UnivConstraint).t functor-application
+opaque Stdlib.String.t another-package
+opaque Stdlib.ref another-package
+opaque Stdlib__Set.Make(Sorts.ElimConstraint).t functor-application
+opaque Vmvalues.values abstract
+option_payload Allow StrictProp bool
+option_payload Asymmetric Patterns bool
+option_payload Auto Template Polymorphism bool
+option_payload Boolean Equality Schemes bool
+option_payload Bullet Behavior string option
+option_payload Case Analysis Schemes bool
+option_payload Contextual Implicit bool
+option_payload Cumulativity Weak Constraints bool
+option_payload Debug Auto bool
+option_payload Debug Eauto bool
+option_payload Debug Trivial bool
+option_payload Debug string
+option_payload Decidable Equality Schemes bool
+option_payload Default Clearing Used Hypotheses bool
+option_payload Default Goal Selector string option
+option_payload Default Proof Mode string option
+option_payload Default Proof Using string option
+option_payload Default Timeout int option
+option_payload Definitional UIP bool
+option_payload Dependent Proposition Eliminators bool
+option_payload Depth Scheme All int option
+option_payload Diffs string option
+option_payload Dump Arith string option
+option_payload Dump Bytecode bool
+option_payload Dump Lambda bool
+option_payload Elimination Schemes bool
+option_payload Extraction AccessOpaque bool
+option_payload Extraction AutoInline bool
+option_payload Extraction Conservative Types bool
+option_payload Extraction File Comment string option
+option_payload Extraction Flag int option
+option_payload Extraction KeepSingleton bool
+option_payload Extraction Optimize bool
+option_payload Extraction Output Directory string option
+option_payload Extraction SafeImplicits bool
+option_payload Extraction TypeExpand bool
+option_payload Fast Name Printing bool
+option_payload Firstorder Depth int option
+option_payload Function_raw_tcc bool
+option_payload Functional Induction Rewrite Dependent bool
+option_payload Generate Goal Names bool
+option_payload Guard Checking bool
+option_payload Hyps Limit int option
+option_payload Implicit Arguments bool
+option_payload Indices Matter bool
+option_payload Info Auto bool
+option_payload Info Eauto bool
+option_payload Info Level int option
+option_payload Info Micromega bool
+option_payload Info Trivial bool
+option_payload Inline Level int option
+option_payload Intuition Negation Unfolding bool
+option_payload Keep Admitted Variables bool
+option_payload Keep Proof Equalities bool
+option_payload Kernel Term Sharing bool
+option_payload Keyed Unification bool
+option_payload Lia Cache bool
+option_payload Lia Depth int option
+option_payload Lra Depth int option
+option_payload Ltac Backtrace bool
+option_payload Ltac Batch Debug bool
+option_payload Ltac Debug bool
+option_payload Ltac Profiling Cutoff string
+option_payload Ltac Profiling bool
+option_payload Ltac2 Backtrace Compact bool
+option_payload Ltac2 Backtrace bool
+option_payload Ltac2 In Ltac1 Profiling bool
+option_payload Ltac2 Typed Notations bool
+option_payload Mangle Names Light bool
+option_payload Mangle Names Prefix string option
+option_payload Mangle Names bool
+option_payload Maximal Implicit Insertion bool
+option_payload NativeCompute Profile Filename string option
+option_payload NativeCompute Profiling bool
+option_payload NativeCompute Timing bool
+option_payload Nested Proofs Allowed bool
+option_payload Nia Cache bool
+option_payload Nonrecursive Elimination Schemes bool
+option_payload Nra Cache bool
+option_payload Parsing Explicit bool
+option_payload Polymorphic Inductive Cumulativity bool
+option_payload Positivity Checking bool
+option_payload Primitive Projections bool
+option_payload Printing All Assumptions bool
+option_payload Printing All bool
+option_payload Printing Allow Match Default Clause bool
+option_payload Printing Coercions bool
+option_payload Printing Compact Contexts bool
+option_payload Printing Dependent Evars Line bool
+option_payload Printing Depth int option
+option_payload Printing Existential Instances bool
+option_payload Printing Factorizable Match Patterns bool
+option_payload Printing Float bool
+option_payload Printing Fully Qualified bool
+option_payload Printing Goal Names bool
+option_payload Printing Goal Tags bool
+option_payload Printing Implicit Defensive bool
+option_payload Printing Implicit bool
+option_payload Printing Match All Subterms bool
+option_payload Printing Matching bool
+option_payload Printing Notations bool
+option_payload Printing Parentheses bool
+option_payload Printing Primitive Projection Parameters bool
+option_payload Printing Projections bool
+option_payload Printing Raw Literals bool
+option_payload Printing Records bool
+option_payload Printing Relevance Marks bool
+option_payload Printing Reversible Up To Conversion Modulo Sorts And Universes bool
+option_payload Printing Reversible Up To Conversion Modulo Universe Unification bool
+option_payload Printing Reversible Up To Conversion Modulo Universes bool
+option_payload Printing Reversible Up To Conversion bool
+option_payload Printing Reversible Up To Unification bool
+option_payload Printing Sort Qualities bool
+option_payload Printing Sort Quality Variables Anonymously bool
+option_payload Printing Sorts bool
+option_payload Printing Synth bool
+option_payload Printing Unfocused bool
+option_payload Printing Unfolded Projection As Match bool
+option_payload Printing Universes bool
+option_payload Printing Use Implicit Types bool
+option_payload Printing Width int option
+option_payload Printing Wildcard bool
+option_payload Private Polymorphic Universes bool
+option_payload Program Cases bool
+option_payload Program Generalized Coercion bool
+option_payload Program Mode bool
+option_payload Reversible Pattern Implicit bool
+option_payload Rewrite Output Constraints bool
+option_payload Rewriting Schemes bool
+option_payload Rocqtop Exit On Error bool
+option_payload Rtauto Check bool
+option_payload Rtauto Pruning bool
+option_payload Rtauto Verbose bool
+option_payload SSR Loaded bool
+option_payload Search Blacklist Locals bool
+option_payload Search Output Name Only bool
+option_payload Short Module Printing bool
+option_payload Silent bool
+option_payload SimplIsCbn bool
+option_payload Solve Unification Constraints bool
+option_payload SsrHave NoTCResolution bool
+option_payload SsrIdents bool
+option_payload SsrMatching LegacyFoUnif bool
+option_payload SsrOldRewriteGoalsOrder bool
+option_payload SsrRewrite bool
+option_payload Strict Implicit bool
+option_payload Strict Universe Declaration bool
+option_payload Strongly Strict Implicit bool
+option_payload Structural Injection bool
+option_payload Suggest Proof Using bool
+option_payload Transparent Obligations bool
+option_payload Typeclass Resolution For Conversion bool
+option_payload Typeclasses Debug Verbosity int option
+option_payload Typeclasses Debug bool
+option_payload Typeclasses Default Mode string option
+option_payload Typeclasses Dependency Order bool
+option_payload Typeclasses Depth int option
+option_payload Typeclasses Iterative Deepening bool
+option_payload Typeclasses Limit Intros bool
+option_payload Typeclasses Strict Resolution bool
+option_payload Typeclasses Unique Instances bool
+option_payload Typeclasses Unique Solutions bool
+option_payload Unification Full Retyping bool
+option_payload Unification Recheck Casts bool
+option_payload Uniform Inductive Parameters bool
+option_payload Universe Checking bool
+option_payload Universe Minimization ToSet bool
+option_payload Universe Polymorphism bool
+option_payload Warnings string
 segment summary root #0
   #0 = tuple(summary,5,#1,#2,#3,#4,#5)
   #1 = annot(dirpath,#6)

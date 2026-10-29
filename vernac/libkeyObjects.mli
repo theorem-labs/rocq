@@ -127,22 +127,42 @@ open Names
     protects is the [coqc] that reads an older build's objects.
 
     The obligation is checked, as far as a build can check it, by
-    test-suite/misc/vo-format.sh, which pins the structure of a [.vo]'s
-    segments as checker/values.ml describes them, and the names of the
-    registered object kinds, against that version (an object kind only the
-    new build has passes there: a build that does not know a kind refuses
-    the file instead of misreading it). What it does not reach, and the
-    reader of this label must carry itself: the payload type of an object
-    kind (no reader in the build describes it, although the typed trees of
-    a build do); the structure of the [vm] segment, which this fork's
-    rocqchk regenerates and never reads, so nothing checks that
-    description against what the kernel writes; the meaning of a string,
-    the bytecode of that segment among them, and the order of a type's
-    constant constructors; a plugin that is not Rocq's own,
-    whose authors cannot bump Rocq's number at all, so a reader that keeps
-    objects across two builds must require the same versions of the
-    packages that install those plugins; and the choice of a number no
-    other branch used. The other thing a plugin rebuild changes -- how the
+    test-suite/misc/vo-format.sh, which pins five things against that
+    version: the structure of a [.vo]'s segments as checker/values.ml
+    describes them, the names of the registered object kinds, the OCaml
+    type of the payload each of those kinds stores (with the definition of
+    every type that type reaches, read from the typed trees the build
+    writes, checker/vo_payloads.ml), which of the four types of
+    [Goptions.option_kind] each declared option stores, and the element
+    type of each [Goptions] table. A kind only the new build has passes
+    there: a build that does not know a kind refuses the file instead of
+    misreading it.
+
+    What that payload printing does not reach it names rather than drops,
+    and the head of checker/vo_payloads.ml is the one place that list is
+    written down. In short: a type no typed tree defines (a functor's
+    result, a functor argument's type, a type of another package), and a
+    type variable no declaration binds.
+
+    What no part of the printing reaches, and the reader of this label
+    must carry itself:
+    - the value behind a [Dyn] tag, so a stored Ltac expression is pinned
+      down to its generic arguments and no further;
+    - the structure of the [vm] segment, which this fork's rocqchk
+      regenerates and never reads, so nothing checks that description
+      against what the kernel writes (the payload part does print the
+      types of that segment, but only because the [REQUIRE] kind's payload
+      reaches them, and that kind is never written to a file);
+    - the meaning of a string, the bytecode of that segment among them,
+      and the order of a type's constant constructors in the segment
+      structure (the payload types do print them in order);
+    - a plugin that is not Rocq's own, whose authors cannot bump Rocq's
+      number at all, so a reader that keeps objects across two builds must
+      require the same versions of the packages that install those
+      plugins;
+    - the choice of a number no other branch used.
+
+    The other thing a plugin rebuild changes -- how the
     elaboration of a file that uses its objects goes -- is a property of
     the build that compiles that file, not of this library.
 
