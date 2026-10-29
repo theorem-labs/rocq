@@ -855,7 +855,8 @@ and lambda_of_app cache env sigma f args =
       | Primitive op -> lambda_of_prim env c op (lambda_of_args cache env sigma 0 args)
       | Def csubst -> (* TODO optimize if f is a proj and argument is known *)
         if cb.const_inline_code
-           || (!inline_budget > 0 && inlinable_body ~limit:!inline_limit csubst)
+           || (!inline_budget > 0 && inlinable_body ~limit:!inline_limit csubst
+               && Option.is_empty (Vmbinnum.recognize_call env kn))
         then
           let () =
             if not cb.const_inline_code then
