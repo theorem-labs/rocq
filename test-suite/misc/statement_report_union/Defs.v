@@ -12,6 +12,7 @@ Parameter m_a : Type@{a}.
 Parameter m_b : Type@{b}.
 Parameter m_part : forall _ : Type@{b}, Type@{a}.
 Polymorphic Definition m_poly@{u} : forall _ : Type@{u}, Type@{u} := fun A => A.
+Polymorphic Definition m_cpoly@{u v | u < v} : forall _ : Type@{u}, Type@{v} := fun _ => Type@{u}.
 
 (* Sealing adds [a <= b]. *)
 Parameter t_ab : Type@{b}.
@@ -38,3 +39,9 @@ Module Type S_p_c. Parameter f : forall _ : Type@{c}, Type@{c}. End S_p_c.
 (* The fresh universe [u] needs [u = a] and [u <= b], so [a <= b]. *)
 Parameter t_p_ab : forall _ : Type@{a}, Type@{b}.
 Module Type S_p_ab. Parameter f : forall _ : Type@{a}, Type@{b}. End S_p_ab.
+
+(* The model's universe context has a constraint, so rocqchk does not compare
+   its type. The sealing takes it at [u = a] and [v <= b], and the model's
+   [u < v] then adds [a < b]: with [b <= c], [a < b <= c < a]. *)
+Parameter t_cp : forall _ : Type@{a}, Type@{b}.
+Module Type S_cp. Parameter f : forall _ : Type@{a}, Type@{b}. End S_cp.
