@@ -212,13 +212,25 @@ replay runs them as stock does.
 **The third soundness review.**  `vm_named_fv_clearbody`: a proof clears a
 section `Let`'s body, then takes from the machine's cache a value that
 closes over that `Let`; stock rejects the proof, which is ineligible
-(`vm_cached_closure`).  `vm_named_fv_cold_hit` is its control: a proof that
-fills that slot itself replays.  `warning_registry_history`: an earlier
+(`vm_section_closure`).  `warning_registry_history`: an earlier
 proof no longer creates a disabled warning that a proof found created, and
 a later command names it; that proof misses on the `warnings_registry` read
 it starts with, runs, and creates the warning as stock does.
 `warning_registry_unchanged_hit` is its control: the same registry, and the
 proofs replay.
+
+**The fourth soundness review.**  `vm_section_closure_creator`: a proof
+fills the slot of a constant that closes over a section `Let`, and a later
+proof takes it from the cache after clearing the `Let`'s body; a replay of
+the first would leave the slot empty, so every use of such a slot, filled
+or cached, makes a proof ineligible (`vm_section_closure`), and
+`vm_named_fv_cold_fill` shows it for a proof that fills the slot alone.
+`vm_named_fv_reset`: `Reset` and a second declaration give a name another
+code; what the first code reaches must not answer for the second, so that
+answer is kept with the declaration, not the name.  `late_reset_congruence`:
+`Reset` restores a Rocqlib registration but not the process-wide lazy a
+proof before it forced; `Reset`, `Back` and `BackTo` are late commands, so
+that proof runs, and replay accepts the later proof as stock does.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
@@ -234,6 +246,8 @@ the last one's byte offset.  `rebind_after_hit`: the proofs before a late
 it.  `plugin_after_hit`: the proof before a late `Declare ML Module` runs, and
 the proof after it misses on its key (the loaded plugins are in it).
 `late_command_hit`: the same load in both trees, and the proof after it hits.
+`Reset`, `Back` and `BackTo` are late commands too: they restore the Rocqlib
+table, not a lazy value a proof forced (`late_reset_congruence`).
 
 **The closer.**  `closer_admitted`: a registered `tac. Qed.` against an edited
 `tac. Admitted.` must miss.
