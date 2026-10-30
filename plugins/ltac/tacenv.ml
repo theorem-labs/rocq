@@ -174,16 +174,43 @@ let is_ltac_for_ml_tactic r =
 
 (* BET-84: ONE value for each of the two Ltac channels. The record sites
    above and the replay evaluators below call these, so a read's value is
-   never computed two ways (dev/tools/census/replay_channels.py). *)
+   never computed two ways (dev/tools/census/replay_channels.py).
+
+   The value is the entry as tactic evaluation sees it: the body with every
+   source location erased ([Tacerase]), which only places error messages,
+   so a definition moved to another line is the same read (fixtures
+   ltac_redef_moved, ltac_alias_moved). [tac_redef], the modules that
+   redefined the tactic, is left out: only [Print Ltac] shows it, and no
+   tactic reads it.
+
+   Erasing builds a new value, which the digest cannot recognize as one it
+   has seen, so each digest is kept with the entry it was computed from and
+   reused while the table holds that same entry (physical identity): an
+   entry is never changed in place, and [replace] makes a new one. An
+   unhashable entry is not kept, so that the digest marks each proof that
+   reads it. *)
+let digest_entry memo ~what k v view =
+  match KerName.Map.find_opt k !memo with
+  | Some (v', d) when v' == v -> d
+  | Some _ | None ->
+    let d = Proof_recorder.digest ~what (view v) in
+    if not (String.equal d "unhashable") then memo := KerName.Map.add k (v, d) !memo;
+    d
+
+let alias_digests : (alias_tactic * string) KerName.Map.t ref = ref KerName.Map.empty
+let definition_digests : (ltac_entry * string) KerName.Map.t ref = ref KerName.Map.empty
+
 let recorded_tactic_alias k =
-  match KerName.Map.find_opt k !alias_map with
-  | None -> None
-  | Some v -> Some (Proof_recorder.digest ~what:"tactic_alias" v)
+  Option.map (fun v ->
+      digest_entry alias_digests ~what:"tactic_alias" k v
+        (fun v -> { v with alias_body = Tacerase.erase_tactic v.alias_body }))
+    (KerName.Map.find_opt k !alias_map)
 
 let recorded_tactic_definition k =
-  match KerName.Map.find_opt k !mactab with
-  | None -> None
-  | Some v -> Some (Proof_recorder.digest ~what:"tactic_definition" v)
+  Option.map (fun v ->
+      digest_entry definition_digests ~what:"tactic_definition" k v
+        (fun v -> (Tacerase.erase_tactic v.tac_body, v.tac_for_ml, v.tac_deprecation)))
+    (KerName.Map.find_opt k !mactab)
 
 let () =
   record_hook :=

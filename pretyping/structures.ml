@@ -289,6 +289,40 @@ let object_table =
   Summary.ref (GlobRefMap.empty : (constr * obj_typ) PatMap.t GlobRefMap.t)
     ~name:"record-canonical-structs"
 
+(* BET-84 census row 14: the canonical solutions of a projection, read by
+   the projection. ONE value function, called by the record sites and by
+   the replay evaluator (dev/tools/census/replay_channels.py): the digest
+   of the projection's whole table of solutions, or absent. *)
+let recorded_canonical_structure env proj =
+  match GlobRefMap.find_opt env proj !object_table with
+  | None -> None
+  | Some m -> Some (Proof_recorder.digest_cached ~what:"canonical_structure" m)
+
+(* The key names the projection, which is always a constant, by
+   [Lib.constant_key] ([GlobRef.print] does not name one constant). Any
+   other reference gets a key that no evaluator reads back. *)
+let canonical_structure_key = function
+  | GlobRef.ConstRef c -> "C" ^ Lib.constant_key c
+  | GlobRef.VarRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _ as r ->
+    "?" ^ Pp.string_of_ppcmds (GlobRef.print r)
+
+let record_canonical_structure env proj =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"canonical_structure"
+      ~key:(fun () -> canonical_structure_key proj)
+      ~value:(fun () -> recorded_canonical_structure env proj)
+
+(* The table is read through the global environment, which the projection's
+   canonical name is resolved in; a key that does not read back is a miss. *)
+let () =
+  Proof_replay.register_evaluator "canonical_structure" (fun key ->
+      let n = String.length key in
+      if n = 0 || key.[0] <> 'C' then Proof_replay.Unknown
+      else match Lib.constant_of_key (String.sub key 1 (n - 1)) with
+        | None -> Proof_replay.Unknown
+        | Some c ->
+          Proof_replay.Value (recorded_canonical_structure (Global.env ()) (GlobRef.ConstRef c)))
+
 let keep_true_projections projs =
   let filter { Structure.proj_true ; proj_canonical; proj_body } = if proj_true then Some (proj_body, proj_canonical) else None in
   List.map_filter filter projs
@@ -447,12 +481,7 @@ type t = {
 
 (* BET-84 census row 14: the canonical-structure table a proof reads. *)
 let find env sigma (proj,pat) =
-  if Proof_recorder.active () then
-    Proof_recorder.read ~row:"14" ~channel:"canonical_structure"
-      ~key:(fun () -> Pp.string_of_ppcmds (Names.GlobRef.print proj))
-      ~value:(fun () -> match GlobRefMap.find_opt env proj !object_table with
-          | None -> None
-          | Some m -> Some (Proof_recorder.digest_cached ~what:"canonical_structure" m));
+  record_canonical_structure env proj;
   let t', { o_DEF = c; o_CTX = ctx; o_INJ=n; o_TABS = bs;
         o_TPARAMS = params; o_NPARAMS = nparams; o_TCOMPS = us } = PatMap.find env pat (GlobRefMap.find env proj !object_table) in
   let us = List.map EConstr.of_constr us in
@@ -492,10 +521,15 @@ let rec decompose_projection ?metas env sigma c args =
   | Const (c, u) ->
      let n = Structure.projection_nparams env c in
      (* Check if there is some canonical projection attached to this structure *)
+     record_canonical_structure env (GlobRef.ConstRef c);
      let _ = GlobRefMap.find env (GlobRef.ConstRef c) !object_table in
      get_nth n args
   | Proj (p, _, c) ->
-     let _ = GlobRefMap.find env (GlobRef.ConstRef (Names.Projection.constant p)) !object_table in
+     (* BET-84: this test of the table decides how unification goes, so it
+        is a read too (census row 14). *)
+     let proj = GlobRef.ConstRef (Names.Projection.constant p) in
+     record_canonical_structure env proj;
+     let _ = GlobRefMap.find env proj !object_table in
      c
   | _ -> raise Not_found
 

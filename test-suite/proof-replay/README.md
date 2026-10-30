@@ -153,9 +153,9 @@ channel's read: in each, the stored term is not the term stock makes.
 ineligible and is not replayed though the tactic it ran changed.  The plugin
 hooks and the process-wide fence need a plugin, so their test is
 `test-suite/misc/proof-replay-plugin-hooks.sh`.  The `canonical_hooks`
-evaluator has no hit test: a proof asks those hooks only after a
-`canonical_structure` lookup, which replay does not evaluate yet, so such a
-proof misses there before its hook read is checked.
+evaluator has no hit test: a proof asks those hooks only when a
+`canonical_structure` lookup finds no solution, which no fixture's
+replayed proof does.
 
 **One fixture per evaluated channel**, named `eval_<channel>`.  Each has two
 proofs.  `changed` makes a read whose value the edited tree changes, and must
@@ -176,7 +176,15 @@ the statement, the collections), so a set that changes is always caught
 there first.  `eval_proof_using_collection`: the expression of a named
 collection of section variables.  `eval_bidirectionality_hint`: the hint of
 a variable, whose key is its name; before, the evaluator could not read such
-a key back, so `same` missed with why `unknown`.
+a key back, so `same` missed with why `unknown`.  `eval_canonical_structure`:
+the canonical instances of a projection, which one more `Canonical` changes.
+
+**Ltac definitions by value.**  A definition is read without its source
+locations.  `ltac_redef_moved` and `ltac_alias_moved`: an `Ltac ... ::=`
+redefinition and a `Tactic Notation` move to another line with the same
+body, and the proof that uses them replays; `ltac_redef_changed` and
+`ltac_alias_changed`: their bodies change, and the proof misses on
+`tactic_definition` and `tactic_alias`.
 
 **The cross-model soundness review of `5f39c90b`.**  Each fixture is a
 reviewer's scenario; stock and replay must agree.
