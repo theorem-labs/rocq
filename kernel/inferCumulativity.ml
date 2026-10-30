@@ -35,6 +35,12 @@ module Inf : sig
   val get_infer_mode : variances -> bool
   val set_infer_mode : bool -> variances -> variances
 
+  (** [extracted_mode] is set while we traverse a term that a [match] can
+      extract as it stands, namely the body of a let-in of an arity or of a
+      constructor type. See [infer_constructor_instance_eq]. *)
+  val get_extracted_mode : variances -> bool
+  val set_extracted_mode : bool -> variances -> variances
+
   val start :
     (Sorts.QVar.t * Variance.t option) array ->
     (Level.t * Variance.t option) array ->
@@ -58,10 +64,15 @@ end = struct
     quals : (mode * inferred) QVar.Map.t;
     univs : (mode * inferred) Level.Map.t;
     infer_mode : bool;
+    extracted_mode : bool;
   }
 
   let get_infer_mode v = v.infer_mode
   let set_infer_mode b v = if v.infer_mode == b then v else {v with infer_mode=b}
+
+  let get_extracted_mode v = v.extracted_mode
+  let set_extracted_mode b v =
+    if v.extracted_mode == b then v else {v with extracted_mode=b}
 
   let to_variance = function
     | IrrelevantI -> Irrelevant
@@ -147,7 +158,7 @@ end = struct
         Level.Map.empty us
     in
     if QVar.Map.is_empty quals && Level.Map.is_empty univs then raise TrivialVariance;
-    {univs; quals; orig_qarray=qs; orig_uarray=us; infer_mode=true}
+    {univs; quals; orig_qarray=qs; orig_uarray=us; infer_mode=true; extracted_mode=false}
 
   let finish (variances : variances) =
     let quals =
@@ -226,10 +237,23 @@ let infer_constructor_instance_eq env variances ((mi,ind),ctor) nargs u =
   let u = extend_ind_instance mind u in
   match extended_mind_variance mind with
   | None -> infer_generic_instance_eq variances u
-  | Some _ ->
+  | Some mind_variance ->
     if not (Int.equal (constructor_cumulativity_arguments (mind,ind,ctor)) nargs)
     then infer_generic_instance_eq variances u
-    else variances (* constructors are convertible at common supertype *)
+    else if get_extracted_mode variances then
+      (* In an extracted position the term is kept as it stands: a match can
+         destruct it and read back the let-ins of this constructor,
+         instantiated with this very instance. So we compare the instance by
+         the inductive's own variance, as we would for a value of that
+         inductive, instead of taking the pass below. A universe which is
+         irrelevant there occurs only irrelevantly in the let-in bodies of its
+         constructors, since those bodies are inferred in this very mode. *)
+      infer_cumulative_ind_instance CONV mind_variance variances u
+    else
+      (* A fully applied constructor is convertible with any other instance of
+         itself at a common supertype, so where conversion is all that is
+         asked of the term, its instance is irrelevant. *)
+      variances
 
 let infer_sort cv_pb variances s =
   match cv_pb with
@@ -384,8 +408,10 @@ let infer_arity_constructor is_arity env variances arcn =
       (Environ.push_rel typ env, infer_term CUMUL env variances typ')
     | Context.Rel.Declaration.LocalDef (_, bdy, _) ->
       (* no need to infer on the type of the letin AFAICT *)
-      let variances = infer_term CONV env variances bdy in
-      (Environ.push_rel typ env, variances)
+      let variances =
+        infer_term CONV env (set_extracted_mode true variances) bdy
+      in
+      (Environ.push_rel typ env, set_extracted_mode false variances)
   in
   let typs, codom = Reduction.whd_decompose_prod_decls env arcn in
   let env, variances = Context.Rel.fold_outside infer_typ typs ~init:(env, variances) in
