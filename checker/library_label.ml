@@ -85,13 +85,17 @@ let json_string b s =
 
 module Values = Coq_checklib.Values
 
-(* The file's [keepfacts] segment, parsed, checked against its stored digest
-   and validated against the checker's description of it
+(* The file's [keepfacts] segment, its bytes checked against their digest,
+   then parsed and validated against the checker's description of it
    ([Values.v_keepfacts]) before it is unmarshalled, as rocqchk reads the
-   segments it reads ([CheckLibrary.marshal_in_segment]). [None] when the file
-   has none, or when the segment does not parse, does not match its digest or
-   is not the shape that description gives: the report then says null, which
-   makes the keep rule rebuild, and standard error says why. *)
+   segments it reads ([CheckLibrary.marshal_in_segment]). [coqc] writes it
+   with no digest of its own ([Library.save_library_base]), so the digest the
+   segment table and the segment's end store is the MD5 of its bytes, and a
+   changed byte is caught here rather than read as another value. [None] when
+   the file has none, or when the segment's bytes do not match that digest,
+   it does not parse, or it is not the shape that description gives: the
+   report then says null, which makes the keep rule rebuild, and standard
+   error says why. *)
 let read_keep_facts f (l : Library.file_label) : KeepFacts.t option =
   match l.Library.keep_facts_segment with
   | None -> None
@@ -99,20 +103,29 @@ let read_keep_facts f (l : Library.file_label) : KeepFacts.t option =
     let absent why =
       prerr_endline ("rocq-library-label: " ^ f ^ ": keepfacts segment read as absent: " ^ why);
       None in
+    let bytes_digest ch =
+      LargeFile.seek_in ch seg.ObjFile.pos;
+      Digest.channel ch (Int64.to_int seg.ObjFile.len)
+    in
     let parse ch =
       LargeFile.seek_in ch seg.ObjFile.pos;
       let v = Coq_checklib.Analyze.parse_channel ch in
       (v, Digest.input ch)
     in
     In_channel.with_open_bin f (fun ch ->
-        match parse ch with
+        match bytes_digest ch with
         | exception e when CErrors.noncritical e -> absent ("unreadable: " ^ Printexc.to_string e)
-        | (_, digest) when not (String.equal digest seg.ObjFile.hash) ->
-          absent "its digest does not match the segment table"
-        | (v, _) ->
-          match Coq_checklib.Validate.check Values.v_keepfacts v with
-          | Error why -> absent ("not the shape checker/values.ml describes: " ^ why)
-          | Ok () -> Some (Obj.obj (Coq_checklib.Analyze.instantiate v) : KeepFacts.t))
+        | d when not (String.equal d seg.ObjFile.hash) ->
+          absent "its bytes do not match its digest"
+        | _ ->
+          match parse ch with
+          | exception e when CErrors.noncritical e -> absent ("unreadable: " ^ Printexc.to_string e)
+          | (_, digest) when not (String.equal digest seg.ObjFile.hash) ->
+            absent "its digest does not match the segment table"
+          | (v, _) ->
+            match Coq_checklib.Validate.check Values.v_keepfacts v with
+            | Error why -> absent ("not the shape checker/values.ml describes: " ^ why)
+            | Ok () -> Some (Obj.obj (Coq_checklib.Analyze.instantiate v) : KeepFacts.t))
 
 let axiom_report_json file (l : Library.file_label) =
   let r = Lazy.force l.axiom_report in

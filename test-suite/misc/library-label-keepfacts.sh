@@ -10,20 +10,28 @@
 # those of D, which proves its lemma with A.l, and of E, which proves its lemma with
 # D.d (E reaches ax through two libraries' keepfacts). Dx proves the same lemma as D
 # against an A compiled without the flag, which has no keepfacts: its closure still
-# sees ax.
+# sees ax. E's closures come from one walk over the stored closures and equal the full
+# walk's (ROCQ_KEEPFACTS_FULL_WALK=1). Three more cases of the stored-closure walk: a
+# keep round (D compiled against an Admitted A, E against the proved A and the old D:
+# E's closure strictly contains the full walk's); the fallback (a match on an empty
+# type over an axiom: each closure by its own walk, equal to the full walk's); and a
+# closure reached only through a foreign inductive's constructor.
 #
 # B1 (opacity a command saw). A's `c` is Admitted in `adm` and a Qed proof in `qed`;
 # the label is equal across. B runs `Transparent A.c.`: it compiles against `adm` and
 # records (c, opaque=false), and it fails against `qed`. B2 runs
 # `Fail Transparent A.c.` against `qed` and records (c, opaque=true): a rolled-back
 # command's outcome still depended on what it saw. BX extracts A.c, which tells an
-# axiom from an opaque proof too, and records (c, opaque=false) against `adm`. BN
-# runs `Transparent Nat.add.`, a transparent definition, which cannot become an axiom
-# or an opaque proof while its library's label stays equal: nothing is recorded.
+# axiom from an opaque proof too, and records (c, opaque=false) against `adm`. BXB
+# extracts an opaque proof whose body extraction reads, in A's own signature and in a
+# sealed module's implementation: each records opaque=true. BN runs
+# `Transparent Nat.add.`, a transparent definition, which cannot become an axiom or an
+# opaque proof while its library's label stays equal: nothing is recorded.
 #
 # Control: a file compiled without the flag has no segment ("assumptions" and
 # "opacity_queries" are null), and neither has a .vos, even one with no proof left
-# out.
+# out; a byte flipped inside a real segment reads as absent, with the reason on
+# standard error.
 
 set -e
 export PATH=$BIN:$PATH
@@ -121,6 +129,78 @@ if [ -n "$eu" ] && [ "$ef" = "$eu" ]; then
 else
   bad "B3: E's closures by every root's own walk '$ef' differ from the stored-closure walk's '$eu'"
 fi
+# includes KEYS1 KEYS2: every key of the JSON list KEYS2 is in the JSON list KEYS1.
+includes() {
+  local k
+  for k in $(printf '%s' "$2" | tr -d '[]' | tr ',' ' '); do
+    printf '%s' "$1" | grep -qF -- "$k" || return 1
+  done
+}
+
+# A keep round: D is compiled against A with c Admitted, so D.d's closure lists A.c; A is
+# rebuilt with c proved (an equal label, so the old D still loads), and E is compiled
+# against that A and the old D. E's closure takes D.d's stored closure, which still lists
+# A.c: a strict superset of the closure a walk of the current bodies gives
+# (ROCQ_KEEPFACTS_FULL_WALK=1), which is empty. The keep rule keeps such a D only when no
+# closure of its in-tree dependencies grew, so a stored closure is never smaller than the
+# current one (vernac/keepFacts.ml, fast_closures).
+K=_kfacts/kr
+mkdir -p $K/{aadm,aqed,d,e,efull}
+printf 'Lemma c : True.\nAdmitted.\n' > $K/aadm/A.v
+printf 'Lemma c : True.\nProof. exact I. Qed.\n' > $K/aqed/A.v
+printf 'Require A.\nLemma d : True.\nProof. exact A.c. Qed.\n' > $K/d/D.v
+printf 'Require Ddep.D.\nLemma e : True.\nProof. exact Ddep.D.d. Qed.\n' > $K/e/E.v
+cp $K/e/E.v $K/efull/E.v
+rocq c -q -location-free-label -R $K/aadm A $K/aadm/A.v
+rocq c -q -location-free-label -R $K/aqed A $K/aqed/A.v
+rocq c -q -location-free-label -R $K/aadm A -R $K/d Ddep $K/d/D.v
+rocq c -q -location-free-label -R $K/aqed A -R $K/d Ddep -R $K/e Edep $K/e/E.v
+ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R $K/aqed A -R $K/d Ddep -R $K/efull Edep $K/efull/E.v
+kd=$(closure $K/d/D.vo d); ke=$(closure $K/e/E.vo e); kf=$(closure $K/efull/E.vo e)
+if [ "$(label $K/aadm/A.vo)" = "$(label $K/aqed/A.vo)" ] && printf '%s' "$kd" | grep -q 'axiom:[^"]*\.c"' \
+   && [ "$ke" = "$kd" ] && includes "$ke" "$kf" && [ "$ke" != "$kf" ]; then
+  pass "B3, keep round: E's closure over the old D's stored closure ($ke) strictly contains the current bodies' ('$kf')"
+else
+  bad "B3, keep round: A's labels $(label $K/aadm/A.vo) $(label $K/aqed/A.vo), D.d '$kd', E.e stored-closure '$ke', full walk '$kf'"
+fi
+
+# The fallback: a match on an empty type over an axiom makes what one shared walk reaches
+# depend on the order it visits objects in, so the library's closures are each computed
+# by their own walk; ROCQ_KEEPFACTS_DEBUG=1 says so, and they are the full walk's.
+FB=_kfacts/fb
+mkdir -p $FB/dbg $FB/full
+printf 'Lemma imp : False.\nAdmitted.\nLemma u : 0 = 1.\nProof. exact (match imp return 0 = 1 with end). Qed.\n' > $FB/dbg/F.v
+cp $FB/dbg/F.v $FB/full/F.v
+ROCQ_KEEPFACTS_DEBUG=1 rocq c -q -location-free-label -R $FB/dbg Fb $FB/dbg/F.v 2> $FB/dbg/debug
+ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R $FB/full Fb $FB/full/F.v
+fd=$(field $FB/dbg/F.vo assumptions); ff=$(field $FB/full/F.vo assumptions); fu=$(closure $FB/dbg/F.vo u)
+if grep -q '^\[keepfacts\] Fb\.F: [0-9]* roots, each by its own walk (a match on an empty type over an axiom)$' $FB/dbg/debug \
+   && printf '%s' "$fu" | grep -q 'axiom:[^"]*\.imp"' && [ "$fd" = "$ff" ]; then
+  pass "B3, fallback: $(cat $FB/dbg/debug); closures equal the full walk's: $fd"
+else
+  bad "B3, fallback: debug '$(cat $FB/dbg/debug)', closures '$fd', full walk '$ff', u '$fu'"
+fi
+
+# A stored closure reached through a foreign inductive and its constructor: D's t has a
+# constructor mk2 whose type mentions A.ax, and E proves D.t with the other constructor,
+# mk, so the block's stored closure is E's only path to A.ax. E's closure is D.t's stored
+# closure (one walk, stored closures used) and equals the full walk's.
+IN=_kfacts/ind
+mkdir -p $IN/{d,e,efull}
+printf 'Require A.\nInductive t : Prop := mk : t | mk2 : A.ax = A.ax -> t.\n' > $IN/d/D.v
+printf 'Require Ddep.D.\nLemma e : Ddep.D.t.\nProof. exact Ddep.D.mk. Qed.\n' > $IN/e/E.v
+cp $IN/e/E.v $IN/efull/E.v
+rocq c -q -location-free-label -R _kfacts/use A -R $IN/d Ddep $IN/d/D.v
+ROCQ_KEEPFACTS_DEBUG=1 rocq c -q -location-free-label -R _kfacts/use A -R $IN/d Ddep -R $IN/e Edep $IN/e/E.v \
+  2> $IN/e/debug
+ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R _kfacts/use A -R $IN/d Ddep -R $IN/efull Edep $IN/efull/E.v
+it=$(closure $IN/d/D.vo t); ie=$(closure $IN/e/E.vo e); if_=$(closure $IN/efull/E.vo e)
+if printf '%s' "$it" | grep -q 'axiom:[^"]*\.ax"' && [ "$ie" = "$it" ] && [ "$ie" = "$if_" ] \
+   && grep -q '^\[keepfacts\] Edep\.E: [0-9]* roots, one walk of [0-9]* objects, [1-9][0-9]* foreign stored closures$' $IN/e/debug; then
+  pass "B3, inductive: E.e's closure through D.mk is D.t's stored closure and the full walk's: $ie ($(cat $IN/e/debug))"
+else
+  bad "B3, inductive: D.t '$it', E.e '$ie', full walk '$if_', debug '$(cat $IN/e/debug)'"
+fi
 
 # --- B1 ---
 printf 'Lemma c : True.\nAdmitted.\n' > _kfacts/adm/A.v
@@ -184,6 +264,30 @@ if [ "$qn" = "[]" ]; then
 else
   bad "B1: Transparent Nat.add recorded: '$qn'"
 fi
+# BXB: with AccessOpaque (the default) an extraction reads an opaque proof's body: the
+# query is opaque=true, which the keep rule treats as a read of the owner's opaque table.
+# For a lemma of A's own signature (n), and for one of a sealed module's implementation
+# (M.sn, whose signature constant is an axiom: the body read still records true).
+mkdir -p _kfacts/xb/{a,b,bs}
+printf 'Lemma n : nat.\nProof. exact 0. Qed.\nModule Type T2. Parameter sn : nat. End T2.\nModule M : T2. Lemma sn : nat. Proof. exact 0. Qed. End M.\n' \
+  > _kfacts/xb/a/A.v
+printf 'From Corelib Require Extraction.\nRequire A.\nExtraction A.n.\n' > _kfacts/xb/b/B.v
+printf 'From Corelib Require Extraction.\nRequire A.\nExtraction A.M.\n' > _kfacts/xb/bs/B.v
+rocq c -q -location-free-label -R _kfacts/xb/a A _kfacts/xb/a/A.v
+rocq c -q -location-free-label -R _kfacts/xb/a A -R _kfacts/xb/b Bdep _kfacts/xb/b/B.v > /dev/null
+rocq c -q -location-free-label -R _kfacts/xb/a A -R _kfacts/xb/bs Bdep _kfacts/xb/bs/B.v > /dev/null
+xlib=$(report _kfacts/xb/a/A.vo | sed -n 's/.*"library":"\([^"]*\)".*/\1/p')
+qb=$(field _kfacts/xb/b/B.vo opacity_queries); qs=$(field _kfacts/xb/bs/B.vo opacity_queries)
+if [ "$qb" = "[{\"constant\":\"$xlib.n\",\"library\":\"$xlib\",\"opaque\":true}]" ]; then
+  pass "B1: an extraction that reads A.n's opaque body records it opaque: $qb"
+else
+  bad "B1: BXB's opacity_queries for A.n: '$qb'"
+fi
+if [ "$qs" = "[{\"constant\":\"$xlib.M.sn\",\"library\":\"$xlib\",\"opaque\":true}]" ]; then
+  pass "B1: an extraction that reads sealed A.M.sn's opaque body records it opaque: $qs"
+else
+  bad "B1: BXB's opacity_queries for the sealed A.M.sn: '$qs'"
+fi
 
 # --- control ---
 cp _kfacts/noax/A.v _kfacts/off/A.v
@@ -208,6 +312,32 @@ if printf '%s' "$r" | grep -q '"version":3,' && ! printf '%s' "$r" | grep -q cop
   pass "schema version 3, with no copied_from_libraries"
 else
   bad "the axiom report is not schema version 3: $r"
+fi
+# A changed byte inside the keepfacts segment of a real .vo: the tool reads the segment
+# as absent (both fields null) and says why on standard error, rather than reading
+# another value (layout per lib/objFile.ml).
+mkdir -p _kfacts/flip
+python3 - _kfacts/noax/A.vo _kfacts/flip/A.vo <<'PY'
+import struct, sys
+b = bytearray(open(sys.argv[1], 'rb').read())
+(sp,) = struct.unpack_from(">Q", b, 8)
+(n,) = struct.unpack_from(">I", b, sp); off = sp + 4
+for _ in range(n):
+    (ln,) = struct.unpack_from(">I", b, off); off += 4
+    name = bytes(b[off:off+ln]); off += ln
+    pos, sz = struct.unpack_from(">QQ", b, off); off += 32
+    if name == b"keepfacts":
+        b[pos + sz // 2] ^= 0x01
+        open(sys.argv[2], 'wb').write(b)
+        sys.exit(0)
+sys.exit("no keepfacts segment in " + sys.argv[1])
+PY
+fr=$("$TOOL" --axiom-report-json _kfacts/flip/A.vo 2> _kfacts/flip/err)
+if printf '%s' "$fr" | grep -q '"assumptions":null,"opacity_queries":null}$' \
+   && grep -q 'keepfacts segment read as absent: its bytes do not match its digest' _kfacts/flip/err; then
+  pass "control: a byte flipped in the keepfacts segment reads as absent, with the reason: $(cat _kfacts/flip/err)"
+else
+  bad "control: the flipped keepfacts segment: report '$fr', stderr '$(cat _kfacts/flip/err)'"
 fi
 
 exit $fail

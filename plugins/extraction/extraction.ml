@@ -1146,12 +1146,22 @@ let extract_constant table access env kn inst cb =
      [Admitted -> Qed] edit, which its label hides, can change whether this
      library compiles. Logged for the keep rule (D18, dispatch://INFRA-361;
      [OpacityLog]), with the body the global environment gives [kn]: the one
-     the dependency's label blinds and its axiom report lists. A body read
-     from a sealed module's implementation is not, and an edit there moves
-     the dependency's label. *)
+     the dependency's label blinds and its axiom report lists. *)
   let () =
     let genv = Global.env () in
     if Environ.mem_constant kn genv then OpacityLog.record kn (Environ.lookup_constant kn genv)
+  in
+  (* With AccessOpaque (the default), extraction reads the BODY of an opaque
+     proof, foreign ones included, and what it extracts depends on that body,
+     which no label covers. Each read is logged as an opaque query
+     ([opaque = true], from [cb], the body read), also when [cb] comes from a
+     sealed module's implementation and the global environment holds the
+     signature's axiom: the keep rule treats every [opaque = true] query as a
+     read of the owner's opaque table and requires the owner's object
+     byte-identical, as for a foreign opaque reference. *)
+  let read_opaque c =
+    OpacityLog.record kn cb;
+    get_opaque access env c
   in
   try
     match flag_of_type env sg typ with
@@ -1172,7 +1182,7 @@ let extract_constant table access env kn inst cb =
                 mk_typ body)
           | OpaqueDef c ->
             add_opaque (Common.State.get_table table) r;
-            if access_opaque () then mk_typ (get_opaque access env c)
+            if access_opaque () then mk_typ (read_opaque c)
             else mk_typ_ax ())
     | (Info,Default) ->
         (match cb.const_body with
@@ -1186,7 +1196,7 @@ let extract_constant table access env kn inst cb =
                 mk_def (qmono cb.const_universes inst body))
           | OpaqueDef c ->
             add_opaque (Common.State.get_table table) r;
-            if access_opaque () then mk_def (get_opaque access env c)
+            if access_opaque () then mk_def (read_opaque c)
             else mk_ax ())
   with SingletonInductiveBecomesProp ind ->
     error_singleton_become_prop ind

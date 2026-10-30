@@ -128,22 +128,29 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    kernel/genlambda.ml:797-798). So neither conversion, nor the VM, nor native
    code unfolds an opaque constant any more than it unfolds an axiom, and a
    dependent compiled against one form type-checks, reduces and compiles
-   identically against the other, but for two observables the label does not
-   carry: a non-opaque strategy command on the constant, which errors on an
-   opaque proof only (the keep rule compares the opacity the dependent's
-   [keepfacts] recorded, [OpacityLog], with the status [axiom_report] gives
-   now), and the library's assumption set, which [Print Assumptions] reads
-   (the keep rule recomputes it from the current objects: its monotone axiom
-   condition). Both read a constant's status off [axiom_report], which is why
-   the blinding stops at the constants it lists. The canonical value also
-   drops the opaque table index of an [OpaqueDef (Indirect (_, _, dp, i))]; a
-   dependent that embeds a foreign opaque reference into [dp] (a functor
-   application or [Include] of this library's opaque proof) therefore has a
-   label that no longer pins which proof index it reads, so the keep rule
-   refuses to keep such a dependent across an edit that could move [dp]'s
-   table ([foreign_opaque_libraries] below reports those [dp]). The kernel
-   itself never applies this map; it is a view used only to compute the
-   label. *)
+   identically against the other, but for three observables the label does
+   not carry: a non-opaque strategy command on the constant, which errors on
+   an opaque proof only, and an extraction of it, which warns (or, made an
+   error, fails) on an axiom to realize or an opaque proof accessed (the keep
+   rule compares the opacity the dependent's [keepfacts] recorded,
+   [OpacityLog], with the status [axiom_report] gives now); an extraction
+   with AccessOpaque (the default), which reads an opaque proof's BODY and
+   extracts what it finds there, which no label covers (the hook logs each
+   such read as an [opaque = true] query, and the keep rule treats every
+   [opaque = true] query as a read of the owner's opaque table, keeping the
+   dependent only when the owner's object is byte-identical, as for a foreign
+   opaque reference below); and the library's assumption set, which [Print
+   Assumptions] reads (the keep rule recomputes it from the current objects:
+   its monotone axiom condition). These read a constant's status off
+   [axiom_report], which is why the blinding stops at the constants it lists.
+   The canonical value also drops the opaque table index of an [OpaqueDef
+   (Indirect (_, _, dp, i))]; a dependent that embeds a foreign opaque
+   reference into [dp] (a functor application or [Include] of this library's
+   opaque proof) therefore has a label that no longer pins which proof index
+   it reads, so the keep rule refuses to keep such a dependent across an edit
+   that could move [dp]'s table ([foreign_opaque_libraries] below reports
+   those [dp]). The kernel itself never applies this map; it is a view used
+   only to compute the label. *)
 let blind_constant (cb : Declarations.constant_body) : Declarations.constant_body =
   match cb.Declarations.const_body with
   | Declarations.Undef None | Declarations.OpaqueDef _ ->

@@ -18,9 +18,12 @@
 # compiles against the Admitted L, DT fails against the Qed L (so a kept DT would hide
 # a failing build), and each D compiled against the Admitted L is refused by coqc next
 # to the Qed L ("inconsistent assumptions": the digest D recorded for L is no longer
-# L's); DO compiled against each L has a different label. Transitive: L2 only applies
-# F, D2 runs Transparent L2.R.c; L2's label differs between the two Ls, and D2
-# compiled against the Admitted chain is refused next to the Qed chain.
+# L's); DO compiled against each L has a different label. DI includes F's application
+# (Module R. Include L.F L.A0. End R.) and runs Transparent R.c: it fails against the
+# Qed L, and DI compiled against the Admitted L is refused next to the Qed L.
+# Transitive: L2 only applies F, D2 runs Transparent L2.R.c; L2's label differs between
+# the two Ls, and D2 compiled against the Admitted chain is refused next to the Qed
+# chain.
 #
 # Case 2, module type. L declares a module type T holding lemma c, Admitted or Qed.
 # Checks: L's label differs; DM (Declare Module M : L.T. Transparent M.c.) compiles
@@ -28,7 +31,8 @@
 # Admitted L is refused next to the Qed L.
 #
 # Each refusal check has a control: the same client next to the L the dependent was
-# compiled against loads.
+# compiled against loads. Every L is checked to carry a label ("label2"), so a label
+# that differs is a label, not a fallback to the MD5 of the segment's bytes.
 
 set -e
 export PATH=$BIN:$PATH
@@ -47,6 +51,15 @@ fail=0
 pass() { echo "PASS $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 label() { "$TOOL" --check "$1" | awk '{print $2}'; }
+# labels2 NAME FILE...: every FILE stores its label ("label2" from --check).
+labels2() {
+  local name=$1 f k ok=1; shift
+  for f in "$@"; do
+    k=$("$TOOL" --check "$f" | awk '{print $1}')
+    [ "$k" = label2 ] || { ok=0; bad "$name: $f is '$k', not label2"; }
+  done
+  [ $ok = 0 ] || pass "$name: every L carries its label (label2)"
+}
 comp() { rocq c -q -location-free-label "$@"; }
 # refused CLIENT_DIR ARGS...: compile CLIENT_DIR/C.v with ARGS; "refused" when coqc
 # reports inconsistent assumptions, "loads" when it compiles, "error" otherwise.
@@ -72,7 +85,7 @@ client() { mkdir -p "$1"; printf 'Require %s.\n' "$2" > "$1/C.v"; }
 
 # --- Case 1: functor ---
 F=_flip/functor
-mkdir -p $F/{adm,qed,dt_adm,dt_qed,do_adm,do_qed,l2_adm,l2_qed,d2_adm}
+mkdir -p $F/{adm,qed,dt_adm,dt_qed,do_adm,do_qed,di_adm,di_qed,l2_adm,l2_qed,d2_adm}
 head='Module Type S. End S.
 Module F (X : S).'
 tail='End F.
@@ -82,6 +95,7 @@ printf '%s\nLemma c : True.\nProof. exact I. Qed.\n%s\n' "$head" "$tail" > $F/qe
 comp -R $F/adm Lib $F/adm/L.v
 comp -R $F/qed Lib $F/qed/L.v
 la=$(label $F/adm/L.vo); lq=$(label $F/qed/L.vo)
+labels2 "functor" $F/adm/L.vo $F/qed/L.vo
 if [ "$la" != "$lq" ]; then pass "functor: L's label differs across c Admitted->Qed in F's body"
 else bad "functor: L's label is equal across c Admitted->Qed in F's body ($la)"; fi
 
@@ -107,6 +121,20 @@ client $F/c_dt Dep.D; expect_refused "functor DT (Transparent R.c)" $F/c_dt -R $
 client $F/c_do_ok Dep.D; expect_loads "functor DO" $F/c_do_ok -R $F/adm Lib -R $F/do_adm Dep
 client $F/c_do Dep.D; expect_refused "functor DO (Opaque R.c)" $F/c_do -R $F/qed Lib -R $F/do_adm Dep
 
+# DI: an Include of F's application copies c's form into R like the application does.
+printf 'Require Lib.L.\nModule R.\nInclude Lib.L.F Lib.L.A0.\nEnd R.\nTransparent R.c.\n' > $F/di_adm/D.v
+cp $F/di_adm/D.v $F/di_qed/D.v
+comp -R $F/adm Lib -R $F/di_adm Dep $F/di_adm/D.v
+if comp -R $F/qed Lib -R $F/di_qed Dep $F/di_qed/D.v 2> $F/di_qed/err; then
+  bad "functor DI: Include L.F L.A0; Transparent R.c compiled against the Qed L"
+elif tr '\n' ' ' < $F/di_qed/err | grep -q 'Cannot make .* transparent because it was declared  *opaque'; then
+  pass "functor DI: Include L.F L.A0; Transparent R.c fails against the Qed L (declared opaque), so a kept DI would hide a failing build"
+else
+  bad "functor DI: Transparent R.c fails against the Qed L for another reason: $(tr '\n' ' ' < $F/di_qed/err)"
+fi
+client $F/c_di_ok Dep.D; expect_loads "functor DI" $F/c_di_ok -R $F/adm Lib -R $F/di_adm Dep
+client $F/c_di Dep.D; expect_refused "functor DI (Include L.F L.A0; Transparent R.c)" $F/c_di -R $F/qed Lib -R $F/di_adm Dep
+
 # Transitive: L2 only applies F; D2 depends on L2 alone.
 printf 'Require Lib.L.\nModule R := Lib.L.F Lib.L.A0.\n' > $F/l2_adm/L2.v
 cp $F/l2_adm/L2.v $F/l2_qed/L2.v
@@ -128,6 +156,7 @@ printf 'Module Type T.\nLemma c : True.\nProof. exact I. Qed.\nEnd T.\n' > $M/qe
 comp -R $M/adm Lib $M/adm/L.v
 comp -R $M/qed Lib $M/qed/L.v
 la=$(label $M/adm/L.vo); lq=$(label $M/qed/L.vo)
+labels2 "module type" $M/adm/L.vo $M/qed/L.vo
 if [ "$la" != "$lq" ]; then pass "module type: L's label differs across c Admitted->Qed in T"
 else bad "module type: L's label is equal across c Admitted->Qed in T ($la)"; fi
 printf 'Require Lib.L.\nDeclare Module M : Lib.L.T.\nTransparent M.c.\n' > $M/dm_adm/D.v

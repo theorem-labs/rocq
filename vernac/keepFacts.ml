@@ -45,10 +45,13 @@ type t = {
       told apart as an axiom or an opaque proof -- a non-opaque
       [Strategy]/[Transparent] command, an extraction ([OpacityLog]) -- while
       its body was [Undef None] ([opaque = false]) or an opaque proof
-      ([opaque = true]); a constant of any other body form is not recorded.
+      ([opaque = true]), or whose opaque proof body an extraction read
+      ([opaque = true]); a constant of any other body form is not recorded,
+      and one recorded both ways is [opaque = true] ([collect_opacity]).
       Sorted by name. The keep rule rebuilds a dependent when the recorded
       opacity no longer matches the dependency's current one -- the command
-      could then error, or stop erroring, on a real recompile. *)
+      could then error, or stop erroring, on a real recompile -- and treats
+      every [opaque = true] query as a read of the owner's opaque table. *)
 }
 
 (* The [MPfile] root of a module path, [None] for a bound (functor-parameter)
@@ -141,17 +144,38 @@ module SSet = CString.Set
    the object contributes plus the closures of its direct references
    (the walk's graph, [Assumptions.reach]). A foreign object takes the closure
    its library stored when it was compiled ([stored dp], the [keepfacts]
-   segment [Library] read with the library's other segments): the objects
-   reachable from it are that library's and its dependencies', the same
-   objects then and now, so it is the same set. Absence from that table means
-   an empty closure, because the table has an entry for every constant and
-   inductive of that library's environment with a non-empty closure
-   ([library_roots]); so the object must be one of them: it is in the global
-   environment under that library's path, and its user and canonical names
-   agree, which rules out a copy made through a module alias, an [Include] or
-   a functor (those are walked, their bodies lead to the originals). A library
-   without a table (compiled without -location-free-label, or whose closures
-   could not be computed) is walked.
+   segment [Library] read with the library's other segments) instead of being
+   walked.
+
+   What that stored closure is. It is the closure the walk gave when that
+   library was compiled, against its dependencies then. So it equals what a
+   walk of the bodies gives now when no library it reaches was recompiled
+   since. A library rebuilt to an equal label is loaded by a dependent that
+   was compiled against its old build, and the keep rule leaves dependents in
+   that state (a keep round): there the stored closure can differ from a walk
+   of the current bodies, and the keep rule makes it a superset of it. It
+   keeps a library only when no declaration's closure in any library of its
+   transitive in-tree closure grew (its monotone condition, s1b), so every
+   closure a kept library recorded still contains the current one: by
+   induction over the dependency order, a library's record is its own
+   declarations' contributions (exact) plus its dependencies' records, each of
+   which contains the dependency's current closure; and a kept object is
+   byte-identical, so its record is the one it wrote. A closure computed here
+   is then a superset of the full walk's, never a subset: it can list an
+   axiom a dependency rebuilt to an equal label no longer uses (an [Admitted]
+   lemma since proved), and it never misses one the bodies use. Outside the
+   keep rule (a hand-made mix of stale and rebuilt objects) nothing makes it
+   a superset. misc/library-label-keepfacts.sh shows both: equal when nothing
+   was recompiled, a strict superset after a dependency's [Admitted -> Qed].
+
+   Absence from that table means an empty closure, because the table has an
+   entry for every constant and inductive of that library's environment with
+   a non-empty closure ([library_roots]); so the object must be one of them:
+   it is in the global environment under that library's path, and its user
+   and canonical names agree, which rules out a copy made through a module
+   alias, an [Include] or a functor (those are walked, their bodies lead to
+   the originals). A library without a table (compiled without
+   -location-free-label, or whose closures could not be computed) is walked.
 
    Two traits of [Assumptions.traverse] make what a walk reaches depend on the
    order it visits objects in, which one walk for every root does not
@@ -296,15 +320,27 @@ let compute_assumptions ~stored access self =
 (* Keyed by the constant's user name, the name [LibkeyObjects.axiom_report]
    lists it under in the library that holds it (an [Include] copy has its own
    entry there, with the status of its copied body), with that library: the
-   [MPfile] root of the user name, which a dotted string cannot give back. *)
+   [MPfile] root of the user name, which a dotted string cannot give back.
+
+   A constant recorded more than once keeps [opaque = true] if any record has
+   it. The records of one compile agree but in one case: an extraction that
+   reads the opaque proof of a sealed module's implementation records it as
+   an opaque body read ([Extraction.extract_constant]) while the global
+   environment, and so a strategy command or the extraction's first record,
+   sees the signature's axiom. A body read is the stronger fact: the keep rule
+   treats every [opaque = true] query as a read of the owner's opaque table. *)
 let collect_opacity self =
   let tbl = Hashtbl.create 16 in
   List.iter
     (fun (c, opaque) ->
       let mp = Constant.modpath c in
       if not (is_self self mp) then
-        Hashtbl.replace tbl (Constant.to_string c)
-          (Option.map DirPath.to_string (mpfile_root mp), opaque))
+        let key = Constant.to_string c in
+        let opaque = match Hashtbl.find_opt tbl key with
+          | Some (_, seen) -> seen || opaque
+          | None -> opaque
+        in
+        Hashtbl.replace tbl key (Option.map DirPath.to_string (mpfile_root mp), opaque))
     (OpacityLog.get ());
   Hashtbl.fold (fun k (lib, v) acc -> { constant = k; library = lib; opaque = v } :: acc) tbl []
   |> List.sort (fun a b -> String.compare a.constant b.constant)

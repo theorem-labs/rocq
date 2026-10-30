@@ -32,8 +32,10 @@ type t = {
   opacity_queries : query list;
   (** Each foreign constant a command told apart as an axiom ([Undef None]) or
       an opaque proof (a non-opaque [Strategy]/[Transparent] command, an
-      extraction: [OpacityLog]), with its library and the opacity it saw,
-      sorted by name. No other body form is recorded. *)
+      extraction: [OpacityLog]), or whose opaque proof body an extraction
+      read (always [opaque = true]), with its library and the opacity it saw,
+      sorted by name; recorded both ways, [opaque = true]. No other body form
+      is recorded. *)
 }
 
 val compute :
@@ -44,8 +46,14 @@ val compute :
     Call it while the library being saved is still loaded. [stored dp] is the
     [assumptions] field of the keepfacts segment of the loaded library [dp]
     (read with its other segments), or [None]: the closure of a constant of
-    such a library is taken from there rather than by walking it, which gives
-    the closure [Print Assumptions] gives. ROCQ_KEEPFACTS_FULL_WALK=1 walks
-    every closure instead (the reference this is checked against), and
+    such a library is taken from there rather than by walking it. That gives
+    the closure [Print Assumptions] gives when no library it reaches was
+    recompiled since [dp] was. After a dependency was rebuilt to an equal label
+    under a kept [dp] (a keep round), it gives a superset: [dp]'s record still
+    lists what the dependency's old build used, and the keep rule keeps [dp]
+    only when no closure of its in-tree dependencies grew, so the record still
+    contains every current closure (the comment of [fast_closures] gives the
+    induction). ROCQ_KEEPFACTS_FULL_WALK=1 walks every body instead (the
+    current closure exactly, the reference this is checked against), and
     ROCQ_KEEPFACTS_DEBUG=1 says on standard error how each library's closures
     were computed. *)

@@ -96,10 +96,14 @@ open Names
     observes the erased difference (kernel/environ.ml:654-677,
     vmbytegen.ml:988-990, genlambda.ml:797-798) except through what the keep
     rule reads beside the label: the opacity a dependent's non-opaque
-    strategy command saw ([KeepFacts], compared with the status
-    [axiom_report] gives now), the library's assumption set (its monotone
-    axiom condition) and which opaque proof a foreign [Indirect] reference
-    resolves to (its foreign-opaque-reference check). All three read a
+    strategy command or extraction saw ([KeepFacts], compared with the status
+    [axiom_report] gives now); the opaque proof BODIES an extraction with
+    AccessOpaque (the default) read, which it logs as [opaque = true] queries
+    and which the keep rule treats as reads of the owner's opaque table,
+    keeping the dependent only when the owner's object is byte-identical; the
+    library's assumption set (its monotone axiom condition); and which opaque
+    proof a foreign [Indirect] reference resolves to (its
+    foreign-opaque-reference check, the same byte-identity). These read a
     constant's status off [axiom_report], so the blinding covers only the
     constants it lists. Every other constant the compiled form holds -- in a
     functor's body, in a functor parameter's module type, in a module type,
