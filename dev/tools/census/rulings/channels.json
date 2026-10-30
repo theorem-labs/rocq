@@ -9,6 +9,7 @@
   },
   "reasons": {
     "unmarshallable": "Any row: the registration cannot marshal the proof's stored term (Marshal.to_string raised), so the proof stores no term and is never replayed (vernac/declare.ml stored_term).",
+    "warning_error": "Any row: the proof raised a warning whose status is an error. A tactic can catch that error (try) and the proof still succeeds, while replay would raise the recorded warning again after it and fail the compile; replay cannot tell a caught error from one that reached the closer, so the proof stores no term (lib/cWarnings.ml warn).",
     "catchall": "A handler that catches every exception tests CErrors.noncritical and marks the running proof when a critical exception reaches it (README.md, catch-all handlers: pretyping/evarconv.ml:282,285,1022, pretyping/evarsolve.ml:1786, tactics/equality.ml:466).",
     "command_in_proof": "Row 21: a sentence that the classifier does not call a proof step, run while a proof is open (toplevel/vernac.ml).",
     "control_flag": "Rows 21 and 22: a sentence under Time, Instructions, Profile, Redirect, Timeout, Fail or Succeed, whose result depends on the clock, on the output channel, or on a state restored behind the recorder's back (vernac/vernacControl.ml under_one_control).",
@@ -56,6 +57,7 @@
     "ineligible:kernel/nativelib.ml:native_compute": {"ineligible": "@native_compute"},
     "read:kernel/vmsymtable.ml:1/vm_global": {"row": "1"},
 
+    "ineligible:lib/cWarnings.ml:warning_error": {"ineligible": "@warning_error"},
     "ineligible:lib/control.ml:timeout": {"ineligible": "@timeout"},
     "ineligible:lib/proof_recorder.ml:nested_proof": {"ineligible": "@nested_proof"},
     "ineligible:lib/proof_recorder.ml:unhashable": {"ineligible": "@unhashable"},

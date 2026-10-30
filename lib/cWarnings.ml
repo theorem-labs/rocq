@@ -134,10 +134,18 @@ let warn { Msg.tag; warning } ?loc v =
      printed document itself, so it lays out as stock lays it out). Only a
      warning the proof's own sentences raise is kept: the declaration at the
      closer raises its own again when it declares a stored term. A disabled
-     warning changes nothing and is not recorded. *)
-  if status <> Disabled && Proof_recorder.active () then
+     warning changes nothing and is not recorded.
+
+     A warning that is an error raises an exception, which a tactic can
+     catch ([try]): the proof then succeeds, and raising the warning again
+     after it would fail it (fixture warning_error_caught). Replay cannot
+     tell a caught error from one that reached the closer, so a proof that
+     raises one is not replayed. *)
+  if status <> Disabled && Proof_recorder.active () then begin
+    if status = AsError then Proof_recorder.ineligible ~reason:"warning_error" ~detail:warning.wname;
     Proof_recorder.write_warning ?loc ~name:warning.wname
-      ~message:(Proof_record.encode_blob (Marshal.to_string (print w) [])) ();
+      ~message:(Proof_record.encode_blob (Marshal.to_string (print w) [])) ()
+  end;
   match status with
   | Disabled -> ()
   | AsError -> Loc.raise ?loc (WarnError w)
