@@ -54,6 +54,7 @@
     "read:kernel/environ.ml:1/module": {"row": "1"},
     "read:kernel/environ.ml:1/modtype": {"row": "1"},
     "ineligible:kernel/nativelib.ml:native_compute": {"ineligible": "@native_compute"},
+    "read:kernel/vmsymtable.ml:1/vm_global": {"row": "1"},
 
     "ineligible:lib/control.ml:timeout": {"ineligible": "@timeout"},
     "ineligible:lib/proof_recorder.ml:nested_proof": {"ineligible": "@nested_proof"},

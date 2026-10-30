@@ -87,7 +87,11 @@ let row1 () =
   Proof_replay.register_evaluator "inductive" (m Environ.recorded_inductive);
   Proof_replay.register_evaluator "inductive_exists" (m Environ.recorded_inductive_exists);
   Proof_replay.register_evaluator "module" (p Environ.recorded_module);
-  Proof_replay.register_evaluator "modtype" (p Environ.recorded_modtype)
+  Proof_replay.register_evaluator "modtype" (p Environ.recorded_modtype);
+  (* The machine's view of a constant. Its lookups would record reads of
+     their own: an evaluator records nothing. *)
+  Proof_replay.register_evaluator "vm_global"
+    (c (fun k env -> Proof_recorder.without_recording (fun () -> Vmsymtable.recorded_vm_global env k)))
 
 (* Rows 5, 7 and 15 register their evaluators beside their one value
    function ([Reductionops.ReductionBehaviour], [Hints], [Rocqlib]), so the
