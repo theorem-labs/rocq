@@ -909,7 +909,20 @@ and lambda_of_app cache env sigma f args =
           let () = inline_st.depth <- inline_st.depth - 1 in
           lam
         else
-          mkLapp (mknode @@ Lconst (kn, u)) (lambda_of_masked_args cache env sigma mask args)
+          (* Erase unused arguments. This stays written out here, where speed-6 has it. A
+             function of its own costs a stack frame at EVERY application of a constant, and
+             this module's recursion over a term is as deep as the term: measured on the ladder
+             of the VM review (gen_stack.py, family [app], 8 MiB), a function of its own left
+             22,724 levels where speed-6 compiles 32,685. [lambda_of_args] below fills its array
+             with a loop and no closure, which the other shape of a deep term, a block spine
+             (family [list]), pays: that one goes from 19,355 levels to 20,087. *)
+          let mapi i arg =
+            let keep = if i < Array.length mask then mask.(i) else true in
+            if keep then lambda_of_constr cache env sigma arg
+            else mknode (Lint 0) (* dummy *)
+          in
+          let args = Array.mapi mapi args in
+          mkLapp (mknode @@ Lconst (kn, u)) args
       | OpaqueDef _ | Undef _ | Symbol _ ->
           mkLapp (mknode @@ Lconst (kn, u)) (lambda_of_args cache env sigma 0 args)
       end
@@ -924,20 +937,6 @@ and lambda_of_app cache env sigma f args =
       let f = lambda_of_constr cache env sigma f in
       let args = lambda_of_args cache env sigma 0 args in
       mkLapp f args
-
-(* The arguments a call keeps, the ones the callee's mask does not call unused. A function of its
-   own, and [lambda_of_args] below fills its array with a loop and no closure, for the stack: both
-   run inside [lambda_of_app], one step of the recursion over a term, and flambda gives that
-   function the frame its largest case needs. Written out in [lambda_of_app] and with
-   [Array.init], the three functions of the recursion need 568 bytes of frame per step; this way
-   they need 536, so the lever's test costs that recursion nothing. *)
-and lambda_of_masked_args cache env sigma mask args =
-  let mapi i arg =
-    let keep = if i < Array.length mask then mask.(i) else true in
-    if keep then lambda_of_constr cache env sigma arg
-    else mknode (Lint 0) (* dummy *)
-  in
-  Array.mapi mapi args
 
 and lambda_of_args cache env sigma start args =
   let nargs = Array.length args in
