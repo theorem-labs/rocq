@@ -178,6 +178,13 @@ collection of section variables.  `eval_bidirectionality_hint`: the hint of
 a variable, whose key is its name; before, the evaluator could not read such
 a key back, so `same` missed with why `unknown`.
 
+**Ltac definitions by value.**  A definition is read without its source
+locations.  `ltac_redef_moved` and `ltac_alias_moved`: an `Ltac ... ::=`
+redefinition and a `Tactic Notation` move to another line with the same
+body, and the proof that uses them replays; `ltac_redef_changed` and
+`ltac_alias_changed`: their bodies change, and the proof misses on
+`tactic_definition` and `tactic_alias`.
+
 **The cross-model soundness review of `5f39c90b`.**  Each fixture is a
 reviewer's scenario; stock and replay must agree.
 `universe_checked_proof_unchecked_graph`: the global graph does not check

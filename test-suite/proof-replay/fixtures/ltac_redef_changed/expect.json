@@ -1,0 +1,16 @@
+{
+  "doc": "the value of an Ltac redefinition a proof reads changes: the proof misses on the tactic_definition read",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.target": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 0,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.target", "read", "tactic_definition", "changed"]]
+    }
+  }
+}
