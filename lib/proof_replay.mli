@@ -85,9 +85,19 @@ val scan_late_rebind : string -> (string * int) option
     skipped; a number is read as Rocq's lexer reads it, and a late word also
     counts at the end of a longer identifier. *)
 
-val scan_late_events : string -> (string * int) option * int option
+val scan_late_events : ?imports_late:bool -> string -> (string * int) option * int option
 (** {!scan_late_rebind}, and the byte offset of the LAST such command's
-    word. *)
+    word. With [~imports_late:false], [Import] and [Export] are not late. A
+    plain module ([Module M.], [Module Import M.]) is not late by itself,
+    and its [End] only when a late word appeared inside it. *)
+
+val note_export_register : unit -> unit
+(** An export-locality Rocqlib registration was loaded or declared: from now
+    on, [Import] and [Export] are late commands. *)
+
+val note_require : already_loaded:bool -> unit
+(** A [Require] runs; [already_loaded]: every library it names was loaded
+    before it. Listed in the summary, for measurement only. *)
 
 val at_sentence : Loc.t -> unit
 (** The location of the sentence the toplevel is about to run. *)

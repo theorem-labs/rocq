@@ -326,8 +326,14 @@ let require_locate from qidl =
       | Error LibNotFound -> Loc.raise ?loc:qid.loc (NotFoundLibrary (root, qid)))
     qidl
 
+(* BET-84 measurement: whether a Require loads anything (Proof_replay.note_require). *)
+let note_require modrefl =
+  Proof_replay.note_require
+    ~already_loaded:(List.for_all (fun (_, dir) -> Library.library_is_loaded dir) modrefl)
+
 let synterp_safe_require ~intern from export qidl =
   let modrefl = require_locate from qidl in
+  note_require modrefl;
   Coq_config.gc_ramp_up @@ fun () ->
   let needed = Library.require_library_syntax_from_dirpath ~cmd_safe:true ~intern modrefl in
   (* Import/Export goes through the standard [import_module] path: our
@@ -342,6 +348,7 @@ let synterp_safe_require ~intern from export qidl =
 
 let synterp_require ~intern from export qidl =
   let modrefl = require_locate from (List.map fst qidl) in
+  note_require modrefl;
   Coq_config.gc_ramp_up @@ fun () ->
   let needed = Library.require_library_syntax_from_dirpath ~cmd_safe:false ~intern modrefl in
   Option.iter (fun (export,cats) ->

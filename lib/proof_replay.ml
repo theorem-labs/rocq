@@ -162,7 +162,12 @@ type file_state = {
   f_refused_detail : string option;
       (** for ["rebind"], and for a file with a late command: the command and its line *)
   f_replay_from : int option;
-      (** the last late command's offset: a proof that opens before it runs *)
+      (** the last late command's offset, [Import] and [Export] counted: a
+          proof that opens before it runs once an export-locality
+          registration is loaded *)
+  f_replay_from_no_imports : int option;
+      (** the same, [Import] and [Export] not counted: the bound while no
+          export-locality registration is loaded *)
   mutable f_candidate : candidate option;
 }
 
@@ -340,11 +345,14 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    file's first [Qed] or [Save] (no proof can be replayed before it), are:
    [Register]; [Require] (a library brings its own [Register] objects and
    plugins, which the text does not show); [Load]; [Declare] (ML Module,
-   Module); [Import]; [Export]; [Include]; any [Module]; and an [End] that
-   closes a module (a sealed one applies its signature's objects there) or
-   a section inside which one of those commands appeared (Claude delta
-   review of 7b2a60f377, P1-2 to P1-4). Decided from the source text, before
-   any proof is replayed. The scan skips nested comments and strings, and
+   Module); [Import] and [Export] once an export-locality registration is
+   loaded (see {!scan_late_events}); [Include]; a [Module] that is not plain
+   (sealed, a functor, a module type, a definition); and an [End] that closes
+   such a module (a sealed one applies its signature's objects there), or a
+   plain module or a section inside which one of those commands appeared
+   (Claude delta review of 7b2a60f377, P1-2 to P1-4). Decided from the source
+   text, before any proof is replayed, with the one runtime condition on
+   [Import]. The scan skips nested comments and strings, and
    reads a number as Rocq's lexer reads one ([0-9][0-9_]*, a fraction and an
    exponent only when a digit follows, or [0x] and hexadecimal digits), so
    in [1Register], [0xaRegister] or [1End] the rest is a word (Claude delta
@@ -357,16 +365,34 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
 let late_words = [ "Register"; "Require"; "Load"; "Declare"; "Import"; "Export"; "Include"; "Module" ]
 
 (* The first late command with its line, and the byte offset of the last
-   one's word. *)
-let scan_late_events text =
+   one's word. With [~imports_late:false], [Import] and [Export] are not late
+   words: opening a module runs only its objects' open functions, which load
+   no code (an ML module acts at load: [Mltop.inMLModule]) and change a
+   Rocqlib answer only through an export-locality [Register]
+   ([Libobject.object_with_locality]: SuperGlobal acts at load, Export at
+   open). The caller uses that scan only while no export-locality
+   registration has been loaded or declared ({!note_export_register}).
+
+   A plain module, [Module M.] or [Module Import M.] with no binder, no
+   signature and no [:=], is not late by itself, and its [End] is late only
+   when a late word appeared inside it: ending it loads again only the
+   objects declared in its body, and a body with no late word declares no
+   Rocqlib registration and loads no code. A sealed module, a functor, a
+   module type and a module definition stay late, and their [End] too. *)
+let scan_late_events ?(imports_late = true) text =
+  let late_words =
+    if imports_late then late_words
+    else List.filter (fun w -> w <> "Import" && w <> "Export") late_words
+  in
   let n = String.length text in
   let line = ref 1 and i = ref 0 in
   let closed = ref false in
   (* One frame per open [Section] or [Module]: whether its [End] can change
-     what a Rocqlib name answers. A module's always can; a section's can when
-     a late word appeared inside it, at any depth. Only a sentence's command
-     word opens or closes one: [Print Section S.] opens nothing, [Fail End S.]
-     closes nothing (Claude delta review of 2daae0ed39, P1-2). *)
+     what a Rocqlib name answers. A non-plain module's always can; a plain
+     module's and a section's can when a late word appeared inside it, at any
+     depth. Only a sentence's command word opens or closes one: [Print
+     Section S.] opens nothing, [Fail End S.] closes nothing (Claude delta
+     review of 2daae0ed39, P1-2). *)
   let frames : bool ref list ref = ref [] in
   let result = ref None and last = ref None in
   let is_letter c = match c with
@@ -410,6 +436,39 @@ let scan_late_events text =
     done;
     i := i0; line := l0;
     !res = Some true
+  in
+  (* Whether the sentence from [j], just after its command word [Module], is
+     [Import] or [Export] at most, then one identifier, then the terminating
+     dot: a plain module. Comments are skipped; anything else (a binder, a
+     signature, [:=], [<:], [Type]) is not plain. The position and line are
+     restored. *)
+  let plain_module_after j =
+    let i0 = !i and l0 = !line in
+    i := j;
+    let skip_blank () =
+      let go = ref true in
+      while !go && !i < n do
+        let c = text.[!i] in
+        if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
+        else if String.contains " \n\t\r" c then step ()
+        else go := false
+      done
+    in
+    let word () =
+      skip_blank ();
+      let k = !i in
+      while !i < n && is_run text.[!i] do incr i done;
+      String.sub text k (!i - k)
+    in
+    let w = word () in
+    let name = if String.equal w "Import" || String.equal w "Export" then word () else w in
+    skip_blank ();
+    let plain =
+      name <> "" && (is_letter name.[0] || name.[0] = '_') && not (String.equal name "Type")
+      && !i < n && text.[!i] = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1])
+    in
+    i := i0; line := l0;
+    plain
   in
   let found w =
     if !result = None then result := Some (w, !line);
@@ -474,6 +533,14 @@ let scan_late_events text =
       while !j < n && is_run text.[!j] do incr j done;
       let run = String.sub text !i (!j - !i) in
       let lead_letter = is_letter c in
+      let plain_module =
+        !at_start && not !under_fail && String.equal run "Module" && plain_module_after !j
+      in
+      if plain_module then begin
+        at_start := false;
+        frames := ref false :: !frames
+      end
+      else begin
       (match late_in run with
        | Some w ->
          List.iter (fun f -> f := true) !frames;
@@ -505,6 +572,7 @@ let scan_late_events text =
           end
         end;
         if String.equal run "Qed" || String.equal run "Save" then closed := true
+      end
       end;
       i := !j
     end
@@ -559,7 +627,9 @@ let unaudited_plugin () =
 
 type source_rebind =
   | No_late_event
-  | Late_events of string * int * int  (** the first command, its line, the last one's offset *)
+  | Late_events of string * int * int * int option
+      (** the first command, its line, the last one's offset, and the last
+          one's offset when [Import] and [Export] are not late *)
   | Unreadable_source
 
 let source_rebind = function
@@ -568,9 +638,18 @@ let source_rebind = function
     match read_file path with
     | text ->
       (match scan_late_events text with
-       | Some (cmd, line), Some last -> Late_events (cmd, line, last)
+       | Some (cmd, line), Some last ->
+         Late_events (cmd, line, last, snd (scan_late_events ~imports_late:false text))
        | _ -> No_late_event)
     | exception (Sys_error _ | End_of_file) -> Unreadable_source
+
+(* An export-locality [Register] acts when its module is opened, so once one
+   is loaded or declared in this process, [Import] and [Export] are late
+   commands again ([Rocqlib] calls this). It is never reset: one process
+   compiles one file. *)
+let export_register_seen = ref false
+
+let note_export_register () = export_register_seen := true
 
 (* The location, in the file being compiled, of the sentence being run.
    The toplevel sets it before each sentence; a driver that does not leaves
@@ -580,6 +659,18 @@ let sentence_loc : Loc.t option ref = ref None
 let sentence_offset () = match !sentence_loc with Some l -> l.Loc.bp | None -> -1
 
 let at_sentence loc = sentence_loc := Some loc
+
+(* Measurement (BET-84, ReplayFine): each [Require] run while replay is on,
+   with its sentence's offset and whether every library it names was
+   already loaded before it ran. A [Require] of loaded libraries loads
+   nothing; the summary lists them so the share of the late-command rule
+   they cause can be counted. Replay does not use them. *)
+let requires_seen : (int * bool) list ref = ref []
+
+let note_require ~already_loaded =
+  match !options with
+  | Some _ -> requires_seen := (sentence_offset (), already_loaded) :: !requires_seen
+  | None -> ()
 
 (* How many proofs are open: a proof opened inside another one is part of
    it (the recorder keeps no entry of its own for it), so it is neither
@@ -607,6 +698,7 @@ let start ~library ~source ~toolchain =
     counts.fence <- None;
     Hashtbl.reset channel_miss;
     Hashtbl.reset miss_detail;
+    requires_seen := [];
     Hashtbl.reset proof_provided;
     pending_counters := [];
     let index = Hashtbl.create 256 in
@@ -640,15 +732,21 @@ let start ~library ~source ~toolchain =
        ([Proof_recorder.start]); a replay that does not run them would let
        a dirty history here match the clean one recorded there. From here
        on they run at each decision ({!decide}). *)
-    let refusal, refused_detail, replay_from =
+    let refusal, refused_detail, replay_from, replay_from_no_imports =
       match refusal with
-      | Some _ -> refusal, None, None
+      | Some _ -> refusal, None, None, None
       | None ->
         match source_rebind source with
-        | Unreadable_source -> Some "rebind", Some "an unreadable source", None
-        | Late_events (cmd, line, last) ->
-          None, Some (Printf.sprintf "%s at line %d; proofs before byte %d run" cmd line last), Some last
-        | No_late_event -> None, None, None
+        | Unreadable_source -> Some "rebind", Some "an unreadable source", None, None
+        | Late_events (cmd, line, last, last_no_imports) ->
+          let bound = function None -> "no proof" | Some b -> Printf.sprintf "proofs before byte %d" b in
+          let detail =
+            if last_no_imports = Some last then Printf.sprintf "%s at line %d; %s run" cmd line (bound (Some last))
+            else Printf.sprintf "%s at line %d; %s run (byte %d after an export Register)"
+                cmd line (bound last_no_imports) last
+          in
+          None, Some detail, Some last, last_no_imports
+        | No_late_event -> None, None, None, None
     in
     if refusal = None then Proof_recorder.start_tracking ();
     toolchain_now := Some toolchain;
@@ -656,6 +754,7 @@ let start ~library ~source ~toolchain =
     open_depth := 0;
     state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal;
                     f_refused_detail = refused_detail; f_replay_from = replay_from;
+                    f_replay_from_no_imports = replay_from_no_imports;
                     f_candidate = None }
 
 let check_budget () =
@@ -739,7 +838,8 @@ let warn_again (base : Loc.t option) (p : R.proof) =
     p.R.writes.R.warnings_raised
 
 let opens_before_late_command st =
-  match st.f_replay_from with
+  let bound = if !export_register_seen then st.f_replay_from else st.f_replay_from_no_imports in
+  match bound with
   | None -> false
   | Some last -> sentence_offset () <= last
 
@@ -947,18 +1047,22 @@ let summary ~killed =
                 (quote name) (quote kind) (quote c) (quote why) detail)
          counts.outcomes)
   in
+  let requires =
+    String.concat ","
+      (List.rev_map (fun (off, loaded) -> Printf.sprintf "[%d,%b]" off loaded) !requires_seen)
+  in
   Printf.sprintf
     "{\"version\":1,\"proofs\":%d,\"hits\":%d,\
      \"misses\":{\"key\":%d,\"read\":%d,\"ineligible\":%d,\"missing_record\":%d},\
      \"refused\":%s,\"refused_detail\":%s,\"charged_s\":%.6f,\"registered_s\":%.6f,\"elapsed_s\":%.6f,\
-     \"killed\":%s,\"fence\":%s,\"channel_misses\":[%s],\"outcomes\":[%s]}\n"
+     \"killed\":%s,\"fence\":%s,\"channel_misses\":[%s],\"requires\":[%s],\"outcomes\":[%s]}\n"
     counts.n_proofs counts.n_hits counts.m_key counts.m_read counts.m_ineligible counts.m_missing
     (match refused () with None -> "null" | Some r -> quote r)
     (match !state with Some { f_refused_detail = Some d; _ } -> quote d | _ -> "null")
     counts.charged counts.registered elapsed
     (if killed then "true" else "false")
     (match counts.fence with None -> "null" | Some f -> quote f)
-    channels outcomes
+    channels requires outcomes
 
 let write ~killed path =
   if configured () then begin
