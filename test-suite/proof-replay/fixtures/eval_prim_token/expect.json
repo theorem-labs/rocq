@@ -1,0 +1,16 @@
+{
+  "doc": "a number notation is declared in an open scope between two proofs that read a number: the later proof misses on the prim_token read, the earlier one replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.same": {"eligible": true}, "PR.A.changed": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.same", "hit"], ["PR.A.changed", "read", "prim_token", "changed"]]
+    }
+  }
+}

@@ -3,7 +3,7 @@
    base found and one absent, the active typeclass solvers and the active
    coercion hooks. Nothing they read changes in the edited tree, so each
    must replay; a channel with no evaluator would make its proof miss. No
-   numerals: a numeral's recorded interpretation holds its source position.
+   numerals: their channel (prim_token) has its own fixture, eval_prim_token.
    The canonical-solution hooks are not here: a proof reaches them only after
    a canonical_structure lookup, a channel replay does not evaluate yet, so
    such a proof misses there whatever its hook read says. *)
