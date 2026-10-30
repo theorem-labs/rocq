@@ -1163,8 +1163,9 @@ let extract_constant table access env kn inst cb =
      library need not be the one whose opaque table holds the body, so the keep
      rule keeps the dependent only when the holder's object is byte-identical
      and so is the object of every library in the holder's registered
-     [foreign_opaque_libraries] ([LibkeyObjects.axiom_report]), which covers
-     every opaque table the holder's copies read. *)
+     [foreign_opaque_libraries] ([LibkeyObjects.axiom_report]): the holder's
+     own table and those libraries' tables are every opaque table the
+     holder's copies read. *)
   let read_opaque c =
     OpacityLog.record kn cb;
     get_opaque access env c

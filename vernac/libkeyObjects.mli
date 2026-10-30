@@ -108,9 +108,10 @@ open Names
     opaque table the body came from:
     so the keep rule keeps the dependent only when the holder's object is
     byte-identical and so is the object of every library in the holder's
-    [foreign_opaque_libraries] as registered, which covers every opaque table
-    the holder's copies read. The status comparison and the assumption set
-    read a constant's status off [axiom_report], so the blinding covers only
+    [foreign_opaque_libraries] as registered: the holder's own table and those
+    libraries' tables are every opaque table the holder's copies read. The
+    status comparison and the assumption set read a constant's status off
+    [axiom_report], so the blinding covers only
     the constants it lists; a body read reads no status, its check being
     byte-identity. Every other constant the compiled form holds -- in a
     functor's body, in a functor parameter's module type, in a module type,
