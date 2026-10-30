@@ -1,0 +1,17 @@
+{
+  "doc": "a proof fills the VM slot of a constant closing over a section Let, and a later proof takes that value from the cache after clearing the Let's body; both are ineligible, so replay fills the slot where stock does and accepts the later proof as stock does",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.S.warm": {"ineligible": ["vm_section_closure"], "stores_no_term": true},
+                       "PR.A.S.later": {"ineligible": ["vm_section_closure"], "stores_no_term": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 2, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.S.warm", "ineligible"], ["PR.A.S.later", "ineligible"]]
+    }
+  }
+}

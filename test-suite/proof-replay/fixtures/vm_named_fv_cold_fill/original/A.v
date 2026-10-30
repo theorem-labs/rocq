@@ -1,7 +1,8 @@
 (* probe closes over the section Let local_flag. No command fills the VM
-   cache before target, so target fills probe's slot itself, in its own
-   environment, and its reads cover what that value holds. The edited tree
-   changes nothing target reads, so target replays. *)
+   cache before target, so target fills probe's slot itself. A replay of
+   target would leave the slot empty for the commands after it, where stock
+   leaves it filled (vm_section_closure_creator), so target is not replayed
+   although nothing it reads changes. *)
 Definition flag : bool := true.
 
 Section S.
