@@ -202,6 +202,13 @@ let define_notation kn tac =
 
 let interp_notation kn = find ~channel:"ltac2_notation" !ltac_notations kn
 
+(* A key that does not read back to a kernel name is a miss. *)
+let () =
+  Proof_replay.register_evaluator "ltac2_notation" (fun key ->
+      match Lib.kername_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_notation" !ltac_notations k))
+
 module ML =
 struct
   type t = ml_tactic_name
