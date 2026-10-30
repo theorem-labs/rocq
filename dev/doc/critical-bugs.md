@@ -568,6 +568,17 @@ fix.
 - risk: needs a sort polymorphic inductive declared in a section with
   a section polymorphic sort and sort polymorphism in the inductive command (cf bug file)
 
+#### variance inference ignores stack of stuck irrelevant to relevant matches
+- component: inductive declarations, universe polymorphism
+- introduced: 8.13
+- impacted released versions: V8.13 to V9.2.0
+- impacted rocqchk versions: same
+- fixed in: V9.2.1, V9.3 ([#22377](https://github.com/rocq-prover/rocq/pull/22377))
+- found by: OpenAI
+- issue: [#22376](https://github.com/rocq-prover/rocq/issues/22376)
+- risk: needs a cumulative inductive in which a match on an empty SProp
+  inductive or inductive using Definitional UIP appears
+
 #### Missing universe substitution in primitive array instance in lazy
 
 - component: lazy, primitive arrays
