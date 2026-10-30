@@ -227,7 +227,10 @@ or cached, makes a proof ineligible (`vm_section_closure`), and
 `vm_named_fv_cold_fill` shows it for a proof that fills the slot alone.
 `vm_named_fv_reset`: `Reset` and a second declaration give a name another
 code; what the first code reaches must not answer for the second, so that
-answer is kept with the declaration, not the name.
+answer is kept with the declaration, not the name.  `late_reset_congruence`:
+`Reset` restores a Rocqlib registration but not the process-wide lazy a
+proof before it forced; `Reset`, `Back` and `BackTo` are late commands, so
+that proof runs, and replay accepts the later proof as stock does.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
@@ -243,6 +246,8 @@ the last one's byte offset.  `rebind_after_hit`: the proofs before a late
 it.  `plugin_after_hit`: the proof before a late `Declare ML Module` runs, and
 the proof after it misses on its key (the loaded plugins are in it).
 `late_command_hit`: the same load in both trees, and the proof after it hits.
+`Reset`, `Back` and `BackTo` are late commands too: they restore the Rocqlib
+table, not a lazy value a proof forced (`late_reset_congruence`).
 
 **The closer.**  `closer_admitted`: a registered `tac. Qed.` against an edited
 `tac. Admitted.` must miss.
