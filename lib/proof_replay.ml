@@ -349,7 +349,13 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    (sealed, a functor, a module type, a definition); and an [End] that closes
    such a module (a sealed one applies its signature's objects there), or a
    plain module or a section inside which one of those commands appeared
-   (Claude delta review of 7b2a60f377, P1-2 to P1-4). Decided from the source
+   (Claude delta review of 7b2a60f377, P1-2 to P1-4); and [Reset] ([Reset
+   Initial] too), [Back] and [BackTo], which restore an earlier state: the
+   Rocqlib table and every Summary go back, while a process-wide lazy that a
+   proof before them forced does not (fourth soundness review, finding 3,
+   fixture late_reset_congruence). Once one of these appears, the sections
+   and modules the scan keeps track of no longer follow the restored state,
+   so every later [End] counts too. Decided from the source
    text, before any proof is replayed, with the one runtime condition on
    [Import]. The scan skips nested comments and strings, and
    reads a number as Rocq's lexer reads one ([0-9][0-9_]*, a fraction and an
@@ -361,7 +367,10 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    file builds is covered because [Load] counts; one a plugin adds is
    covered by the plugin audit below ({!unaudited_plugin}), not by this
    scan. *)
-let late_words = [ "Register"; "Require"; "Load"; "Declare"; "Import"; "Export"; "Include"; "Module" ]
+let restoring_words = [ "Reset"; "Back"; "BackTo" ]
+
+let late_words =
+  [ "Register"; "Require"; "Load"; "Declare"; "Import"; "Export"; "Include"; "Module" ] @ restoring_words
 
 (* The first late command with its line, and the byte offset of the last
    one's word. With [~imports_late:false], [Import] and [Export] are not late
@@ -393,6 +402,9 @@ let scan_late_events ?(imports_late = true) text =
      Section S.] opens nothing, [Fail End S.] closes nothing (Claude delta
      review of 2daae0ed39, P1-2). *)
   let frames : bool ref list ref = ref [] in
+  (* A [Reset], [Back] or [BackTo] has appeared: the frames no longer follow
+     the restored sections and modules. *)
+  let restored = ref false in
   let result = ref None and last = ref None in
   let is_letter c = match c with
     | 'a'..'z' | 'A'..'Z' -> true
@@ -543,6 +555,7 @@ let scan_late_events ?(imports_late = true) text =
       (match late_in run with
        | Some w ->
          List.iter (fun f -> f := true) !frames;
+         if List.mem w restoring_words then restored := true;
          if !closed then found w
        | None -> ());
       begin
@@ -557,7 +570,10 @@ let scan_late_events ?(imports_late = true) text =
             else if String.equal run "Section" then frames := ref false :: !frames
             else if String.equal run "End" then begin
               match !frames with
-              | f :: rest -> frames := rest; if !closed && !f then found "End (of a module, or of a section that loads or imports)"
+              | f :: rest ->
+                frames := rest;
+                if !closed && !f then found "End (of a module, or of a section that loads or imports)"
+                else if !closed && !restored then found "End (after a Reset or Back)"
               | [] -> if !closed then found "End"
             end
           end
