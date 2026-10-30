@@ -139,14 +139,21 @@ val open_proof :
     it marks the open proof ineligible with reason ["nested_proof"], and
     its reads are kept as the open proof's own. *)
 
-val sentence : ?span:int * int -> (unit -> string) -> (unit -> 'a) -> 'a
-(** [sentence ?span digest run] runs one parsed sentence. When a proof is
-    open at the end of [run], or was opened by it, [digest ()] is kept as
+val sentence : ?span:int * int -> ?loc:Loc.t -> (unit -> string) -> (unit -> 'a) -> 'a
+(** [sentence ?span ?loc digest run] runs one parsed sentence. When a proof
+    is open at the end of [run], or was opened by it, [digest ()] is kept as
     one of the proof's sentences (key item 1, the statement's sentence
     included). [digest] is called only then. [span] is the sentence's byte
     range in the compiled file: the statement's start and the closer's end
     make the proof's {!Proof_record.proof.span}. A caller that gives no
-    span records no span. *)
+    span records no span. [loc] is the sentence's location: a proof keeps
+    its statement's, and the warnings it raises are kept relative to it. *)
+
+val nested_closed : unit -> bool
+(** Whether a nested proof closed during the sentence being run while the
+    proof around it stays open. The STM empties the proof stack after every
+    closer and restores the outer proof at its next command, so the toplevel
+    must not take the empty stack for a dropped proof then. *)
 
 val close_proof : closer:string -> kernel_check:bool -> replay:string option -> unit
 (** Ends the entry of the innermost open proof and, at the outermost one,
@@ -182,7 +189,7 @@ val writing : unit -> bool
 val write_universes : levels:string list -> constraints:string list -> unit
 val write_scheme : string -> unit
 val write_constraint_source : string -> unit
-val write_warning : name:string -> message:string -> unit
+val write_warning : ?loc:Loc.t -> name:string -> message:string -> unit -> unit
 val write_counters : (string * int) list -> unit
 (** What the proof changed for the proofs after it. They are collected
     while a proof is open, {!without_recording} included, because a write

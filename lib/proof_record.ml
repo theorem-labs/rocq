@@ -54,8 +54,57 @@ type writes = {
   constraints : string list;
   schemes : string list;
   constraint_sources : string list;
-  warnings_raised : (string * string) list;
+  warnings_raised : (string * string * string) list;
 }
+
+(* Base64, for the Marshal blobs a record carries (a stored proof term, a
+   universe footprint, a warning's text): the record is JSON, which carries
+   no arbitrary bytes. *)
+let b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+let encode_blob s =
+  let n = String.length s in
+  let b = Buffer.create (4 * ((n + 2) / 3)) in
+  let byte i = if i < n then Char.code s.[i] else 0 in
+  let rec loop i =
+    if i < n then begin
+      let x = (byte i lsl 16) lor (byte (i + 1) lsl 8) lor byte (i + 2) in
+      Buffer.add_char b b64_alphabet.[(x lsr 18) land 63];
+      Buffer.add_char b b64_alphabet.[(x lsr 12) land 63];
+      Buffer.add_char b (if i + 1 < n then b64_alphabet.[(x lsr 6) land 63] else '=');
+      Buffer.add_char b (if i + 2 < n then b64_alphabet.[x land 63] else '=');
+      loop (i + 3)
+    end
+  in
+  loop 0;
+  Buffer.contents b
+
+let b64_value =
+  lazy
+    (let t = Array.make 256 (-1) in
+     String.iteri (fun i c -> t.(Char.code c) <- i) b64_alphabet;
+     t)
+
+let decode_blob s =
+  let t = Lazy.force b64_value in
+  let b = Buffer.create (3 * (String.length s / 4)) in
+  let acc = ref 0 and bits = ref 0 in
+  try
+    String.iter
+      (fun c ->
+         if c <> '=' then begin
+           let v = t.(Char.code c) in
+           if v < 0 then raise Exit;
+           acc := (!acc lsl 6) lor v;
+           bits := !bits + 6;
+           if !bits >= 8 then begin
+             bits := !bits - 8;
+             Buffer.add_char b (Char.chr ((!acc lsr !bits) land 0xff))
+           end
+         end)
+      s;
+    Some (Buffer.contents b)
+  with Exit -> None
 
 type proof = {
   name : string;
@@ -144,6 +193,9 @@ let field k add v = (k, fun b -> add b v)
 
 let add_string_pairs = add_list (add_pair add_string add_string)
 
+let add_string_triples =
+  add_list (fun b (x, y, z) -> add_list add_string b [ x; y; z ])
+
 let add_toolchain b (t : toolchain) =
   add_object b [
     field "binary" add_string t.binary;
@@ -184,7 +236,7 @@ let add_writes b w =
     field "constraints" (add_list add_string) w.constraints;
     field "schemes" (add_list add_string) w.schemes;
     field "constraint_sources" (add_list add_string) w.constraint_sources;
-    field "warnings_raised" add_string_pairs w.warnings_raised;
+    field "warnings_raised" add_string_triples w.warnings_raised;
   ]
 
 let kind k = field "kind" add_string k
@@ -444,6 +496,11 @@ let to_option f = function Null -> None | v -> Some (f v)
 
 let to_string_pairs what = to_list what (to_pair what (to_str what) (to_str what))
 
+let to_string_triples what =
+  to_list what (function
+      | Arr [ a; b; c ] -> (to_str what a, to_str what b, to_str what c)
+      | _ -> fail "%s: expected a triple" what)
+
 let to_toolchain v : toolchain =
   match fields "toolchain" [ "binary"; "plugins"; "load_order"; "warnings"; "safe_deps"; "stack_limit" ] v with
   | [ b; p; lo; w; sd; sl ] ->
@@ -483,7 +540,7 @@ let to_writes v =
     { universe_levels = strs "universe_levels" ul;
       counters = to_list "counters" (to_pair "counters" (to_str "counters") (to_int "counters")) c;
       constraints = strs "constraints" cs; schemes = strs "schemes" sc;
-      constraint_sources = strs "constraint_sources" src; warnings_raised = to_string_pairs "warnings_raised" w }
+      constraint_sources = strs "constraint_sources" src; warnings_raised = to_string_triples "warnings_raised" w }
   | _ -> assert false
 
 let kind_of = function

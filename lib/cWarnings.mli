@@ -26,6 +26,11 @@ type 'a msg
 val warn : 'a msg -> ?loc:Loc.t -> 'a -> unit
 (** Emit a message in some warning. *)
 
+val warn_again : ?loc:Loc.t -> name:string -> message:string -> unit -> unit
+(** Raises again a warning a replayed proof's record holds (BET-84): the
+    warning [name]'s current status decides, as for {!warn}, and [message]
+    is the document the registration printed, as the record keeps it. *)
+
 (** Creation functions
 
     Note that names are in a combined namespace including the special name ["none"].

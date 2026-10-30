@@ -1,15 +1,15 @@
 {
-  "doc": "a hint database entry is added: the proof that searches the database misses, the others hit",
+  "doc": "a hint database entry is added: the proof that searches the database misses; a later proof that does not search it misses too, because every proof's start_tables hold every database at its start (proof_recorder.mli, tables_at_start: the tables are always sampled); the proofs before the hint hit",
   "files": ["A.v"],
   "summaries": {
     "A.v": {
       "proofs": 4,
-      "hits": 3,
-      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "hits": 2,
+      "misses": {"key": 0, "read": 2, "ineligible": 0, "missing_record": 0},
       "refused": null,
       "killed": false,
       "outcomes": [["PR.A.base", "hit"], ["PR.A.other", "hit"],
-                   ["PR.A.uses_db", "read"], ["PR.A.no_db", "hit"]]
+                   ["PR.A.uses_db", "read", "hint_db", "changed"], ["PR.A.no_db", "read", "hint_db", "changed"]]
     }
   }
 }

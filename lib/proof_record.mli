@@ -120,7 +120,13 @@ type writes = {
   constraints : string list;  (** New universe constraints, printed. *)
   schemes : string list;  (** Schemes the proof created. *)
   constraint_sources : string list;  (** Constraint-source entries written. *)
-  warnings_raised : (string * string) list;  (** Warning name, message. *)
+  warnings_raised : (string * string * string) list;
+  (** Warning name, the printed document (base64 of its [Marshal]ed
+      [Pp.t]), and where it was raised relative to the proof's statement
+      sentence (["line,bp,ep,bol,line_last,bol_last"] offsets, or [""] when
+      it had no location in this file). Only warnings raised while the proof
+      was recorded: the declaration at the closer raises its own again when it
+      declares a stored term. *)
 }
 
 type proof = {
@@ -192,6 +198,13 @@ val parse_string : string -> file
     line after the trailer. *)
 
 (** {6 Digests} *)
+
+val encode_blob : string -> string
+(** Base64 of a [Marshal] blob ({!proof.replay}, a universe footprint, a
+    warning's text): the record is JSON, which carries no arbitrary bytes. *)
+
+val decode_blob : string -> string option
+(** The inverse, [None] on a string that is not base64. *)
 
 exception Unhashable of string
 

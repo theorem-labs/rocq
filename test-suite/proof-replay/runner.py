@@ -342,8 +342,11 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: `expect.json` says. channels_unchanged replays five proofs whose terms
 #: name bool and nat, and its library segment shares the string "Datatypes"
 #: where stock's does (vodiff, 2026-10-26: 0 value differences, 2 sharing
-#: differences, every other segment equal).
-EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged")
+#: differences, every other segment equal). write_scheme_rewrite replays
+#: two proofs whose stored terms carry the scheme they created, and its
+#: library segment shares "A" and "PR" where stock's does (vodiff,
+#: 2026-10-30: 0 value differences, 4 sharing differences).
+EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite")
 
 
 def exemption_allowed(fixture, differing_segments, library_values_equal):
