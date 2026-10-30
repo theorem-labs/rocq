@@ -637,6 +637,9 @@ let patch_globals p =
       | Reloc.SReloc_Const_ind _ | Reloc.SReloc_indirect _ -> acc)
     p.reloc_infos []
 
+(* BET-84: the free variables a code closes over when it is evaluated. *)
+let to_patch_fv tp = tp.tp_fv
+
 type 'a pbody_code =
   | BCdefined of bool array * 'a * patches
   | BCalias of Names.Constant.t

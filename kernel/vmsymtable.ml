@@ -282,20 +282,52 @@ let envcache_of_rel i envcache = {
    constant is walked once per proof. ONE value function, called here and
    by the replay evaluator (vernac/proof_replay_env.ml;
    dev/tools/census/replay_channels.py). [on_call] receives each constant
-   the code calls; the record site records it, the evaluator ignores it.
+   the code calls; the record site records it, the evaluator passes none.
    The lookups also record the constant's own [constant] and
-   [constant_exists] reads, as the cold path does. *)
-let recorded_vm_global ?(on_call = ignore) env kn =
+   [constant_exists] reads, as the cold path does.
+
+   A code also closes over the section variables it names ([tp_fv]): the
+   cold path evaluates the body of each one that has a body ([Let]), and
+   the value it caches holds that evaluation, which the code's relocations
+   do not name (fixture vm_named_fv). So [on_call] also receives every
+   constant the body of such a variable mentions, through the variables
+   that body names in turn: more than that body's code may call, never
+   less. A variable the environment does not hold has no body to follow.
+   A global's code is compiled with no local binder, so it closes over no
+   [FVrel]. *)
+let named_fv_globals env on_call fv =
+  let seen = ref Id.Set.empty in
+  let rec named id =
+    if not (Id.Set.mem id !seen) then begin
+      seen := Id.Set.add id !seen;
+      match Environ.lookup_named id env with
+      | decl -> Option.iter term (NamedDecl.get_value decl)
+      | exception Not_found -> ()
+    end
+  and term c =
+    match Constr.kind c with
+    | Constr.Const (kn, _) -> on_call kn
+    | Constr.Var id -> named id
+    | Constr.Proj (p, _, _) -> on_call (Projection.constant p); Constr.iter term c
+    | _ -> Constr.iter term c
+  in
+  Array.iter (function FVnamed id -> named id | FVrel _ -> ()) fv
+
+let recorded_vm_global ?on_call env kn =
   ignore (Environ.mem_constant kn env);
   match Environ.lookup_constant_opt kn env with
   | None -> None
   | Some cb ->
     let view = match cb.const_body_code with
       | None | Some BCconstant -> `Accumulator
-      | Some (BCalias kn') -> on_call kn'; `Alias kn'
+      | Some (BCalias kn') -> Option.iter (fun f -> f kn') on_call; `Alias kn'
       | Some (BCdefined (mask, index, patches)) ->
-        List.iter on_call (patch_globals patches);
-        `Code (mask, Environ.lookup_vm_code index env, patches)
+        let code = Environ.lookup_vm_code index env in
+        Option.iter (fun f ->
+            List.iter f (patch_globals patches);
+            named_fv_globals env f (to_patch_fv code))
+          on_call;
+        `Code (mask, code, patches)
     in
     Some (Proof_recorder.digest ~what:"vm_global" view)
 
