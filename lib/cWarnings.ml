@@ -150,6 +150,28 @@ let flags = ref ""
 
 let get_flags () = !flags
 
+(* BET-84: what a later command can see of the registry of warnings and
+   categories: each one by name, with its parents' names, and a warning's
+   default status and whether it is also a category. Its current status is
+   a function of these and of the flags, which are read on their own
+   ([get_flags]). The view is built again only when the registry changed,
+   so a reader that keeps its digest by address digests it once per
+   change. *)
+let registry_view =
+  let last = ref (String.Map.empty, []) in
+  fun () ->
+    let g, v = !last in
+    if g == !graph then v
+    else begin
+      let v = String.Map.fold (fun name (c : category) acc ->
+          (name, List.map (fun (p : category) -> p.name) c.parents,
+           Option.map (fun w -> (w.default, w.hybrid)) c.warning) :: acc)
+          !graph []
+      in
+      last := (!graph, v);
+      v
+    end
+
 let iter_warnings f =
   !graph |> String.Map.iter (fun _ w -> Option.iter f w.warning)
 

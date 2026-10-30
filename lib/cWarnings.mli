@@ -76,6 +76,12 @@ val create : name:string -> ?category:category -> ?default:status ->
 val get_flags : unit -> string
 val set_flags : string -> unit
 
+val registry_view : unit -> (string * string list * (status * bool) option) list
+(** BET-84: the registry of warnings and categories as a later command can
+    see it: each name, its parents' names, and for a warning its default
+    status and whether it is also a category. The same list (physically)
+    until the registry changes. *)
+
 type 'a elt =
   | There of 'a
   | NotThere
