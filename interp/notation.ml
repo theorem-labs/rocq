@@ -629,6 +629,20 @@ let notation_query_of_key key =
        | Some _ | None -> None)
   | Some _ | None -> None
 
+(* BET-84 census row 11: each number or string notation the proof reads,
+   with the scopes it was read in and the query's mode.
+
+   ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py): the term and the scope
+   the query finds, or absent. Every node of the term carries the token's
+   location, which is not in the key, so the locations of the compiled file
+   are left out of the digest: a number written on another line is the same
+   read. *)
+let recorded_prim_token = function
+  | None -> None
+  | Some (pat, sc) ->
+    Some (Proof_recorder.digest ?locs:(Proof_recorder.compiled_source ()) ~what:"prim_token" (pat, sc))
+
 (* [mode] names the query. A term query accepts every interpretation; a
    pattern query rejects one that is not a constructor and goes on to an older
    scope. With the same token and scopes they can find different answers, so
@@ -636,20 +650,18 @@ let notation_query_of_key key =
 let interp_prim_token_gen ~mode ?loc g p local_scopes =
   let scopes = make_current_scopes local_scopes in
   let p_as_ntn = try notation_of_prim_token p with Not_found -> InConstrEntry,"" in
-  (* BET-84 census row 11: each number or string notation the proof reads,
-     with the scopes it was read in and the query's mode. *)
   try
     let pat, sc = find_interpretation p_as_ntn (find_prim_token ?loc g p) scopes in
     if Proof_recorder.active () then
       Proof_recorder.read ~row:"11" ~channel:"prim_token"
         ~key:(fun () -> mode ^ notation_query_key p_as_ntn scopes)
-        ~value:(fun () -> Some (Proof_recorder.digest ~what:"prim_token" (pat, sc)));
+        ~value:(fun () -> recorded_prim_token (Some (pat, sc)));
     pat, sc
   with Not_found as exn ->
     if Proof_recorder.active () then
       Proof_recorder.read ~row:"11" ~channel:"prim_token"
         ~key:(fun () -> mode ^ notation_query_key p_as_ntn scopes)
-        ~value:(fun () -> None);
+        ~value:(fun () -> recorded_prim_token None);
     let _, info = Exninfo.capture exn in
     user_err ?loc ~info
     ((match p with
@@ -662,6 +674,56 @@ let interp_prim_token ?loc =
 
 let interp_prim_token_cases_pattern_expr ?loc check_allowed p =
   interp_prim_token_gen ~mode:"P" ?loc check_allowed p
+
+(* The token [notation_of_prim_token] wrote as [text]: a string is quoted, a
+   negative number starts with ["- "], and a number is written as it was
+   lexed, which [NumTok.Unsigned.parse_string] reads back. *)
+let prim_token_of_notation_text text =
+  let n = String.length text in
+  let token =
+    if n > 0 && text.[0] = '"' then
+      Option.map (fun s -> Constrexpr.String s) (String.unquote_coq_string text)
+    else if n > 2 && text.[0] = '-' && text.[1] = ' ' then
+      Option.map (fun u -> Constrexpr.Number (SMinus, u))
+        (NumTok.Unsigned.parse_string (String.sub text 2 (n - 2)))
+    else Option.map (fun u -> Constrexpr.Number (SPlus, u)) (NumTok.Unsigned.parse_string text)
+  in
+  match token with
+  | Some p when notation_eq (notation_of_prim_token p) (InConstrEntry, text) -> Some p
+  | Some _ | None -> None
+
+(* A term query asked again by the replay evaluator, exactly as
+   [interp_prim_token] asks it, at a location of the compiled file, which
+   the value leaves out. It runs the token's interpreter, so what that
+   leaves behind is undone: the universe levels it makes are not the
+   proof's, so the level and sort counters are put back; a warning it raises
+   is not printed (the record raises the proof's warnings again on a hit,
+   and on a miss the proof prints them itself); and its reads are not the
+   open proof's. *)
+let replay_prim_token_query p_as_ntn p scopes =
+  let loc = Option.map Loc.initial (Proof_recorder.compiled_source ()) in
+  let counters = UnivGen.counters () in
+  Fun.protect ~finally:(fun () -> UnivGen.set_counters counters) (fun () ->
+      Proof_recorder.without_recording (fun () ->
+          CWarnings.with_warn "-all" (fun () ->
+              match find_interpretation p_as_ntn (find_prim_token ?loc (fun _ -> ()) p) scopes with
+              | found -> Some found
+              | exception Not_found -> None) ()))
+
+(* Only a term query is asked again. A pattern query's answer also depends
+   on its caller's check of the pattern, which the key does not hold, so its
+   read is a miss; so is a key that does not read back. *)
+let () =
+  Proof_replay.register_evaluator "prim_token" (fun key ->
+      let n = String.length key in
+      if n = 0 || key.[0] <> 'T' then Proof_replay.Unknown
+      else
+        match notation_query_of_key (String.sub key 1 (n - 1)) with
+        | Some ((InConstrEntry, text) as p_as_ntn, scopes) ->
+          (match prim_token_of_notation_text text with
+           | None -> Proof_replay.Unknown
+           | Some p -> Proof_replay.Value (recorded_prim_token (replay_prim_token_query p_as_ntn p scopes)))
+        | Some ((InCustomEntry _, _), _) | None -> Proof_replay.Unknown)
 
 let warn_notation =
   UserWarn.create_depr_and_user_warnings ~object_name:"Notation" ~warning_name_base:"notation"
