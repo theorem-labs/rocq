@@ -187,3 +187,11 @@ val global_of_kernel_string : string -> Names.GlobRef.t
 (** BET-84 P3: what the kernel name printed as this string names now, also
     for an object declared in an open section (whose nametab path holds the
     section). Raises [Not_found] when nothing binds it. *)
+
+val kername_key : Names.KerName.t -> string
+(** BET-84 P3: the kernel name as a recorded key that names it alone:
+    each part with its length, a bound module with its number. *)
+
+val kername_of_key : string -> Names.KerName.t option
+(** The kernel name {!kername_key} wrote, or [None] for a string it did not
+    write and for the name of a bound module, which cannot be rebuilt. *)

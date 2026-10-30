@@ -151,9 +151,15 @@ ineligible and is not replayed though the tactic it ran changed.  The plugin
 hooks and the process-wide fence need a plugin, so their test is
 `test-suite/misc/proof-replay-plugin-hooks.sh`.  The `canonical_hooks`
 evaluator has no hit test: a proof asks those hooks only after a
-`canonical_structure` lookup, and the probes also read a notation; replay
-evaluates neither channel yet, so such a proof misses on one of them before
-its hook read is checked.
+`canonical_structure` lookup, which replay does not evaluate yet, so such a
+proof misses there before its hook read is checked.
+
+**One fixture per evaluated channel**, named `eval_<channel>`.  Each has two
+proofs.  `changed` makes a read whose value the edited tree changes, and must
+miss on that read (why `changed`).  `same` makes the same kind of read on a
+value that does not change, and must replay; before its channel had an
+evaluator it missed with why `no_evaluator`.  `eval_notation`: the
+interpretation of a notation.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
