@@ -258,11 +258,11 @@ module Recorded = struct
   let mind tbl = once tbl Mindmap_env.mem Mindmap_env.add MutInd.to_string
   let mpath tbl = once tbl MPmap.mem MPmap.add ModPath.to_string
 
-  (* The library of a kernel name, and that library's .vo digest. A constant
-     of a REQUIRED library is recorded by the digest and not by its body: the
-     digest pins every object the library holds, and one body can be a
-     megabyte of term (a memory image a registration file requires). Only the
-     objects of the library being compiled are digested. *)
+  (* The library of a kernel name, and that library's .vo digest. A module
+     or module type of a REQUIRED library is recorded by the digest and not
+     by its body: the digest pins every object the library holds, and a
+     module body holds every constant of the module. Constants and
+     inductives are recorded by value ([recorded_constant]). *)
   let lib_digests = ref DirPath.Map.empty
 
   let rec root_lib = function
@@ -305,34 +305,40 @@ let recorded_constant kn env =
   match Cmap_env.find_opt kn env.env_constants with
   | None -> None
   | Some (cb, _, _) ->
-    match Recorded.library_of (Constant.modpath kn) with
-    | Some d -> Some ("library " ^ d)
-    | None ->
-      (* Two fields are positions in this library, not values: the bytecode
-         field indexes the library's VM code table, and an opaque body
-         indexes its opaque table, so a definition added or deleted earlier
-         in the file moves both (fixture const_deleted). The bytecode is a
-         function of the body, and a proof sees an opaque constant only
-         through its type, so the view keeps every other field and drops
-         those two. *)
-      let body = match cb.const_body with
-        | Undef inline -> `Undef inline
-        | Def c -> `Def c
-        | OpaqueDef _ -> `Opaque
-        | Primitive p -> `Primitive p
-        | Symbol rules -> `Symbol rules
-      in
-      Some (Proof_recorder.digest_cached_by ~what:"constant" ~key:cb (fun () ->
-          (cb.const_hyps, cb.const_univ_hyps, body, cb.const_type, cb.const_relevance,
-           cb.const_universes, cb.const_inline_code, cb.const_typing_flags)))
+    (* The constant's value as a proof sees it, for the file's own constants
+       and a required library's alike. A required library's .vo digest
+       changed whenever the grade rebuilt the library, even with every value
+       equal (a replayed proof's term shares differently), and every reader
+       of every constant of it missed.
+
+       Two fields are positions in the library, not values: the bytecode
+       field indexes the library's VM code table, and an opaque body indexes
+       its opaque table, so a definition added or deleted earlier in the file
+       moves both (fixture const_deleted). The bytecode is a function of the
+       body, and the kernel never unfolds an opaque body, so a proof sees an
+       opaque constant only through its type: a changed proof of an
+       unchanged statement is the same input (fixture lib_opaque_proof_changed). *)
+    let body = match cb.const_body with
+      | Undef inline -> `Undef inline
+      | Def c -> `Def c
+      | OpaqueDef _ -> `Opaque
+      | Primitive p -> `Primitive p
+      | Symbol rules -> `Symbol rules
+    in
+    Some (Proof_recorder.digest_cached_by ~what:"constant" ~key:cb (fun () ->
+        (cb.const_hyps, cb.const_univ_hyps, body, cb.const_type, cb.const_relevance,
+         cb.const_universes, cb.const_inline_code, cb.const_typing_flags)))
 
 let recorded_constant_exists kn env = Some (string_of_bool (Cmap_env.mem kn env.env_constants))
 
 let recorded_rewrite_rules kn env = Recorded.of_rules (Cmap_env.find_opt kn env.symb_pats)
 
+(* An inductive's value, for the file's own and a required library's alike
+   (see [recorded_constant]): its body holds no position in its library. *)
 let recorded_inductive kn env =
-  Recorded.of_value "inductive" (MutInd.modpath kn)
-    (match Mindmap_env.find_opt kn env.env_inductives with None -> None | Some (mb, _, _) -> Some mb)
+  match Mindmap_env.find_opt kn env.env_inductives with
+  | None -> None
+  | Some (mb, _, _) -> Some (Proof_recorder.digest_cached ~what:"inductive" mb)
 
 let recorded_inductive_exists kn env = Some (string_of_bool (Mindmap_env.mem kn env.env_inductives))
 

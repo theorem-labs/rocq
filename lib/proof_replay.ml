@@ -1039,7 +1039,15 @@ let summary ~killed =
               let detail = match Hashtbl.find_opt miss_detail name with
                 | None -> ""
                 | Some (key, was, now) ->
-                  let cut s = if String.length s > 300 then String.sub s 0 300 ^ "..." else s in
+                  (* Cut at a character boundary: the summary is JSON, and half a
+                     UTF-8 sequence makes the whole file unreadable. *)
+                  let cut s =
+                    if String.length s <= 300 then s
+                    else
+                      let k = ref 300 in
+                      while !k > 0 && Char.code s.[!k] land 0xC0 = 0x80 do decr k done;
+                      String.sub s 0 !k ^ "..."
+                  in
                   let opt = function None -> "null" | Some v -> quote (cut v) in
                   Printf.sprintf ",\"key\":%s,\"recorded\":%s,\"now\":%s" (quote (cut key)) (opt was) (opt now)
               in
