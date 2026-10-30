@@ -1158,7 +1158,8 @@ let extract_constant table access env kn inst cb =
      sealed module's implementation and the global environment holds the
      signature's axiom, or from a functor's body, which the global environment
      does not hold. The query names [kn]'s library, the one holding the
-     constant read. For a copy (a functor application, an [Include]) that
+     constant read. For a copy (a functor application, or an [Include] or
+     alias of a functor or a module type) that
      library is not the one whose opaque table holds the body, so the keep
      rule keeps the dependent only when the holder's object is byte-identical
      and so is the object of every library in the holder's registered

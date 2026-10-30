@@ -332,7 +332,8 @@ let compute_assumptions ~stored access self =
    treats every [opaque = true] query as a read of an opaque table and
    requires the holder's object byte-identical, with every library in its
    registered [foreign_opaque_libraries], since the [library] recorded here is
-   the holder's, which for a copy (a functor application, an [Include]) is not
+   the holder's, which for a copy (a functor application, or an [Include] or
+   alias of a functor or a module type) is not
    the library whose table holds the body. *)
 let collect_opacity self =
   let tbl = Hashtbl.create 16 in
