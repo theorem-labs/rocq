@@ -47,8 +47,8 @@
      module type nested at any depth. "foreign_opaque_libraries" does not
      rest on any such classification: it is computed from every constant
      of the compiled library, functor bodies, module types and
-     implementations included, so it names every library whose opaque
-     table any copy references (misc/library-label-opaque-shift.sh checks
+     implementations included, so it names every other library whose
+     opaque table any copy references (misc/library-label-opaque-shift.sh checks
      a functor application, an [Include F A0] and an [Include] of a plain
      module, which holds none; the DI and DM cases of
      misc/library-label-functor-flip.sh show an [Include] of a functor

@@ -104,7 +104,7 @@ open Names
     foreign [Indirect] reference resolves to (its foreign-opaque-reference
     check: the referenced library's object byte-identical). A body read names
     the constant's holder, and for a copy a module operation did not
-    strengthen (a functor application, say) that is not the library whose
+    strengthen (a functor application, say) that need not be the library whose
     opaque table the body came from:
     so the keep rule keeps the dependent only when the holder's object is
     byte-identical and so is the object of every library in the holder's

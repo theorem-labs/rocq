@@ -1160,7 +1160,7 @@ let extract_constant table access env kn inst cb =
      does not hold. The query names [kn]'s library, the one holding the
      constant read. For a copy a module operation did not strengthen (a
      functor application, say) that
-     library is not the one whose opaque table holds the body, so the keep
+     library need not be the one whose opaque table holds the body, so the keep
      rule keeps the dependent only when the holder's object is byte-identical
      and so is the object of every library in the holder's registered
      [foreign_opaque_libraries] ([LibkeyObjects.axiom_report]), which covers

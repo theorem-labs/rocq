@@ -138,7 +138,7 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    extracts what it finds there, which no label covers (the hook logs each
    such read as an [opaque = true] query naming the library that holds the
    constant read; for a copy a module operation did not strengthen (a
-   functor application, say) that is not the library whose opaque table the
+   functor application, say) that need not be the library whose opaque table the
    body came from,
    so the keep rule keeps the dependent only when the holder's object is
    byte-identical and so is the object of every library in the holder's

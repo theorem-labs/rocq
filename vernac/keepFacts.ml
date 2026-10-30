@@ -333,7 +333,7 @@ let compute_assumptions ~stored access self =
    requires the holder's object byte-identical, with every library in its
    registered [foreign_opaque_libraries], since the [library] recorded here is
    the holder's, which for a copy a module operation did not strengthen (a
-   functor application, say) is not
+   functor application, say) need not be
    the library whose table holds the body. *)
 let collect_opacity self =
   let tbl = Hashtbl.create 16 in
