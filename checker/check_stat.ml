@@ -195,6 +195,21 @@ let pr_assumptions ass axs =
   else
     hv 2 (str ass ++ str ":" ++ fnl() ++ prlist_with_sep fnl str axs)
 
+(* The fold below reports every constant the environment holds without a
+   body, and, for one a seal hides, what [register_opacified_constant]
+   recorded behind it. [Module M : T := E] puts T in the environment, so a
+   field E defines has no body there either, and both of those reported it as
+   an axiom while [Print Assumptions] read a proof that uses it closed
+   (dispatch://BET-245). [Mod_impl] answers whether the implementation leaves
+   a constant assumed, and what the fold yields, from the environment and
+   from those records alike, is dropped where it does not. The names
+   [record_sealed_axioms] collected are added after, unasked: each is a
+   constant an implementation itself declares without a body, which this
+   question would keep. The question is asked here, over the final
+   environment, because that environment holds every implementation the names
+   come from, while a check in progress holds a module's type where its
+   implementation is still to come. What the walk reads, and what it leaves
+   out, is written in mod_impl.ml. *)
 let pr_axioms env opac =
   let add c cb acc =
     if Declareops.constant_has_body cb then acc else
@@ -202,6 +217,7 @@ let pr_axioms env opac =
       | None -> Cset.add c acc
       | Some s -> Cset.union s acc in
   let csts = fold_constants add env Cset.empty in
+  let csts = Cset.filter (fun c -> not (Mod_impl.defines_constant env c)) csts in
   let csts = Cset.fold (fun c acc -> Constant.to_string c :: acc) csts [] in
   pr_assumptions "Axioms" (add_missing csts !sealed_axioms)
 
