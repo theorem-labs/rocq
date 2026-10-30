@@ -225,12 +225,60 @@ let footprint_of f =
          declared = Univ.Level.Set.elements declared;
          undeclared = Univ.Level.Set.elements undeclared }
 
-let universe_footprint_key fp = Proof_replay.encode_blob (Marshal.to_string fp [])
+(* The key in text, short enough not to grow the record: ["w"] for the whole
+   graph, else ["f"], then the declared and the undeclared levels on two
+   lines. A line lists [S] (Set), [V<n>] (a bound variable) and, per
+   library and process, [G<dirpath>|<process>|<n>,<n>...], separated by
+   [;]. A key that does not read back is not taken for another: the proof
+   misses. *)
+let encode_levels levels =
+  let groups = Hashtbl.create 8 and order = ref [] and others = ref [] in
+  List.iter (fun l ->
+      match Univ.Level.name l, Univ.Level.var_index l with
+      | Some g, _ ->
+        let dp, s, n = Univ.UGlobal.repr g in
+        let k = (Names.DirPath.to_string dp, s) in
+        (match Hashtbl.find_opt groups k with
+         | Some ns -> Hashtbl.replace groups k (n :: ns)
+         | None -> Hashtbl.add groups k [ n ]; order := k :: !order)
+      | None, Some i -> others := ("V" ^ string_of_int i) :: !others
+      | None, None -> others := "S" :: !others)
+    levels;
+  let group (dp, s) =
+    let ns = List.rev (Hashtbl.find groups (dp, s)) in
+    Printf.sprintf "G%s|%s|%s" dp s (String.concat "," (List.map string_of_int ns))
+  in
+  String.concat ";" (List.rev_append !others (List.rev_map group !order))
+
+let decode_levels line =
+  let dirpath s = Names.DirPath.make (List.rev_map Names.Id.of_string (String.split_on_char '.' s)) in
+  let item it =
+    if String.equal it "S" then [ Univ.Level.set ]
+    else if String.length it > 1 && it.[0] = 'V' then
+      [ Univ.Level.var (int_of_string (String.sub it 1 (String.length it - 1))) ]
+    else if String.length it > 1 && it.[0] = 'G' then
+      match String.split_on_char '|' (String.sub it 1 (String.length it - 1)) with
+      | [ dp; s; ns ] ->
+        let dp = dirpath dp in
+        List.map (fun n -> Univ.Level.make (Univ.UGlobal.make dp s (int_of_string n)))
+          (String.split_on_char ',' ns)
+      | _ -> failwith "universe footprint group"
+    else failwith "universe footprint item"
+  in
+  if String.equal line "" then [] else List.concat_map item (String.split_on_char ';' line)
+
+let universe_footprint_key fp =
+  if fp.whole_graph then "w"
+  else "f\n" ^ encode_levels fp.declared ^ "\n" ^ encode_levels fp.undeclared
 
 let universe_footprint_of_key key =
-  match Proof_replay.decode_blob key with
-  | None -> None
-  | Some bytes -> (try Some (Marshal.from_string bytes 0 : universe_footprint) with _ -> None)
+  match String.split_on_char '\n' key with
+  | [ "w" ] -> Some { whole_graph = true; declared = []; undeclared = [] }
+  | [ "f"; d; u ] ->
+    (match decode_levels d, decode_levels u with
+     | declared, undeclared -> Some { whole_graph = false; declared; undeclared }
+     | exception (Failure _ | Invalid_argument _ | CErrors.UserError _) -> None)
+  | _ -> None
 
 let universe_footprint_value graph fp =
   UGraph.without_query_hook (fun () ->
@@ -247,7 +295,7 @@ let universe_footprint_value graph fp =
         in
         if not (declared_now && undeclared_now) then "universe_domain_changed"
         else
-          let levels = Array.of_list fp.declared in
+          let levels = Array.of_list (List.sort Univ.Level.compare fp.declared) in
           let n = Array.length levels in
           let order = Bytes.make (n * n) '.' in
           for i = 0 to n - 1 do
