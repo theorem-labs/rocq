@@ -137,6 +137,7 @@ let flags_slot = Proof_recorder.slot ()
 let generalizable_slot = Proof_recorder.slot ()
 let template_slot = Proof_recorder.slot ()
 let universe_slot = Proof_recorder.slot ()
+let warnings_registry_slot = Proof_recorder.slot ()
 
 let cached slot what v = Proof_recorder.digest_slot slot ~what v
 
@@ -368,6 +369,12 @@ let start_reads () =
     one "4" "typing_flags" (fun () -> cached flags_slot "typing_flags" (Environ.typing_flags env));
     one "13" "options" (fun () -> Proof_recorder.digest ~what:"options" (Goptions.get_tables ()));
     one "13" "warnings" (fun () -> Proof_recorder.digest ~what:"warnings" (CWarnings.get_flags ()));
+    (* The warnings and categories that exist: a warning created the first
+       time it is needed (a deprecated reference's version warning) exists
+       or not depending on what ran before, and a later warnings flag can
+       name it (fixture warning_registry_history). *)
+    one "13" "warnings_registry" (fun () ->
+        cached warnings_registry_slot "warnings_registry" (CWarnings.registry_view ()));
     one "M3" "generalizable" (fun () ->
         cached generalizable_slot "generalizable" (Implicit_quantifiers.generalizable_idents ()));
     one "M7" "template_default_univs" (fun () ->
