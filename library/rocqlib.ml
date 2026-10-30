@@ -162,12 +162,27 @@ let add_ref s c =
 let cache_ref (s,c) =
   add_ref s c
 
+(* BET-84: an export-locality registration acts when its module is opened,
+   so replay treats [Import] as a late command once one is loaded or
+   declared (Proof_replay.note_export_register). Otherwise the object is
+   [object_with_locality]'s: SuperGlobal acts at load, Export at open. *)
+let note_locality = function
+  | Libobject.Export -> Proof_replay.note_export_register ()
+  | Libobject.Local | Libobject.SuperGlobal -> ()
+
 let (inRocqlibRef : Libobject.locality * (string * GlobRef.t) -> Libobject.obj) =
   let open Libobject in
-  declare_object @@ object_with_locality "COQLIBREF"
-    ~cache:cache_ref
-    ~subst:(Some ident_subst_function)
-    ~discharge:(fun x -> x)
+  declare_object
+    { (object_with_locality "COQLIBREF"
+         ~cache:cache_ref
+         ~subst:(Some ident_subst_function)
+         ~discharge:(fun x -> x))
+      with
+      cache_function = (fun (locality, v) -> note_locality locality; cache_ref v);
+      load_function = (fun _ (locality, v) -> match locality with
+          | Local -> assert false
+          | Export -> note_locality locality
+          | SuperGlobal -> cache_ref v) }
 
 (** Replaces a binding ! *)
 let register_ref local s c =
