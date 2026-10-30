@@ -175,6 +175,12 @@ collection of section variables.  `eval_bidirectionality_hint`: the hint of
 a variable, whose key is its name; before, the evaluator could not read such
 a key back, so `same` missed with why `unknown`.
 
+**The cross-model soundness review of `5f39c90b`.**  Each fixture is a
+reviewer's scenario; stock and replay must agree.
+`universe_checked_proof_unchecked_graph`: the global graph does not check
+universes, a proof checks its own, and a constraint it needs is reversed;
+stock rejects the proof.
+
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
 one trips, no later proof of the process is replayed, and each is counted as

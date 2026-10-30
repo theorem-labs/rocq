@@ -280,6 +280,12 @@ let universe_footprint_of_key key =
      | exception (Failure _ | Invalid_argument _ | CErrors.UserError _) -> None)
   | _ -> None
 
+(* The order is computed with universe checking ON, whatever the graph's
+   own mode: a graph that does not check ([Unset Universe Checking]) proves
+   every constraint, while the proof can check its own constraints against
+   it ([#[bypass_check(universes=no)]]), so the order the proof's checks see
+   is the checked one. The graph's mode is kept in the value beside it
+   (fixture universe_checked_proof_unchecked_graph). *)
 let universe_footprint_value graph fp =
   UGraph.without_query_hook (fun () ->
       if fp.whole_graph then cached universe_slot "universe_graph" graph
@@ -295,6 +301,7 @@ let universe_footprint_value graph fp =
         in
         if not (declared_now && undeclared_now) then "universe_domain_changed"
         else
+          let checked = UGraph.set_type_in_type false graph in
           let levels = Array.of_list (List.sort Univ.Level.compare fp.declared) in
           let n = Array.length levels in
           let order = Bytes.make (n * n) '.' in
@@ -303,8 +310,8 @@ let universe_footprint_value graph fp =
               if i <> j then
                 let a = levels.(i) and b = levels.(j) in
                 let c =
-                  if UGraph.check_constraint graph (a, Univ.UnivConstraint.Lt, b) then 'l'
-                  else if UGraph.check_constraint graph (a, Univ.UnivConstraint.Le, b) then 'e'
+                  if UGraph.check_constraint checked (a, Univ.UnivConstraint.Lt, b) then 'l'
+                  else if UGraph.check_constraint checked (a, Univ.UnivConstraint.Le, b) then 'e'
                   else '-'
                 in
                 Bytes.set order (i * n + j) c
