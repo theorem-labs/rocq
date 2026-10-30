@@ -4,8 +4,9 @@
    costs is major-collector work -- lane R2's fast set pays about 1.7 s of marking and sweeping per
    file at [space_overhead = 200] -- and how much of that allocation the minor heap promotes and
    how much of the shared cache each process takes for itself. The constants below are the ones the
-   lane measured (reports/lever9a.md): a change of either is a change of the lane's wall, so the
-   test pins them.
+   lane measured (reports/lever9a.md), with [space_overhead] held down to what a compile process can
+   answer under the address-space ceilings misc/print-assumptions-memo-limits.sh pins: a change of
+   either is a change of the lane's wall or of what that test allows, so the test pins them.
 
    The policy changes no result: OCaml's collector decides when values move and are freed, not what
    any function computes. The second test pins the other half of [init_gc]: when the user sets
@@ -18,7 +19,7 @@ open Utest
 
 (* The values of sysinit/coqinit.ml's [set_gc_policy] and [set_gc_best_fit]. *)
 let lane_minor_heap_size = 2 * 1024 * 1024
-let lane_space_overhead = 3200
+let lane_space_overhead = 1600
 let best_fit = 2
 
 (* OCAMLRUNPARAM is not set when the test-suite runs a unit test; if it were, [init_gc] would install
