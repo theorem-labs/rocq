@@ -396,10 +396,30 @@ let table_cache = ref ConstrMap.empty
 let saturate_cache = ref ConstrMap.empty
 let specs_cache = ref ConstrMap.empty
 
-let record_cache name table =
+(* BET-84 census row 15: the three registration tables, each read whole
+   under its Summary name before [init_cache] copies it. ONE value function,
+   called by the record site and by the replay evaluator
+   (dev/tools/census/replay_channels.py). *)
+let recorded_zify_table name =
+  let tbl = match name with
+    | "zify_table" -> Some !table
+    | "zify_saturate" -> Some !saturate
+    | "zify_specs" -> Some !specs
+    | _ -> None
+  in
+  Option.map (fun t -> Proof_recorder.digest_cached ~what:"zify_table" t) tbl
+
+(* A key that names none of the three tables is a miss. *)
+let () =
+  Proof_replay.register_evaluator "zify_table" (fun key ->
+      match recorded_zify_table key with
+      | Some _ as v -> Proof_replay.Value v
+      | None -> Proof_replay.Unknown)
+
+let record_cache name =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"15" ~channel:"zify_table" ~key:(fun () -> name)
-      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"zify_table" table))
+      ~value:(fun () -> recorded_zify_table name)
 
 (** Each type-class gives rise to a different table.
     They only differ on how projections are extracted.  *)
@@ -771,15 +791,12 @@ module UnOpSpec = MakeTable (EUnopSpec)
 module BinOpSpec = MakeTable (EBinOpSpec)
 
 let init_cache () =
-  let table = !table in
-  let saturate = !saturate in
-  let specs = !specs in
-  record_cache "zify_table" table;
-  record_cache "zify_saturate" saturate;
-  record_cache "zify_specs" specs;
-  table_cache := table;
-  saturate_cache := saturate;
-  specs_cache := specs
+  record_cache "zify_table";
+  record_cache "zify_saturate";
+  record_cache "zify_specs";
+  table_cache := !table;
+  saturate_cache := !saturate;
+  specs_cache := !specs
 
 open EInjT
 

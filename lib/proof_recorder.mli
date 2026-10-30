@@ -238,6 +238,9 @@ val set_locs_source : Loc.source -> unit
     locations. Set by the compile driver, for a recording compile and a
     replaying one alike. *)
 
+val compiled_source : unit -> Loc.source option
+(** The source {!set_locs_source} set, if any. *)
+
 val digest_cached_by : what:string -> key:'k -> (unit -> 'a) -> string
 (** [digest_cached_by ~what ~key view] is the digest of [view ()], with the
     locations of the compiled file left out, computed once per physical

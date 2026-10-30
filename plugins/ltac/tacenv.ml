@@ -60,7 +60,7 @@ let record_hook : (string -> KerName.t -> string option) ref = ref (fun _ _ -> N
    function through [record_hook], never from that argument. *)
 let record channel k (_found : 'a option) =
   if Proof_recorder.active () then
-    Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> KerName.to_string k)
+    Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> Lib.kername_key k)
       ~value:(fun () -> !record_hook channel k)
 
 (* The lookup itself must build no option when the recorder is off: these run
@@ -185,25 +185,20 @@ let recorded_tactic_definition k =
   | None -> None
   | Some v -> Some (Proof_recorder.digest ~what:"tactic_definition" v)
 
-(* The record holds the printed kernel name. Both tables are scanned, so a
-   name in neither really is absent, which is what the lookup recorded. *)
-let kername_of_string s =
-  let found = ref None in
-  let look k _ = if Option.is_empty !found && String.equal (KerName.to_string k) s then found := Some k in
-  KerName.Map.iter look !mactab;
-  if Option.is_empty !found then KerName.Map.iter look !alias_map;
-  !found
-
 let () =
   record_hook :=
     (fun channel k ->
        if String.equal channel "tactic_alias" then recorded_tactic_alias k
        else recorded_tactic_definition k)
 
+(* The record holds the kernel name as [Lib.kername_key] writes it, which
+   names one kernel name ([KerName.to_string] does not: a bound module loses
+   its number, and ["A.B.c"] is both a file's label and a module's). A key
+   that does not read back is a miss. *)
 let () =
   let evaluator recorded key =
-    match kername_of_string key with
-    | None -> Proof_replay.Value None
+    match Lib.kername_of_key key with
+    | None -> Proof_replay.Unknown
     | Some k -> (match recorded k with v -> Proof_replay.Value v | exception _ -> Proof_replay.Unknown)
   in
   Proof_replay.register_evaluator "tactic_alias" (evaluator recorded_tactic_alias);
