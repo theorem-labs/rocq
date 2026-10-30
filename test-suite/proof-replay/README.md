@@ -183,7 +183,14 @@ stock rejects the proof.  `vm_inline_lib`, `vm_inline_same_file`: a changed
 constant is inlined (`Register Inline`) into the bytecode of an unchanged one
 that a proof runs with `vm_compute`; stock rejects the proof.
 `vm_global_unchanged_hit` is their control: unchanged bytecode, moved in the
-library's code table, still replays.
+library's code table, still replays.  `vm_lia_hit`: two `lia` proofs, whose
+certificate check runs the machine over Stdlib's checker, replay on a cold
+and on a warm cache; its replay `.vo` differs from stock's only in the
+sharing of the string "BinInt" (`EXEMPTIBLE_FIXTURES` in `runner.py`).
+`vm_cache_lib`, `vm_cache_same_file`:
+an `Eval vm_compute` fills the machine's cache with an unchanged constant
+that calls a changed one, and a proof then runs it from the cache; stock
+rejects the proof.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once

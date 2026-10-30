@@ -345,8 +345,14 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: differences, every other segment equal). write_scheme_rewrite replays
 #: two proofs whose stored terms carry the scheme they created, and its
 #: library segment shares "A" and "PR" where stock's does (vodiff,
-#: 2026-10-30: 0 value differences, 4 sharing differences).
-EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite")
+#: 2026-10-30: 0 value differences, 4 sharing differences). vm_lia_hit
+#: replays two lia proofs whose terms name Stdlib's BinInt, and stock's
+#: library segment reaches the string "BinInt" through a shared pointer
+#: where the replay's does not (vodiff, 2026-10-30: 0 value differences,
+#: 2 sharing differences; the same on a switch built before the vm_global
+#: read).
+EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite",
+                       "vm_lia_hit")
 
 
 def exemption_allowed(fixture, differing_segments, library_values_equal):
