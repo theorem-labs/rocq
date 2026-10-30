@@ -193,7 +193,9 @@ that calls a changed one, and a proof then runs it from the cache; stock
 rejects the proof.  `prim_token_warning_threshold`: a number notation's
 warning threshold drops below a number a proof reads, under `Set Warnings
 "+large-number"`; the term and scope do not change, and stock rejects the
-proof.
+proof.  `warning_error_caught`: a `try` catches a warning raised as an error,
+and stock accepts the proof; the proof is ineligible (`warning_error`), so
+replay does not raise the warning again, and the control replays.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
