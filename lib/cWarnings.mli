@@ -31,6 +31,12 @@ val warn_again : ?loc:Loc.t -> name:string -> message:string -> unit -> unit
     warning [name]'s current status decides, as for {!warn}, and [message]
     is the document the registration printed, as the record keeps it. *)
 
+val with_enabled_silenced : (unit -> 'a) -> 'a
+(** BET-84: runs [f] with every enabled warning disabled, and restores them
+    afterwards, also when [f] raises. A warning that is an error stays an
+    error, so [f] fails where it would fail; only what it prints is left
+    out. *)
+
 (** Creation functions
 
     Note that names are in a combined namespace including the special name ["none"].

@@ -190,7 +190,10 @@ sharing of the string "BinInt" (`EXEMPTIBLE_FIXTURES` in `runner.py`).
 `vm_cache_lib`, `vm_cache_same_file`:
 an `Eval vm_compute` fills the machine's cache with an unchanged constant
 that calls a changed one, and a proof then runs it from the cache; stock
-rejects the proof.
+rejects the proof.  `prim_token_warning_threshold`: a number notation's
+warning threshold drops below a number a proof reads, under `Set Warnings
+"+large-number"`; the term and scope do not change, and stock rejects the
+proof.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once

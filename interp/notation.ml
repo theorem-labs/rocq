@@ -640,14 +640,32 @@ let notation_query_of_key key =
 
    ONE value function, called by the record site and by the replay
    evaluator (dev/tools/census/replay_channels.py): the term and the scope
-   the query finds, or absent. Every node of the term carries the token's
-   location, which is not in the key, so the locations of the compiled file
-   are left out of the digest: a number written on another line is the same
-   read. *)
+   the query finds, with the primitive interpreter that scope holds (its
+   functions, and its warning policy: a number notation's [warning after]
+   threshold decides whether the same term comes with a warning, fixture
+   prim_token_warning_threshold), or absent. Every node of the term carries
+   the token's location, which is not in the key, so the locations of the
+   compiled file are left out of the digest: a number written on another
+   line is the same read. *)
+let prim_token_interpreter_view (required, info) =
+  (* [ty_name] is a qualid with the location of the declaring command, used
+     only to name the type in messages: its printed name is the value. *)
+  let obj o = PrimNotations.(o.to_kind, o.to_ty, o.to_post, o.of_kind, o.of_ty,
+                             Libnames.string_of_qualid o.ty_name, o.warning) in
+  (required, match info with
+    | Uid uid -> `Uid uid
+    | NumberNotation o -> `Number (obj o)
+    | StringNotation o -> `String (obj o))
+
 let recorded_prim_token = function
   | None -> None
   | Some (pat, sc) ->
-    Some (Proof_recorder.digest ?locs:(Proof_recorder.compiled_source ()) ~what:"prim_token" (pat, sc))
+    let interpreter =
+      Option.map prim_token_interpreter_view
+        (String.Map.find_opt (Option.default default_scope sc) !prim_token_interp_infos)
+    in
+    Some (Proof_recorder.digest ?locs:(Proof_recorder.compiled_source ()) ~what:"prim_token"
+            (pat, sc, interpreter))
 
 (* [mode] names the query. A term query accepts every interpretation; a
    pattern query rejects one that is not a constructor and goes on to an older
@@ -702,19 +720,21 @@ let prim_token_of_notation_text text =
    [interp_prim_token] asks it, at a location of the compiled file, which
    the value leaves out. It runs the token's interpreter, so what that
    leaves behind is undone: the universe levels it makes are not the
-   proof's, so the level and sort counters are put back; a warning it raises
-   is not printed (the record raises the proof's warnings again on a hit,
-   and on a miss the proof prints them itself); and its reads are not the
-   open proof's. *)
+   proof's, so the level and sort counters are put back, and its reads are
+   not the open proof's. A warning that is an error still raises, so the
+   query fails where stock's fails and the read is a miss; an enabled
+   warning is not printed (the record raises the proof's warnings again on
+   a hit, and on a miss the proof prints them itself). The warning policy
+   that decides whether a warning comes is in the value. *)
 let replay_prim_token_query p_as_ntn p scopes =
   let loc = Option.map Loc.initial (Proof_recorder.compiled_source ()) in
   let counters = UnivGen.counters () in
   Fun.protect ~finally:(fun () -> UnivGen.set_counters counters) (fun () ->
       Proof_recorder.without_recording (fun () ->
-          CWarnings.with_warn "-all" (fun () ->
+          CWarnings.with_enabled_silenced (fun () ->
               match find_interpretation p_as_ntn (find_prim_token ?loc (fun _ -> ()) p) scopes with
               | found -> Some found
-              | exception Not_found -> None) ()))
+              | exception Not_found -> None)))
 
 (* Only a term query is asked again. A pattern query's answer also depends
    on its caller's check of the pattern, which the key does not hold, so its
