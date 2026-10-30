@@ -161,7 +161,8 @@ value that does not change, and must replay; before its channel had an
 evaluator it missed with why `no_evaluator`.  `eval_notation`: the
 interpretation of a notation.  `eval_zify_table`: the zify operator table,
 which an `Add Zify` between the two proofs changes.  `eval_prim_token`: the
-scope a number is read in.
+scope a number is read in.  `eval_ltac2_global`: the body of an Ltac2
+definition.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
