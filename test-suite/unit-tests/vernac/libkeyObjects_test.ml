@@ -96,17 +96,21 @@ let objects_exn ?(compiled = lib_a) ?(summary = sum_a) (syntax, objects) =
   | Ok b -> b
   | Error what -> failwith ("no label: " ^ what)
 
-(* Version 5 test vector: the label of [vector_input] over [lib_a] and
-   [sum_a], without [Libkey]'s header, which holds the OCaml version and so
-   differs between switches. It pins the layout of LibkeyObjects (version,
-   the blinded compiled form, the segments' tree, the summary's view) and the
-   encoding beneath it; a change of either must bump a version and change
-   this value. [lib_a] is an empty library, so the axiom-or-opaque blinding
-   ([blind_compiled]) is the identity on it. *)
-let vector = "fc8c33be8f8584b10d7cc9ca3509540c9b5a4872f948d545bfacc513ca582cac"
+(* Version 6 test vector: the label of [vector_input] over [lib_a] and
+   [sum_a] at vmlibrary format 0, without [Libkey]'s header, which holds the
+   OCaml version and so differs between switches. It pins the layout of
+   LibkeyObjects (version, the vmlibrary format, the blinded compiled form,
+   the segments' tree, the summary's view) and the encoding beneath it; a
+   change of either must bump a version and change this value. [lib_a] is an
+   empty library, so the axiom-or-opaque blinding ([blind_compiled]) is the
+   identity on it. The format is written out rather than taken from
+   [LibkeyObjects.vmlibrary_format_version] so that a build whose constant is
+   another format (a merge with the VM member) still has this vector; what
+   ties the layout to the live constant is the "layout" test below. *)
+let vector = "c209892ff2126058df0579e4d883c324ac2c3e4b4c2ef55c265c1a490ff2a956"
 
-let () = add_test "layout version 5" (fun () ->
-    assert_equal ~printer:string_of_int 5 LibkeyObjects.version)
+let () = add_test "layout version 6" (fun () ->
+    assert_equal ~printer:string_of_int 6 LibkeyObjects.version)
 
 (* The summary as the layout reads it, written out: the name, the
    dependencies as a list in their order, the safe dependencies in
@@ -117,17 +121,19 @@ let summary_view (s : LibkeyObjects.summary) =
     List.map (fun (w : UserWarn.warn) -> (w.note, w.cats)) s.info.UserWarn.warn))
 
 (* The value the layout encodes, over [lib_a] and [sum_a] with the
-   locations of [vector_input] left out: the version, the blinded compiled
-   form, the two segments and the summary's view. The three tests below read
-   it, so a layout change is written once. *)
-let layout_value ?(version = LibkeyObjects.version) () =
+   locations of [vector_input] left out: the version, the vmlibrary format
+   version, the blinded compiled form, the two segments and the summary's
+   view. The four tests below read it, so a layout change is written once. *)
+let layout_value ?(version = LibkeyObjects.version)
+    ?(vmlibrary_version = LibkeyObjects.vmlibrary_format_version) () =
   let syn, obj = vector_input None None in
-  Obj.repr (version, LibkeyObjects.blind_compiled lib_a, syn, obj, summary_view sum_a)
+  Obj.repr (version, vmlibrary_version, LibkeyObjects.blind_compiled lib_a, syn, obj,
+            summary_view sum_a)
 
 let () = add_test "test vector" (fun () ->
     let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
     assert_equal ~msg:"32 bytes" ~printer:string_of_int 32 (String.length label);
-    let headerless = Libkey.sha256 (Libkey.encode (layout_value ())) in
+    let headerless = Libkey.sha256 (Libkey.encode (layout_value ~vmlibrary_version:0 ())) in
     assert_equal ~msg:"label without the header" ~printer:(fun s -> s) vector (hex headerless))
 
 (* The reference reading of the layout: Libkey.label of that value.
@@ -145,7 +151,23 @@ let () = add_test "a label of another layout version is another label" (fun () -
     List.iter (fun version ->
         assert_bool ("layout version " ^ string_of_int version)
           (not (String.equal (Libkey.label (layout_value ~version ())) current)))
-      [1; 2; 3; 4])
+      [1; 2; 3; 4; 5])
+
+(* Version 6 (speed-8): the vmlibrary format is part of the encoded value
+   too, so a library compiled by a build whose VM segment is in another
+   format never has the label of this one, whatever its source, objects and
+   summary are (the version-6 paragraph of vernac/libkeyObjects.mli). The
+   two formats that exist are 0, a segment that starts straight with the
+   marshalled table, and 1, the first with a version word; both are here,
+   and this build's own is left out, so the pair that exists is covered
+   whichever of them this build is. 2 stands for the next one. *)
+let () = add_test "a label under another vmlibrary format is another label" (fun () ->
+    let current = Libkey.label (layout_value ()) in
+    List.iter (fun vmlibrary_version ->
+        if not (Int.equal vmlibrary_version LibkeyObjects.vmlibrary_format_version) then
+          assert_bool ("vmlibrary format " ^ string_of_int vmlibrary_version)
+            (not (String.equal (Libkey.label (layout_value ~vmlibrary_version ())) current)))
+      [0; 1; 2])
 
 let () = add_test "the compiled form counts" (fun () ->
     let input = vector_input None None in

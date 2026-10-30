@@ -65,10 +65,15 @@
      application and a module declared with a module type are refused like
      the application). An [Admitted -> Qed] edit in a functor body or a
      module type moves its owner's label (label version 5).
-   Two modes describe this build and take no file:
+   Three modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across
      builds compares them only within one layout version.
+   - [--vmlibrary-format-version]: the number that names the format of the
+     VM-bytecode segment this build reads and writes
+     ([LibkeyObjects.vmlibrary_format_version]), one line, read by
+     test-suite/misc/library-label-vmlibrary.sh against the first word of
+     that segment in a library this build wrote.
    - [--vo-representation]: how this build represents what a .vo stores
      (see [vo_representation] below), read by test-suite/misc/vo-format.sh.
    Exit 0; 1 when the file cannot be read as a .vo file; 2 on a usage error;
@@ -83,7 +88,7 @@ let hex s =
 
 let usage () =
   prerr_endline "usage: rocq-library-label (--check | --stored | --attempts | --attempts-json | --axiom-report-json) FILE.vo";
-  prerr_endline "       rocq-library-label (--layout-version | --vo-representation)";
+  prerr_endline "       rocq-library-label (--layout-version | --vmlibrary-format-version | --vo-representation)";
   exit 2
 
 (* The label kind [--check] prints, and the hex it prints beside it: the full
@@ -436,5 +441,7 @@ let () =
     | _ -> usage ()
     end
   | ["--layout-version"] -> Printf.printf "%d\n" LibkeyObjects.version
+  | ["--vmlibrary-format-version"] ->
+    Printf.printf "%d\n" LibkeyObjects.vmlibrary_format_version
   | ["--vo-representation"] -> print_string (vo_representation ())
   | _ -> usage ()

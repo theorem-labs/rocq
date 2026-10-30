@@ -22,8 +22,25 @@ open Libobject
    library's own signature (the ones [axiom_report] lists); in a functor
    body, a module type and every other place an opaque proof stays one,
    distinct from an axiom, with its table index erased ([blind_compiled]),
-   so an [Admitted -> Qed] edit there moves the label. *)
-let version = 5
+   so an [Admitted -> Qed] edit there moves the label.
+   Version 6 (speed-8): the key covers [vmlibrary_format_version], the
+   format version of the VM-bytecode segment of the files this build reads
+   and writes, so an object written under one VM format is never reused by
+   a build that reads another. *)
+let version = 6
+
+(* The format of the vmlibrary segment the files of this build carry, as a
+   number the key separates formats by: 0 for a segment that starts straight
+   with the marshalled table (what a build without the VM member writes), and
+   otherwise the version word the segment starts with
+   ([Vmlibrary.format_version], kernel/vmlibrary.ml), which counts from 1, so
+   no versioned format is ever 0.
+
+   Why the key carries it, why it is a number here rather than
+   [Vmlibrary.format_version], and what the merge of the two branches defines
+   it as: the version-6 paragraph of libkeyObjects.mli. A build that has both
+   and disagrees fails test-suite/misc/library-label-vmlibrary.sh. *)
+let vmlibrary_format_version = 0
 
 type summary = {
   name : DirPath.t;
@@ -280,7 +297,8 @@ let label_result ~summary ~compiled ~syntax ~objects =
     | Error what -> Error ("object segment: " ^ what)
     | Ok objects ->
       let input =
-        (version, blind_compiled compiled, syntax, objects, summary_view summary) in
+        (version, vmlibrary_format_version, blind_compiled compiled, syntax, objects,
+         summary_view summary) in
       match Libkey.label (Obj.repr input) with
       | label -> Ok label
       | exception Libkey.Unsupported what -> Error ("encoding: " ^ what)

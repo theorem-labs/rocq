@@ -22,9 +22,12 @@ open Names
     same label, unless the edit creates a new universe (below), so its
     dependents keep their compiled files.
 
-    {b Byte layout, version 2.} The label is
-    {v Libkey.label (Obj.repr (version, compiled, syn', obj', summary')) v}
+    {b Byte layout, version 6.} The label is
+    {v Libkey.label (Obj.repr (version, vmlibrary_format_version, compiled, syn', obj', summary')) v}
     (32 bytes) where:
+    - [vmlibrary_format_version] is the format version of the VM-bytecode
+      segment this build reads and writes: see the version-6 paragraph
+      below;
     - [compiled] is the library's compiled form as stored. It holds the
       digests its dependencies' files stored when this library was compiled
       against them. Such a digest covers a dependency's own summary only
@@ -219,11 +222,48 @@ open Names
     elaboration of a file that uses its objects goes -- is a property of
     the build that compiles that file, not of this library.
 
+    {b The VM segment's format version in the key (version 6, speed-8).}
+    The [vmlibrary] segment of a [.vo] holds VM bytecode: instruction words
+    the C interpreter of the READING process dispatches on. A process whose
+    VM lacks the opcodes the writer emitted jumps where its own table sends
+    that word and dies with no message, which is why that segment carries a
+    format version of its own ([Vmlibrary.format_version],
+    kernel/vmlibrary.ml: a 32-bit word the segment starts with, checked
+    before anything in it is unmarshalled). Two builds whose VM segments are
+    in different formats cannot read each other's files, so they must never
+    agree on a label, however identical a library's source, objects and
+    summary are: nothing else in the key moves with that format, since the
+    compiled form the label reads is the kernel value, not the bytes of the
+    segment. The key therefore carries [vmlibrary_format_version], the
+    number that names this build's format: 0 for a segment that starts
+    straight with the marshalled table, which is what a build without the
+    VM member writes, and otherwise the version word the segment starts
+    with, which counts from 1. The two formats that exist are therefore 0
+    and 1, and they are two labels.
+
+    It is a number here rather than [Vmlibrary.format_version] itself
+    because the branch that writes the version word and the branch that
+    computes this key meet only in a release: neither is an ancestor of the
+    other, so this file cannot name a value the other defines, and a build
+    of this branch alone has none. The merge of the two therefore defines
+    this constant as [Vmlibrary.format_version], which is one edit and
+    leaves one number to raise afterwards. It is not left to a reader of
+    this comment:
+    test-suite/misc/library-label-vmlibrary.sh reads the first word of the
+    [vmlibrary] segment of a library the build under test wrote and fails
+    unless this constant names that format -- equal to the word when there
+    is one, 0 when the segment starts with the marshaller's magic. A merge
+    that forgets the edit fails that test, which names it, and so does a
+    build whose [Vmlibrary.format_version] was raised without the key. Once
+    the two branches share a base, the binding is the only definition and
+    that test's purpose is gone.
+
     {b What the label does not cover.} The [opaques] segment (the proof
     terms of opaque constants: a changed proof keeps the label unless it
     changes what the compiled form holds, which is the point of the
     design, so its owning library must still reach the proof checker), the
-    [vm] segment, which the checker regenerates, the [keepfacts] segment
+    [vm] segment's bytes, which the checker regenerates (its format version
+    is covered: the paragraph above), the [keepfacts] segment
     ([KeepFacts]: per-declaration assumption closures and the opacities
     commands saw, which [coqc] writes only under [-location-free-label] and
     only for a [.vo], which [rocqchk] never reads, which a dependent's [coqc]
@@ -240,6 +280,12 @@ open Names
     reads labels handles all of these. *)
 
 val version : int
+
+val vmlibrary_format_version : int
+(** The number that names the format of the [vmlibrary] segment this build
+    reads and writes: [Vmlibrary.format_version] in a build that writes a
+    version word, 0 in a build that writes none (the version-6 paragraph
+    above). [rocq-library-label --vmlibrary-format-version] prints it. *)
 
 (** The summary of a library, as [Library] writes it in a [.vo] file's
     [summary] segment (but for the OCaml version). *)
