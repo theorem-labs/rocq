@@ -1051,6 +1051,25 @@ let compile ~fail_on_error ~inline_limit ~uinstance ?(binnum = Vmbinnum.no_binnu
       None
     end
 
+(* ROCQ_VM_INLINE=0 turns off both VM levers at once, the compile-time expansion of a small
+   called constant's body and the native binary-number operation [Vmznative] pins to a body
+   it recognizes; what that means for a caller is in the .mli.
+
+   The two answer to one switch because either one alone is not the arm: a process that still
+   pins native operations compiles different bytecode from the base's for every constant
+   [Vmznative] recognizes, which is what the arm exists to rule out.
+
+   ROCQ_VM_INLINE=1 and an unset variable are the default. Any other value stops the process,
+   as a misspelt switch that silently did nothing would be read as a measurement. *)
+let levers_on =
+  match Sys.getenv_opt "ROCQ_VM_INLINE" with
+  | None | Some "1" -> true
+  | Some "0" -> false
+  | Some v ->
+    Printf.eprintf
+      "ROCQ_VM_INLINE=%s: expected 0 (the base's code generation) or 1.\n%!" v;
+    exit 1
+
 let compile_constant_body ?name ?count ~fail_on_error ?(inline_limit = 0) env univs = function
   | Undef _ | OpaqueDef _ -> Some BCconstant
   | Primitive _ | Symbol _ -> None
@@ -1082,10 +1101,12 @@ let compile_constant_body ?name ?count ~fail_on_error ?(inline_limit = 0) env un
            defines, which is the one at the init index of a fixpoint block and the body itself
            otherwise. A function BINNUM already guards gets none, and is not even read for one:
            BINNUM accepts every argument the native operation accepts and more, so the second
-           check would only read the arguments again. *)
+           check would only read the arguments again. With the levers off, no body is read for
+           one at all. *)
         let znative =
           let init = match kind body with Fix ((_, init), _) -> init | _ -> 0 in
-          if not (UVars.eq_sizes (0, 0) instance_size) || Option.has_some (binnum init) then
+          if not levers_on || not (UVars.eq_sizes (0, 0) instance_size)
+             || Option.has_some (binnum init) then
             no_znative
           else match Vmznative.pin_of_body ?name env body with
             | None -> no_znative

@@ -13,9 +13,22 @@ open Constr
 open Declarations
 open Environ
 
+val levers_on : bool
+(** Whether this process generates the code the VM levers of this build produce:
+    the compile-time expansion of a small called constant's body (the
+    [inline_limit] below, which {!Vmsymtable} sets from this) and the native
+    binary-number operations of {!Vmznative}. False under ROCQ_VM_INLINE=0,
+    where the process generates the code its base generates.
+
+    The native operations are pinned while a declaration is compiled, so with
+    this false a library file carries different bytecode, and a process runs the
+    bytecode the library files it loads carry: an arm that is to generate and run
+    the base's code must build its libraries under the switch too. *)
+
 (** [inline_limit] (default 0, no inlining) is the size under which an applied constant's body is
     expanded instead of called; see [Genlambda.inlinable_body]. Code that goes into a library file
-    is compiled with the default, so a library's bytes do not depend on it. *)
+    is compiled with the default, so a library's bytes do not depend on this limit (they do depend
+    on [levers_on], through the native operations above). *)
 val compile :
   fail_on_error:bool ->
   ?inline_limit:int ->

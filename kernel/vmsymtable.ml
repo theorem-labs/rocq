@@ -291,18 +291,10 @@ let envcache_of_rel i envcache = {
    whose vmlibrary disagrees with its library, and the compiler must use the bytecode that file
    carries, as stock does, for the checker to be the thing that refuses it.
 
-   ROCQ_VM_INLINE=0 turns the expansion off: no body is expanded, no constant is compiled again,
-   and this process generates the code speed-6 generates, which gives a reviewer an arm that
-   differs from the base in nothing else. ROCQ_VM_INLINE=1 and an unset variable are the default.
-   Any other value stops the process, as a misspelt switch that silently did nothing would be read
-   as a measurement. *)
-let inline_limit =
-  match Sys.getenv_opt "ROCQ_VM_INLINE" with
-  | None | Some "1" -> 50
-  | Some "0" -> 0
-  | Some v ->
-    Printf.eprintf "ROCQ_VM_INLINE=%s: expected 0 (no expansion) or 1.\n%!" v;
-    exit 1
+   ROCQ_VM_INLINE=0 turns the expansion off here and the native operations of [Vmznative]
+   off where they are pinned, so the process generates the code the base generates; the
+   switch and what it covers are [Vmbytegen.levers_on]. *)
+let inline_limit = if Vmbytegen.levers_on then 50 else 0
 
 let compiled_again_count = ref 0
 let compiled_again () = !compiled_again_count
