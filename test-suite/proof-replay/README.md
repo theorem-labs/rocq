@@ -166,6 +166,11 @@ definition.  `eval_reserved_type`: the reserved type (`Implicit Types`) of a
 binder.  `eval_abbreviation`: what an abbreviation stands for.
 `eval_delimiters_scope`: the scope a delimiting key names.
 `eval_ltac2_notation`: what an Ltac2 notation expands to.
+`eval_proof_using_set`: the set a `Proof using` sentence gives.  Its
+`changed` proof misses on `named_context`, not on `proof_using_set`: the set
+is computed from inputs the proof records before it (the section context,
+the statement, the collections), so a set that changes is always caught
+there first.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
