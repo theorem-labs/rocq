@@ -301,7 +301,13 @@ let rebind_scan =
      && s "Lemma a : True. Qed. Lemma b : True. Proof. idtac \"Require \"\"Load\"\"\". Qed." = None
      && s "Section S. Register x as core.eq.type. Lemma a : True. Qed.\nEnd S." = Some (end_, 2)
      && s "Section S. Lemma a : True. Qed. End S." = None
-     && s "Lemma a : True. Qed. Module M. End M." = Some ("Module", 1)
+     && s "Lemma a : True. Qed. Module M. End M." = None
+     && s "Lemma a : True. Qed. Module Import M. End M." = Some ("Import", 1)
+     && s "Lemma a : True. Qed. Module M : T. End M." = Some ("Module", 1)
+     && s "Lemma a : True. Qed. Module F (X : T). End F." = Some ("Module", 1)
+     && s "Lemma a : True. Qed. Module Type T. End T." = Some ("Module", 1)
+     && s "Module M. Include N. Lemma a : True. Qed. End M." = Some (end_, 1)
+     && s "Module M. Lemma a : True. Qed. End M." = None
      && s "Lemma a : True. Qed. Module N := F X." = Some ("Module", 1)
      && s "Lemma a : True. Qed. Timeout 1Register x as core.eq.type." = Some ("Register", 1)
      && s "Module M : T. Lemma a : True. Qed. End M." = Some (end_, 1)
@@ -340,7 +346,13 @@ let late_events_scan =
      = (Some ("Import", 1), Some 52)
      && s "Lemma a : True. Qed. Lemma b : True. Qed." = (None, None)
      && s "Require Import M. Lemma a : True. Qed." = (None, None)
-     && s "Lemma a : True. Qed. Register x as core.eq.type." = (Some ("Register", 1), Some 21))
+     && s "Lemma a : True. Qed. Register x as core.eq.type." = (Some ("Register", 1), Some 21)
+     && s "Lemma a : True. Qed. Module M. Import N. End M." = (Some ("Import", 1), Some 41)
+     && Replay.scan_late_events ~imports_late:false "Lemma a : True. Qed. Module M. Import N. End M."
+        = (None, None)
+     && Replay.scan_late_events ~imports_late:false "Lemma a : True. Qed. Import N. Require M."
+        = (Some ("Require", 1), Some 31)
+     && s "Lemma a : True. Qed. Module M : T. End M." = (Some ("Module", 1), Some 35))
 
 (* The hit hooks see the replayed proof's reads, and only on a hit (Rocqlib
    marks the lib_ref keys observed through one). *)
