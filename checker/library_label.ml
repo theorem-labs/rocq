@@ -38,21 +38,23 @@
      saw; null when the file has no segment).
      A segment that does not validate against checker/values.ml's
      description of it reads as absent ([read_keep_facts]). Version 3 drops
-     version 2's "copied_from_libraries", which nothing read: only an
-     [Include] of a module that is not a functor, and an alias of such a
-     module, are strengthened by the kernel to transparent definitions that
-     hold no opaque reference. Every other copy keeps the copy's reference
-     into the source library's opaque table: a functor application
-     ([Module R := F A0]), an [Include] of a functor or of a functor
-     application ([Include F A0]), an alias of a functor ([Module G := F]),
-     and an [Include] of a module type or a module declared from one.
-     "foreign_opaque_libraries" names the source library in every such case,
-     because it is computed from every constant of the compiled library, not
-     from this list (misc/library-label-opaque-shift.sh checks the
-     application, the [Include F A0] form and the plain-module [Include];
-     the DI case of misc/library-label-functor-flip.sh shows the Include is
-     refused like the application). An [Admitted -> Qed] edit in a functor
-     body or a module type moves its owner's label (label version 5).
+     version 2's "copied_from_libraries", which nothing read. Whether a
+     constant copied by a module operation keeps a reference into its
+     source library's opaque table depends on the operation and on where
+     the constant sits: the kernel strengthens some copies to transparent
+     definitions (kernel/modops.ml, [strengthen_const]) and only
+     substitutes others, such as a functor application or a functor or
+     module type nested at any depth. "foreign_opaque_libraries" does not
+     rest on any such classification: it is computed from every constant
+     of the compiled library, functor bodies, module types and
+     implementations included, so it names every library whose opaque
+     table any copy references (misc/library-label-opaque-shift.sh checks
+     a functor application, an [Include F A0] and an [Include] of a plain
+     module, which holds none; the DI and DM cases of
+     misc/library-label-functor-flip.sh show an [Include] of a functor
+     application and a module declared with a module type are refused like
+     the application). An [Admitted -> Qed] edit in a functor body or a
+     module type moves its owner's label (label version 5).
    Two modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across

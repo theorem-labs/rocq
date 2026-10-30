@@ -137,9 +137,9 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    with AccessOpaque (the default), which reads an opaque proof's BODY and
    extracts what it finds there, which no label covers (the hook logs each
    such read as an [opaque = true] query naming the library that holds the
-   constant read; for a copy (a functor application, or an [Include] or
-   alias of a functor or a module type) that is not the library whose opaque
-   table the body came from,
+   constant read; for a copy a module operation did not strengthen (a
+   functor application, say) that is not the library whose opaque table the
+   body came from,
    so the keep rule keeps the dependent only when the holder's object is
    byte-identical and so is the object of every library in the holder's
    registered [foreign_opaque_libraries] below); and the library's
@@ -150,9 +150,9 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    a body read reads no status, its check being byte-identity.
    The canonical value also drops the opaque table index of an [OpaqueDef
    (Indirect (_, _, dp, i))]; a dependent that embeds a foreign opaque
-   reference into [dp] (a copy of this library's opaque proof through a
-   functor application, or an [Include] or alias of a functor or module
-   type) therefore has a label that no longer pins which proof index
+   reference into [dp] (a copy of this library's opaque proof that a module
+   operation did not strengthen, a functor application, say) therefore has a
+   label that no longer pins which proof index
    it reads, so the keep rule refuses to keep such a dependent across an edit
    that could move [dp]'s table ([foreign_opaque_libraries] below reports
    those [dp]). The kernel itself never applies this map; it is a view used

@@ -103,9 +103,9 @@ open Names
     assumption set (its monotone axiom condition); and which opaque proof a
     foreign [Indirect] reference resolves to (its foreign-opaque-reference
     check: the referenced library's object byte-identical). A body read names
-    the constant's holder, and for a copy (a functor application, or an
-    [Include] or alias of a functor or a module type) that is not the library
-    whose opaque table the body came from:
+    the constant's holder, and for a copy a module operation did not
+    strengthen (a functor application, say) that is not the library whose
+    opaque table the body came from:
     so the keep rule keeps the dependent only when the holder's object is
     byte-identical and so is the object of every library in the holder's
     [foreign_opaque_libraries] as registered, which covers every opaque table
@@ -288,9 +288,10 @@ type axiom_report = {
       status [Axiom] is the library's assumption set. *)
   foreign_opaque_libraries : DirPath.Set.t;
   (** The libraries, other than this one, whose opaque table this library's
-      compiled form holds an [Indirect] reference into (a copy of their opaque
-      proofs through a functor application, or an [Include] or alias of a
-      functor or module type). A dependent keeps its registered
+      compiled form holds an [Indirect] reference into: copies of their
+      opaque proofs that a module operation did not strengthen. It is
+      computed from every constant ([foreign_opaque_of]), so it does not
+      depend on which operations those are. A dependent keeps its registered
       object across an edit to such a library only when that library's object
       is byte-identical, because the blinded label no longer pins the opaque
       index the reference reads. *)
