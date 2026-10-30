@@ -343,9 +343,6 @@ let indices_matter env = env.env_typing_flags.indices_matter
 
 let universes env = env.env_universes
 
-let set_universes g env =
-  {env with env_universes=g}
-
 let qualities env = env.env_qualities
 let qvars env = QGraph.qvar_domain @@ qualities env
 
@@ -454,6 +451,14 @@ let fold_named_context_reverse f ~init env =
 
 (* Universe constraints *)
 
+let set_universes g env =
+  let g =
+    if Bool.equal (UGraph.type_in_type g) env.env_typing_flags.check_universes then
+      UGraph.set_type_in_type (not env.env_typing_flags.check_universes) g
+    else g
+  in
+  {env with env_universes=g}
+
 let map_universes f env = set_universes (f env.env_universes) env
 
 let map_qualities f env = set_qualities (f env.env_qualities) env
@@ -555,13 +560,11 @@ let same_flags {
   allow_uip == alt.allow_uip
 [@warning "+9"]
 
-let set_type_in_type b = map_universes (UGraph.set_type_in_type b)
-
 let set_typing_flags c env =
   if same_flags env.env_typing_flags c then env
   else
     let env = { env with env_typing_flags = c } in
-    let env = set_type_in_type (not c.check_universes) env in
+    let env = { env with env_universes = UGraph.set_type_in_type (not c.check_universes) env.env_universes } in
     let env = { env with env_qualities = QGraph.set_ignore_constraints (not c.check_eliminations) env.env_qualities } in
     env
 
