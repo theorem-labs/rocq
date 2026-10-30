@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # S3 (D18, dispatch://INFRA-361; Astra review 2 §1.2, Claude review S3): a foreign
-# opaque reference survives a functor APPLICATION (an Include of a module is
-# strengthened to transparent aliases and holds none; an Include of a functor
-# application, like `Module R := F A0`, keeps an Indirect into that library's opaque
-# table, as Astra §3.3 noted). Label v2b drops the
+# opaque reference survives a functor APPLICATION (an Include of a module that is not
+# a functor is strengthened to transparent aliases and holds none; a functor
+# application, `Module R := F A0`, and an Include of a functor or of a functor
+# application, `Include F A0`, keep an Indirect into that library's opaque table, as
+# Astra §3.3 noted). Label v2b drops the
 # opaque table index that reference carries, so an edit that shifts the index leaves
 # the owner's label equal -- which the keep rule's byte-identity guard over the
 # referenced owner has to catch, because the label cannot.
@@ -15,8 +16,8 @@
 # slot and F.t's index moves, so B's stored Indirect would read the wrong proof. BI
 # holds only `Module R2. Include A.F A.A0. End R2.`, and BM only `Module R3.
 # Include A.P. End R3.`, where A's module P holds an opaque lemma p: BI's report names
-# A as a foreign opaque owner too, BM's does not (the Include of a module strengthens
-# R3.p to a transparent alias of A.P.p, with no opaque reference).
+# A as a foreign opaque owner too, BM's does not (the Include of a module that is not
+# a functor strengthens R3.p to a transparent alias of A.P.p, with no opaque reference).
 #
 # Under label v2b (version 3) A's label is EQUAL across that edit (the blinding drops
 # the body form AND the index): this asserts that equality (RED on a pre-v2b build,
