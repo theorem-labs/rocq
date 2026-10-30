@@ -742,13 +742,13 @@ let rec modpath_key = function
 
 let kername_key kn = key_part (Label.to_string (KerName.label kn)) ^ modpath_key (KerName.modpath kn)
 
-(* The reader of [kername_key]. A bound module cannot be rebuilt from its
+(* The reader of [kername_key], from byte [start] of [key]: the kernel name
+   and the position after it. A bound module cannot be rebuilt from its
    number, so its key reads back to nothing; so does a part that is not an
-   identifier [Id.of_string_soft] accepts. The name read back must print
-   back as the key. *)
-let kername_of_key key =
+   identifier [Id.of_string_soft] accepts. *)
+let kername_parse key start =
   let n = String.length key in
-  let pos = ref 0 in
+  let pos = ref start in
   let number () =
     match String.index_from_opt key !pos ':' with
     | None -> None
@@ -790,9 +790,28 @@ let kername_of_key key =
   in
   match part () with
   | None -> None
-  | Some l ->
-    match modpath () with
-    | Some mp when !pos = n ->
-      let kn = KerName.make mp l in
-      if String.equal (kername_key kn) key then Some kn else None
+  | Some l -> Option.map (fun mp -> (KerName.make mp l, !pos)) (modpath ())
+
+(* The whole key must be read, and the name read back must print back as
+   the key. *)
+let kername_of_key key =
+  match kername_parse key 0 with
+  | Some (kn, e) when e = String.length key && String.equal (kername_key kn) key -> Some kn
+  | Some _ | None -> None
+
+(* BET-84: a constant as a recorded key: its user and canonical kernel
+   names, each as [kername_key] writes it. Two constants with the same user
+   name and different canonical names (an alias of a module) get different
+   keys. *)
+let constant_key c =
+  kername_key (Constant.user c) ^ kername_key (Constant.canonical c)
+
+let constant_of_key key =
+  match kername_parse key 0 with
+  | None -> None
+  | Some (user, e) ->
+    match kername_parse key e with
+    | Some (canonical, e') when e' = String.length key ->
+      let c = Constant.make user canonical in
+      if String.equal (constant_key c) key then Some c else None
     | Some _ | None -> None
