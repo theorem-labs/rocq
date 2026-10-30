@@ -39,14 +39,15 @@
      A segment that does not validate against checker/values.ml's
      description of it reads as absent ([read_keep_facts]). Version 3 drops
      version 2's "copied_from_libraries", which nothing read: an [Include]
-     of a module (not of a functor or a functor application) and a
-     module-alias copy are strengthened to transparent definitions by the
-     kernel; an [Include] of a functor or of a functor application copies
-     the opaque proof with its reference into the source library's opaque
-     table, so "foreign_opaque_libraries" names that library
-     (misc/library-label-functor-flip.sh, the DI case), and an [Admitted ->
-     Qed] edit in a functor body or a module type moves its owner's label
-     (label version 5).
+     of a module (not of a functor application) and a module-alias copy are
+     strengthened to transparent definitions by the kernel and hold no
+     opaque reference; an [Include] of a functor application, like
+     [Module R := F A0], keeps the copy's reference into the source
+     library's opaque table, so "foreign_opaque_libraries" names that
+     library (misc/library-label-opaque-shift.sh checks both forms; the DI
+     case of misc/library-label-functor-flip.sh shows the Include is refused
+     like the application); and an [Admitted -> Qed] edit in a functor body
+     or a module type moves its owner's label (label version 5).
    Two modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across
