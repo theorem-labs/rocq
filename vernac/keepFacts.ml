@@ -171,15 +171,18 @@ module SSet = CString.Set
    of the current bodies, and the keep rule makes it a superset of it.
 
    The premise: every kept object is a registration object, and a
-   registration compiles every library from scratch (it never keeps), so
-   every record a registration wrote is exact for its library's own
-   declarations against the objects it was compiled with. The keep rule
-   keeps a library only when no declaration's closure in any library of its
-   transitive in-tree closure grew (its monotone condition, s1b) AND every
-   table named in its own body-read queries is byte-identical: the growth
-   check alone is not enough, since a copy whose body sits in another
-   library's table can gain an axiom while that library's label and every
-   closure it stores stay the same (misc/library-label-keepfacts.sh, BXA).
+   registration never keeps: each library it stages it either compiles, or
+   takes from the registration object store as an object an earlier
+   registration compiled from identical inputs, against the same
+   prerequisite objects. So every record a registration wrote is exact for
+   its library's own declarations against the objects it was compiled with.
+   The keep rule keeps a library only when no declaration's closure in any
+   library of its transitive in-tree closure grew (its monotone condition,
+   s1b) AND every table named in its own body-read queries is
+   byte-identical: the growth check alone is not enough, since a copy whose
+   body sits in another library's table can gain an axiom while that
+   library's label and every closure it stores stay the same
+   (misc/library-label-keepfacts.sh, BXA).
    Then every closure a kept library recorded still contains the current
    one: by induction over the dependency order, a library's record is its
    own declarations' contributions (exact, by the premise, and unchanged
@@ -417,10 +420,13 @@ let collect_opacity self =
    recomputes it on every compile). A foreign constant's body: the full walk
    (ROCQ_KEEPFACTS_FULL_WALK=1, or the fallback) reads every one it reaches,
    and the stored-closure walk reads one only for a library that stored no
-   closures, whose constants it walks. Neither walk logs them: their holder
-   is a dependency, whose own keepfacts log its copies, and whose closures
-   the keep rule's monotone condition checks. So both walks log the same
-   queries, since both walk every constant of this library they reach.
+   closures, or for a copy whose user and canonical names differ (an alias,
+   or an [Include] of a plain module, which it enters; such a copy is a
+   transparent definition, so its walk reaches the original). Neither walk
+   logs them: their holder is a dependency, whose own keepfacts log its
+   copies, and whose closures the keep rule's monotone condition checks. So
+   both walks log the same queries, since both walk every constant of this
+   library they reach.
 
    A fresh accessor per library also starts the walks' reuse afresh
    ([Assumptions] keys it by the accessor), so no entry made before, which

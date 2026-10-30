@@ -69,9 +69,11 @@ val compute :
     recompiled since [dp] was. After a dependency was rebuilt to an equal label
     under a kept [dp] (a keep round), it gives a superset: [dp]'s record still
     lists what the dependency's old build used, and the keep rule keeps [dp]
-    only when no closure of its in-tree dependencies grew, so the record still
+    only when no closure of its in-tree dependencies grew and every table its
+    own body-read queries name is byte-identical (the growth check alone is
+    not enough: misc/library-label-keepfacts.sh, BXA), so the record still
     contains every current closure (the comment of [fast_closures] gives the
-    induction). ROCQ_KEEPFACTS_FULL_WALK=1 walks every body instead (the
-    current closure exactly, the reference this is checked against), and
-    ROCQ_KEEPFACTS_DEBUG=1 says on standard error how each library's closures
-    were computed. *)
+    premise and the induction). ROCQ_KEEPFACTS_FULL_WALK=1 walks every body
+    instead (the current closure exactly, the reference this is checked
+    against), and ROCQ_KEEPFACTS_DEBUG=1 says on standard error how each
+    library's closures were computed. *)
