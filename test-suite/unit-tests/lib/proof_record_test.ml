@@ -49,7 +49,6 @@ let proof : R.proof = R.{
     constraints = [ "Top.File.12 < Top.File.13" ];
     schemes = [ "Top.File.t_rect" ];
     constraint_sources = [ "Top.File.lemma" ];
-    warnings_raised = [ ("deprecated-reference", "Reference foo is deprecated.", "1,12,15,10,1,10") ];
   };
   kernel_check = false;
   wall_s = 1.5;
@@ -190,7 +189,9 @@ let vo_path =
      && R.path_of_vo "Foo.vo" = "Foo.proof-record.jsonl")
 
 (* Format v3 rejects v2 records: v3 replaces the whole [universe_graph] start
-   read with per-query universe records, so an older record must run stock. *)
+   read with per-query universe records, so an older record must run stock.
+   Format v4 drops the writes' [warnings_raised]: a proof that raises a
+   warning is ineligible, so no warning is raised again. *)
 let written_with p =
   let buf = Buffer.create 1024 in
   R.output_header buf header;
@@ -211,12 +212,12 @@ let without_suffix suffix text =
 let v3_fields =
   let with_values = written_with proof and with_nulls = written_with proof_without_v2 in
   mk_bool_test "proof-record-v3-fields"
-    "span and replay round-trip, a v2 proof line is refused, and the universe-query format is version 3"
+    "span and replay round-trip, a v2 proof line is refused, and the format is version 4"
     (R.parse_string with_values = R.{ header; proofs = [ proof ]; trailer }
      && R.parse_string with_nulls = R.{ header; proofs = [ proof_without_v2 ]; trailer }
      && refused (without_suffix ",\"span\":null,\"replay\":null" with_nulls)
      && refused (without_suffix ",\"replay\":null" with_nulls)
-     && R.format_version = 3)
+     && R.format_version = 4)
 
 (* The memo of blocks lives from one call to the next, so a persistent value
    digested again after a change costs its delta. It must not change a digest:
