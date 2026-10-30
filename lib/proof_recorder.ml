@@ -529,6 +529,8 @@ let locs_source : Loc.source option ref = ref None
 
 let set_locs_source src = locs_source := Some src
 
+let compiled_source () = !locs_source
+
 let digest_cached_by ~what ~key view =
   let o = Obj.repr key in
   match Addr.find_opt digest_cache o with

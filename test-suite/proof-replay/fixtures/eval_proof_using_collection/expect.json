@@ -1,0 +1,16 @@
+{
+  "doc": "a named collection of section variables a proof declares changes: that proof misses on the proof_using_collection read, and the proof that declares an unchanged collection replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.S.same": {"eligible": true}, "PR.A.S.changed": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.S.same", "hit"], ["PR.A.S.changed", "read", "proof_using_collection", "changed"]]
+    }
+  }
+}

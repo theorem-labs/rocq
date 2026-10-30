@@ -81,10 +81,12 @@ let recorded_arguments_names env r =
   | exception Not_found -> None
 
 (* The record holds the reference as [GlobRef.print] wrote it: a constant
-   or variable as its path, an inductive as ["(path, i)"], a constructor
-   as ["(path, i, j)"]. A key that does not read back to a reference, or
-   reads back to one that prints differently, is not taken for another
-   one: the proof misses (review P3Bugs F4). *)
+   as its path, an inductive as ["(path, i)"], a constructor as
+   ["(path, i, j)"], a variable (a section variable or a hypothesis of the
+   goal) as its name. A constant's path always has a dot, so a key with no
+   dot and no parenthesis can only be a variable's name. A key that does not
+   read back to a reference, or reads back to one that prints differently,
+   is not taken for another one: the proof misses (review P3Bugs F4). *)
 let globref_of_string s =
   let mind_of path =
     match Lib.global_of_kernel_string (String.trim path) with
@@ -106,6 +108,10 @@ let globref_of_string s =
          | Some m, Some i, Some j -> Some (GlobRef.ConstructRef ((m, i), j))
          | _ -> None)
       | _ -> None
+    else if n > 0 && not (String.contains s '.') && not (String.contains s '(') then
+      match Id.of_string_soft s with
+      | id -> Some (GlobRef.VarRef id)
+      | exception CErrors.UserError _ -> None
     else
       match Lib.global_of_kernel_string s with
       | r -> Some r

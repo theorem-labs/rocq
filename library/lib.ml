@@ -718,3 +718,81 @@ let global_of_kernel_string s =
        in
        go (Libnames.dirpath_of_path (cwd ()))
      | _ -> raise Not_found)
+
+(* BET-84 P3: a kernel name as a recorded key, and back.
+   [KerName.to_string] is not a key: it drops a bound module's number, and
+   ["A.B.c"] is both the label [c] of the file [A.B] and the label [c] of the
+   module [B] of the file [A]. So each part is written with its length
+   ([<length>:<bytes>]): the label, then the module path, which is
+   [F<n>:] and the [n] parts of a file's directory path, outermost first;
+   [D<label>] and the path of the module it is in; or [B] and a bound
+   module's number, name and file. No key is a prefix of another, so a key
+   names one kernel name. *)
+let key_part s = string_of_int (String.length s) ^ ":" ^ s
+
+let rec modpath_key = function
+  | ModPath.MPfile dp ->
+    let ids = List.rev (DirPath.repr dp) in
+    "F" ^ string_of_int (List.length ids) ^ ":"
+    ^ String.concat "" (List.map (fun id -> key_part (Id.to_string id)) ids)
+  | ModPath.MPbound mbid ->
+    let (n, id, dp) = MBId.repr mbid in
+    "B" ^ key_part (string_of_int n) ^ key_part (Id.to_string id) ^ modpath_key (ModPath.MPfile dp)
+  | ModPath.MPdot (mp, l) -> "D" ^ key_part (Label.to_string l) ^ modpath_key mp
+
+let kername_key kn = key_part (Label.to_string (KerName.label kn)) ^ modpath_key (KerName.modpath kn)
+
+(* The reader of [kername_key]. A bound module cannot be rebuilt from its
+   number, so its key reads back to nothing; so does a part that is not an
+   identifier [Id.of_string_soft] accepts. The name read back must print
+   back as the key. *)
+let kername_of_key key =
+  let n = String.length key in
+  let pos = ref 0 in
+  let number () =
+    match String.index_from_opt key !pos ':' with
+    | None -> None
+    | Some j ->
+      let v = int_of_string_opt (String.sub key !pos (j - !pos)) in
+      pos := j + 1;
+      (match v with Some v when v >= 0 -> Some v | Some _ | None -> None)
+  in
+  let part () =
+    match number () with
+    | Some len when !pos + len <= n ->
+      let s = String.sub key !pos len in
+      pos := !pos + len;
+      (match Id.of_string_soft s with
+       | id -> Some id
+       | exception CErrors.UserError _ -> None)
+    | Some _ | None -> None
+  in
+  let rec parts k acc =
+    if k = 0 then Some acc
+    else match part () with None -> None | Some id -> parts (k - 1) (id :: acc)
+  in
+  let rec modpath () =
+    if !pos >= n then None
+    else begin
+      let tag = key.[!pos] in
+      incr pos;
+      match tag with
+      | 'F' ->
+        (match number () with
+         | None -> None
+         | Some k -> Option.map (fun ids -> ModPath.MPfile (DirPath.make ids)) (parts k []))
+      | 'D' ->
+        (match part () with
+         | None -> None
+         | Some l -> Option.map (fun mp -> ModPath.MPdot (mp, Label.of_id l)) (modpath ()))
+      | _ -> None
+    end
+  in
+  match part () with
+  | None -> None
+  | Some l ->
+    match modpath () with
+    | Some mp when !pos = n ->
+      let kn = KerName.make mp l in
+      if String.equal (kername_key kn) key then Some kn else None
+    | Some _ | None -> None

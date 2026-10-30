@@ -1885,11 +1885,72 @@ let record_using using =
        | d -> Proof_replay.provide ~channel:"proof_using" ~key:"" ~value:(Some d)
        | exception Proof_record.Unhashable _ -> ())
 
-let record_set_proof_using using =
+(* BET-84 census row 19: the set a [Proof using] sentence gives, keyed by
+   the sentence's expression. The key leaves out the expression's
+   locations, which the set does not depend on: each node is one letter and
+   a name is written with its length, so a key names one expression, and
+   [proof_using_of_key] reads it back. *)
+let rec proof_using_key = function
+  | Vernacexpr.SsEmpty -> "E"
+  | Vernacexpr.SsType -> "T"
+  | Vernacexpr.SsSingl { CAst.v = id; _ } ->
+    let s = Id.to_string id in
+    "S" ^ string_of_int (String.length s) ^ ":" ^ s
+  | Vernacexpr.SsCompl e -> "C" ^ proof_using_key e
+  | Vernacexpr.SsUnion (a, b) -> "U" ^ proof_using_key a ^ proof_using_key b
+  | Vernacexpr.SsSubstr (a, b) -> "D" ^ proof_using_key a ^ proof_using_key b
+  | Vernacexpr.SsFwdClose e -> "F" ^ proof_using_key e
+
+let proof_using_of_key key =
+  let n = String.length key in
+  let pos = ref 0 in
+  let name () =
+    match String.index_from_opt key !pos ':' with
+    | None -> None
+    | Some j ->
+      match int_of_string_opt (String.sub key !pos (j - !pos)) with
+      | Some len when len >= 0 && j + 1 + len <= n ->
+        pos := j + 1 + len;
+        (match Id.of_string_soft (String.sub key (j + 1) len) with
+         | id -> Some id
+         | exception CErrors.UserError _ -> None)
+      | Some _ | None -> None
+  in
+  let rec expr () =
+    if !pos >= n then None
+    else begin
+      let tag = key.[!pos] in
+      incr pos;
+      let one f = Option.map f (expr ()) in
+      let two f = match expr () with
+        | None -> None
+        | Some a -> Option.map (fun b -> f a b) (expr ())
+      in
+      match tag with
+      | 'E' -> Some Vernacexpr.SsEmpty
+      | 'T' -> Some Vernacexpr.SsType
+      | 'S' -> Option.map (fun id -> Vernacexpr.SsSingl (CAst.make id)) (name ())
+      | 'C' -> one (fun e -> Vernacexpr.SsCompl e)
+      | 'U' -> two (fun a b -> Vernacexpr.SsUnion (a, b))
+      | 'D' -> two (fun a b -> Vernacexpr.SsSubstr (a, b))
+      | 'F' -> one (fun e -> Vernacexpr.SsFwdClose e)
+      | _ -> None
+    end
+  in
+  match expr () with
+  | Some e when !pos = n && String.equal (proof_using_key e) key -> Some e
+  | Some _ | None -> None
+
+(* ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_proof_using_set set =
+  Some (Proof_recorder.digest ~what:"proof_using_set" (Names.Id.Set.elements set))
+
+let record_set_proof_using expr set =
   if Proof_recorder.active () then
-    Proof_recorder.read ~row:"19" ~channel:"proof_using_set" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest ~what:"proof_using_set" (Names.Id.Set.elements using)))
+    Proof_recorder.read ~row:"19" ~channel:"proof_using_set"
+      ~key:(fun () -> proof_using_key expr)
+      ~value:(fun () -> recorded_proof_using_set set)
 
 let record_mutual cinfo =
   match cinfo with
@@ -1897,6 +1958,12 @@ let record_mutual cinfo =
     let detail = String.concat "," (List.map (fun cinfo -> Id.to_string cinfo.CInfo.name) cinfo) in
     Proof_recorder.ineligible ~reason:"mutual" ~detail
   | _ -> ()
+
+(* BET-84 P3: the proof replay may replay, as it started, for the
+   proof_using_set evaluator below. Replay decides at the closer, before any
+   sentence of the proof has run, so the [Proof using] sentence has not run
+   either; the evaluator interprets the recorded expression in this state. *)
+let replay_start = ref None
 
 let start_proof_core ~name ~pinfo ?using sigma goals =
   (* In ?sign, we remove the bodies of variables in the named context
@@ -1914,13 +1981,17 @@ let start_proof_core ~name ~pinfo ?using sigma goals =
   let () = record_using using in
   let proof = Proof.start ~name ~poly ?typing_flags sigma goals in
   let initial_euctx = Evd.ustate Proof.((data proof).sigma) in
-  { proof
-  ; endline_tactic = None
-  ; using
-  ; initial_euctx
-  ; pinfo
-  ; sideff = SideEff.empty
-  }
+  let ps =
+    { proof
+    ; endline_tactic = None
+    ; using
+    ; initial_euctx
+    ; pinfo
+    ; sideff = SideEff.empty
+    }
+  in
+  replay_start := (if Proof_replay.candidate_open () then Some ps else None);
+  ps
 
 (** [start_proof ~info ~cinfo sigma] starts a proof of [cinfo].
    The proof is started in the evar map [sigma] (which
@@ -2096,10 +2167,36 @@ let interpret_proof_using pstate using =
   Proof_using.definition_using env sigma ~fixnames ~using ~terms
 
 let set_proof_using pstate using =
-  let using = interpret_proof_using pstate using in
-  let res = set_used_variables pstate ~using in
-  record_set_proof_using using;
+  let set = interpret_proof_using pstate using in
+  let res = set_used_variables pstate ~using:set in
+  record_set_proof_using using set;
   res
+
+(* The evaluator asks the recorded expression again, with the function the
+   sentence calls, on the proof as it started ([replay_start]). In the
+   registration the sentence may have run after other sentences; the set
+   depends on the proof's state only through the unification variables of
+   its statement, so a statement with an undefined one is a miss. A warning
+   it raises is not printed (the record raises the proof's warnings again on
+   a hit, and on a miss the sentence prints them itself), and its collection
+   lookups are not the open proof's reads. *)
+let () =
+  Proof_replay.register_evaluator "proof_using_set" (fun key ->
+      match !replay_start, proof_using_of_key key with
+      | Some ps, Some using ->
+        let data = Proof.data ps.proof in
+        let ground =
+          List.for_all (fun (_, _, typ) -> Evarutil.is_ground_term data.Proof.sigma typ)
+            (Proofview.initial_goals data.Proof.entry)
+        in
+        if not ground then Proof_replay.Unknown
+        else
+          let set =
+            Proof_recorder.without_recording (fun () ->
+                CWarnings.with_warn "-all" (fun () -> interpret_proof_using ps using) ())
+          in
+          Proof_replay.Value (recorded_proof_using_set set)
+      | (Some _ | None), _ -> Proof_replay.Unknown)
 
 let get_open_goals ps =
   let Proof.{ goals; stack; sigma } = Proof.data ps.proof in
@@ -2257,12 +2354,20 @@ let return_proof p = (prepare_proof p : closed_proof_output)
    only when the counter at the proof's start is the same; replay checks
    that, and leaves the counters where the tactics would have.
 
+   [rb_using] is the set of section variables the proof declared it uses,
+   at its [Proof using] sentence or its statement. A replay runs no sentence,
+   so the proof being closed has not set it; stock declares with it, and so
+   must the replay. Every input of the set is a recorded read
+   ([proof_using], [proof_using_set], the collections, the section context),
+   so on a hit it is the set stock computes.
+
    A value the OCaml runtime cannot marshal stores nothing, so that proof
    runs its tactics in every grade. The blob is read back only by a binary
    whose digest is key item 2 of the same record, so its type is the type
    this unit was compiled with. *)
 type replay_blob = {
   rb_output : closed_proof_output;
+  rb_using : Id.Set.t option;
   rb_univ_start : int * int;
   rb_univ_end : int * int;
 }
@@ -2273,9 +2378,10 @@ let stored_term (proof_obj : Proof_object.t) =
   if Proof_recorder.current_name () = None then None
   else
     match proof_obj.Proof_object.proof_object with
-    | DefaultProof { proof; opaque = true; using = _; keep_body_ucst_separate = None } ->
+    | DefaultProof { proof; opaque = true; using; keep_body_ucst_separate = None } ->
       let blob =
-        { rb_output = proof; rb_univ_start = !open_counters; rb_univ_end = UnivGen.counters () }
+        { rb_output = proof; rb_using = using; rb_univ_start = !open_counters;
+          rb_univ_end = UnivGen.counters () }
       in
       (match Marshal.to_string blob [] with
        | s -> Some (Proof_record.encode_blob s)
@@ -2300,8 +2406,9 @@ let () =
       | Some b -> b.rb_univ_start = UnivGen.counters ())
 
 (* The other side: the stored term, as the proof object the declaration
-   takes, with the counters the declaration must leave behind. The proof's
-   own [using] and [pinfo] are this compile's. *)
+   takes, with the counters the declaration must leave behind. The section
+   variables it uses are the record's ([rb_using]); its [pinfo] is this
+   compile's. *)
 let replayed_proof_object ~blob ~(proof : t) =
   match decode_replay blob with
   | None -> None
@@ -2323,7 +2430,7 @@ let replayed_proof_object ~blob ~(proof : t) =
     in
     Some
       ( { Proof_object.proof_object =
-            DefaultProof { proof = output; opaque = true; using = proof.using;
+            DefaultProof { proof = output; opaque = true; using = b.rb_using;
                            keep_body_ucst_separate = None };
           pinfo = proof.pinfo },
         b.rb_univ_end )
