@@ -163,7 +163,7 @@ interpretation of a notation.  `eval_zify_table`: the zify operator table,
 which an `Add Zify` between the two proofs changes.  `eval_prim_token`: the
 scope a number is read in.  `eval_ltac2_global`: the body of an Ltac2
 definition.  `eval_reserved_type`: the reserved type (`Implicit Types`) of a
-binder.
+binder.  `eval_abbreviation`: what an abbreviation stands for.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
