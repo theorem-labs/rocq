@@ -179,7 +179,11 @@ a key back, so `same` missed with why `unknown`.
 reviewer's scenario; stock and replay must agree.
 `universe_checked_proof_unchecked_graph`: the global graph does not check
 universes, a proof checks its own, and a constraint it needs is reversed;
-stock rejects the proof.
+stock rejects the proof.  `vm_inline_lib`, `vm_inline_same_file`: a changed
+constant is inlined (`Register Inline`) into the bytecode of an unchanged one
+that a proof runs with `vm_compute`; stock rejects the proof.
+`vm_global_unchanged_hit` is their control: unchanged bytecode, moved in the
+library's code table, still replays.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
