@@ -38,3 +38,32 @@ Module Type S_p_c. Parameter f : forall _ : Type@{c}, Type@{c}. End S_p_c.
 (* The fresh universe [u] needs [u = a] and [u <= b], so [a <= b]. *)
 Parameter t_p_ab : forall _ : Type@{a}, Type@{b}.
 Module Type S_p_ab. Parameter f : forall _ : Type@{a}, Type@{b}. End S_p_ab.
+
+(* Opaque proofs, so that rocqchk -j N with N > 1 hands their checks to
+   worker processes while it builds the report in the main process. They
+   are in Prop and add no universe. Without Corelib, the tactic language is
+   loaded as Corelib's Init/Ltac.v loads it. *)
+Declare ML Module "rocq-runtime.plugins.ltac".
+Set Default Proof Mode "Classic".
+
+Inductive unit_j : Prop := tt_j.
+Lemma opaque_01 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_02 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_03 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_04 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_05 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_06 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_07 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_08 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_09 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_10 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_11 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_12 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_13 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_14 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_15 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_16 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_17 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_18 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_19 : unit_j. Proof. exact tt_j. Qed.
+Lemma opaque_20 : unit_j. Proof. exact tt_j. Qed.
