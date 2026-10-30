@@ -538,6 +538,25 @@ type sealing = { fresh : int; constraints : Univ.UnivConstraints.t }
 
 let adds_nothing = { fresh = 0; constraints = Univ.UnivConstraints.empty }
 
+(* A verdict other than [match]. *)
+type other_verdict =
+  | Mismatch
+  | Universes_differ
+  | Universes_undecided
+  | Model_missing
+  | Trusted_missing
+  | Not_requested
+
+(* The name the report prints for a verdict. *)
+let verdict_name : (sealing, other_verdict) result -> string = function
+  | Ok _ -> "match"
+  | Error Mismatch -> "mismatch"
+  | Error Universes_differ -> "universes-differ"
+  | Error Universes_undecided -> "universes-undecided"
+  | Error Model_missing -> "model-missing"
+  | Error Trusted_missing -> "trusted-missing"
+  | Error Not_requested -> "not-requested"
+
 (* Whether the model constant can stand for the trusted constant in a module
    sealed by a signature that declares the trusted type T: whether [Definition
    f := model] ([Polymorphic] when T is) is accepted for the field [Parameter f
@@ -548,18 +567,19 @@ let adds_nothing = { fresh = 0; constraints = Univ.UnivConstraints.empty }
    Elaborating the definition takes a polymorphic model at fresh universes,
    and can minimize them when the model's universe context has sort variables
    or constraints; this check does not replay that, so it answers
-   [universes-differ] for such a model, which the sealing may still accept.
+   [universes-undecided] for such a model without comparing the types: the
+   sealing may accept or refuse it.
    [Ok] is [match], with what the sealing adds to the global universes;
    [Error] is any other verdict. *)
-let type_verdict env model trusted : (sealing, string) result =
+let type_verdict env model trusted : (sealing, other_verdict) result =
   let cm = Environ.lookup_constant model env and ct = Environ.lookup_constant trusted env in
   let infer ~fresh env =
     let state = (Environ.universes env, Univ.UnivConstraints.empty), infer_universes in
     match Conversion.generic_conv Conversion.CUMUL ~l2r:false TransparentState.full env state
             cm.const_type ct.const_type with
     | Result.Ok (_, constraints) -> Ok { fresh; constraints }
-    | Result.Error None -> Error "mismatch"
-    | Result.Error (Some ()) -> Error "universes-differ"
+    | Result.Error None -> Error Mismatch
+    | Result.Error (Some ()) -> Error Universes_differ
   in
   (* The definition's context [am] must be T's context [at]; the types are
      compared under [at]. A failure that ignoring universe levels removes needs a
@@ -572,9 +592,9 @@ let type_verdict env model trusted : (sealing, string) result =
       | Result.Error () ->
         match Conversion.default_conv_leq (Environ.set_type_in_type true env)
                 cm.const_type ct.const_type with
-        | Result.Ok () -> Error "universes-differ"
-        | Result.Error () -> Error "mismatch"
-    else Error "universes-differ"
+        | Result.Ok () -> Error Universes_differ
+        | Result.Error () -> Error Mismatch
+    else Error Universes_differ
   in
   let minimizable am =
     fst (UVars.AbstractContext.size am) > 0
@@ -583,7 +603,7 @@ let type_verdict env model trusted : (sealing, string) result =
   match cm.const_universes, ct.const_universes with
   | Monomorphic, Monomorphic -> infer ~fresh:0 env
   | Monomorphic, Polymorphic at -> against_polymorphic UVars.AbstractContext.empty at
-  | Polymorphic am, _ when minimizable am -> Error "universes-differ"
+  | Polymorphic am, _ when minimizable am -> Error Universes_undecided
   | Polymorphic am, Monomorphic ->
     (* The model's bound universes are fresh in [env]: they are its instance. The
        definition declares them as global universes, which [Global.push_context_set]
@@ -658,21 +678,13 @@ let print env access requests =
   let judged = List.map (fun r ->
       let model = CString.Map.find_opt r.req_model index in
       let verdict = match model, r.req_trusted with
-        | None, _ -> Error "model-missing"
-        | Some _, None -> Error "not-requested"
+        | None, _ -> Error Model_missing
+        | Some _, None -> Error Not_requested
         | Some model, Some t ->
           match CString.Map.find_opt t index with
-          | None -> Error "trusted-missing"
+          | None -> Error Trusted_missing
           | Some t -> type_verdict env model t
       in
-      (* Only [Ok] reads match, with what its sealing adds: a verdict string
-         match on the [Error] side would escape the check that the sealings
-         load together. Every other verdict passes here, and
-         misc/statement_report_sealing.sh asks for a report with each of them,
-         so a new verdict that reads match on this side stops that report. *)
-      (match verdict with
-       | Error "match" -> CErrors.anomaly Pp.(str "statement report: match without its sealing.")
-       | Ok _ | Error _ -> ());
       r, model, verdict)
       requests
   in
@@ -689,7 +701,7 @@ let print env access requests =
       (List.length sealings) positions))
   end;
   List.iter (fun (r, model, verdict) ->
-      let verdict = match verdict with Ok _ -> "match" | Error v -> v in
+      let verdict = verdict_name verdict in
       let trusted = Option.default "-" r.req_trusted in
       match model with
       | None -> line "statement %s %s %s %s 0 0" r.req_name r.req_model trusted verdict

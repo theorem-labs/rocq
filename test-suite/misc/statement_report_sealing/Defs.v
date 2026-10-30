@@ -128,3 +128,11 @@ Module Type S_different. Parameter f : forall _ : unit, Set. End S_different.
 (* One binder fewer. *)
 Parameter t_binder : Set.
 Module Type S_binder. Parameter f : Set. End S_binder.
+
+(* The statement's universe context has two universes, the model's one. *)
+Polymorphic Parameter t_poly_ctx@{u v} : forall _ : Type@{u}, Type@{u}.
+Module Type S_poly_ctx. Polymorphic Parameter f@{u v} : forall _ : Type@{u}, Type@{u}. End S_poly_ctx.
+
+(* Another statement, polymorphic: the types are compared under its context. *)
+Polymorphic Parameter t_poly_different : forall _ : unit, Set.
+Module Type S_poly_different. Polymorphic Parameter f : forall _ : unit, Set. End S_poly_different.
