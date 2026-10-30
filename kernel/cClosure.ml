@@ -619,6 +619,13 @@ let rec to_constr lfts v =
     | FIrrelevant -> assert (!Flags.in_debugger); mkVar(Id.of_string"_IRRELEVANT_")
     | FLOCKED -> assert (!Flags.in_debugger); mkVar(Id.of_string"_LOCKED_")
 
+(* [iv] is already reified: the [FCaseInvert] arm of [to_constr] maps
+   [to_constr lfts] over the indices, which applies this environment, terms
+   and universe instance alike (an [FCaseT] carries none). Substituting again
+   renames a de Bruijn index or an abstract universe
+   (test-suite/success/case_inversion_reify.v); upstream #22381 does so.
+   [pms], the return clause and the branches are raw here and do need the
+   substitution: that is what #22381 fixes. *)
 and to_constr_case lfts ci u pms (p,r) iv c ve env =
   let subs = comp_subs lfts env in
   let r = usubst_relevance subs r in
@@ -630,7 +637,7 @@ and to_constr_case lfts ci u pms (p,r) iv c ve env =
     mkCase (ci, usubst_instance subs u,
             Array.Smart.map (subst_instance_constr (snd env)) pms,
             (f_ctx p,r),
-            map_invert (subst_instance_constr (snd env)) iv,
+            iv,
             to_constr lfts c,
             Array.Smart.map f_ctx ve)
   else
@@ -643,7 +650,7 @@ and to_constr_case lfts ci u pms (p,r) iv c ve env =
             usubst_instance subs u,
             Array.map (fun c -> subst_constr subs c) pms,
             (f_ctx p,r),
-            map_invert (subst_constr subs) iv,
+            iv,
             to_constr lfts c,
             Array.map f_ctx ve)
 
