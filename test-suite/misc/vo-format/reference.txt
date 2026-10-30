@@ -1225,7 +1225,7 @@ segment keepfacts root #0
   #1 = opt(#3)
   #2 = list(#4)
   #3 = list(#5)
-  #4 = tuple(query,3,#6,#7,#8)
+  #4 = tuple(query,4,#6,#7,#8,#7)
   #5 = tuple(*,2,#6,#9)
   #6 = string
   #7 = opt(#6)

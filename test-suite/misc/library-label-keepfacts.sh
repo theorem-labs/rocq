@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # D18 (dispatch://INFRA-361), Astra review 2 blockers 1 and 3: the [keepfacts]
 # segment that -location-free-label writes, read through
-# `rocq-library-label --axiom-report-json` (schema version 3).
+# `rocq-library-label --axiom-report-json` (schema version 4).
 #
 # B3 (assumption closure). A's lemma `l` is a Qed proof in both variants; in `use`
 # its proof starts to use A's existing axiom `ax`. The label blinds the opaque body,
@@ -25,10 +25,14 @@
 # axiom from an opaque proof too, and records (c, opaque=false) against `adm`. BXB
 # extracts opaque proofs whose bodies extraction reads: a lemma in a functor body
 # (`Extraction A.F`, which the global environment does not hold) and one in a sealed
-# module's implementation (`Extraction A.M`): each records opaque=true. BXH seals a
+# module's implementation (`Extraction A.M`): each records opaque=true and the table
+# its body came from (A). Each body read records the holder and the table: BXH seals a
 # functor application to a module type that omits its lemma (`Module X : A.S :=
-# A.F A.A0.` in H): H's foreign_opaque_libraries names A, and a JSON extraction of
-# H.X, which rebuilds X from that expression, records X.fc opaque=true under H. BN runs
+# A.F A.A0.` in H; H names no foreign opaque library), and a JSON extraction of H.X,
+# which rebuilds X from that expression, records holder H and table A; BXC goes two
+# copies deep (K's lemma, included by L's functor, applied in H): table K; BXF applies a
+# functor in its own library: holder and table A; BXS is H's own extraction of its X:
+# H records it, because the table (A) is foreign. BN runs
 # `Transparent Nat.add.`, a transparent definition, which cannot become an axiom or an
 # opaque proof while its library's label stays equal: nothing is recorded.
 #
@@ -206,6 +210,29 @@ else
   bad "B3, inductive: D.t '$it', E.e '$ie', full walk '$if_', debug '$(cat $IN/e/debug)'"
 fi
 
+# A stored closure of a functor application's copy: D applies A's functor F, whose
+# opaque lemma t uses A's axiom; E proves its lemma with D.R.t. D.R.t is a root of D's
+# table, so E's closure is its stored closure, which equals the full walk's.
+FN=_kfacts/fn
+mkdir -p $FN/a $FN/d $FN/e $FN/efull
+printf 'Axiom ax : True.\nModule Type S. End S.\nModule F (X : S). Lemma t : True. Proof. exact ax. Qed. End F.\nModule A0. End A0.\n' \
+  > $FN/a/A.v
+printf 'Require A.\nModule R := A.F A.A0.\n' > $FN/d/D.v
+printf 'Require Ddep.D.\nLemma e : True.\nProof. exact Ddep.D.R.t. Qed.\n' > $FN/e/E.v
+cp $FN/e/E.v $FN/efull/E.v
+rocq c -q -location-free-label -R $FN/a A $FN/a/A.v
+rocq c -q -location-free-label -R $FN/a A -R $FN/d Ddep $FN/d/D.v
+ROCQ_KEEPFACTS_DEBUG=1 rocq c -q -location-free-label -R $FN/a A -R $FN/d Ddep -R $FN/e Edep $FN/e/E.v \
+  2> $FN/e/debug
+ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R $FN/a A -R $FN/d Ddep -R $FN/efull Edep $FN/efull/E.v
+fr=$(closure $FN/d/D.vo t); fe=$(closure $FN/e/E.vo e); ff=$(closure $FN/efull/E.vo e)
+if printf '%s' "$fr" | grep -q 'axiom:[^"]*\.ax"' && [ "$fe" = "$fr" ] && [ "$fe" = "$ff" ] \
+   && grep -q '^\[keepfacts\] Edep\.E: [0-9]* roots, one walk of [0-9]* objects, [1-9][0-9]* foreign stored closures$' $FN/e/debug; then
+  pass "B3, functor application: E.e's closure through D.R.t is D.R.t's stored closure and the full walk's: $fe ($(cat $FN/e/debug))"
+else
+  bad "B3, functor application: D.R.t '$fr', E.e '$fe', full walk '$ff', debug '$(cat $FN/e/debug)'"
+fi
+
 # --- B1 ---
 printf 'Lemma c : True.\nAdmitted.\n' > _kfacts/adm/A.v
 printf 'Lemma c : True.\nProof. exact I. Qed.\n' > _kfacts/qed/A.v
@@ -229,12 +256,12 @@ else
 fi
 alib=$(report _kfacts/adm/A.vo | sed -n 's/.*"library":"\([^"]*\)".*/\1/p')
 q1=$(field _kfacts/badm/B.vo opacity_queries); q2=$(field _kfacts/b2qed/B.vo opacity_queries)
-if [ "$q1" = "[{\"constant\":\"$alib.c\",\"library\":\"$alib\",\"opaque\":false}]" ]; then
+if [ "$q1" = "[{\"constant\":\"$alib.c\",\"library\":\"$alib\",\"opaque\":false,\"table\":null}]" ]; then
   pass "B1: B records the opacity it saw against the Admitted A: $q1"
 else
   bad "B1: B's opacity_queries against the Admitted A: '$q1'"
 fi
-if [ "$q2" = "[{\"constant\":\"$alib.c\",\"library\":\"$alib\",\"opaque\":true}]" ]; then
+if [ "$q2" = "[{\"constant\":\"$alib.c\",\"library\":\"$alib\",\"opaque\":true,\"table\":null}]" ]; then
   pass "B1: B2 records (Fail-wrapped) the opacity it saw against the Qed A: $q2"
 else
   bad "B1: B2's opacity_queries against the Qed A: '$q2'"
@@ -253,7 +280,7 @@ fi
 printf 'From Corelib Require Extraction.\nRequire A.\nExtraction A.c.\n' > _kfacts/bx/B.v
 rocq c -q -location-free-label -R _kfacts/adm A -R _kfacts/bx Bdep _kfacts/bx/B.v > /dev/null
 qx=$(field _kfacts/bx/B.vo opacity_queries)
-if [ "$qx" = "[{\"constant\":\"$alib.c\",\"library\":\"$alib\",\"opaque\":false}]" ]; then
+if [ "$qx" = "[{\"constant\":\"$alib.c\",\"library\":\"$alib\",\"opaque\":false,\"table\":null}]" ]; then
   pass "B1: an extraction of A.c records the axiom it saw against the Admitted A: $qx"
 else
   bad "B1: BX's opacity_queries against the Admitted A: '$qx'"
@@ -284,47 +311,97 @@ rocq c -q -location-free-label -R _kfacts/xb/a A -R _kfacts/xb/b Bdep _kfacts/xb
 rocq c -q -location-free-label -R _kfacts/xb/a A -R _kfacts/xb/bs Bdep _kfacts/xb/bs/B.v > /dev/null
 xlib=$(report _kfacts/xb/a/A.vo | sed -n 's/.*"library":"\([^"]*\)".*/\1/p')
 qb=$(field _kfacts/xb/b/B.vo opacity_queries); qs=$(field _kfacts/xb/bs/B.vo opacity_queries)
-if [ "$qb" = "[{\"constant\":\"$xlib.F.fc\",\"library\":\"$xlib\",\"opaque\":true}]" ]; then
+if [ "$qb" = "[{\"constant\":\"$xlib.F.fc\",\"library\":\"$xlib\",\"opaque\":true,\"table\":\"$xlib\"}]" ]; then
   pass "B1: an extraction that reads the functor-body lemma A.F.fc's opaque body records it opaque: $qb"
 else
   bad "B1: BXB's opacity_queries for the functor-body A.F.fc: '$qb'"
 fi
-if [ "$qs" = "[{\"constant\":\"$xlib.M.sn\",\"library\":\"$xlib\",\"opaque\":true}]" ]; then
+if [ "$qs" = "[{\"constant\":\"$xlib.M.sn\",\"library\":\"$xlib\",\"opaque\":true,\"table\":\"$xlib\"}]" ]; then
   pass "B1: an extraction that reads sealed A.M.sn's opaque body records it opaque: $qs"
 else
   bad "B1: BXB's opacity_queries for the sealed A.M.sn: '$qs'"
 fi
+# The table a body read records. An extraction to a language other than OCaml (JSON
+# here) rebuilds a module whose implementation is an algebraic expression from that
+# expression, and reads its opaque proofs' bodies from wherever the copies' references
+# point. Each query records the holder ("library") and the library whose opaque table
+# held the body ("table"); the keep rule requires both byte-identical.
+# jsonx DIR REQUIRE QUALID ARGS...: DIR/B.v requires REQUIRE and extracts QUALID to
+# JSON, compiled with ARGS; prints B's opacity_queries, or "error: ..." when it fails.
+jsonx() {
+  local d=$1 req=$2 q=$3; shift 3
+  mkdir -p "$d"
+  printf 'From Corelib Require Extraction.\nRequire %s.\nExtraction Language JSON.\nExtraction %s.\n' "$req" "$q" \
+    > "$d/B.v"
+  if rocq c -q -location-free-label "$@" -R "$d" Bdep "$d/B.v" > "$d/out" 2>&1; then
+    field "$d/B.vo" opacity_queries
+  else echo "error: $(tr '\n' ' ' < "$d/out" | cut -c1-600)"; fi
+}
+functorA='Module Type S. End S.\nModule F (X : S). Lemma fc : nat. Proof. exact 0. Qed. End F.\nModule A0. End A0.\n'
+
 # BXH: H seals a functor application to a module type that omits its opaque lemma,
-# `Module X : A.S := A.F A.A0.`. X keeps the expression as its implementation and S as
-# its signature, so no constant of H holds a reference into A's opaque table; H's
-# report still names A, from the module paths of that implementation. An extraction
-# to a language other than OCaml (JSON here) rebuilds X from the expression and reads
-# A.F.fc's body as X.fc: the query is opaque=true, under H, whose
-# foreign_opaque_libraries then makes the keep rule check A.
+# `Module X : A.S := A.F A.A0.`. X keeps the expression as its implementation, so no
+# constant of H holds a reference into A's opaque table and H's report names no
+# foreign opaque library; the extraction of H.X reads A.F.fc's body as X.fc, from A's
+# table: holder H, table A.
 XH=_kfacts/xh
-mkdir -p $XH/a $XH/h $XH/b
-printf 'Module Type S. End S.\nModule F (X : S). Lemma fc : nat. Proof. exact 0. Qed. End F.\nModule A0. End A0.\n' \
-  > $XH/a/A.v
+mkdir -p $XH/a $XH/h
+printf "$functorA" > $XH/a/A.v
 printf 'Require A.\nModule X : A.S := A.F A.A0.\n' > $XH/h/H.v
-printf 'From Corelib Require Extraction.\nRequire Hdep.H.\nExtraction Language JSON.\nExtraction Hdep.H.X.\n' > $XH/b/B.v
 rocq c -q -location-free-label -R $XH/a A $XH/a/A.v
 rocq c -q -location-free-label -R $XH/a A -R $XH/h Hdep $XH/h/H.v
-xhlib=$(report $XH/a/A.vo | sed -n 's/.*"library":"\([^"]*\)".*/\1/p')
 hfor=$(field $XH/h/H.vo foreign_opaque_libraries)
-if [ "$hfor" = "[\"$xhlib\"]" ]; then
-  pass "BXH: H (Module X : A.S := A.F A.A0) names A in foreign_opaque_libraries: $hfor"
+qh=$(jsonx $XH/b Hdep.H Hdep.H.X -R $XH/a A -R $XH/h Hdep)
+if [ "$hfor" = "[]" ] && [ "$qh" = '[{"constant":"Hdep.H.X.fc","library":"Hdep.H","opaque":true,"table":"A.A"}]' ]; then
+  pass "BXH: the JSON extraction of H.X records holder H and table A ($qh); H's foreign_opaque_libraries is $hfor"
 else
-  bad "BXH: H's foreign_opaque_libraries (Module X : A.S := A.F A.A0): '$hfor', expected [\"$xhlib\"]"
+  bad "BXH: H's foreign_opaque_libraries '$hfor', BXH's opacity_queries for the JSON extraction of H.X: '$qh'"
 fi
-if rocq c -q -location-free-label -R $XH/a A -R $XH/h Hdep -R $XH/b Bdep $XH/b/B.v > $XH/b/out 2>&1; then
-  qh=$(field $XH/b/B.vo opacity_queries)
-  if [ "$qh" = '[{"constant":"Hdep.H.X.fc","library":"Hdep.H","opaque":true}]' ]; then
-    pass "BXH: the JSON extraction of H.X reads A.F.fc's body and records it opaque under H: $qh"
-  else
-    bad "BXH: BXH's opacity_queries for the JSON extraction of H.X: '$qh'"
-  fi
+
+# BXC: a chain. K's functor G holds the opaque lemma fc; L's functor F includes G's
+# application (`Include K.G X`); H seals F's application. The extraction of H.X reads
+# fc's body from K's table, two copies away: holder H, table K.
+XC=_kfacts/xc
+mkdir -p $XC/k $XC/l $XC/h
+printf 'Module Type S. End S.\nModule G (X : S). Lemma fc : nat. Proof. exact 0. Qed. End G.\n' > $XC/k/K.v
+printf 'Require Kd.K.\nModule F (X : Kd.K.S). Include Kd.K.G X. End F.\nModule A0. End A0.\n' > $XC/l/L.v
+printf 'Require Kd.K Ld.L.\nModule X : Kd.K.S := Ld.L.F Ld.L.A0.\n' > $XC/h/H.v
+rocq c -q -location-free-label -R $XC/k Kd $XC/k/K.v
+rocq c -q -location-free-label -R $XC/k Kd -R $XC/l Ld $XC/l/L.v
+rocq c -q -location-free-label -R $XC/k Kd -R $XC/l Ld -R $XC/h Hc $XC/h/H.v
+qc=$(jsonx $XC/b Hc.H Hc.H.X -R $XC/k Kd -R $XC/l Ld -R $XC/h Hc)
+if [ "$qc" = '[{"constant":"Hc.H.X.fc","library":"Hc.H","opaque":true,"table":"Kd.K"}]' ]; then
+  pass "BXC: the JSON extraction of H.X, two copies from K's lemma, records table K: $qc"
 else
-  bad "BXH: the JSON extraction of Hdep.H.X failed: $(tr '\n' ' ' < $XH/b/out | cut -c1-600)"
+  bad "BXC: BXC's opacity_queries for the JSON extraction of H.X: '$qc'"
+fi
+
+# BXF: a functor applied inside its own library (`Module X : S := F A0.` in A): the
+# body read records A as holder and as table.
+XF=_kfacts/xf
+mkdir -p $XF/a
+{ printf "$functorA"; printf 'Module X : S := F A0.\n'; } > $XF/a/A.v
+rocq c -q -location-free-label -R $XF/a As $XF/a/A.v
+qf=$(jsonx $XF/b As.A As.A.X -R $XF/a As)
+if [ "$qf" = '[{"constant":"As.A.X.fc","library":"As.A","opaque":true,"table":"As.A"}]' ]; then
+  pass "BXF: the JSON extraction of a functor application in its own library records it as holder and table: $qf"
+else
+  bad "BXF: BXF's opacity_queries for the JSON extraction of A.X: '$qf'"
+fi
+
+# BXS: H's own extraction of its own sealed X reads A's table: the constant is H's, but
+# the table is foreign, so H records the query (holder H, table A).
+XS=_kfacts/xs
+mkdir -p $XS/h
+printf 'From Corelib Require Extraction.\nRequire A.\nModule X : A.S := A.F A.A0.\nExtraction Language JSON.\nExtraction X.\n' \
+  > $XS/h/H.v
+if rocq c -q -location-free-label -R $XH/a A -R $XS/h Hs $XS/h/H.v > $XS/h/out 2>&1; then
+  qs2=$(field $XS/h/H.vo opacity_queries)
+else qs2="error: $(tr '\n' ' ' < $XS/h/out | cut -c1-600)"; fi
+if [ "$qs2" = '[{"constant":"Hs.H.X.fc","library":"Hs.H","opaque":true,"table":"A.A"}]' ]; then
+  pass "BXS: a library's extraction of its own copy of A's lemma records the foreign table: $qs2"
+else
+  bad "BXS: BXS's opacity_queries for H's own extraction of X: '$qs2'"
 fi
 
 # --- control ---
@@ -346,10 +423,10 @@ else
   bad "control: the .vos has keepfacts: assumptions=$v1 opacity_queries=$v2"
 fi
 r=$(report _kfacts/noax/A.vo)
-if printf '%s' "$r" | grep -q '"version":3,' && ! printf '%s' "$r" | grep -q copied_from_libraries; then
-  pass "schema version 3, with no copied_from_libraries"
+if printf '%s' "$r" | grep -q '"version":4,' && ! printf '%s' "$r" | grep -q copied_from_libraries; then
+  pass "schema version 4, with no copied_from_libraries"
 else
-  bad "the axiom report is not schema version 3: $r"
+  bad "the axiom report is not schema version 4: $r"
 fi
 # A changed byte inside the keepfacts segment of a real .vo: the tool reads the segment
 # as absent (both fields null) and says why on standard error, rather than reading

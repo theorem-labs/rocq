@@ -626,11 +626,11 @@ let v_vmlib = v_tuple "vmlibrary" [|v_dp; v_array v_vm_to_patch|]
 
 (* vernac/keepFacts.ml: written only by [coqc -location-free-label], only for
    a .vo; rocqchk never reads it (the keep rule reads it through
-   rocq-library-label). *)
+   rocq-library-label). A query is (constant, library, opaque, table). *)
 let v_keepfacts =
   v_tuple "keepfacts"
     [| v_opt (v_list (v_pair v_string (v_list v_string)));
-       v_list (v_tuple "query" [| v_string; v_opt v_string; v_bool |]) |]
+       v_list (v_tuple "query" [| v_string; v_opt v_string; v_bool; v_opt v_string |]) |]
 
 let vo_segments =
   [ ("summary", v_libsum); ("library", v_lib);

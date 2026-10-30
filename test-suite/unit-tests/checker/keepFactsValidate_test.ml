@@ -24,11 +24,11 @@ let refused what v =
   | Ok () -> assert_failure (what ^ ": accepted")
   | Error _ -> ()
 
-let query = { KeepFacts.constant = "A.c"; library = Some "A"; opaque = true }
+let query = { KeepFacts.constant = "A.c"; library = Some "A"; opaque = true; table = Some "K" }
 
 let full : KeepFacts.t = {
   KeepFacts.assumptions = Some [("A.l", ["axiom:A.ax"; "theory:impredicative_set"])];
-  opacity_queries = [query; { query with KeepFacts.library = None; opaque = false }];
+  opacity_queries = [query; { query with KeepFacts.library = None; opaque = false; table = None }];
 }
 
 let () = add_test "a well-shaped value passes" (fun () ->
@@ -39,9 +39,11 @@ let () = add_test "a well-shaped value passes" (fun () ->
 let () = add_test "a value of another shape fails" (fun () ->
     refused "a pair of a string and an int" (Obj.repr ("A.c", 3));
     refused "an int where the opacity bool is"
-      (Obj.repr { full with KeepFacts.opacity_queries = [Obj.magic ("A.c", Some "A", 5)] });
-    refused "a query with a field missing"
-      (Obj.repr { full with KeepFacts.opacity_queries = [Obj.magic ("A.c", Some "A")] });
+      (Obj.repr { full with KeepFacts.opacity_queries = [Obj.magic ("A.c", Some "A", 5, None)] });
+    refused "a query with the table missing (the version 3 shape)"
+      (Obj.repr { full with KeepFacts.opacity_queries = [Obj.magic ("A.c", Some "A", true)] });
+    refused "an int where the table's name is"
+      (Obj.repr { full with KeepFacts.opacity_queries = [Obj.magic ("A.c", Some "A", true, Some 7)] });
     refused "an int where a closure's keys are"
       (Obj.repr { full with KeepFacts.assumptions = Some [Obj.magic ("A.l", 7)] });
     refused "a list where the closures' option is"

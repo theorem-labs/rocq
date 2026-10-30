@@ -106,10 +106,13 @@ type file_label = {
   (** The constants the label blinded, with their current status, and the
       libraries this one holds a foreign opaque reference into
       ([LibkeyObjects.axiom_report]): what the keep rule reads beside the
-      label for its monotone axiom condition. *)
+      label for its monotone axiom condition. The tables an extraction read a
+      proof body from are not here but in the keepfacts segment's queries. *)
   keep_facts_segment : KeepFacts.t ObjFile.segment option;
   (** Where the file's [keepfacts] segment is ([KeepFacts]: the assumption
-      closures and the foreign opacities its strategy commands saw), not its
+      closures, the foreign opacities its commands saw, and for each
+      extraction body read the library holding the constant and the library
+      whose opaque table held the body), not its
       value: nothing is read from it here. A reader parses it from there and
       validates it against the checker's description of the segment
       ([Values.v_keepfacts]) before it unmarshals it, as

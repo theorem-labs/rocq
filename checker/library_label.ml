@@ -26,7 +26,7 @@
      the schema documented at [Attempts.to_json] (vernac/attempts.mli).
    - [--axiom-report-json FILE.vo]: one JSON document for the keep rule's
      monotone axiom condition (schema "rocq-library-label/axiom-report",
-     version 3): the library name, the label kind and the hex [--check]
+     version 4): the library name, the label kind and the hex [--check]
      prints, the constants whose label contribution the axiom-or-opaque
      blinding erased (each with its current "axiom" or "proof" status), the
      libraries this one holds a foreign opaque reference into, and its
@@ -34,8 +34,16 @@
      user name to its sorted assumption closure, empty closures left out; null
      when absent) and "opacity_queries" (each foreign constant a strategy
      command or an extraction told apart as an axiom or an opaque proof, or
-     whose opaque body an extraction read, by user name, with the opacity it
-     saw; null when the file has no segment).
+     whose opaque body an extraction read, by user name, with the library
+     holding it, the opacity it saw, and "table": for a body read, the
+     library whose opaque table holds the body read, else null; null when the
+     file has no segment). A body read records both the holder and the table:
+     for a copy a module operation did not strengthen they differ, and the
+     keep rule requires both libraries' objects byte-identical.
+     "foreign_opaque_libraries" does not cover body reads: a sealed
+     [Module X : T := L.F A] keeps its expression, which holds no reference,
+     and a non-OCaml extraction rebuilds it and reads the table of the
+     library F's proof comes from. Version 4 adds "table".
      A segment that does not validate against checker/values.ml's
      description of it reads as absent ([read_keep_facts]). Version 3 drops
      version 2's "copied_from_libraries", which nothing read. Whether a
@@ -53,13 +61,8 @@
      module, which holds none; the DI and DM cases of
      misc/library-label-functor-flip.sh show an [Include] of a functor
      application and a module declared with a module type are refused like
-     the application). It also names every other library a module path of
-     an algebraic implementation names, at any depth: a sealed [Module X :
-     T := L.F A] keeps that expression, which a non-OCaml extraction
-     rebuilds, reading [L]'s table, while [T] can omit the proof
-     (misc/library-label-keepfacts.sh, BXH). An [Admitted -> Qed] edit in a
-     functor body or a module type moves its owner's label (label version
-     5).
+     the application). An [Admitted -> Qed] edit in a functor body or a
+     module type moves its owner's label (label version 5).
    Two modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across
@@ -155,7 +158,7 @@ let axiom_report_json file (l : Library.file_label) =
     json_string b k; Buffer.add_char b ':'; f () in
   Buffer.add_char b '{';
   field "schema" (fun () -> json_string b "rocq-library-label/axiom-report");
-  field "version" (fun () -> Buffer.add_string b "3");
+  field "version" (fun () -> Buffer.add_string b "4");
   field "library" (fun () -> json_string b (Names.DirPath.to_string l.name));
   field "label_kind" (fun () -> json_string b kind);
   field "label" (fun () -> json_string b lhex);
@@ -202,16 +205,18 @@ let axiom_report_json file (l : Library.file_label) =
       | None -> Buffer.add_string b "null"
       | Some { KeepFacts.opacity_queries = q; _ } ->
         Buffer.add_char b '[';
-        List.iteri (fun i { KeepFacts.constant; library; opaque } ->
+        List.iteri (fun i { KeepFacts.constant; library; opaque; table } ->
+            let opt = function Some d -> json_string b d | None -> Buffer.add_string b "null" in
             if i > 0 then Buffer.add_char b ',';
             Buffer.add_char b '{';
             json_string b "constant"; Buffer.add_char b ':'; json_string b constant;
             Buffer.add_char b ',';
-            json_string b "library"; Buffer.add_char b ':';
-            (match library with Some d -> json_string b d | None -> Buffer.add_string b "null");
+            json_string b "library"; Buffer.add_char b ':'; opt library;
             Buffer.add_char b ',';
             json_string b "opaque"; Buffer.add_char b ':';
             Buffer.add_string b (if opaque then "true" else "false");
+            Buffer.add_char b ',';
+            json_string b "table"; Buffer.add_char b ':'; opt table;
             Buffer.add_char b '}')
           q;
         Buffer.add_char b ']');

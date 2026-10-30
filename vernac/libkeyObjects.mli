@@ -99,19 +99,18 @@ open Names
     strategy command or extraction saw ([KeepFacts], compared with the status
     [axiom_report] gives now); the opaque proof BODIES an extraction with
     AccessOpaque (the default) read, which it logs as [opaque = true] queries
-    naming the library that holds the constant read; the library's
-    assumption set (its monotone axiom condition); and which opaque proof a
-    foreign [Indirect] reference resolves to (its foreign-opaque-reference
-    check: the referenced library's object byte-identical). A body read names
-    the constant's holder, and for a copy a module operation did not
-    strengthen (a functor application, say) that need not be the library whose
-    opaque table the body came from:
-    so the keep rule keeps the dependent only when the holder's object is
-    byte-identical and so is the object of every library in the holder's
-    [foreign_opaque_libraries] as registered: the holder's own table and those
-    libraries' tables are every opaque table the holder's copies read. The
-    status comparison and the assumption set read a constant's status off
-    [axiom_report], so the blinding covers only
+    naming the library that holds the constant read and the library whose
+    opaque table holds the body read; the library's assumption set (its
+    monotone axiom condition); and which opaque proof a foreign [Indirect]
+    reference resolves to (its foreign-opaque-reference check: the referenced
+    library's object byte-identical). For a copy a module operation did not
+    strengthen (a functor application, an [Include] of one, a sealed [Module
+    X : T := L.F A] an extraction rebuilds from its expression) the holder
+    and the table differ, however many copies away the proof came from, so a
+    body read records both and the keep rule keeps the dependent only when
+    both libraries' objects are byte-identical. [foreign_opaque_libraries]
+    does not cover body reads. The status comparison and the assumption set
+    read a constant's status off [axiom_report], so the blinding covers only
     the constants it lists; a body read reads no status, its check being
     byte-identity. Every other constant the compiled form holds -- in a
     functor's body, in a functor parameter's module type, in a module type,
@@ -289,18 +288,16 @@ type axiom_report = {
       status [Axiom] is the library's assumption set. *)
   foreign_opaque_libraries : DirPath.Set.t;
   (** The libraries, other than this one, whose opaque table this library's
-      compiled form can read a proof from: those it holds an [Indirect]
-      reference into (copies of their opaque proofs that a module operation
-      did not strengthen), computed from every constant, so it does not
-      depend on which operations those are; and those that a module path of
-      an algebraic implementation names, at any depth (a sealed [Module X :
-      T := L.F A] keeps the expression, whose result a non-OCaml extraction
-      rebuilds, reading [L]'s table, while [T] can omit that proof). The
-      second route over-approximates: it names a library whether or not the
-      expression reaches an opaque proof of it. A dependent keeps its
-      registered object across an edit to such a library only when that
-      library's object is byte-identical, because the blinded label no longer
-      pins the opaque index the reference reads. *)
+      compiled form holds an [Indirect] reference into: copies of their
+      opaque proofs that a module operation did not strengthen. It is
+      computed from every constant ([foreign_opaque_of]), so it does not
+      depend on which operations those are. A dependent keeps its registered
+      object across an edit to such a library only when that library's object
+      is byte-identical, because the blinded label no longer pins the opaque
+      index the reference reads. It does not cover the tables an extraction
+      reads a body from: a module whose implementation is an algebraic
+      expression holds no reference, and an extraction can rebuild it; each
+      such read records its table ([KeepFacts.query]). *)
 }
 
 val axiom_report :

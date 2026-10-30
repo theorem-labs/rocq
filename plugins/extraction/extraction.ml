@@ -1154,20 +1154,19 @@ let extract_constant table access env kn inst cb =
   (* With AccessOpaque (the default), extraction reads the BODY of an opaque
      proof, foreign ones included, and what it extracts depends on that body,
      which no label covers. Each read is logged as an opaque query
-     ([opaque = true], from [cb], the body read), also when [cb] comes from a
-     sealed module's implementation and the global environment holds the
-     signature's axiom, or from a functor's body, which the global environment
-     does not hold. The query names [kn]'s library, the one holding the
-     constant read. For a copy a module operation did not strengthen (a
-     functor application, say) that
-     library need not be the one whose opaque table holds the body, so the keep
-     rule keeps the dependent only when the holder's object is byte-identical
-     and so is the object of every library in the holder's registered
-     [foreign_opaque_libraries] ([LibkeyObjects.axiom_report]): the holder's
-     own table and those libraries' tables are every opaque table the
-     holder's copies read. *)
+     ([opaque = true]), also when [cb] comes from a sealed module's
+     implementation and the global environment holds the signature's axiom,
+     or from a functor's body, which the global environment does not hold.
+     The query records two libraries: the holder, [kn]'s library, and the
+     table, the library whose opaque table holds the body read
+     ([Opaqueproof.repr c]). For a copy a module operation did not strengthen
+     (a functor application, an [Include] of one, at any depth, a sealed
+     [Module X : T := L.F A] rebuilt from its expression) the two differ, and
+     the table's library need not be one the holder's compiled form names.
+     The keep rule keeps the dependent only when the holder's object and the
+     table's object are both byte-identical. *)
   let read_opaque c =
-    OpacityLog.record kn cb;
+    OpacityLog.record_body_read kn c;
     get_opaque access env c
   in
   try

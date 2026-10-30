@@ -35,22 +35,35 @@ open Names
    stays equal, so a record of it could only make the keep rule rebuild a
    dependent forever (`Transparent Nat.add.` on a transparent definition). A
    library that makes no such query gets no record, so its file is what a
-   stock [coqc] writes. *)
+   stock [coqc] writes.
+
+   An extraction with AccessOpaque (the default) also reads an opaque proof's
+   BODY, and what it extracts depends on that body, which no label covers.
+   Such a read is logged with the library whose opaque table it read
+   ([record_body_read]): for a copy that a module operation did not
+   strengthen (a functor application, an [Include] of one, at any depth) that
+   table's library is not the one holding the constant read, and nothing else
+   names it. *)
 
 let enabled = ref false
 
 let set_enabled b = enabled := b
 
-let queries : (Constant.t * bool) list ref = ref []
+let queries : (Constant.t * bool * DirPath.t option) list ref = ref []
 
 let reset () = queries := []
 
 let record c (cb : Declarations.constant_body) =
   if !enabled then
     match cb.Declarations.const_body with
-    | Declarations.Undef None -> queries := (c, false) :: !queries
-    | Declarations.OpaqueDef _ -> queries := (c, true) :: !queries
+    | Declarations.Undef None -> queries := (c, false, None) :: !queries
+    | Declarations.OpaqueDef _ -> queries := (c, true, None) :: !queries
     | Declarations.Undef (Some _) | Declarations.Def _
     | Declarations.Primitive _ | Declarations.Symbol _ -> ()
+
+let record_body_read c o =
+  if !enabled then
+    let (_, _, dp, _) = Opaqueproof.repr o in
+    queries := (c, true, Some dp) :: !queries
 
 let get () = !queries

@@ -20,6 +20,12 @@ type query = {
   constant : string;  (** its user name, as [LibkeyObjects.axiom_report] lists it *)
   library : string option;  (** the library holding it; [None] for a functor parameter's *)
   opaque : bool;  (** whether it was an opaque proof when the command ran *)
+  table : string option;
+  (** for an extraction that read its opaque proof's body, the library whose
+      opaque table holds that body: the holder's own, or, for a copy a module
+      operation did not strengthen, the library whose table the copy's
+      reference points into, however many copies away; [None] for every other
+      query *)
 }
 
 type t = {
@@ -33,9 +39,11 @@ type t = {
   (** Each foreign constant a command told apart as an axiom ([Undef None]) or
       an opaque proof (a non-opaque [Strategy]/[Transparent] command, an
       extraction: [OpacityLog]), or whose opaque proof body an extraction
-      read (always [opaque = true]), with its library and the opacity it saw,
-      sorted by name; recorded both ways, [opaque = true]. No other body form
-      is recorded. *)
+      read (always [opaque = true], with its [table]), with its library and
+      the opacity it saw, sorted by name; also a constant of this library
+      whose body an extraction read from another library's table. Recorded
+      several ways, [opaque = true] with the body read's table. No other body
+      form is recorded. *)
 }
 
 val compute :

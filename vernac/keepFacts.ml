@@ -23,6 +23,9 @@ type query = {
   constant : string;  (** its user name *)
   library : string option;  (** the library holding it; [None] for a functor parameter's *)
   opaque : bool;  (** whether it was an opaque proof when the command ran *)
+  table : string option;
+  (** for an extraction that read its opaque proof's body, the library whose
+      opaque table holds that body; [None] for every other query *)
 }
 
 type t = {
@@ -46,13 +49,17 @@ type t = {
       [Strategy]/[Transparent] command, an extraction ([OpacityLog]) -- while
       its body was [Undef None] ([opaque = false]) or an opaque proof
       ([opaque = true]), or whose opaque proof body an extraction read
-      ([opaque = true]); a constant of any other body form is not recorded,
-      and one recorded both ways is [opaque = true] ([collect_opacity]).
+      ([opaque = true], with [table] the library whose opaque table it read);
+      a constant of any other body form is not recorded. A constant of this
+      library is recorded too when an extraction read its body from another
+      library's table (a copy made here, by a functor application, of another
+      library's proof). A constant recorded several ways is [opaque = true] if
+      any record is, with the table of its body read ([collect_opacity]).
       Sorted by name. The keep rule rebuilds a dependent when the recorded
       opacity no longer matches the dependency's current one -- the command
-      could then error, or stop erroring, on a real recompile -- and treats
-      every [opaque = true] query as a read of an opaque table: the holder's,
-      and for a copy the ones its registered foreign opaque libraries hold. *)
+      could then error, or stop erroring, on a real recompile -- and keeps a
+      dependent that read a body only when the holder's object and the
+      table's object are both byte-identical. *)
 }
 
 (* The [MPfile] root of a module path, [None] for a bound (functor-parameter)
@@ -328,32 +335,41 @@ let compute_assumptions ~stored access self =
    entry there, with the status of its copied body), with that library: the
    [MPfile] root of the user name, which a dotted string cannot give back.
 
+   A query is kept when the constant is foreign, and also, for a body read,
+   when the table it read is foreign though the constant is this library's:
+   a copy made here of another library's opaque proof (a functor application,
+   at any depth) reads that library's table.
+
    A constant recorded more than once keeps [opaque = true] if any record has
-   it. The records of one compile agree but in one case: an extraction that
-   reads the opaque proof of a sealed module's implementation records it as
-   an opaque body read ([Extraction.extract_constant]) while the global
-   environment, and so a strategy command or the extraction's first record,
-   sees the signature's axiom. A body read is the stronger fact: the keep rule
-   treats every [opaque = true] query as a read of an opaque table and
-   requires the holder's object byte-identical, with every library in its
-   registered [foreign_opaque_libraries], since the [library] recorded here is
-   the holder's, which for a copy a module operation did not strengthen (a
-   functor application, say) need not be
-   the library whose table holds the body. *)
+   it, and the table of its body read. The records of one compile agree but
+   in one case: an extraction that reads the opaque proof of a sealed module's
+   implementation records it as an opaque body read
+   ([Extraction.extract_constant]) while the global environment, and so a
+   strategy command or the extraction's first record, sees the signature's
+   axiom. A body read is the stronger fact: the keep rule keeps the dependent
+   only when the holder's object and the table's object are both
+   byte-identical. *)
 let collect_opacity self =
   let tbl = Hashtbl.create 16 in
   List.iter
-    (fun (c, opaque) ->
+    (fun (c, opaque, table) ->
       let mp = Constant.modpath c in
-      if not (is_self self mp) then
+      let foreign_table = match table with
+        | Some dp -> not (DirPath.equal dp self)
+        | None -> false
+      in
+      if not (is_self self mp) || foreign_table then
         let key = Constant.to_string c in
-        let opaque = match Hashtbl.find_opt tbl key with
-          | Some (_, seen) -> seen || opaque
-          | None -> opaque
+        let opaque, table = match Hashtbl.find_opt tbl key with
+          | Some (_, seen, seen_table) ->
+            (seen || opaque), (match seen_table with Some _ -> seen_table | None -> table)
+          | None -> opaque, table
         in
-        Hashtbl.replace tbl key (Option.map DirPath.to_string (mpfile_root mp), opaque))
+        Hashtbl.replace tbl key (Option.map DirPath.to_string (mpfile_root mp), opaque, table))
     (OpacityLog.get ());
-  Hashtbl.fold (fun k (lib, v) acc -> { constant = k; library = lib; opaque = v } :: acc) tbl []
+  Hashtbl.fold (fun k (lib, v, table) acc ->
+      { constant = k; library = lib; opaque = v; table = Option.map DirPath.to_string table } :: acc)
+    tbl []
   |> List.sort (fun a b -> String.compare a.constant b.constant)
 
 let compute ~access ~stored ~self =
