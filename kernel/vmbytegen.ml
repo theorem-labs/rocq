@@ -1059,6 +1059,11 @@ let compile ~fail_on_error ~inline_limit ~uinstance ?(binnum = Vmbinnum.no_binnu
    pins native operations compiles different bytecode from the base's for every constant
    [Vmznative] recognizes, which is what the arm exists to rule out.
 
+   The switch is read once, in this process, and governs only the code this process generates.
+   A library compiled earlier with the levers on keeps the bytecode its file carries, and with
+   the switch off this process runs that bytecode when it loads the file: a comparison against
+   the base must compile every library it loads under ROCQ_VM_INLINE=0, the prelude included.
+
    ROCQ_VM_INLINE=1 and an unset variable are the default. Any other value stops the process,
    as a misspelt switch that silently did nothing would be read as a measurement. *)
 let levers_on =

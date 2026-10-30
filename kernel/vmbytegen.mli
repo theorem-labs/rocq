@@ -23,7 +23,16 @@ val levers_on : bool
     The native operations are pinned while a declaration is compiled, so with
     this false a library file carries different bytecode, and a process runs the
     bytecode the library files it loads carry: an arm that is to generate and run
-    the base's code must build its libraries under the switch too. *)
+    the base's code must build its libraries under the switch too.
+
+    The switch governs the code this process generates; it does not reinterpret
+    code that is already compiled. A library compiled with the levers on keeps
+    the bytecode its file carries, and with the switch off a compiling process
+    that loads it runs that bytecode, since {!Vmsymtable.compile_again}, the one
+    path that replaces stored code, does nothing at inline limit 0. (The checker
+    is not that process: it recompiles every constant of a library under its own
+    [levers_on].) So a comparison of this build against its base must compile
+    every library it loads under ROCQ_VM_INLINE=0, the prelude included. *)
 
 (** [inline_limit] (default 0, no inlining) is the size under which an applied constant's body is
     expanded instead of called; see [Genlambda.inlinable_body]. Code that goes into a library file
