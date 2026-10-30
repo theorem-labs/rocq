@@ -139,7 +139,7 @@ cache that no choke point can reach (a `lazy` of a `lib_ref`). Those reads go in
 | 23 | Files and external processes | Ineligible: `native_compute` (`native_compute`) and the external prover `csdpcert` that `psatz` calls (`external_prover`). Micromega's certificate caches are already blocked in grading | `kernel/nativelib.ml` `compile`; `plugins/micromega/coq_micromega.ml` `really_call_csdpcert` |
 | 24 | Resource limits | Recorded in the header: `stack_limit` (in key item 2), `memory_cap`, `rlimit_as`, `rlimit_data`, `overcommit_memory`. The cap is recorded and never compared (GRADE, 12:19Z); replay is refused when an address-space limit is set or `overcommit_memory` is 2 | `lib/proof_limits.ml` |
 | M1 | Abbreviations | Recorded: each `find_opt` and `find_interp`, by kernel name | `interp/abbreviation.ml` |
-| M2 | Reserved types | Recorded: each `find_reserved_type`, by identifier root | `interp/reserve.ml` |
+| M2 | Reserved types | Recorded: each `find_reserved_type`, by identifier root. Replay: the evaluator looks the root up again with the record site's `recorded_reserved_type` | `interp/reserve.ml` |
 | M3 | Generalizable variables | Recorded: one digest of the table at each proof's start | `proof_record_env.ml`; `interp/implicit_quantifiers.ml` `generalizable_idents` |
 | M4 | Schemes created (write) | Write: each scheme the proof created, by name | `tactics/ind_tables.ml` `define` |
 | M5 | Universe constraint sources (write) | Write: the constant whose declaration wrote a constraint-source record | `vernac/declare.ml` `declare_constant` |
