@@ -292,7 +292,7 @@ let rebind_scan =
   let s = Replay.scan_late_rebind in
   let end_ = "End (of a module, or of a section that loads or imports)" in
   mk_bool_test "proof-replay-rebind-scan"
-    "a Register, Require, Load, Declare, Import, Export, Include, Module, or an End that can rebind, after the first closer, is found with its line"
+    "a Register, Require, Load, Declare, Import, Export, Include, Module, Reset, Back, BackTo, or an End that can rebind, after the first closer, is found with its line"
     (s "Lemma a : True.\nProof. exact I. Qed.\nRegister x as core.eq.type.\n" = Some ("Register", 3)
      && s "Register x as core.eq.type.\nLemma a : True.\nProof. exact I. Qed.\n" = None
      && s "Lemma a : True.\nProof. exact I. Save a.\nRequire Import Foo.\n" = Some ("Require", 3)
@@ -334,6 +334,14 @@ let rebind_scan =
      && s "Lemma a : True. Qed. Import M." = Some ("Import", 1)
      && s "Lemma a : True. Qed. Load \"f\"." = Some ("Load", 1)
      && s "Lemma Requires : True. Qed." = None
+     && s "Lemma a : True. Qed. Reset a." = Some ("Reset", 1)
+     && s "Lemma a : True. Qed. Reset Initial." = Some ("Reset", 1)
+     && s "Lemma a : True. Qed. Back." = Some ("Back", 1)
+     && s "Lemma a : True. Qed. Back 2." = Some ("Back", 1)
+     && s "Lemma a : True. Qed. BackTo 3." = Some ("BackTo", 1)
+     && s "Definition d := 0. Reset d. Lemma a : True. Qed." = None
+     && s "Section S. Reset S. Section T. Lemma a : True. Qed. End T." = Some ("End (after a Reset or Back)", 1)
+     && s "Lemma Resets : True. Qed." = None
      && s "" = None)
 
 (* The scan also gives the offset of the LAST late command: every proof that
@@ -352,7 +360,12 @@ let late_events_scan =
         = (None, None)
      && Replay.scan_late_events ~imports_late:false "Lemma a : True. Qed. Import N. Require M."
         = (Some ("Require", 1), Some 31)
-     && s "Lemma a : True. Qed. Module M : T. End M." = (Some ("Module", 1), Some 35))
+     && s "Lemma a : True. Qed. Module M : T. End M." = (Some ("Module", 1), Some 35)
+     (* After a Reset the frames are not followed: the plain module's End,
+        whose frame the Reset popped, still counts. *)
+     && s "Module M. Import N. Lemma a : True. Qed. Section S. Reset S. End M."
+        = (Some ("Reset", 1), Some 61)
+     && s "Lemma a : True. Qed. Reset a. Lemma b : True. Qed." = (Some ("Reset", 1), Some 21))
 
 (* The hit hooks see the replayed proof's reads, and only on a hit (Rocqlib
    marks the lib_ref keys observed through one). *)
