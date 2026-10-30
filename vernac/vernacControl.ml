@@ -203,8 +203,14 @@ let under_one_control ~loc ~with_local_state control f =
     let v = Topfmt.with_output_to_file ~truncate fname f () in
     Some (ControlRedirect {fname; truncate=false}, v)
   | ControlTimeout {remaining} -> with_timeout ~timeout:remaining f
-  | ControlFail {st} -> with_fail ~loc ~with_local_state st f
-  | ControlSucceed {st} -> with_succeed ~with_local_state st f
+  (* [Fail] and [Succeed] observe the error or the result of the command and
+     then discard its effect, so they run it under
+     [Opaques.with_qed_typecheck_forced]. The five controls above keep the
+     effect of the command. *)
+  | ControlFail {st} ->
+    with_fail ~loc ~with_local_state st (fun () -> Opaques.with_qed_typecheck_forced f)
+  | ControlSucceed {st} ->
+    with_succeed ~with_local_state st (fun () -> Opaques.with_qed_typecheck_forced f)
 
 let rec under_control ~loc ~with_local_state controls ~noop f =
   match controls with

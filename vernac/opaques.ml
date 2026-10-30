@@ -23,6 +23,13 @@ let skip_qed_typecheck = ref false
 let { Goptions.get = skip_qed_typecheck_flag } =
   Goptions.declare_bool_option_and_ref ~key:["Skip";"Qed";"Typecheck"] ~value:false ()
 
+let qed_typecheck_forced = ref false
+
+(* [Flags.with_modified_ref] restores the old value on a normal return and on
+   an exception, which is how [Fail] leaves the scope. *)
+let with_qed_typecheck_forced f =
+  Flags.with_modified_ref qed_typecheck_forced (fun _ -> true) f ()
+
 type opaque_proof =
 | Checked of Safe_typing.opaque_certificate
 | Unchecked of Constr.t * Univ.ContextSet.t Opaqueproof.delayed_universes
@@ -113,11 +120,16 @@ let declare_defined_opaque ?feedback_id ~poly i (body : Safe_typing.private_cons
      the thunk is evaluated, not the one where this function is called. It does
      not matter because the former must be an extension of the latter or
      otherwise the call to Safe_typing would throw an anomaly. *)
-  (* The flag is read when the proof is declared, at Qed. *)
-  let skip_flag = skip_qed_typecheck_flag () in
+  (* Both spellings of the skip are read when the proof is declared, at Qed,
+     and so is the force a discarding control sets: the proof is checked in
+     full whenever the command that declares it runs under [Fail] or
+     [Succeed]. *)
+  let skip = (!skip_qed_typecheck || skip_qed_typecheck_flag ())
+             && not !qed_typecheck_forced
+  in
   let proof = Future.chain body begin fun pf ->
       let proof =
-        if !skip_qed_typecheck || skip_flag then unchecked_opaque ~poly i pf
+        if skip then unchecked_opaque ~poly i pf
         else Checked (Safe_typing.check_opaque (Global.safe_env ()) i pf)
       in
       let () = Option.iter (fun id -> Feedback.feedback ~id Feedback.Complete) feedback_id in
