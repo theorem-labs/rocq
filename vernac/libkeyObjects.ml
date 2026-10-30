@@ -136,13 +136,17 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    [OpacityLog], with the status [axiom_report] gives now); an extraction
    with AccessOpaque (the default), which reads an opaque proof's BODY and
    extracts what it finds there, which no label covers (the hook logs each
-   such read as an [opaque = true] query, and the keep rule treats every
-   [opaque = true] query as a read of the owner's opaque table, keeping the
-   dependent only when the owner's object is byte-identical, as for a foreign
-   opaque reference below); and the library's assumption set, which [Print
-   Assumptions] reads (the keep rule recomputes it from the current objects:
-   its monotone axiom condition). These read a constant's status off
-   [axiom_report], which is why the blinding stops at the constants it lists.
+   such read as an [opaque = true] query naming the library that holds the
+   constant read; for a copy, made by a functor application or an
+   [Include], that is not the library whose opaque table the body came from,
+   so the keep rule keeps the dependent only when the holder's object is
+   byte-identical and so is the object of every library in the holder's
+   registered [foreign_opaque_libraries] below); and the library's
+   assumption set, which [Print Assumptions] reads (the keep rule recomputes
+   it from the current objects: its monotone axiom condition). The status
+   comparison and the assumption set read a constant's status off
+   [axiom_report], which is why the blinding stops at the constants it lists;
+   a body read reads no status, its check being byte-identity.
    The canonical value also drops the opaque table index of an [OpaqueDef
    (Indirect (_, _, dp, i))]; a dependent that embeds a foreign opaque
    reference into [dp] (a functor application or [Include] of this library's

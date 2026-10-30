@@ -1156,9 +1156,14 @@ let extract_constant table access env kn inst cb =
      which no label covers. Each read is logged as an opaque query
      ([opaque = true], from [cb], the body read), also when [cb] comes from a
      sealed module's implementation and the global environment holds the
-     signature's axiom: the keep rule treats every [opaque = true] query as a
-     read of the owner's opaque table and requires the owner's object
-     byte-identical, as for a foreign opaque reference. *)
+     signature's axiom, or from a functor's body, which the global environment
+     does not hold. The query names [kn]'s library, the one holding the
+     constant read. For a copy (a functor application, an [Include]) that
+     library is not the one whose opaque table holds the body, so the keep
+     rule keeps the dependent only when the holder's object is byte-identical
+     and so is the object of every library in the holder's registered
+     [foreign_opaque_libraries] ([LibkeyObjects.axiom_report]), which covers
+     every opaque table the holder's copies read. *)
   let read_opaque c =
     OpacityLog.record kn cb;
     get_opaque access env c

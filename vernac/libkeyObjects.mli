@@ -99,13 +99,19 @@ open Names
     strategy command or extraction saw ([KeepFacts], compared with the status
     [axiom_report] gives now); the opaque proof BODIES an extraction with
     AccessOpaque (the default) read, which it logs as [opaque = true] queries
-    and which the keep rule treats as reads of the owner's opaque table,
-    keeping the dependent only when the owner's object is byte-identical; the
-    library's assumption set (its monotone axiom condition); and which opaque
-    proof a foreign [Indirect] reference resolves to (its
-    foreign-opaque-reference check, the same byte-identity). These read a
-    constant's status off [axiom_report], so the blinding covers only the
-    constants it lists. Every other constant the compiled form holds -- in a
+    naming the library that holds the constant read; the library's
+    assumption set (its monotone axiom condition); and which opaque proof a
+    foreign [Indirect] reference resolves to (its foreign-opaque-reference
+    check: the referenced library's object byte-identical). A body read names
+    the constant's holder, and for a copy (a functor application, an
+    [Include]) that is not the library whose opaque table the body came from:
+    so the keep rule keeps the dependent only when the holder's object is
+    byte-identical and so is the object of every library in the holder's
+    [foreign_opaque_libraries] as registered, which covers every opaque table
+    the holder's copies read. The status comparison and the assumption set
+    read a constant's status off [axiom_report], so the blinding covers only
+    the constants it lists; a body read reads no status, its check being
+    byte-identity. Every other constant the compiled form holds -- in a
     functor's body, in a functor parameter's module type, in a module type,
     in the implementation of a sealed module -- keeps an opaque proof
     distinct from an axiom, read as one fixed opaque body with no table

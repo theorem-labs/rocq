@@ -51,7 +51,8 @@ type t = {
       Sorted by name. The keep rule rebuilds a dependent when the recorded
       opacity no longer matches the dependency's current one -- the command
       could then error, or stop erroring, on a real recompile -- and treats
-      every [opaque = true] query as a read of the owner's opaque table. *)
+      every [opaque = true] query as a read of an opaque table: the holder's,
+      and for a copy the ones its registered foreign opaque libraries hold. *)
 }
 
 (* The [MPfile] root of a module path, [None] for a bound (functor-parameter)
@@ -328,7 +329,11 @@ let compute_assumptions ~stored access self =
    an opaque body read ([Extraction.extract_constant]) while the global
    environment, and so a strategy command or the extraction's first record,
    sees the signature's axiom. A body read is the stronger fact: the keep rule
-   treats every [opaque = true] query as a read of the owner's opaque table. *)
+   treats every [opaque = true] query as a read of an opaque table and
+   requires the holder's object byte-identical, with every library in its
+   registered [foreign_opaque_libraries], since the [library] recorded here is
+   the holder's, which for a copy (a functor application, an [Include]) is not
+   the library whose table holds the body. *)
 let collect_opacity self =
   let tbl = Hashtbl.create 16 in
   List.iter

@@ -336,8 +336,12 @@ let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 let vm_seg : seg_vm ObjFile.id = Vmlibrary.vm_segment
-(* [-location-free-label] only: the keep rule's facts ([KeepFacts]). No digest
-   covers this segment, and rocqchk does not read it. *)
+(* [-location-free-label] only: the keep rule's facts ([KeepFacts]). The label
+   does not cover this segment. It is written with no digest of its own
+   ([save_library_base]), so its stored digest is the MD5 of its bytes, which
+   rocq-library-label checks before it reads the segment; coqc reads it under
+   the flag as it reads the other segments ([intern_from_file]); rocqchk does
+   not read it. *)
 let keepfacts_seg : KeepFacts.t ObjFile.id = ObjFile.make_id "keepfacts"
 
 module Intern = struct

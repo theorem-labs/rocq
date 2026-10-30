@@ -265,23 +265,25 @@ else
   bad "B1: Transparent Nat.add recorded: '$qn'"
 fi
 # BXB: with AccessOpaque (the default) an extraction reads an opaque proof's body: the
-# query is opaque=true, which the keep rule treats as a read of the owner's opaque table.
-# For a lemma of A's own signature (n), and for one of a sealed module's implementation
-# (M.sn, whose signature constant is an axiom: the body read still records true).
+# query is opaque=true, with the library holding the constant read. Two cases only the
+# body-read hook can record as opaque: a lemma of a functor's body (F.fc), which the
+# global environment does not hold, so the extraction's first record (of the body the
+# environment gives) records nothing; and a lemma of a sealed module's implementation
+# (M.sn), whose signature constant is an axiom, so that record says opaque=false.
 mkdir -p _kfacts/xb/{a,b,bs}
-printf 'Lemma n : nat.\nProof. exact 0. Qed.\nModule Type T2. Parameter sn : nat. End T2.\nModule M : T2. Lemma sn : nat. Proof. exact 0. Qed. End M.\n' \
+printf 'Module Type S. End S.\nModule F (X : S). Lemma fc : nat. Proof. exact 0. Qed. End F.\nModule Type T2. Parameter sn : nat. End T2.\nModule M : T2. Lemma sn : nat. Proof. exact 0. Qed. End M.\n' \
   > _kfacts/xb/a/A.v
-printf 'From Corelib Require Extraction.\nRequire A.\nExtraction A.n.\n' > _kfacts/xb/b/B.v
+printf 'From Corelib Require Extraction.\nRequire A.\nExtraction A.F.\n' > _kfacts/xb/b/B.v
 printf 'From Corelib Require Extraction.\nRequire A.\nExtraction A.M.\n' > _kfacts/xb/bs/B.v
 rocq c -q -location-free-label -R _kfacts/xb/a A _kfacts/xb/a/A.v
 rocq c -q -location-free-label -R _kfacts/xb/a A -R _kfacts/xb/b Bdep _kfacts/xb/b/B.v > /dev/null
 rocq c -q -location-free-label -R _kfacts/xb/a A -R _kfacts/xb/bs Bdep _kfacts/xb/bs/B.v > /dev/null
 xlib=$(report _kfacts/xb/a/A.vo | sed -n 's/.*"library":"\([^"]*\)".*/\1/p')
 qb=$(field _kfacts/xb/b/B.vo opacity_queries); qs=$(field _kfacts/xb/bs/B.vo opacity_queries)
-if [ "$qb" = "[{\"constant\":\"$xlib.n\",\"library\":\"$xlib\",\"opaque\":true}]" ]; then
-  pass "B1: an extraction that reads A.n's opaque body records it opaque: $qb"
+if [ "$qb" = "[{\"constant\":\"$xlib.F.fc\",\"library\":\"$xlib\",\"opaque\":true}]" ]; then
+  pass "B1: an extraction that reads the functor-body lemma A.F.fc's opaque body records it opaque: $qb"
 else
-  bad "B1: BXB's opacity_queries for A.n: '$qb'"
+  bad "B1: BXB's opacity_queries for the functor-body A.F.fc: '$qb'"
 fi
 if [ "$qs" = "[{\"constant\":\"$xlib.M.sn\",\"library\":\"$xlib\",\"opaque\":true}]" ]; then
   pass "B1: an extraction that reads sealed A.M.sn's opaque body records it opaque: $qs"
