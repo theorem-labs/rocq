@@ -170,7 +170,8 @@ binder.  `eval_abbreviation`: what an abbreviation stands for.
 `changed` proof misses on `named_context`, not on `proof_using_set`: the set
 is computed from inputs the proof records before it (the section context,
 the statement, the collections), so a set that changes is always caught
-there first.
+there first.  `eval_proof_using_collection`: the expression of a named
+collection of section variables.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
