@@ -426,6 +426,16 @@ and lack of checking of relevance marks on constants in coqchk
 - risk: high when combining module subyping with sort polymorphism
   (but not possible in non-rc version)
 
+### Incorrect subtyping of inductives with letins in constructor types
+- component: subtyping, inductive declarations
+- introduced: unclear, possibly only exploitable since V8.14 (#13563)
+- impacted versions: until V9.2.0
+- fixed in: 9.2.0, 9.3
+- found by: OpenAI
+- issue: #22387
+- risk: need to use module subtyping to confuse inductives with different letins,
+  and use those letins in a match.
+
 ### Universes
 
 #### issue with two parameters in the same universe level
