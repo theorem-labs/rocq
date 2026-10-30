@@ -1,0 +1,6 @@
+{
+  "doc": "a required library inlines a changed constant into the bytecode of an unchanged one that a proof runs with vm_compute: stock rejects the proof, and replay must reject it too",
+  "files": ["A.v", "B.v"],
+  "compile_fails": ["B.v"],
+  "coqchk": false
+}

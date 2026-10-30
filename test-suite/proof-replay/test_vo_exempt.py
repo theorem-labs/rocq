@@ -62,7 +62,9 @@ class Exemption(unittest.TestCase):
 
     def test_every_listed_fixture_is_named(self):
         """The list is explicit, so adding one is a deliberate act."""
-        self.assertEqual(sorted(EXEMPTIBLE_FIXTURES), ["channels_unchanged", "hint_removed", "place_same_file"])
+        self.assertEqual(sorted(EXEMPTIBLE_FIXTURES),
+                         ["channels_unchanged", "hint_removed", "place_same_file", "vm_lia_hit",
+                          "write_scheme_rewrite"])
 
 
 if __name__ == "__main__":

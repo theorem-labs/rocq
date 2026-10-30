@@ -175,6 +175,28 @@ collection of section variables.  `eval_bidirectionality_hint`: the hint of
 a variable, whose key is its name; before, the evaluator could not read such
 a key back, so `same` missed with why `unknown`.
 
+**The cross-model soundness review of `5f39c90b`.**  Each fixture is a
+reviewer's scenario; stock and replay must agree.
+`universe_checked_proof_unchecked_graph`: the global graph does not check
+universes, a proof checks its own, and a constraint it needs is reversed;
+stock rejects the proof.  `vm_inline_lib`, `vm_inline_same_file`: a changed
+constant is inlined (`Register Inline`) into the bytecode of an unchanged one
+that a proof runs with `vm_compute`; stock rejects the proof.
+`vm_global_unchanged_hit` is their control: unchanged bytecode, moved in the
+library's code table, still replays.  `vm_lia_hit`: two `lia` proofs, whose
+certificate check runs the machine over Stdlib's checker, replay on a cold
+and on a warm cache; its replay `.vo` differs from stock's only in the
+sharing of the string "BinInt" (`EXEMPTIBLE_FIXTURES` in `runner.py`).
+`vm_cache_lib`, `vm_cache_same_file`:
+an `Eval vm_compute` fills the machine's cache with an unchanged constant
+that calls a changed one, and a proof then runs it from the cache; stock
+rejects the proof.  `prim_token_warning_threshold`: a number notation's
+warning threshold drops below a number a proof reads, under `Set Warnings
+"+large-number"`; the term and scope do not change, and stock rejects the
+proof.  `warning_error_caught`: a `try` catches a warning raised as an error,
+and stock accepts the proof; the proof is ineligible (`warning_error`), so
+replay does not raise the warning again, and the control replays.
+
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
 one trips, no later proof of the process is replayed, and each is counted as
