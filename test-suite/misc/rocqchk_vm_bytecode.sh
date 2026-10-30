@@ -45,55 +45,22 @@ rocq c -noinit -R "$d/d1" "" "$d/d1/Defs.v"
 rocq c -noinit -R "$d/d2" "" "$d/d2/Defs.v"
 
 # Splice: library from d1 (body says true), vmlibrary from d2 (bytecode says
-# false), keeping d1's opaques/summary. All per-segment MD5s and the summary
-# offsets are recomputed so the container is well formed.
-python3 - "$d" <<'PY'
-import sys, hashlib, struct
-d = sys.argv[1]
-MAGIC = 0x436F7121  # "Coq!"; all ints big-endian, layout per lib/objFile.ml
-def parse(p):
-    b = open(p, "rb").read()
-    magic, ver = struct.unpack_from(">II", b, 0)
-    assert magic == MAGIC, "bad magic"
-    (sp,) = struct.unpack_from(">Q", b, 8)
-    off = sp
-    (n,) = struct.unpack_from(">I", b, off); off += 4
-    segs = {}
-    for _ in range(n):
-        (nl,) = struct.unpack_from(">I", b, off); off += 4
-        name = b[off:off+nl].decode(); off += nl
-        pos, ln = struct.unpack_from(">QQ", b, off); off += 16
-        h = b[off:off+16]; off += 16
-        data = b[pos:pos+ln]
-        assert hashlib.md5(data).digest() == h, name + ": bad segment MD5"
-        segs[name] = data
-    return ver, segs
-def write(p, ver, by):
-    out = bytearray()
-    out += struct.pack(">II", MAGIC, ver)
-    out += struct.pack(">Q", 0)              # summary position placeholder
-    summ = []
-    for name in sorted(by):                  # CString.Map.iter order
-        data = by[name]; pos = len(out); out += data
-        h = hashlib.md5(data).digest(); out += h
-        summ.append((name, pos, len(data), h))
-    sp = len(out)
-    out += struct.pack(">I", len(summ))
-    for name, pos, ln, h in summ:
-        nb = name.encode()
-        out += struct.pack(">I", len(nb)); out += nb
-        out += struct.pack(">QQ", pos, ln); out += h
-    struct.pack_into(">Q", out, 8, sp)
-    open(p, "wb").write(out)
-v1, s1 = parse(d + "/d1/Defs.vo")
-v2, s2 = parse(d + "/d2/Defs.vo")
+# false), keeping d1's opaques/summary and its segment order.
+# misc/vo_container.py rebuilds the container, so every MD5 and every offset is
+# right.
+python3 - "$(dirname "$0")" "$d" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import vo_container
+
+d = sys.argv[2]
+v1, s1 = vo_container.read(d + "/d1/Defs.vo")
+v2, s2 = vo_container.read(d + "/d2/Defs.vo")
 assert v1 == v2, "vo_version mismatch"
-assert s1["library"]   != s2["library"],   "library should differ"
+assert s1["library"] != s2["library"], "library should differ"
 assert s1["vmlibrary"] != s2["vmlibrary"], "vmlibrary should differ"
-write(d + "/Defs.vo", v1, {"library":   s1["library"],
-                           "vmlibrary": s2["vmlibrary"],
-                           "opaques":   s1["opaques"],
-                           "summary":   s1["summary"]})
+s1["vmlibrary"] = s2["vmlibrary"]
+vo_container.write(d + "/Defs.vo", v1, s1)
 PY
 
 # The spliced file is well typed, only its bytecode lies, and rocqchk no longer

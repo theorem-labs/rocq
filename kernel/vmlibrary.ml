@@ -19,7 +19,7 @@ module Delayed :
 sig
 
 type 'a t
-val make : file:string -> ObjFile.in_handle -> segment:'a ObjFile.id -> 'a t
+val make : file:string -> pos:int64 -> digest:Digest.t -> 'a t
 val return : 'a -> 'a t
 val eval : 'a t -> 'a
 
@@ -36,14 +36,8 @@ type 'a node = ToFetch of 'a delayed | Fetched of 'a
 
 type 'a t = 'a node ref
 
-let in_delayed f ch ~segment =
-  let seg = ObjFile.get_segment ch ~segment in
-  let digest = seg.ObjFile.hash in
-  { del_file = f; del_digest = digest; del_off = seg.ObjFile.pos; }
-
-let make ~file ch ~segment =
-  let del = in_delayed file ch ~segment in
-  ref (ToFetch del)
+let make ~file ~pos ~digest =
+  ref (ToFetch { del_file = file; del_off = pos; del_digest = digest })
 
 (** Fetching a table of opaque terms at position [pos] in file [f],
     expecting to find first a copy of [digest]. *)
@@ -138,10 +132,69 @@ let add code lib =
   let lib = { lib with local = tab } in
   lib, idx
 
-let vm_segment : compiled_library ObjFile.id = ObjFile.make_id "vmlibrary"
+let segment_name = "vmlibrary"
+
+let vm_segment : compiled_library ObjFile.id = ObjFile.make_id segment_name
+
+(* Format of the vmlibrary segment.
+
+   The segment holds the VM bytecode a library file carries: a marshalled
+   [compiled_library], that is, emitted instruction strings together with the
+   relocation data that patches them. Those bytes mean nothing on their own. An
+   instruction is a word the C interpreter of the READING process dispatches on,
+   so a process that does not have the opcodes the writer emitted jumps where
+   its own table sends that word, and dies with no message: a library written by
+   a Rocq whose VM has instructions this one lacks made the reader dump core
+   (SIGABRT, dispatch://BET-241).
+
+   The segment therefore starts with its own format version, a 32-bit big-endian
+   word (the integer form the rest of the container uses, lib/objFile.ml),
+   written before the marshalled table and read before anything in the segment is
+   unmarshalled. A reader that finds a version it does not know refuses the file,
+   naming the library and both versions.
+
+   Raise [format_version] whenever what the segment stores changes: a new or
+   renumbered opcode in the emitted code, a change of the marshalled types, or a
+   change in what a reader must do with them. Nothing ties it to the opcode
+   table, so a change that leaves it alone brings the crash back for the readers
+   this check is for. It is the version of this segment alone, not of the file:
+   the other segments stay readable, so a .vo whose vmlibrary a reader refuses
+   is named rather than misread. *)
+let format_version = 1
+
+(* The version word, as [output_binary_int] writes it. A file written before
+   there was one starts with the marshaller's magic instead, which is negative,
+   so no value this reader can see is mistaken for a version. *)
+let segment_header_bytes = 4
+
+let format_mismatch dp ~file ~found =
+  let found =
+    if found > 0 then
+      Pp.(str "is in vmlibrary format version " ++ int found)
+    else
+      Pp.(str "carries no vmlibrary format version, so it was written before \
+               this check existed")
+  in
+  CErrors.user_err Pp.(str "The VM bytecode of library " ++ DirPath.print dp ++
+    str " (file " ++ str file ++ str ") " ++ found ++
+    str ", but this process reads vmlibrary format version " ++
+    int format_version ++ str ". Rebuild that library with this Rocq.")
+
+let save ch lib =
+  let oc, finish = ObjFile.marshal_out_binary ch ~segment:vm_segment in
+  let () = output_binary_int oc format_version in
+  let () = Marshal.to_channel oc lib [] in
+  finish ()
 
 let load dp ~file ch =
-  (dp, Delayed.make ~file ~segment:vm_segment ch : on_disk)
+  let found = ObjFile.input_segment_int ch ~segment:vm_segment in
+  let () =
+    if not (Int.equal found format_version) then format_mismatch dp ~file ~found
+  in
+  let seg = ObjFile.get_segment ch ~segment:vm_segment in
+  (* The marshalled table starts after the version word. *)
+  let pos = Int64.add seg.ObjFile.pos (Int64.of_int segment_header_bytes) in
+  (dp, Delayed.make ~file ~pos ~digest:seg.ObjFile.hash : on_disk)
 
 let link (dp, m) libs =
   let () = assert (not @@ DirPath.Map.mem dp libs.foreign) in

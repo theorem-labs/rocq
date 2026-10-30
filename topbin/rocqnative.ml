@@ -132,11 +132,16 @@ let summary_seg : summary_disk ObjFile.id = ObjFile.make_id "summary"
 let library_seg : library_disk ObjFile.id = ObjFile.make_id "library"
 
 let intern_from_file f =
-  let ch = System.with_magic_number_check (fun file -> ObjFile.open_in ~file) f in
-  let lsd, digest_lsd = ObjFile.marshal_in_segment ch ~segment:summary_seg in
-  let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
-  let vmlib = Vmlibrary.load ~file:f lsd.md_name ch in
-  ObjFile.close_in ch;
+  let lsd, lmd, digest_lmd, vmlib =
+    let ch = System.with_magic_number_check (fun file -> ObjFile.open_in ~file) f in
+    (* Closed on every exit: Vmlibrary.load refuses a segment in a format this
+       build does not know, and that raises here. *)
+    Fun.protect ~finally:(fun () -> ObjFile.close_in ch) @@ fun () ->
+    let lsd, _ = ObjFile.marshal_in_segment ch ~segment:summary_seg in
+    let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
+    let vmlib = Vmlibrary.load ~file:f lsd.md_name ch in
+    lsd, lmd, digest_lmd, vmlib
+  in
   System.check_caml_version ~caml:lsd.md_ocaml ~file:f;
   let open Safe_typing in
   mk_library lsd f lmd.md_compiled (Dvo_or_vi digest_lmd) vmlib

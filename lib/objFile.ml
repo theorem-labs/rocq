@@ -184,6 +184,14 @@ let close_in ch =
 let get_segment (type a) ch ~(segment : a id) : a segment =
   (CString.Map.find segment.id ch.in_segments :> a segment)
 
+let input_segment_int h ~segment =
+  let s = get_segment h ~segment in
+  let () = LargeFile.seek_in h.in_channel s.pos in
+  (* A summary that points a segment past the end of the file: the same answer
+     [open_in] gives for a file that ends early, not an uncaught exception. *)
+  try input_binary_int h.in_channel
+  with End_of_file -> error_corrupted h.in_filename "premature end of file"
+
 let segments ch = ch.in_segments
 
 let open_out ~file =
