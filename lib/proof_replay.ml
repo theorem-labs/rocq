@@ -136,7 +136,6 @@ type candidate = {
       (** the provided channels, read where the record read them: at the
           proof's start, not at its closer *)
   c_counters : (string * int * (int -> unit)) list;  (** each counter at the proof's start *)
-  c_base : Loc.t option;  (** the statement's sentence, for the warnings raised again *)
 }
 
 type counts = {
@@ -809,8 +808,9 @@ let abandon () =
 (* A write the declaration of the stored term does not make by itself: a
    counter that no [register_counter] can move. The declaration makes the
    rest — the levels and constraints, the constraint sources, and the
-   schemes, which travel with the term's side effects — and a warning the
-   proof raised is raised again at the hit ({!warn_again}).
+   schemes, which travel with the term's side effects. A proof that raises a
+   warning is ineligible ([CWarnings.warn]), so no warning is to be raised
+   again.
 
    The universe and sort counters are not here: the stored term carries
    them, and the precheck compares them. Every other registered counter is
@@ -820,22 +820,6 @@ let unreplayable_writes (p : R.proof) =
     (fun (name, n) ->
        n > 0 && name <> "univ_level" && name <> "sort_quality" && not (can_advance name))
     p.R.writes.R.counters
-
-(* The warnings of a replayed proof, raised again where its tactics raised
-   them: each location moves with the statement's sentence. Their status
-   now decides, as it decided then; the [warnings] read (row 13) makes it
-   the same one. *)
-let warn_again (base : Loc.t option) (p : R.proof) =
-  let at rel =
-    match base, List.map int_of_string_opt (String.split_on_char ',' rel) with
-    | Some b, [ Some dl; Some dbp; Some dep; Some dbol; Some dll; Some dbl ] ->
-      Some { b with Loc.line_nb = b.Loc.line_nb + dl; bp = b.Loc.bp + dbp; ep = b.Loc.bp + dep;
-                    bol_pos = b.Loc.bp + dbol; line_nb_last = b.Loc.line_nb + dll;
-                    bol_pos_last = b.Loc.bp + dbl }
-    | _ -> None
-  in
-  List.iter (fun (name, message, rel) -> CWarnings.warn_again ?loc:(at rel) ~name ~message ())
-    p.R.writes.R.warnings_raised
 
 let opens_before_late_command st =
   let bound = if !export_register_seen then st.f_replay_from else st.f_replay_from_no_imports in
@@ -872,8 +856,7 @@ let open_proof ~name ~statement ~position ~toolchain_key =
             past it (opening the proof makes evars and levels of its own).
             So they are read here, where the record read them. *)
          st.f_candidate <-
-           Some { c_name = name; c_proof = p; c_provided = provided (); c_counters = counter_starts ();
-                  c_base = !sentence_loc })
+           Some { c_name = name; c_proof = p; c_provided = provided (); c_counters = counter_starts () })
 
 (* A counter's start (row 18) matters to a proof only through the fresh
    names it makes from it: a proof whose record shows no advance of a
@@ -954,8 +937,7 @@ let rec decide ~sentences ~closer =
 and decide_once ~sentences ~closer =
   match !state with
   | None | Some { f_candidate = None; _ } | Some { f_refused = Some _; _ } -> None
-  | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_provided = at_start; c_counters = starts;
-                                 c_base = base };
+  | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_provided = at_start; c_counters = starts };
             _ } as st) ->
     st.f_candidate <- None;
     (* A process-wide fence this process tripped (a stale Rocqlib cache, a
@@ -992,7 +974,6 @@ and decide_once ~sentences ~closer =
           | None ->
             counts.n_hits <- counts.n_hits + 1;
             outcome name "hit" None;
-            warn_again base p;
             Queue.iter (fun f -> f (p.R.start_tables @ p.R.reads)) hit_hooks;
             take_counters ~starts ~recorded:p.R.writes.R.counters;
             counts.registered <- counts.registered +. p.R.wall_s;

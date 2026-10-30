@@ -129,48 +129,48 @@ let warn { Msg.tag; warning } ?loc v =
   let tag = DMap.tag_of_onetag tag in
   let w = W (loc,tag,v) in
   let status = warning_status warning in
-  (* BET-84: a warning a proof raised is a write: replay raises it again,
-     at the same place relative to the proof, with the same text (the
-     printed document itself, so it lays out as stock lays it out). Only a
-     warning the proof's own sentences raise is kept: the declaration at the
-     closer raises its own again when it declares a stored term. A disabled
-     warning changes nothing and is not recorded.
-
-     A warning that is an error raises an exception, which a tactic can
-     catch ([try]): the proof then succeeds, and raising the warning again
-     after it would fail it (fixture warning_error_caught). Replay cannot
-     tell a caught error from one that reached the closer, so a proof that
-     raises one is not replayed. *)
-  if status <> Disabled && Proof_recorder.active () then begin
-    if status = AsError then Proof_recorder.ineligible ~reason:"warning_error" ~detail:warning.wname;
-    Proof_recorder.write_warning ?loc ~name:warning.wname
-      ~message:(Proof_record.encode_blob (Marshal.to_string (print w) [])) ()
-  end;
+  (* BET-84: a proof that raises a warning is not replayed. Raising its
+     warning again after a replay is not what stock does: the status that
+     decides is the one when the warning came, which a sentence's warnings
+     attribute can set for that sentence only (fixture
+     warning_attribute_enabled), and an error a tactic catches ([try]) let
+     the proof succeed (fixture warning_error_caught). A disabled warning
+     changes nothing. The declaration at the closer raises its own warnings
+     again when it declares a stored term, outside the recorded window. *)
+  if status <> Disabled && Proof_recorder.active () then
+    Proof_recorder.ineligible ~reason:"warning" ~detail:warning.wname;
   match status with
   | Disabled -> ()
   | AsError -> Loc.raise ?loc (WarnError w)
   | Enabled -> Feedback.msg_warning ?loc ~quickfix:(quickfix w) (print w)
-
-let warn_again ?loc ~name ~message () =
-  let status = match String.Map.find_opt name !graph with
-    | Some { warning = Some w; _ } -> warning_status w
-    | Some { warning = None; _ } | None -> Enabled
-  in
-  let pp =
-    match Option.map (fun s -> (Marshal.from_string s 0 : Pp.t)) (Proof_record.decode_blob message) with
-    | Some pp -> pp
-    | None | exception (Failure _ | Invalid_argument _ | End_of_file) -> Pp.str message
-  in
-  match status with
-  | Disabled -> ()
-  | AsError -> CErrors.user_err ?loc pp
-  | Enabled -> Feedback.msg_warning ?loc pp
 
 (** Flag handling *)
 
 let flags = ref ""
 
 let get_flags () = !flags
+
+(* BET-84: what a later command can see of the registry of warnings and
+   categories: each one by name, with its parents' names, and a warning's
+   default status and whether it is also a category. Its current status is
+   a function of these and of the flags, which are read on their own
+   ([get_flags]). The view is built again only when the registry changed,
+   so a reader that keeps its digest by address digests it once per
+   change. *)
+let registry_view =
+  let last = ref (String.Map.empty, []) in
+  fun () ->
+    let g, v = !last in
+    if g == !graph then v
+    else begin
+      let v = String.Map.fold (fun name (c : category) acc ->
+          (name, List.map (fun (p : category) -> p.name) c.parents,
+           Option.map (fun w -> (w.default, w.hybrid)) c.warning) :: acc)
+          !graph []
+      in
+      last := (!graph, v);
+      v
+    end
 
 let iter_warnings f =
   !graph |> String.Map.iter (fun _ w -> Option.iter f w.warning)
@@ -370,9 +370,19 @@ let all = create_category ~from:[] ~name:"all" ()
 
 let default_cat = create_category ~from:[all] ~name:"default" ()
 
+(* BET-84: a warning or category created while a proof is recorded, the
+   first time it is needed (a deprecated reference's version warning), is
+   state the proofs after it see: a later warnings flag can name it
+   (fixture warning_lazy_registration). A replay would not create it, so
+   that proof is not replayed. *)
+let note_registry_growth name =
+  if Proof_recorder.active () then
+    Proof_recorder.ineligible ~reason:"warning_registry" ~detail:name
+
 let create_category ?(from=[all]) ~name () =
   check_fresh_name name;
   check_cat_list from;
+  note_registry_growth name;
   create_category ~from ~name ()
 
 let add_pp name pp =
@@ -406,6 +416,7 @@ let make_warning_pp ~from name =
 let create_gen ?(from=[all]) ?(default=Enabled) ~name ~hybrid () =
   check_fresh_name name;
   check_cat_list from;
+  note_registry_growth name;
   let from = if default <> Disabled then default_cat :: from else from in
   let pp = make_warning_pp ~from name in
   let w = {

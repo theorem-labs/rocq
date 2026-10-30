@@ -26,11 +26,6 @@ type 'a msg
 val warn : 'a msg -> ?loc:Loc.t -> 'a -> unit
 (** Emit a message in some warning. *)
 
-val warn_again : ?loc:Loc.t -> name:string -> message:string -> unit -> unit
-(** Raises again a warning a replayed proof's record holds (BET-84): the
-    warning [name]'s current status decides, as for {!warn}, and [message]
-    is the document the registration printed, as the record keeps it. *)
-
 val with_enabled_silenced : (unit -> 'a) -> 'a
 (** BET-84: runs [f] with every enabled warning disabled, and restores them
     afterwards, also when [f] raises. A warning that is an error stays an
@@ -80,6 +75,12 @@ val create : name:string -> ?category:category -> ?default:status ->
 
 val get_flags : unit -> string
 val set_flags : string -> unit
+
+val registry_view : unit -> (string * string list * (status * bool) option) list
+(** BET-84: the registry of warnings and categories as a later command can
+    see it: each name, its parents' names, and for a warning its default
+    status and whether it is also a category. The same list (physically)
+    until the registry changes. *)
 
 type 'a elt =
   | There of 'a
