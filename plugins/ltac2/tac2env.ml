@@ -81,33 +81,73 @@ let define_global kn e =
   let state = !ltac_state in
   ltac_state := { state with ltac_tactics = KerName.Map.add kn e state.ltac_tactics }
 
-(* BET-84 census row 10: each Ltac2 definition the proof reads. *)
-let record channel k v =
+(* BET-84 census row 10: each Ltac2 definition the proof reads, keyed by its
+   kernel name as [Lib.kername_key] writes it ([KerName.to_string] is not
+   injective). ONE value function for the six channels, called by the
+   record sites and by the replay evaluators
+   (dev/tools/census/replay_channels.py): the digest of what [tbl] holds
+   for [k], or absent. *)
+let recorded_ltac2 channel tbl k =
+  match KerName.Map.find_opt k tbl with
+  | None -> None
+  | Some v -> Some (Proof_recorder.digest ~what:channel v)
+
+let record ~channel tbl k =
   if Proof_recorder.active () then
-    Proof_recorder.read_by ~row:"10" ~channel ~id:k ~key:(fun () -> KerName.to_string k)
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some v -> Some (Proof_recorder.digest ~what:channel v))
+    Proof_recorder.read_by ~row:"10" ~channel ~id:k ~key:(fun () -> Lib.kername_key k)
+      ~value:(fun () -> recorded_ltac2 channel tbl k)
 
 (* Ltac2 interpretation resolves a name at every call, so the lookup itself
-   must build no option when the recorder is off: [record] is reached with an
-   allocated [Some] only under [active]. *)
-let find channel tbl kn =
+   must build nothing when the recorder is off: [record] is reached only
+   under [active], or on the failing lookup. *)
+let find ~channel tbl kn =
   match KerName.Map.find kn tbl with
   | v ->
-    if Proof_recorder.active () then record channel kn (Some v);
+    if Proof_recorder.active () then record ~channel tbl kn;
     v
   | exception Not_found ->
-    record channel kn None;
+    record ~channel tbl kn;
     raise Not_found
 
-let interp_global kn = find "ltac2_global" ltac_state.contents.ltac_tactics kn
+let interp_global kn = find ~channel:"ltac2_global" ltac_state.contents.ltac_tactics kn
 
-(* Its one caller tests [active] first; the test is repeated here so that no
-   caller can make the lookup allocate with the recorder off. *)
-let record_global kn =
-  if Proof_recorder.active () then
-    record "ltac2_global" kn (KerName.Map.find_opt kn ltac_state.contents.ltac_tactics)
+(* A key that does not read back to a kernel name is a miss. *)
+let () =
+  Proof_replay.register_evaluator "ltac2_global" (fun key ->
+      match Lib.kername_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_global" ltac_state.contents.ltac_tactics k))
+
+(* The other tables of the Ltac2 state, read the same way. A proof that runs
+   an Ltac2 definition also reads the types, constructors and projections
+   its code names, so evaluating [ltac2_global] alone replays nothing. *)
+let () =
+  Proof_replay.register_evaluator "ltac2_type" (fun key ->
+      match Lib.kername_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_type" ltac_state.contents.ltac_types k))
+
+let () =
+  Proof_replay.register_evaluator "ltac2_constructor" (fun key ->
+      match Lib.kername_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_constructor" ltac_state.contents.ltac_constructors k))
+
+let () =
+  Proof_replay.register_evaluator "ltac2_projection" (fun key ->
+      match Lib.kername_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_projection" ltac_state.contents.ltac_projections k))
+
+let () =
+  Proof_replay.register_evaluator "ltac2_alias" (fun key ->
+      match Lib.kername_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_alias" ltac_state.contents.ltac_aliases k))
+
+(* Its one caller tests [active] first; [record] tests it again, so that no
+   caller can make the lookup record with the recorder off. *)
+let record_global kn = record ~channel:"ltac2_global" ltac_state.contents.ltac_tactics kn
 
 (* BET-84: [Tac2interp.eval_global] runs the closure stored here in place of
    the global's definition, and row 10 records the definition only. Nothing
@@ -133,7 +173,7 @@ let define_constructor kn t =
     ltac_constructors = KerName.Map.add kn t state.ltac_constructors;
   }
 
-let interp_constructor kn = find "ltac2_constructor" ltac_state.contents.ltac_constructors kn
+let interp_constructor kn = find ~channel:"ltac2_constructor" ltac_state.contents.ltac_constructors kn
 
 let find_all_constructors_in_type kn =
   KerName.Map.filter (fun _ data -> KerName.equal kn data.cdata_type) (!ltac_state).ltac_constructors
@@ -142,25 +182,25 @@ let define_projection kn t =
   let state = !ltac_state in
   ltac_state := { state with ltac_projections = KerName.Map.add kn t state.ltac_projections }
 
-let interp_projection kn = find "ltac2_projection" ltac_state.contents.ltac_projections kn
+let interp_projection kn = find ~channel:"ltac2_projection" ltac_state.contents.ltac_projections kn
 
 let define_type kn e =
   let state = !ltac_state in
   ltac_state := { state with ltac_types = KerName.Map.add kn e state.ltac_types }
 
-let interp_type kn = find "ltac2_type" ltac_state.contents.ltac_types kn
+let interp_type kn = find ~channel:"ltac2_type" ltac_state.contents.ltac_types kn
 
 let define_alias ?deprecation kn tac =
   let state = !ltac_state in
   let data = { alias_body = tac; alias_depr = deprecation } in
   ltac_state := { state with ltac_aliases = KerName.Map.add kn data state.ltac_aliases }
 
-let interp_alias kn = find "ltac2_alias" ltac_state.contents.ltac_aliases kn
+let interp_alias kn = find ~channel:"ltac2_alias" ltac_state.contents.ltac_aliases kn
 
 let define_notation kn tac =
   ltac_notations := KerName.Map.add kn tac !ltac_notations
 
-let interp_notation kn = find "ltac2_notation" !ltac_notations kn
+let interp_notation kn = find ~channel:"ltac2_notation" !ltac_notations kn
 
 module ML =
 struct
