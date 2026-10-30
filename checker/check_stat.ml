@@ -51,6 +51,10 @@ let unsafe_flags = ref None
 let start_summary enabled =
   unsafe_flags := if enabled then Some empty_unsafe_flags else None
 
+(* The collection the checker runs for the sections below is wasted work when
+   no summary will be printed. *)
+let summary_enabled () = !unsafe_flags <> None
+
 (* An admitted library is never walked, and the environment holds only the
    interface of its sealed modules, so the sections below cannot see an unsafe
    flag inside one. Saying so beats printing <none>, which a reader takes for
@@ -149,6 +153,16 @@ let record_inductive ~indices_matter c mib =
         else flags.indices_matter;
     }
 
+(* An axiom declared inside a module sealed with [Module M : T] is in no
+   environment the Axioms section can fold over, so the checker records the
+   ones it walks past and the section adds them to what the fold saw. Why
+   that walk looks where it does, and what it leaves out, is explained where
+   it lives: [record_sealed_axioms] in mod_checking.ml (dispatch://BET-245). *)
+let sealed_axioms = ref []
+
+let record_axiom c =
+  if !unsafe_flags <> None then sealed_axioms := add_name (constant_name c) !sealed_axioms
+
 (* The environment walk keeps its own order, and a recorded name it already
    holds is dropped, so a constant is never listed twice. The membership test
    is a set, because a tree can record tens of thousands of names. *)
@@ -189,7 +203,7 @@ let pr_axioms env opac =
       | Some s -> Cset.union s acc in
   let csts = fold_constants add env Cset.empty in
   let csts = Cset.fold (fun c acc -> Constant.to_string c :: acc) csts [] in
-  pr_assumptions "Axioms" csts
+  pr_assumptions "Axioms" (add_missing csts !sealed_axioms)
 
 let pr_type_in_type env flags =
   let csts = fold_constants (fun c cb acc -> if not cb.const_typing_flags.check_universes then Constant.to_string c :: acc else acc) env [] in
