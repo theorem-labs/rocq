@@ -26,16 +26,21 @@
      the schema documented at [Attempts.to_json] (vernac/attempts.mli).
    - [--axiom-report-json FILE.vo]: one JSON document for the keep rule's
      monotone axiom condition (schema "rocq-library-label/axiom-report",
-     version 2): the library name, the label kind and the hex [--check]
+     version 3): the library name, the label kind and the hex [--check]
      prints, the constants whose label contribution the axiom-or-opaque
      blinding erased (each with its current "axiom" or "proof" status), the
-     libraries this one holds a foreign opaque reference into, the libraries
-     a declaration of it is copied from ("copied_from_libraries"), and its
+     libraries this one holds a foreign opaque reference into, and its
      [keepfacts] segment: "assumptions" (an object from each declaration's
      user name to its sorted assumption closure, empty closures left out; null
-     when absent) and "opacity_queries" (each foreign constant a non-opaque
-     strategy command named, by user name, with the opacity it saw; null when
-     the file has no segment).
+     when absent) and "opacity_queries" (each foreign constant a strategy
+     command or an extraction told apart as an axiom or an opaque proof, by
+     user name, with the opacity it saw; null when the file has no segment).
+     A segment that does not validate against checker/values.ml's
+     description of it reads as absent ([read_keep_facts]). Version 3 drops
+     version 2's "copied_from_libraries": an [Admitted -> Qed] edit in a
+     functor body or a module type now moves its owner's label (label
+     version 5), and an [Include] or module-alias copy is strengthened to a
+     transparent definition by the kernel, so nothing read it.
    Two modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across
@@ -78,7 +83,38 @@ let json_string b s =
       | c -> Buffer.add_char b c) s;
   Buffer.add_char b '"'
 
-let axiom_report_json (l : Library.file_label) =
+module Values = Coq_checklib.Values
+
+(* The file's [keepfacts] segment, parsed, checked against its stored digest
+   and validated against the checker's description of it
+   ([Values.v_keepfacts]) before it is unmarshalled, as rocqchk reads the
+   segments it reads ([CheckLibrary.marshal_in_segment]). [None] when the file
+   has none, or when the segment does not parse, does not match its digest or
+   is not the shape that description gives: the report then says null, which
+   makes the keep rule rebuild, and standard error says why. *)
+let read_keep_facts f (l : Library.file_label) : KeepFacts.t option =
+  match l.Library.keep_facts_segment with
+  | None -> None
+  | Some seg ->
+    let absent why =
+      prerr_endline ("rocq-library-label: " ^ f ^ ": keepfacts segment read as absent: " ^ why);
+      None in
+    let parse ch =
+      LargeFile.seek_in ch seg.ObjFile.pos;
+      let v = Coq_checklib.Analyze.parse_channel ch in
+      (v, Digest.input ch)
+    in
+    In_channel.with_open_bin f (fun ch ->
+        match parse ch with
+        | exception e when CErrors.noncritical e -> absent ("unreadable: " ^ Printexc.to_string e)
+        | (_, digest) when not (String.equal digest seg.ObjFile.hash) ->
+          absent "its digest does not match the segment table"
+        | (v, _) ->
+          match Coq_checklib.Validate.check Values.v_keepfacts v with
+          | Error why -> absent ("not the shape checker/values.ml describes: " ^ why)
+          | Ok () -> Some (Obj.obj (Coq_checklib.Analyze.instantiate v) : KeepFacts.t))
+
+let axiom_report_json file (l : Library.file_label) =
   let r = Lazy.force l.axiom_report in
   let kind, lhex = check_kind l in
   let b = Buffer.create 1024 in
@@ -87,7 +123,7 @@ let axiom_report_json (l : Library.file_label) =
     json_string b k; Buffer.add_char b ':'; f () in
   Buffer.add_char b '{';
   field "schema" (fun () -> json_string b "rocq-library-label/axiom-report");
-  field "version" (fun () -> Buffer.add_string b "2");
+  field "version" (fun () -> Buffer.add_string b "3");
   field "library" (fun () -> json_string b (Names.DirPath.to_string l.name));
   field "label_kind" (fun () -> json_string b kind);
   field "label" (fun () -> json_string b lhex);
@@ -115,12 +151,10 @@ let axiom_report_json (l : Library.file_label) =
     Buffer.add_char b '[';
     List.iteri (fun i s -> if i > 0 then Buffer.add_char b ','; json_string b s) l;
     Buffer.add_char b ']' in
-  field "copied_from_libraries" (fun () ->
-      strings (List.map Names.DirPath.to_string
-                 (Names.DirPath.Set.elements r.LibkeyObjects.copied_from_libraries)));
-  (* The [keepfacts] segment: null when the file has none (the keep rule then
-     rebuilds), or when the closure could not be computed. *)
-  let facts = l.Library.keep_facts in
+  (* The [keepfacts] segment: null when the file has none or it does not
+     validate (the keep rule then rebuilds), or when the closure could not be
+     computed. *)
+  let facts = read_keep_facts file l in
   field "assumptions" (fun () ->
       match facts with
       | Some { KeepFacts.assumptions = Some a; _ } ->
@@ -151,8 +185,6 @@ let axiom_report_json (l : Library.file_label) =
         Buffer.add_char b ']');
   Buffer.add_char b '}';
   Buffer.contents b
-
-module Values = Coq_checklib.Values
 
 (* The representation of the values this build writes into a .vo
    ([--vo-representation]), in three parts:
@@ -361,7 +393,7 @@ let () =
       | Ok j -> print_endline j
       | Error what -> prerr_endline ("rocq-library-label: " ^ f ^ ": " ^ what); exit 3
       end
-    | "--axiom-report-json" -> print_endline (axiom_report_json (read f))
+    | "--axiom-report-json" -> print_endline (axiom_report_json f (read f))
     | _ -> usage ()
     end
   | ["--layout-version"] -> Printf.printf "%d\n" LibkeyObjects.version

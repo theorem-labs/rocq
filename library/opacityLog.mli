@@ -10,9 +10,10 @@
 
 open Names
 
-(** The opacity a non-opaque [Strategy]/[Transparent] command saw on a
-    constant while a library was compiled (design D18, dispatch://INFRA-361).
-    See [opacityLog.ml] for why. *)
+(** Whether a constant was an axiom or an opaque proof when a command whose
+    outcome depends on that distinction (a non-opaque [Strategy]/[Transparent]
+    command, an extraction) ran while a library was compiled (design D18,
+    dispatch://INFRA-361). See [opacityLog.ml] for why. *)
 
 val set_enabled : bool -> unit
 (** Log queries ([true]) or ignore every [record] call ([false], the default).
@@ -22,10 +23,11 @@ val set_enabled : bool -> unit
 val reset : unit -> unit
 (** Forget the queries logged so far. *)
 
-val record : Constant.t -> opaque:bool -> unit
-(** Log that a non-opaque strategy command named [c] while [c]'s body was an
-    opaque proof ([opaque = true]) or not ([opaque = false]). Ignored unless
-    logging is enabled. *)
+val record : Constant.t -> Declarations.constant_body -> unit
+(** [record c cb]: such a command told [c], whose body is [cb], apart as an
+    axiom or an opaque proof. Logs [(c, true)] when [cb]'s body is an opaque
+    proof ([OpaqueDef]), [(c, false)] when it is [Undef None], and nothing for
+    any other body. Ignored unless logging is enabled. *)
 
 val get : unit -> (Constant.t * bool) list
 (** The queries logged so far, newest first, with repeats. *)

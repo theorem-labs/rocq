@@ -831,11 +831,12 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   in
   (* The keep rule's facts, while the library's own constants and opaque
      proofs are still in the environment. A [.vos] (proofs left out) gets none,
-     since its closure would miss the bodies not compiled. *)
-  let keepfacts =
-    if !location_free_label && Future.UUIDSet.is_empty except
-    then Some (KeepFacts.compute ~access:indirect_accessor ~self:dir)
-    else None
+     even with no proof left out, since its closure would miss the bodies not
+     compiled. *)
+  let keepfacts = match todo_proofs with
+    | ProofsTodoNone when !location_free_label ->
+      Some (KeepFacts.compute ~access:indirect_accessor ~self:dir)
+    | ProofsTodoNone | ProofsTodoSomeEmpty _ -> None
   in
   OpacityLog.reset ();
   let sd, md, vmlib, ast = save_library_struct ~output_native_objects dir in
@@ -853,18 +854,20 @@ type file_label = {
   label : (string, string) result Lazy.t;
   attempts : Attempts.t option;
   axiom_report : LibkeyObjects.axiom_report Lazy.t;
-  keep_facts : KeepFacts.t option;
+  keep_facts_segment : KeepFacts.t ObjFile.segment option;
 }
 
 let read_file_label f =
   let ch = raw_intern_library f in
-  let sd, md, stored, seg, keep_facts = Fun.protect ~finally:(fun () -> ObjFile.close_in ch) (fun () ->
+  let sd, md, stored, seg, keep_facts_segment = Fun.protect ~finally:(fun () -> ObjFile.close_in ch) (fun () ->
       let sd, _ = ObjFile.marshal_in_segment ch ~segment:summary_seg in
       let md, stored = ObjFile.marshal_in_segment ch ~segment:library_seg in
-      let keep_facts =
-        try Some (fst (ObjFile.marshal_in_segment ch ~segment:keepfacts_seg))
+      (* Where the keepfacts segment is, not its value: the reader validates
+         it before it unmarshals it (see the .mli). *)
+      let keep_facts_segment =
+        try Some (ObjFile.get_segment ch ~segment:keepfacts_seg)
         with Not_found -> None in
-      sd, md, stored, ObjFile.get_segment ch ~segment:library_seg, keep_facts)
+      sd, md, stored, ObjFile.get_segment ch ~segment:library_seg, keep_facts_segment)
   in
   let segment_md5 = lazy (In_channel.with_open_bin f (fun ic ->
       In_channel.seek ic seg.ObjFile.pos;
@@ -873,7 +876,7 @@ let read_file_label f =
   { name = sd.md_name; stored; segment_md5; label = lazy (label_result sd md);
     attempts = Attempts.find md.md_objects;
     axiom_report = lazy (LibkeyObjects.axiom_report ~compiled:md.md_compiled);
-    keep_facts }
+    keep_facts_segment }
 
 let get_used_load_paths () =
   String.Set.elements

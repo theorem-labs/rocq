@@ -119,17 +119,17 @@ let check_not_fully_opaque l ref =
   | Evaluable.EvalConstRef _sp, Conv_oracle.Opaque -> ()
   | Evaluable.EvalConstRef sp, _ ->
     if Environ.mem_constant sp (Global.env ()) then begin
-      let opaque = Declareops.is_opaque (Global.lookup_constant sp) (* FIXME *) in
-      (* Record the opacity this non-opaque strategy command saw, so the keep
-         rule (D18, dispatch://INFRA-361) rebuilds a dependent whose unchanged
-         source would now meet, or no longer meet, the error below once the
-         constant's body form changes between an axiom and an opaque proof (an
-         edit v2b's label hides). The record is kept in the error branch too: a
-         command wrapped in [Fail] is rolled back but its compilation outcome
-         still depended on what this saw. [OpacityLog] drops the call unless
-         -location-free-label. *)
-      OpacityLog.record sp ~opaque;
-      if opaque then
+      let cb = Global.lookup_constant sp in
+      (* Record whether this non-opaque strategy command saw an axiom or an
+         opaque proof, so the keep rule (D18, dispatch://INFRA-361) rebuilds a
+         dependent whose unchanged source would now meet, or no longer meet,
+         the error below once the constant's body form changes between the two
+         (an edit the label hides). The record is kept in the error branch too:
+         a command wrapped in [Fail] is rolled back but its compilation outcome
+         still depended on what this saw. [OpacityLog] records only those two
+         body forms, and drops the call unless -location-free-label. *)
+      OpacityLog.record sp cb;
+      if Declareops.is_opaque cb (* FIXME *) then
         user_err
           (str "Cannot make" ++ spc () ++
               Nametab.pr_global_env Id.Set.empty (GlobRef.ConstRef sp) ++

@@ -112,8 +112,9 @@ printf 'Declare ML Module "labelplugin2".\nDefinition a := 0.\n' > _test/renamed
 comp renamed
 check "another plugin name: another label" test "$(label declare)" != "$(label renamed)"
 
-# 4. The layout version the labels above are made by.
+# 4. The layout version the labels above are made by (5 since D18 F1, which
+#    restricted the axiom-or-opaque blinding to the library's own signature).
 v=$("$TOOL" --layout-version || echo "no --layout-version")
-check "--layout-version prints the layout version (got '$v')" test "$v" = "4"
+check "--layout-version prints the layout version (got '$v')" test "$v" = "5"
 
 exit $fail

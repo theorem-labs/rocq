@@ -17,8 +17,13 @@ open Libobject
    Version 4 (BET-342): the plugin file digests of an ML-MODULE object and
    of an [ml_module] attempt are out of the key (vernac/mltop.ml,
    vernac/attempts.ml), so a plugin rebuilt from the same sources leaves
-   the label of the libraries that declare it unchanged. *)
-let version = 4
+   the label of the libraries that declare it unchanged.
+   Version 5 (D18 F1): the blinding covers only the constants of the
+   library's own signature (the ones [axiom_report] lists); in a functor
+   body, a module type and every other place an opaque proof stays one,
+   distinct from an axiom, with its table index erased ([blind_compiled]),
+   so an [Admitted -> Qed] edit there moves the label. *)
+let version = 5
 
 type summary = {
   name : DirPath.t;
@@ -79,7 +84,8 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
   let warn = List.map (fun ({ UserWarn.note; cats } : UserWarn.warn) -> (note, cats)) warn in
   (name, Array.to_list deps, DirPath.Set.elements safe_deps, (depr, warn))
 
-(* The axiom-or-opaque-proof blinding (design S1b, dispatch://INFRA-361).
+(* The axiom-or-opaque-proof blinding (design S1b, dispatch://INFRA-361;
+   restricted to the library's own signature in version 5, D18 F1).
 
    [blind_constant] maps a constant whose body is [Undef None] (an axiom or
    parameter with no body, as [Admitted] and [Axiom] make) and one whose body
@@ -93,26 +99,51 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    and [Undef (Some _)] (an inlinable parameter, whose inline level a functor
    application observes) are left distinct.
 
+   Where. [blind_compiled] applies [blind_constant] only to the constants of
+   the library's own signature ([map_own_signature]): its structure and the
+   signature of each of its submodules, recursively, which are exactly the
+   constants [axiom_report] lists with their current status. Every other
+   constant body the compiled form holds -- in a functor's body, in the
+   module type of a functor's parameter, in a module type, in the
+   implementation of a sealed module -- keeps an opaque proof distinct from
+   an axiom: its [OpaqueDef] is replaced by [unindexed_opaque], one fixed
+   opaque body with no table index. Those forms are copied into a dependent's
+   own declarations (a functor application copies its body's [Undef] or
+   [OpaqueDef] into the applying library, kernel/mod_typing.ml; [Declare
+   Module M : T] and [Module X : T := ...] copy a module type's), where they
+   decide whether the dependent compiles ([Transparent R.c] fails on an opaque
+   proof) and what its [Print Assumptions] says, while no report lists them,
+   so the keep rule could not see an [Admitted -> Qed] edit there (review
+   gate 1, F1). Such an edit therefore moves the label; a shift of the opaque
+   table index alone still does not.
+
    Exactness. A dependent of this library never observes the difference the
-   blinding erases. The kernel's conversion gets no body for either form
-   ([Environ.constant_value_in] raises [NotEvaluableConst] for both [OpaqueDef]
-   and [Undef], and [evaluable_constant] is [false] for both:
-   kernel/environ.ml:654-677); the VM and the native compiler both lower a use
-   of either form to a plain constant reference (kernel/vmbytegen.ml:988-990,
+   blinding erases, except through what the keep rule reads beside the label
+   for exactly the constants [axiom_report] lists. The kernel's conversion
+   gets no body for either form ([Environ.constant_value_in] raises
+   [NotEvaluableConst] for both [OpaqueDef] and [Undef], and
+   [evaluable_constant] is [false] for both: kernel/environ.ml:654-677); the
+   VM and the native compiler both lower a use of either form to a plain
+   constant reference (kernel/vmbytegen.ml:988-990,
    kernel/genlambda.ml:797-798). So neither conversion, nor the VM, nor native
    code unfolds an opaque constant any more than it unfolds an axiom, and a
    dependent compiled against one form type-checks, reduces and compiles
-   identically against the other. The one observable the blinding drops -- the
-   library's assumption set, which [Print Assumptions] reads -- is not carried
-   by a dependent's object: the keep rule recomputes it from the current
-   objects (its monotone axiom condition). The canonical value also drops the
-   opaque table index of an [OpaqueDef (Indirect (_, _, dp, i))]; a dependent
-   that embeds a foreign opaque reference into [dp] (a functor application or
-   [Include] of this library's opaque proof) therefore has a label that no
-   longer pins which proof index it reads, so the keep rule refuses to keep
-   such a dependent across an edit that could move [dp]'s table
-   ([foreign_opaque_libraries] below reports those [dp]). The kernel itself
-   never applies this map; it is a view used only to compute the label. *)
+   identically against the other, but for two observables the label does not
+   carry: a non-opaque strategy command on the constant, which errors on an
+   opaque proof only (the keep rule compares the opacity the dependent's
+   [keepfacts] recorded, [OpacityLog], with the status [axiom_report] gives
+   now), and the library's assumption set, which [Print Assumptions] reads
+   (the keep rule recomputes it from the current objects: its monotone axiom
+   condition). Both read a constant's status off [axiom_report], which is why
+   the blinding stops at the constants it lists. The canonical value also
+   drops the opaque table index of an [OpaqueDef (Indirect (_, _, dp, i))]; a
+   dependent that embeds a foreign opaque reference into [dp] (a functor
+   application or [Include] of this library's opaque proof) therefore has a
+   label that no longer pins which proof index it reads, so the keep rule
+   refuses to keep such a dependent across an edit that could move [dp]'s
+   table ([foreign_opaque_libraries] below reports those [dp]). The kernel
+   itself never applies this map; it is a view used only to compute the
+   label. *)
 let blind_constant (cb : Declarations.constant_body) : Declarations.constant_body =
   match cb.Declarations.const_body with
   | Declarations.Undef None | Declarations.OpaqueDef _ ->
@@ -120,9 +151,45 @@ let blind_constant (cb : Declarations.constant_body) : Declarations.constant_bod
   | Declarations.Undef (Some _) | Declarations.Def _
   | Declarations.Primitive _ | Declarations.Symbol _ -> cb
 
+(* The opaque body an opaque proof outside the own signature is read as: one
+   fixed value, so no table index, and not [Undef None]. *)
+let unindexed_opaque : (Constr.t, Opaqueproof.opaque, bool) Declarations.constant_def =
+  Declarations.OpaqueDef (fst (Opaqueproof.create DirPath.empty Opaqueproof.empty_opaquetab))
+
+let unindex_opaque (cb : Declarations.constant_body) : Declarations.constant_body =
+  match cb.Declarations.const_body with
+  | Declarations.OpaqueDef _ -> { cb with Declarations.const_body = unindexed_opaque }
+  | Declarations.Undef _ | Declarations.Def _
+  | Declarations.Primitive _ | Declarations.Symbol _ -> cb
+
+(* [f] applied to each constant of the own signature [sign] of the module at
+   [mp], with its name: the constants of its [NoFunctor] structure and, for
+   each submodule, of the submodule's own signature, recursively. A functor
+   signature ([MoreFunctor]) declares no constant a dependent names directly,
+   and a module type ([SFBmodtype]) none at all, so neither is entered. This
+   is the one walk both the blinding and [axiom_report] use, so the constants
+   the label blinds are exactly the constants the report lists, and the same
+   walk the checker uses to enumerate a library's constants
+   ([checker/mod_checking.ml] collect_constants_without_body). *)
+let rec map_own_signature f mp (sign : Mod_declarations.module_signature) =
+  match sign with
+  | Declarations.MoreFunctor _ -> sign
+  | Declarations.NoFunctor struc ->
+    Declarations.NoFunctor (List.map (fun (lab, sfb) ->
+        match (sfb : Mod_declarations.structure_field_body) with
+        | Declarations.SFBconst cb -> (lab, Declarations.SFBconst (f (Constant.make2 mp lab) cb))
+        | Declarations.SFBmodule mb ->
+          let sign = map_own_signature f (ModPath.MPdot (mp, lab)) (Mod_declarations.mod_type mb) in
+          (lab, Declarations.SFBmodule (Mod_declarations.set_signature sign mb))
+        | Declarations.SFBmind _ | Declarations.SFBrules _
+        | Declarations.SFBmodtype _ -> (lab, sfb))
+        struc)
+
 let blind_compiled (compiled : Safe_typing.compiled_library) : Safe_typing.compiled_library =
-  Safe_typing.replace_module_of_library compiled
-    (Mod_declarations.map_constants blind_constant (Safe_typing.module_of_library compiled))
+  let self = ModPath.MPfile (Safe_typing.dirpath_of_library compiled) in
+  let mb = Mod_declarations.map_constants unindex_opaque (Safe_typing.module_of_library compiled) in
+  let sign = map_own_signature (fun _ cb -> blind_constant cb) self (Mod_declarations.mod_type mb) in
+  Safe_typing.replace_module_of_library compiled (Mod_declarations.set_signature sign mb)
 
 (* The report the keep rule needs beside the label (C1): per library, the
    constants whose contribution the label blinded, each with its current
@@ -137,37 +204,23 @@ type axiom_report = {
   foreign_opaque_libraries : DirPath.Set.t;
   (** The libraries, other than this one, whose opaque table this library's
       compiled form holds an [Indirect] reference into. *)
-  copied_from_libraries : DirPath.Set.t;
-  (** The libraries, other than this one, a declaration of this library's
-      compiled form is COPIED from: every [foreign_opaque_libraries] owner,
-      plus every library that is the canonical origin (through [mod_delta]) of
-      a signature constant or inductive -- an [Include] or module alias keeps a
-      declaration's canonical name pointing at its origin. An over-approximation
-      only makes the keep rule more conservative. (D18 S1.) *)
 }
 
 (* The blinded constants of the module signature a dependent sees, with their
-   names: the same walk the checker uses to enumerate a library's constants
-   ([checker/mod_checking.ml] collect_constants_without_body). A functor
-   signature ([MoreFunctor]) declares no constant a dependent names directly,
-   so it contributes none. *)
-let rec sig_blinded mp sign acc =
-  match (sign : Mod_declarations.module_signature) with
-  | Declarations.MoreFunctor _ -> acc
-  | Declarations.NoFunctor struc ->
-    List.fold_left (fun acc (lab, sfb) ->
-        match (sfb : Mod_declarations.structure_field_body) with
-        | Declarations.SFBconst cb ->
-          (match cb.Declarations.const_body with
-           | Declarations.Undef None -> (Constant.make2 mp lab, Axiom) :: acc
-           | Declarations.OpaqueDef _ -> (Constant.make2 mp lab, Proof) :: acc
-           | Declarations.Undef (Some _) | Declarations.Def _
-           | Declarations.Primitive _ | Declarations.Symbol _ -> acc)
-        | Declarations.SFBmodule mb ->
-          sig_blinded (ModPath.MPdot (mp, lab)) (Mod_declarations.mod_type mb) acc
-        | Declarations.SFBmind _ | Declarations.SFBrules _
-        | Declarations.SFBmodtype _ -> acc)
-      acc struc
+   names: the constants [map_own_signature] walks, so exactly the ones
+   [blind_compiled] blinds. *)
+let sig_blinded mp sign =
+  let acc = ref [] in
+  let note c (cb : Declarations.constant_body) =
+    (match cb.Declarations.const_body with
+     | Declarations.Undef None -> acc := (c, Axiom) :: !acc
+     | Declarations.OpaqueDef _ -> acc := (c, Proof) :: !acc
+     | Declarations.Undef (Some _) | Declarations.Def _
+     | Declarations.Primitive _ | Declarations.Symbol _ -> ());
+    cb
+  in
+  let _ : Mod_declarations.module_signature = map_own_signature note mp sign in
+  !acc
 
 (* Every library, other than [self], that a constant body of [mb] holds an
    opaque [Indirect] reference into. [map_constants] visits every constant of
@@ -188,69 +241,13 @@ let foreign_opaque_of ~self mb =
   let _ : Mod_declarations.module_body = Mod_declarations.map_constants note mb in
   !acc
 
-(* The [MPfile] root of a module path, [None] for a bound (functor-parameter)
-   path. *)
-let rec mpfile_root = function
-  | ModPath.MPfile dp -> Some dp
-  | ModPath.MPdot (mp, _) -> mpfile_root mp
-  | ModPath.MPbound _ -> None
-
-(* Every library, other than [self], a declaration of [mb] is copied from: the
-   [foreign_opaque_of] owners, plus the canonical origin of every signature
-   constant and inductive, resolved through the [mod_delta] of the modules on
-   the path. [Include] and module aliases keep a declaration's canonical name
-   pointing at the library it came from, so its canonical [MPfile] is that
-   library; a declaration made here resolves to [self] and is dropped. A
-   functor signature ([MoreFunctor]) and a module type ([SFBmodtype]) declare
-   nothing a dependent names by its origin, so they contribute none (an applied
-   functor's opaque results are caught by [foreign_opaque_of]'s [Indirect]). *)
-let copied_from_of ~self mb =
-  let acc = ref (foreign_opaque_of ~self mb) in
-  let add_mp mp = match mpfile_root mp with
-    | Some dp when not (DirPath.equal dp self) -> acc := DirPath.Set.add dp !acc
-    | _ -> () in
-  (* [deltas] holds the resolver of every module on the path from the
-     library down to [mp]; each one's root prefixes [mp]. A resolver is not
-     joined into its parent's ([Mod_subst.add_delta_resolver] requires one
-     root to extend the other's, which a submodule's does not satisfy for its
-     parent's), so a name is resolved through each of them and every origin
-     found counts: an over-approximation. *)
-  let rec go deltas mp sign =
-    match (sign : Mod_declarations.module_signature) with
-    | Declarations.MoreFunctor _ -> ()
-    | Declarations.NoFunctor struc ->
-      List.iter (fun (lab, sfb) ->
-          match (sfb : Mod_declarations.structure_field_body) with
-          | Declarations.SFBconst _ ->
-            let kn = KerName.make mp lab in
-            List.iter (fun delta ->
-                add_mp (KerName.modpath (Constant.canonical
-                                           (Mod_subst.constant_of_delta_kn delta kn))))
-              deltas
-          | Declarations.SFBmind _ ->
-            let kn = KerName.make mp lab in
-            List.iter (fun delta ->
-                add_mp (KerName.modpath (MutInd.canonical
-                                           (Mod_subst.mind_of_delta_kn delta kn))))
-              deltas
-          | Declarations.SFBmodule submb ->
-            go (Mod_declarations.mod_delta submb :: deltas)
-              (ModPath.MPdot (mp, lab)) (Mod_declarations.mod_type submb)
-          | Declarations.SFBrules _ | Declarations.SFBmodtype _ -> ())
-        struc
-  in
-  go [Mod_declarations.mod_delta mb] (ModPath.MPfile self) (Mod_declarations.mod_type mb);
-  !acc
-
 let axiom_report ~(compiled : Safe_typing.compiled_library) : axiom_report =
   let self = Safe_typing.dirpath_of_library compiled in
   let mb = Safe_typing.module_of_library compiled in
   let blinded =
     List.sort (fun (a, _) (b, _) -> Constant.CanOrd.compare a b)
-      (sig_blinded (ModPath.MPfile self) (Mod_declarations.mod_type mb) []) in
-  { blinded;
-    foreign_opaque_libraries = foreign_opaque_of ~self mb;
-    copied_from_libraries = copied_from_of ~self mb }
+      (sig_blinded (ModPath.MPfile self) (Mod_declarations.mod_type mb)) in
+  { blinded; foreign_opaque_libraries = foreign_opaque_of ~self mb }
 
 let label_result ~summary ~compiled ~syntax ~objects =
   match strip_segment syntax with

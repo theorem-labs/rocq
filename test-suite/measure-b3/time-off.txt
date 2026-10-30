@@ -1,2 +1,0 @@
-Command exited with non-zero status 2
-off wall 0.21 s user 0.35 s sys 0.30 s maxrss 59100 KB

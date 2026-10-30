@@ -10,24 +10,32 @@
 
 open Names
 
-(* Records of the opacity a [Strategy]/[Transparent] command saw on a
-   constant while a library is compiled (design D18, dispatch://INFRA-361,
-   Astra review 2 blocker 1).
+(* Records of whether a constant was an axiom or an opaque proof when a
+   command whose outcome depends on that distinction ran while a library was
+   compiled (design D18, dispatch://INFRA-361, Astra review 2 blocker 1).
 
    [Tactics.Redexpr.check_not_fully_opaque] rejects a non-opaque strategy
    command (`Transparent c.`, `Strategy expand [c].`) on a constant [c] whose
    body is an opaque proof ([OpaqueDef]), but accepts it on an axiom
-   ([Undef]). The library label v2b ([Vernac.LibkeyObjects]) deliberately gives
-   an axiom and an opaque proof the same label, so an edit that completes an
-   admitted dependency constant with a [Qed] proof keeps the dependency's
-   label, yet a real recompile of a dependent that set a non-opaque strategy
-   on that constant would now hit the error. A [local] strategy command (the
-   default of [Opacity]) writes no persistent object, so a dependent's [.vo]
-   does not record it. So the fact is logged here, outside the state a [Fail]
-   rolls back, and [Vernac.Library] stores the foreign ones in the saved
-   library ([KeepFacts]) for the keep rule to revalidate against the
-   dependency's current opacity. A library that makes no such query gets no
-   record, so its file is what a stock [coqc] writes. *)
+   ([Undef]); extraction warns about an axiom to realize, or about an opaque
+   proof it accessed, and either warning can be an error
+   ([Extraction.extract_constant]). The library label ([Vernac.LibkeyObjects])
+   deliberately gives an axiom and an opaque proof of the library's own
+   signature the same label, so an edit that completes an admitted dependency
+   constant with a [Qed] proof keeps the dependency's label, yet a real
+   recompile of a dependent that ran such a command on that constant could
+   now fail, or stop failing. A [local] strategy command (the default of
+   [Opacity]) writes no persistent object, so a dependent's [.vo] does not
+   record it. So the fact is logged here, outside the state a [Fail] rolls
+   back, and [Vernac.Library] stores the foreign ones in the saved library
+   ([KeepFacts]) for the keep rule to revalidate against the dependency's
+   current status. Only a constant whose body is [Undef None] or [OpaqueDef]
+   is logged: those are the two forms the label blinds into one, and a
+   constant of any other form cannot become the other kind while the label
+   stays equal, so a record of it could only make the keep rule rebuild a
+   dependent forever (`Transparent Nat.add.` on a transparent definition). A
+   library that makes no such query gets no record, so its file is what a
+   stock [coqc] writes. *)
 
 let enabled = ref false
 
@@ -37,7 +45,12 @@ let queries : (Constant.t * bool) list ref = ref []
 
 let reset () = queries := []
 
-let record c ~opaque =
-  if !enabled then queries := (c, opaque) :: !queries
+let record c (cb : Declarations.constant_body) =
+  if !enabled then
+    match cb.Declarations.const_body with
+    | Declarations.Undef None -> queries := (c, false) :: !queries
+    | Declarations.OpaqueDef _ -> queries := (c, true) :: !queries
+    | Declarations.Undef (Some _) | Declarations.Def _
+    | Declarations.Primitive _ | Declarations.Symbol _ -> ()
 
 let get () = !queries

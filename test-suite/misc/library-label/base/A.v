@@ -40,7 +40,12 @@ Canonical Structure cs_nat.
 
 Module Type S. Parameter u : Type. End S.
 
-Module F (X : S). Definition d := X.u. End F.
+(* fc and tc are Admitted on the line that declares them, so the axqed and
+   axdef variants (which edit lines that hold only "Admitted.") leave them;
+   the ftorqed and mtqed variants make them Qed. *)
+Module F (X : S). Definition d := X.u. Lemma fc : True. Admitted. End F.
+
+Module Type T. Lemma tc : True. Admitted. End T.
 
 Definition g := f.
 

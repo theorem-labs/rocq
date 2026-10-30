@@ -1140,6 +1140,19 @@ let extract_constant table access env kn inst cb =
     let e,t = extract_std_constant table env sg kn inst c typ in
     Dterm (r,e,t)
   in
+  (* Every branch below tells an axiom ([Undef]: an axiom to realize, a
+     logical axiom) from an opaque proof (accessed, or extracted as an axiom),
+     and each of those warnings can be made an error, so a dependency's
+     [Admitted -> Qed] edit, which its label hides, can change whether this
+     library compiles. Logged for the keep rule (D18, dispatch://INFRA-361;
+     [OpacityLog]), with the body the global environment gives [kn]: the one
+     the dependency's label blinds and its axiom report lists. A body read
+     from a sealed module's implementation is not, and an edit there moves
+     the dependency's label. *)
+  let () =
+    let genv = Global.env () in
+    if Environ.mem_constant kn genv then OpacityLog.record kn (Environ.lookup_constant kn genv)
+  in
   try
     match flag_of_type env sg typ with
     | (Logic,TypeScheme) -> warn_log ();

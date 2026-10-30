@@ -27,8 +27,12 @@
 #   functor declared under Succeed, which shifts it and leaves nothing
 #   else, another canonical instance, an Admitted lemma made a transparent
 #   Definition (axdef, a transparent body which conversion unfolds, so it is
-#   NOT blinded), a Proof-using change that discharges one more section
-#   binder (secbind), and the two
+#   NOT blinded), an Admitted lemma made Qed inside the functor F's body
+#   (ftorqed) and inside the module type T (mtqed) -- label version 5 blinds
+#   the axiom-or-opaque distinction only for the library's own signature,
+#   since a functor application or a Declare Module copies those forms into
+#   a dependent (misc/library-label-functor-flip.sh) --, a Proof-using change
+#   that discharges one more section binder (secbind), and the two
 #   parts of the library's summary: the Require made Require (safe), which
 #   changes only which dependencies the summary lists as safe (Astra review,
 #   section 3.1), and the note of the library's attribute): both refuse,
@@ -65,7 +69,7 @@ variant() {
 }
 
 KEEP="same comment blank spaces proof attrs admitted axqed"
-CHANGE="stmt body inductive addcon universe notation abbrev hint extern ltac redef tacnot option ltac2 functor counter canonical axdef secbind guard safe info"
+CHANGE="stmt body inductive addcon universe notation abbrev hint extern ltac redef tacnot option ltac2 functor counter canonical axdef ftorqed mtqed secbind guard safe info"
 
 mkdir -p _test/base
 cp base/A.v _test/base/A.v
@@ -99,6 +103,8 @@ variant canonical -e 's/^Canonical Structure cs_nat\./Canonical Structure cs_nat
 variant admitted -e 's/^Proof\. intros n\. reflexivity\. Qed\./Proof. intros n. reflexivity. Admitted./'
 variant axqed -e 's/^Admitted\.$/Proof. exact I. Qed./'
 variant axdef -e 's/^Lemma lax : True\.$/Definition lax := I./' -e '/^Admitted\.$/d'
+variant ftorqed -e 's/Lemma fc : True\. Admitted\./Lemma fc : True. Proof. exact I. Qed./'
+variant mtqed -e 's/Lemma tc : True\. Admitted\./Lemma tc : True. Proof. exact I. Qed./'
 variant secbind -e 's/Proof using sv\./Proof using sv sw./'
 variant guard -e 's/^Fixpoint fg /Unset Guard Checking.\nFixpoint fg /'
 variant safe -e 's/^Require Corelib\.Classes\.CMorphisms\./Require (safe) Corelib.Classes.CMorphisms./'

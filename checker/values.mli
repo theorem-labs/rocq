@@ -61,6 +61,9 @@ val v_libsum : value
 val v_lib : value
 val v_opaquetable : value
 val v_vmlib : value
+val v_keepfacts : value
+(** The keepfacts segment ([KeepFacts.t]), which only rocq-library-label
+    reads, validating it against this. *)
 
 val vo_segments : (string * value) list
 (** Every segment a .vo holds, with the schema of its value, in the order

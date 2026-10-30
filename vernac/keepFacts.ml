@@ -41,12 +41,14 @@ type t = {
       its own axioms, so a proof of the same library starting to use one would
       not move it. *)
   opacity_queries : query list;
-  (** Each foreign constant (its user name) a non-opaque
-      [Strategy]/[Transparent] command in this library named, with the opacity
-      it saw ([true]: the constant was an opaque proof; [false]: it was not).
+  (** Each foreign constant (its user name) that a command of this library
+      told apart as an axiom or an opaque proof -- a non-opaque
+      [Strategy]/[Transparent] command, an extraction ([OpacityLog]) -- while
+      its body was [Undef None] ([opaque = false]) or an opaque proof
+      ([opaque = true]); a constant of any other body form is not recorded.
       Sorted by name. The keep rule rebuilds a dependent when the recorded
       opacity no longer matches the dependency's current one -- the command
-      would then error, or stop erroring, on a real recompile. *)
+      could then error, or stop erroring, on a real recompile. *)
 }
 
 (* The [MPfile] root of a module path, [None] for a bound (functor-parameter)

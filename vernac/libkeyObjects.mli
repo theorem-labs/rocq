@@ -79,22 +79,38 @@ open Names
     reaching a new field), so that labels made by different views never
     match.
 
-    {b The axiom-or-opaque-proof blinding (version 3, S1b).} A constant whose
-    body is [Undef None] (an axiom or parameter with no body, as [Admitted]
-    and [Axiom] make) and one whose body is [OpaqueDef _] (an opaque proof, as
-    [Qed] makes) give the {e same} label contribution: the label reads their
-    type, universe context and constraints, typing and guard flags, section
-    data, relevance and inline mark, but not the axiom-or-opaque distinction
-    nor the opaque table index ([blind_constant]). [Admitted -> Qed] and
-    [Qed -> Admitted] therefore keep the label. A transparent body ([Def]),
-    which conversion unfolds, is {e not} blinded, and neither is an inlinable
-    parameter ([Undef (Some _)]), whose inline level a functor application
-    observes. The blinding is sound because a dependent never observes the
-    erased difference (kernel/environ.ml:654-677, vmbytegen.ml:988-990,
-    genlambda.ml:797-798); its two consequences the label no longer carries --
-    the library's assumption set and which opaque proof a foreign [Indirect]
-    reference resolves to -- are the keep rule's monotone axiom condition and
-    its foreign-opaque-reference check, fed by [axiom_report].
+    {b The axiom-or-opaque-proof blinding (version 3, S1b; restricted in
+    version 5, D18 F1).} A constant of the library's own signature (its
+    structure and, recursively, the signature of each of its submodules:
+    exactly the constants [axiom_report] lists) whose body is [Undef None]
+    (an axiom or parameter with no body, as [Admitted] and [Axiom] make) and
+    one whose body is [OpaqueDef _] (an opaque proof, as [Qed] makes) give
+    the {e same} label contribution: the label reads their type, universe
+    context and constraints, typing and guard flags, section data, relevance
+    and inline mark, but not the axiom-or-opaque distinction nor the opaque
+    table index ([blind_constant]). [Admitted -> Qed] and [Qed -> Admitted]
+    of such a constant therefore keep the label. A transparent body ([Def]),
+    which conversion unfolds, is {e not} blinded, and neither is an
+    inlinable parameter ([Undef (Some _)]), whose inline level a functor
+    application observes. The blinding is sound because a dependent never
+    observes the erased difference (kernel/environ.ml:654-677,
+    vmbytegen.ml:988-990, genlambda.ml:797-798) except through what the keep
+    rule reads beside the label: the opacity a dependent's non-opaque
+    strategy command saw ([KeepFacts], compared with the status
+    [axiom_report] gives now), the library's assumption set (its monotone
+    axiom condition) and which opaque proof a foreign [Indirect] reference
+    resolves to (its foreign-opaque-reference check). All three read a
+    constant's status off [axiom_report], so the blinding covers only the
+    constants it lists. Every other constant the compiled form holds -- in a
+    functor's body, in a functor parameter's module type, in a module type,
+    in the implementation of a sealed module -- keeps an opaque proof
+    distinct from an axiom, read as one fixed opaque body with no table
+    index: a functor application, [Declare Module M : T] or [Module X : T :=
+    ...] copies such a form into the dependent's own declarations, where it
+    decides whether the dependent compiles ([Transparent R.c]) and what its
+    [Print Assumptions] says (review gate 1, F1). So an [Admitted -> Qed]
+    edit there moves the label, and a shift of the opaque table index alone
+    does not.
 
     {b Plugin files out of the key (version 4, BET-342).} A [Declare ML
     Module] contributes the plugin names, each with whether it is an
@@ -159,7 +175,18 @@ open Names
       against what the kernel writes (the payload part does print the
       types of that segment, but only because the [REQUIRE] kind's payload
       reaches them, and that kind is never written to a file);
-    - the meaning of a string, the bytecode of that segment among them,
+    - the OCaml type of the [keepfacts] segment ([KeepFacts.t]): the
+      printing gives checker/values.ml's description of it ([v_keepfacts]),
+      not the type [coqc] marshals. What ties the two is that
+      rocq-library-label validates every keepfacts segment it reads against
+      that description, as rocqchk validates the segments it reads, and reads
+      one that does not match as absent, and misc/library-label-keepfacts.sh
+      reads this build's own segments through it: a change to [KeepFacts.t]
+      without the matching change to the description fails that test, and
+      one with it fails vo-format.sh. Validation checks the shape of the
+      value (blocks, tags, sizes, strings), not every type change: a [bool]
+      read where an [int] was written passes it;
+    - the meaning of a string, the bytecode of the [vm] segment among them,
       and the order of a type's constant constructors in the segment
       structure (the payload types do print them in order);
     - a plugin that is not Rocq's own, whose authors cannot bump Rocq's
@@ -226,10 +253,12 @@ val blind_constant : Declarations.constant_body -> Declarations.constant_body
     [Symbol] and [Undef (Some _)] left as they are (S1b). *)
 val blind_compiled :
   Safe_typing.compiled_library -> Safe_typing.compiled_library
-(** The compiled library as the label reads it: every constant with an
-    [OpaqueDef] or [Undef None] body replaced by a canonical [Undef None]
-    ([blind_constant]). Idempotent. A view for computing the label; the kernel
-    never loads this. *)
+(** The compiled library as the label reads it: every constant of its own
+    signature (the ones [axiom_report] lists) with an [OpaqueDef] or [Undef
+    None] body replaced by a canonical [Undef None] ([blind_constant]), and
+    every other [OpaqueDef] in it by one fixed opaque body with no table
+    index. Idempotent. A view for computing the label; the kernel never loads
+    this. *)
 
 (** The assumption status of a blinded constant: [Axiom] is a body of
     [Undef None], [Proof] a body of [OpaqueDef _]. *)
@@ -250,13 +279,6 @@ type axiom_report = {
       object across an edit to such a library only when that library's object
       is byte-identical, because the blinded label no longer pins the opaque
       index the reference reads. *)
-  copied_from_libraries : DirPath.Set.t;
-  (** The libraries, other than this one, a declaration of this library is
-      copied from: every [foreign_opaque_libraries] owner, plus the canonical
-      origin ([mod_delta]) of every signature constant and inductive -- an
-      [Include] or module alias keeps the origin's canonical name. A superset
-      of [foreign_opaque_libraries]; an over-approximation only makes the keep
-      rule more conservative (D18 S1). *)
 }
 
 val axiom_report :

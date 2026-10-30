@@ -17,7 +17,10 @@
 # the body form AND the index): this asserts that equality (RED on a pre-v2b build,
 # where the edit changes A's label; GREEN on v2b), shows A's object bytes DIFFER, and
 # shows B's --axiom-report-json names A as a foreign opaque owner -- the evidence the
-# keep rule uses to deny keeping B (A is referenced and not byte-identical).
+# keep rule uses to deny keeping B (A is referenced and not byte-identical). Since
+# label version 5, F.t in F's body stays an opaque proof in the label (no longer
+# blinded into an axiom, misc/library-label-functor-flip.sh), but with its table
+# index erased, so the shift alone still leaves A's label equal.
 
 set -e
 export PATH=$BIN:$PATH
@@ -67,8 +70,8 @@ else
 fi
 
 # B's instantiated t is an Indirect into A's opaque table, so the report names A as a
-# foreign opaque owner -- the keep rule's foreign-opaque/copied-from coverage then
-# requires A byte-identical, which the shift breaks.
+# foreign opaque owner -- the keep rule's foreign-opaque coverage then requires A
+# byte-identical, which the shift breaks.
 bfor=$("$TOOL" --axiom-report-json _oshift/b/B.vo | sed -n 's/.*"foreign_opaque_libraries":\(\[[^]]*\]\).*/\1/p')
 if printf '%s' "$bfor" | grep -q "\"$alib\""; then
   echo "PASS B's --axiom-report-json names A ($alib) as a foreign opaque owner: $bfor"

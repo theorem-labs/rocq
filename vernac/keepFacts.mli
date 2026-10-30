@@ -30,8 +30,10 @@ type t = {
       traversing opaque proof bodies as [Print Assumptions] does. [None] when
       it could not be computed. *)
   opacity_queries : query list;
-  (** Each foreign constant a non-opaque [Strategy]/[Transparent] command
-      named, with its library and the opacity it saw, sorted by name. *)
+  (** Each foreign constant a command told apart as an axiom ([Undef None]) or
+      an opaque proof (a non-opaque [Strategy]/[Transparent] command, an
+      extraction: [OpacityLog]), with its library and the opacity it saw,
+      sorted by name. No other body form is recorded. *)
 }
 
 val compute : access:Global.indirect_accessor -> self:DirPath.t -> t

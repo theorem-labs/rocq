@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
 # D18 (dispatch://INFRA-361), Astra review 2 blockers 1 and 3: the [keepfacts]
 # segment that -location-free-label writes, read through
-# `rocq-library-label --axiom-report-json` (schema version 2).
+# `rocq-library-label --axiom-report-json` (schema version 3).
 #
 # B3 (assumption closure). A's lemma `l` is a Qed proof in both variants; in `use`
-# its proof starts to use A's existing axiom `ax`. Label v2b blinds the opaque body,
+# its proof starts to use A's existing axiom `ax`. The label blinds the opaque body,
 # so A's label is equal across the edit, and every declaration status is unchanged,
 # so only a real closure tells the edits apart: A's "assumptions" gain `ax`, and so do
-# those of D, which proves its lemma with A.l.
+# those of D, which proves its lemma with A.l, and of E, which proves its lemma with
+# D.d (E reaches ax through two libraries' keepfacts). Dx proves the same lemma as D
+# against an A compiled without the flag, which has no keepfacts: its closure still
+# sees ax.
 #
-# B1 (opacity a strategy command saw). A's `c` is Admitted in `adm` and a Qed proof
-# in `qed`; the label is equal across. B runs `Transparent A.c.`: it compiles against
-# `adm` and records (c, opaque=false), and it fails against `qed`. B2 runs
+# B1 (opacity a command saw). A's `c` is Admitted in `adm` and a Qed proof in `qed`;
+# the label is equal across. B runs `Transparent A.c.`: it compiles against `adm` and
+# records (c, opaque=false), and it fails against `qed`. B2 runs
 # `Fail Transparent A.c.` against `qed` and records (c, opaque=true): a rolled-back
-# command's outcome still depended on what it saw.
+# command's outcome still depended on what it saw. BX extracts A.c, which tells an
+# axiom from an opaque proof too, and records (c, opaque=false) against `adm`. BN
+# runs `Transparent Nat.add.`, a transparent definition, which cannot become an axiom
+# or an opaque proof while its library's label stays equal: nothing is recorded.
 #
 # Control: a file compiled without the flag has no segment ("assumptions" and
-# "opacity_queries" are null).
+# "opacity_queries" are null), and neither has a .vos, even one with no proof left
+# out.
 
 set -e
 export PATH=$BIN:$PATH
@@ -29,7 +36,7 @@ done
 
 cd misc
 rm -rf _kfacts
-mkdir -p _kfacts/{noax,use,dnoax,duse,adm,qed,badm,bqed,b2qed,off}
+mkdir -p _kfacts/{noax,use,dnoax,duse,euse,offa,dx,adm,qed,badm,bqed,b2qed,bx,bn,off,vos}
 
 fail=0
 pass() { echo "PASS $*"; }
@@ -49,6 +56,12 @@ rocq c -q -location-free-label -R _kfacts/noax A _kfacts/noax/A.v
 rocq c -q -location-free-label -R _kfacts/use A _kfacts/use/A.v
 rocq c -q -location-free-label -R _kfacts/noax A -R _kfacts/dnoax Ddep _kfacts/dnoax/D.v
 rocq c -q -location-free-label -R _kfacts/use A -R _kfacts/duse Ddep _kfacts/duse/D.v
+printf 'Require Ddep.D.\nLemma e : True.\nProof. exact Ddep.D.d. Qed.\n' > _kfacts/euse/E.v
+rocq c -q -location-free-label -R _kfacts/use A -R _kfacts/duse Ddep -R _kfacts/euse Edep _kfacts/euse/E.v
+cp _kfacts/use/A.v _kfacts/offa/A.v
+cp _kfacts/dnoax/D.v _kfacts/dx/D.v
+rocq c -q -R _kfacts/offa A _kfacts/offa/A.v
+rocq c -q -location-free-label -R _kfacts/offa A -R _kfacts/dx Ddep _kfacts/dx/D.v
 
 if [ "$(label _kfacts/noax/A.vo)" = "$(label _kfacts/use/A.vo)" ]; then
   pass "B3: A's label is equal when l's opaque proof starts to use ax"
@@ -74,6 +87,18 @@ if [ -z "$d1" ] && printf '%s' "$d2" | grep -q 'axiom:[^"]*\.ax"'; then
   pass "B3: D.d's closure gains ax through A.l's opaque proof: '$d1' -> $d2"
 else
   bad "B3: D.d's closure does not see ax through A.l: '$d1' -> '$d2'"
+fi
+e2=$(closure _kfacts/euse/E.vo e)
+if [ -n "$d2" ] && [ "$e2" = "$d2" ]; then
+  pass "B3: E.e's closure is D.d's, through D's and A's keepfacts: $e2"
+else
+  bad "B3: E.e's closure '$e2' is not D.d's '$d2'"
+fi
+dx=$(closure _kfacts/dx/D.vo d)
+if [ -n "$d2" ] && [ "$dx" = "$d2" ]; then
+  pass "B3: against an A without keepfacts, D.d's closure is still $dx"
+else
+  bad "B3: against an A without keepfacts, D.d's closure is '$dx', not '$d2'"
 fi
 
 # --- B1 ---
@@ -118,15 +143,25 @@ else
   bad "B1: A's axiom_blind does not list $alib.c as the opacity record names it"
 fi
 
-# --- S1 field: an Include in a submodule copies A's axiom c; its canonical name stays in A ---
-mkdir -p _kfacts/inc
-printf 'Require A.\nModule M.\nInclude A.\nEnd M.\n' > _kfacts/inc/E.v
-rocq c -q -location-free-label -R _kfacts/adm A -R _kfacts/inc Edep _kfacts/inc/E.v
-cf=$(field _kfacts/inc/E.vo copied_from_libraries)
-if [ "$cf" = "[\"$alib\"]" ]; then
-  pass "S1: E's copied_from_libraries names A for the Include in submodule M: $cf"
+# BX: extraction tells A.c's axiom from an opaque proof (an axiom to realize, an opaque
+# proof accessed: either warning can be an error), so it records what it saw too.
+printf 'From Corelib Require Extraction.\nRequire A.\nExtraction A.c.\n' > _kfacts/bx/B.v
+rocq c -q -location-free-label -R _kfacts/adm A -R _kfacts/bx Bdep _kfacts/bx/B.v > /dev/null
+qx=$(field _kfacts/bx/B.vo opacity_queries)
+if [ "$qx" = "[{\"constant\":\"$alib.c\",\"library\":\"$alib\",\"opaque\":false}]" ]; then
+  pass "B1: an extraction of A.c records the axiom it saw against the Admitted A: $qx"
 else
-  bad "S1: E's copied_from_libraries: '$cf'"
+  bad "B1: BX's opacity_queries against the Admitted A: '$qx'"
+fi
+# BN: a transparent definition is neither form the label blinds into one: no record,
+# or every later keep check would find it mismatched and rebuild BN forever.
+printf 'Transparent Nat.add.\nDefinition n := 0.\n' > _kfacts/bn/B.v
+rocq c -q -location-free-label -R _kfacts/bn Bdep _kfacts/bn/B.v
+qn=$(field _kfacts/bn/B.vo opacity_queries)
+if [ "$qn" = "[]" ]; then
+  pass "B1: Transparent Nat.add (a transparent definition) records nothing"
+else
+  bad "B1: Transparent Nat.add recorded: '$qn'"
 fi
 
 # --- control ---
@@ -138,10 +173,20 @@ if [ "$o1" = null ] && [ "$o2" = null ]; then
 else
   bad "control: off file has keepfacts: assumptions=$o1 opacity_queries=$o2"
 fi
-if report _kfacts/noax/A.vo | grep -q '"version":2,'; then
-  pass "schema version 2"
+# A .vos gets no segment, even one that leaves no proof out (it has no opaque proof).
+printf 'Axiom ax : True.\nDefinition d := I.\n' > _kfacts/vos/A.v
+rocq c -q -vos -location-free-label -R _kfacts/vos A _kfacts/vos/A.v
+v1=$(field _kfacts/vos/A.vos assumptions); v2=$(field _kfacts/vos/A.vos opacity_queries)
+if [ -f _kfacts/vos/A.vos ] && [ "$v1" = null ] && [ "$v2" = null ]; then
+  pass "control: a .vos with no proof left out has no keepfacts"
 else
-  bad "the axiom report is not schema version 2"
+  bad "control: the .vos has keepfacts: assumptions=$v1 opacity_queries=$v2"
+fi
+r=$(report _kfacts/noax/A.vo)
+if printf '%s' "$r" | grep -q '"version":3,' && ! printf '%s' "$r" | grep -q copied_from_libraries; then
+  pass "schema version 3, with no copied_from_libraries"
+else
+  bad "the axiom report is not schema version 3: $r"
 fi
 
 exit $fail

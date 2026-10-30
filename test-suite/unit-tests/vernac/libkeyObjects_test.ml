@@ -96,17 +96,17 @@ let objects_exn ?(compiled = lib_a) ?(summary = sum_a) (syntax, objects) =
   | Ok b -> b
   | Error what -> failwith ("no label: " ^ what)
 
-(* Version 4 test vector: the label of [vector_input] over [lib_a] and
+(* Version 5 test vector: the label of [vector_input] over [lib_a] and
    [sum_a], without [Libkey]'s header, which holds the OCaml version and so
    differs between switches. It pins the layout of LibkeyObjects (version,
    the blinded compiled form, the segments' tree, the summary's view) and the
    encoding beneath it; a change of either must bump a version and change
    this value. [lib_a] is an empty library, so the axiom-or-opaque blinding
    ([blind_compiled]) is the identity on it. *)
-let vector = "e05e3cb2d18ff8a568d550f75468cce69da83792dfb0bbe868a3779e58bd7475"
+let vector = "fc8c33be8f8584b10d7cc9ca3509540c9b5a4872f948d545bfacc513ca582cac"
 
-let () = add_test "layout version 4" (fun () ->
-    assert_equal ~printer:string_of_int 4 LibkeyObjects.version)
+let () = add_test "layout version 5" (fun () ->
+    assert_equal ~printer:string_of_int 5 LibkeyObjects.version)
 
 (* The summary as the layout reads it, written out: the name, the
    dependencies as a list in their order, the safe dependencies in
@@ -145,7 +145,7 @@ let () = add_test "a label of another layout version is another label" (fun () -
     List.iter (fun version ->
         assert_bool ("layout version " ^ string_of_int version)
           (not (String.equal (Libkey.label (layout_value ~version ())) current)))
-      [1; 2; 3])
+      [1; 2; 3; 4])
 
 let () = add_test "the compiled form counts" (fun () ->
     let input = vector_input None None in
