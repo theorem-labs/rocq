@@ -23,8 +23,9 @@
 # `Fail Transparent A.c.` against `qed` and records (c, opaque=true): a rolled-back
 # command's outcome still depended on what it saw. BX extracts A.c, which tells an
 # axiom from an opaque proof too, and records (c, opaque=false) against `adm`. BXB
-# extracts an opaque proof whose body extraction reads, in A's own signature and in a
-# sealed module's implementation: each records opaque=true. BN runs
+# extracts opaque proofs whose bodies extraction reads: a lemma in a functor body
+# (`Extraction A.F`, which the global environment does not hold) and one in a sealed
+# module's implementation (`Extraction A.M`): each records opaque=true. BN runs
 # `Transparent Nat.add.`, a transparent definition, which cannot become an axiom or an
 # opaque proof while its library's label stays equal: nothing is recorded.
 #

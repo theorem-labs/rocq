@@ -33,14 +33,20 @@
      [keepfacts] segment: "assumptions" (an object from each declaration's
      user name to its sorted assumption closure, empty closures left out; null
      when absent) and "opacity_queries" (each foreign constant a strategy
-     command or an extraction told apart as an axiom or an opaque proof, by
-     user name, with the opacity it saw; null when the file has no segment).
+     command or an extraction told apart as an axiom or an opaque proof, or
+     whose opaque body an extraction read, by user name, with the opacity it
+     saw; null when the file has no segment).
      A segment that does not validate against checker/values.ml's
      description of it reads as absent ([read_keep_facts]). Version 3 drops
-     version 2's "copied_from_libraries": an [Admitted -> Qed] edit in a
-     functor body or a module type now moves its owner's label (label
-     version 5), and an [Include] or module-alias copy is strengthened to a
-     transparent definition by the kernel, so nothing read it.
+     version 2's "copied_from_libraries", which nothing read: an [Include]
+     of a module (not of a functor or a functor application) and a
+     module-alias copy are strengthened to transparent definitions by the
+     kernel; an [Include] of a functor or of a functor application copies
+     the opaque proof with its reference into the source library's opaque
+     table, so "foreign_opaque_libraries" names that library
+     (misc/library-label-functor-flip.sh, the DI case), and an [Admitted ->
+     Qed] edit in a functor body or a module type moves its owner's label
+     (label version 5).
    Two modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across
