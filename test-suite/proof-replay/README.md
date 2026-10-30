@@ -225,6 +225,9 @@ proof takes it from the cache after clearing the `Let`'s body; a replay of
 the first would leave the slot empty, so every use of such a slot, filled
 or cached, makes a proof ineligible (`vm_section_closure`), and
 `vm_named_fv_cold_fill` shows it for a proof that fills the slot alone.
+`vm_named_fv_reset`: `Reset` and a second declaration give a name another
+code; what the first code reaches must not answer for the second, so that
+answer is kept with the declaration, not the name.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once

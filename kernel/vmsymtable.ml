@@ -350,27 +350,34 @@ let rec record_vm_global env kn =
    it from the cache, is not replayed.
 
    Whether a constant's code, or a code it calls, closes over a section
-   variable is a function of the constants' codes, which do not change once
-   declared, so it is kept for the compile. *)
-let named_fv_memo : bool Cmap_env.t ref = ref Cmap_env.empty
+   variable is a function of its declaration, so it is kept with the
+   declaration it was computed for, compared by identity: a name alone does
+   not identify one, since [Reset] and a second declaration give the name
+   another body and code (fixture vm_named_fv_reset), and a kept answer is
+   used only while the environment holds the same declaration under the
+   name. The declarations it calls are then the same too: an environment
+   holds a declaration only after the declarations its code names, and a
+   name cannot be declared again without taking every later declaration
+   away. *)
+let named_fv_memo : (constant_body * bool) Cmap_env.t ref = ref Cmap_env.empty
 
 let rec reaches_named_fv env kn =
-  match Cmap_env.find_opt kn !named_fv_memo with
-  | Some b -> b
-  | None ->
-    let b = match Environ.lookup_constant_opt kn env with
-      | None -> false
-      | Some cb ->
-        match cb.const_body_code with
+  match Environ.lookup_constant_opt kn env with
+  | None -> false
+  | Some cb ->
+    match Cmap_env.find_opt kn !named_fv_memo with
+    | Some (cb', b) when cb' == cb -> b
+    | Some _ | None ->
+      let b = match cb.const_body_code with
         | None | Some BCconstant -> false
         | Some (BCalias kn') -> reaches_named_fv env kn'
         | Some (BCdefined (_, index, patches)) ->
           Array.exists (function FVnamed _ -> true | FVrel _ -> false)
             (to_patch_fv (Environ.lookup_vm_code index env))
           || List.exists (reaches_named_fv env) (patch_globals patches)
-    in
-    named_fv_memo := Cmap_env.add kn b !named_fv_memo;
-    b
+      in
+      named_fv_memo := Cmap_env.add kn (cb, b) !named_fv_memo;
+      b
 
 let fence_section_closure env kn =
   if Proof_recorder.without_recording (fun () -> reaches_named_fv env kn) then
