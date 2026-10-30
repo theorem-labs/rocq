@@ -100,6 +100,27 @@ if [ -n "$d2" ] && [ "$dx" = "$d2" ]; then
 else
   bad "B3: against an A without keepfacts, D.d's closure is '$dx', not '$d2'"
 fi
+# E's closures come from one walk that takes D.d's closure from D's keepfacts
+# (ROCQ_KEEPFACTS_DEBUG=1 says so on standard error), and they are the closures each
+# root's own walk through every body gives (ROCQ_KEEPFACTS_FULL_WALK=1).
+mkdir -p _kfacts/edbg _kfacts/efull
+cp _kfacts/euse/E.v _kfacts/edbg/E.v; cp _kfacts/euse/E.v _kfacts/efull/E.v
+ROCQ_KEEPFACTS_DEBUG=1 rocq c -q -location-free-label -R _kfacts/use A -R _kfacts/duse Ddep -R _kfacts/edbg Edep \
+  _kfacts/edbg/E.v 2> _kfacts/edbg/debug
+ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R _kfacts/use A -R _kfacts/duse Ddep -R _kfacts/efull Edep \
+  _kfacts/efull/E.v
+if grep -q '^\[keepfacts\] Edep\.E: [0-9]* roots, one walk of [0-9]* objects, [1-9][0-9]* foreign stored closures$' \
+     _kfacts/edbg/debug; then
+  pass "B3: E's closures come from one walk over D's stored closures: $(cat _kfacts/edbg/debug)"
+else
+  bad "B3: E's closures did not come from stored closures: '$(cat _kfacts/edbg/debug)'"
+fi
+ef=$(field _kfacts/efull/E.vo assumptions); eu=$(field _kfacts/euse/E.vo assumptions)
+if [ -n "$eu" ] && [ "$ef" = "$eu" ]; then
+  pass "B3: every root's own walk gives E the same closures: $ef"
+else
+  bad "B3: E's closures by every root's own walk '$ef' differ from the stored-closure walk's '$eu'"
+fi
 
 # --- B1 ---
 printf 'Lemma c : True.\nAdmitted.\n' > _kfacts/adm/A.v

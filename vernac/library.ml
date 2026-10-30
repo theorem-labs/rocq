@@ -112,6 +112,26 @@ type library_t = {
 
 type load_status = FullLoaded | SafeLoaded
 
+(* [-location-free-label]: store the location-free label as the library's
+   digest, the attempted-resolution records and the keep rule's facts in the
+   library, and read the closures each dependency stored. Off (the default),
+   coqc reads and writes stock's bytes. *)
+let location_free_label = ref false
+
+(* Under [-location-free-label], the assumption closures each interned
+   library's [keepfacts] segment stores ([KeepFacts.t.assumptions]), with the
+   digest of its library segment, read with its other segments
+   ([intern_from_file]): [KeepFacts.compute] takes a constant's closure from
+   here instead of walking it. Each intern of a library sets or removes its
+   entry, so the entry is that of the file interned last, which is the file
+   loaded (a loaded library is not interned again), and the reader also
+   requires the digest the loaded library has. Not a field of [library_t],
+   whose type the REQUIRE kind's payload reaches (misc/vo-format.sh prints
+   it), and not synchronized, like [libraries_filename_table]. *)
+let stored_closures_table :
+  (Safe_typing.vodigest * (string * string list) list) DirPath.Map.t ref =
+  ref DirPath.Map.empty
+
 (* This is a map from names to loaded libraries *)
 let libraries_table : (load_status * library_t) DirPath.Map.t ref =
   Summary.ref DirPath.Map.empty ~stage:Summary.Stage.Synterp ~name:"LIBRARY"
@@ -336,6 +356,22 @@ let intern_from_file file =
   let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
   let del_opaque, _ = in_delayed file ch ~segment:opaques_seg in
   let vmlib = Vmlibrary.load lsd.md_name ~file ch in
+  (* Under [-location-free-label] only: the closures the library stored, read
+     now, from the file whose other segments are loaded
+     ([stored_closures_table]). Read unvalidated, as the other segments are: a
+     change to [KeepFacts.t] needs a vo_magic bump, which refuses older files
+     (the vo-format chain in vernac/libkeyObjects.mli). *)
+  let () =
+    if !location_free_label then
+      let closures = match ObjFile.marshal_in_segment ch ~segment:keepfacts_seg with
+        | ({ KeepFacts.assumptions; _ }, _) -> assumptions
+        | exception Not_found -> None
+      in
+      stored_closures_table := match closures with
+        | Some a ->
+          DirPath.Map.add lsd.md_name (Safe_typing.Dvo_or_vi digest_lmd, a) !stored_closures_table
+        | None -> DirPath.Map.remove lsd.md_name !stored_closures_table
+  in
   ObjFile.close_in ch;
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
   register_library_filename lsd.md_name file;
@@ -735,11 +771,6 @@ let save_library_base f sum lib ~label ?keepfacts proofs vmlib =
     Sys.remove f;
     Exninfo.iraise iexn
 
-(* [-location-free-label]: store the location-free label as the library's
-   digest and the attempted-resolution records in the library. Off (the
-   default), coqc writes stock's bytes. *)
-let location_free_label = ref false
-
 let set_location_free_label b =
   location_free_label := b;
   Attempts.set_enabled b;
@@ -832,10 +863,16 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   (* The keep rule's facts, while the library's own constants and opaque
      proofs are still in the environment. A [.vos] (proofs left out) gets none,
      even with no proof left out, since its closure would miss the bodies not
-     compiled. *)
+     compiled. A loaded library's stored closures stand in for walking its
+     constants ([KeepFacts.compute]). *)
+  let stored dp = match find_library dp, DirPath.Map.find_opt dp !stored_closures_table with
+    | Some (_, m), Some (digest, a)
+      when Safe_typing.digest_match ~actual:m.library_digests ~required:digest -> Some a
+    | _ -> None
+  in
   let keepfacts = match todo_proofs with
     | ProofsTodoNone when !location_free_label ->
-      Some (KeepFacts.compute ~access:indirect_accessor ~self:dir)
+      Some (KeepFacts.compute ~access:indirect_accessor ~stored ~self:dir)
     | ProofsTodoNone | ProofsTodoSomeEmpty _ -> None
   in
   OpacityLog.reset ();

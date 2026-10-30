@@ -36,7 +36,16 @@ type t = {
       sorted by name. No other body form is recorded. *)
 }
 
-val compute : access:Global.indirect_accessor -> self:DirPath.t -> t
+val compute :
+  access:Global.indirect_accessor ->
+  stored:(DirPath.t -> (string * string list) list option) -> self:DirPath.t -> t
 (** The facts for the library [self], computed from the current environment
     (its constants and inductives, and the opaque bodies [access] reaches).
-    Call it while the library being saved is still loaded. *)
+    Call it while the library being saved is still loaded. [stored dp] is the
+    [assumptions] field of the keepfacts segment of the loaded library [dp]
+    (read with its other segments), or [None]: the closure of a constant of
+    such a library is taken from there rather than by walking it, which gives
+    the closure [Print Assumptions] gives. ROCQ_KEEPFACTS_FULL_WALK=1 walks
+    every closure instead (the reference this is checked against), and
+    ROCQ_KEEPFACTS_DEBUG=1 says on standard error how each library's closures
+    were computed. *)

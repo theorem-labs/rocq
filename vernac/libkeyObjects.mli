@@ -157,7 +157,8 @@ open Names
     reader looks a segment up by name ([ObjFile.marshal_in_segment]), so an
     older build never reads a segment it does not know, and a newer build
     treats one a file lacks as absent. The one such segment is [keepfacts]
-    ([KeepFacts]), which [rocqchk] never reads and [coqc] writes only under
+    ([KeepFacts]), which [rocqchk] never reads and [coqc] reads (a
+    dependency's stored closures) and writes only under
     [-location-free-label].
 
     What that payload printing does not reach it names rather than drops,
@@ -205,10 +206,12 @@ open Names
     design, so its owning library must still reach the proof checker), the
     [vm] segment, which the checker regenerates, the [keepfacts] segment
     ([KeepFacts]: per-declaration assumption closures and the opacities
-    strategy commands saw, which [coqc] writes only under
-    [-location-free-label] and only for a [.vo], which [rocqchk] never reads,
-    and which the keep rule reads off the CURRENT object, so it needs no
-    digest; were it covered, an [Admitted -> Qed] edit would move the label),
+    commands saw, which [coqc] writes only under [-location-free-label] and
+    only for a [.vo], which [rocqchk] never reads, which a dependent's [coqc]
+    reads to take the closures of this library's constants instead of
+    walking them, and which the keep rule reads off the CURRENT object, so it
+    needs no digest; were it covered, an [Admitted -> Qed] edit would move the
+    label),
     and the native sidecar files beside the [.vo]. A [.vos] built from a
     source has the same summary and [library] segments as its [.vo], and so
     the same label.
