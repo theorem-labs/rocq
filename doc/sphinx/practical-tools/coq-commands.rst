@@ -768,9 +768,13 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   against a polymorphic *trusted* its universe context must be *trusted*'s);
   ``mismatch`` when the types are not convertible; ``universes-differ`` when
   they need universe constraints that the environment or *trusted* refuses,
-  when the universe contexts differ, and for every polymorphic *model* whose
-  universe context has sort variables or constraints, because elaborating
-  the definition can minimize those and the check does not replay it;
+  when they need an algebraic universe such as ``max(a,b)`` to equal another
+  universe (only two universe levels can be made equal), and when the
+  universe contexts differ; ``universes-undecided`` for every polymorphic
+  *model* whose universe context has sort variables or constraints, because
+  elaborating the definition can minimize those and the check does not
+  replay it, so it does not compare the types and the sealing may accept or
+  refuse such a *model*;
   ``not-requested`` with no *trusted*;
   ``model-missing`` or ``trusted-missing`` when a name is not in the
   environment. The verdict is about the two constants as the kernel stores
@@ -816,13 +820,11 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
 
   This check covers only the statements that read ``match``, so it does
   not make the report agree with a check that loads every sealing module.
-  A polymorphic *model* with sort variables or constraints in its universe
-  context reads ``universes-differ`` without its type being compared, and
-  adds nothing to the check. Its sealing module may still be accepted, and
-  the universe constraints it adds may clash with those of a ``match``
-  statement. A check that loads every sealing module refuses those two
-  statements together. This report stays complete and gives each of them
-  its own verdict.
+  A statement that reads ``universes-undecided`` adds nothing to the check.
+  Its sealing module may still be accepted, and the universe constraints it
+  adds may clash with those of a ``match`` statement. A check that loads
+  every sealing module refuses those two statements together. This report
+  stays complete and gives each of them its own verdict.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.

@@ -43,11 +43,14 @@ END STATEMENT REPORT
     a monomorphic T is taken at fresh universes; a polymorphic T requires the
     model's universe context to be T's, and adds no constraint). It is
     [universes-differ] when the types need universe constraints the
-    environment or T's context refuses, when the universe contexts differ,
-    and for every polymorphic model whose universe context has sort variables
-    or constraints: elaborating the definition can minimize those, and the
-    check does not replay it, so the sealing may still accept such a model.
-    It is [mismatch] when the types are not convertible, and otherwise
+    environment or T's context refuses, when they need an algebraic universe
+    such as [max(a,b)] to equal another universe (only two universe levels
+    can be made equal), and when the universe contexts differ. It is
+    [universes-undecided] for every polymorphic model whose universe
+    context has sort variables or constraints: elaborating the
+    definition can minimize those, and the check does not replay it, so it
+    does not compare the types, and the sealing may accept or refuse such a
+    model. It is [mismatch] when the types are not convertible, and otherwise
     [model-missing], [trusted-missing], or
     [not-requested] (no trusted constant).
 
@@ -77,9 +80,8 @@ END STATEMENT REPORT
     whatever its verdict, and the report stops without its end marker. The
     message gives the number of those statements and their positions among
     the requests, counted from 1, and never a name. Only the statements that
-    read [match] are in this check: a polymorphic model whose universe
-    context has sort variables or constraints reads [universes-differ]
-    without being compared, adds nothing, and its sealing may still be
-    accepted and clash with theirs.
+    read [match] are in this check: a statement that reads
+    [universes-undecided] adds nothing, and its sealing may still be accepted
+    and clash with theirs.
     @raise CErrors.UserError when those sealings are not accepted together,
     after the first line. *)
