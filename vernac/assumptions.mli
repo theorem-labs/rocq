@@ -64,3 +64,10 @@ val object_assumptions :
     body: the direct references of an object that {!reach}'s graph maps to
     [None]. *)
 val type_references : Constant.t -> GlobRef.Set_env.t
+
+(** While a walk ({!assumptions}, {!reach}) reads an opaque proof's body
+    through the accessor it was given, the constant whose body it reads (as
+    the walk reached it, by its user name); [None] at any other time. Every
+    accessor call a walk makes is such a read, so an accessor that wraps the
+    one the walk is given can name each table read ([KeepFacts]). *)
+val reading_constant : unit -> Constant.t option

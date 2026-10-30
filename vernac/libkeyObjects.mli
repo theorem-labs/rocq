@@ -101,14 +101,17 @@ open Names
     AccessOpaque (the default) read, which it logs as [opaque = true] queries
     naming the library that holds the constant read and the library whose
     opaque table holds the body read; the library's assumption set (its
-    monotone axiom condition); and which opaque proof a foreign [Indirect]
-    reference resolves to (its foreign-opaque-reference check: the referenced
-    library's object byte-identical). For a copy a module operation did not
-    strengthen (a functor application, an [Include] of one, a sealed [Module
-    X : T := L.F A] an extraction rebuilds from its expression) the holder
-    and the table differ, however many copies away the proof came from, so a
-    body read records both and the keep rule keeps the dependent only when
-    both libraries' objects are byte-identical. [foreign_opaque_libraries]
+    monotone axiom condition, over the closures [keepfacts] stores, whose
+    walk logs each body of the library's own copy it reads from another
+    library's table as the same kind of query); and which opaque proof a
+    foreign [Indirect] reference resolves to (its foreign-opaque-reference
+    check: the referenced library's object byte-identical). For a copy a
+    module operation did not strengthen (a functor application, an
+    [Include] of one, a sealed [Module X : T := L.F A] an extraction or the
+    closure walk reads from its expression) the holder and the table can
+    differ, however many copies away the proof came from, so a body read
+    records both and the keep rule keeps the dependent only when both
+    libraries' objects are byte-identical. [foreign_opaque_libraries]
     does not cover body reads. The status comparison and the assumption set
     read a constant's status off [axiom_report], so the blinding covers only
     the constants it lists; a body read reads no status, its check being
@@ -170,7 +173,12 @@ open Names
     treats one a file lacks as absent. The one such segment is [keepfacts]
     ([KeepFacts]), which [rocqchk] never reads and [coqc] reads (a
     dependency's stored closures) and writes only under
-    [-location-free-label].
+    [-location-free-label]. The obligation above is on a RELEASED
+    representation: [keepfacts], which no released build has written,
+    changed its query shape (a table field) with no new version, and a file
+    of the older shape stays safe to read, since [coqc] takes only its
+    [assumptions], whose shape did not change, and rocq-library-label
+    validates the segment before it reads the queries.
 
     What that payload printing does not reach it names rather than drops,
     and the head of checker/vo_payloads.ml is the one place that list is
@@ -294,10 +302,11 @@ type axiom_report = {
       depend on which operations those are. A dependent keeps its registered
       object across an edit to such a library only when that library's object
       is byte-identical, because the blinded label no longer pins the opaque
-      index the reference reads. It does not cover the tables an extraction
-      reads a body from: a module whose implementation is an algebraic
-      expression holds no reference, and an extraction can rebuild it; each
-      such read records its table ([KeepFacts.query]). *)
+      index the reference reads. It does not cover the tables a body read
+      reads: a module whose implementation is an algebraic expression holds
+      no reference, and an extraction or the walk that computes the
+      library's closures reads its constants from that expression; each such
+      read records its table ([KeepFacts.query]). *)
 }
 
 val axiom_report :

@@ -34,16 +34,18 @@
      user name to its sorted assumption closure, empty closures left out; null
      when absent) and "opacity_queries" (each foreign constant a strategy
      command or an extraction told apart as an axiom or an opaque proof, or
-     whose opaque body an extraction read, by user name, with the library
+     whose opaque body an extraction read; and each constant of this library
+     whose opaque body an extraction or the walk that computes the closures
+     read from another library's table; by user name, with the library
      holding it, the opacity it saw, and "table": for a body read, the
      library whose opaque table holds the body read, else null; null when the
      file has no segment). A body read records both the holder and the table:
-     for a copy a module operation did not strengthen they differ, and the
+     for a copy a module operation did not strengthen they can differ, and the
      keep rule requires both libraries' objects byte-identical.
      "foreign_opaque_libraries" does not cover body reads: a sealed
      [Module X : T := L.F A] keeps its expression, which holds no reference,
-     and a non-OCaml extraction rebuilds it and reads the table of the
-     library F's proof comes from. Version 4 adds "table".
+     and a non-OCaml extraction, or the closure walk, reads the table of the
+     library F's proof comes from through it. Version 4 adds "table".
      A segment that does not validate against checker/values.ml's
      description of it reads as absent ([read_keep_facts]). Version 3 drops
      version 2's "copied_from_libraries", which nothing read. Whether a

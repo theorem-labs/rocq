@@ -31,10 +31,11 @@ val record : Constant.t -> Declarations.constant_body -> unit
     and nothing for any other body. Ignored unless logging is enabled. *)
 
 val record_body_read : Constant.t -> Opaqueproof.opaque -> unit
-(** [record_body_read c o]: an extraction read the body of [c], the opaque
-    proof [o]. Logs [(c, true, Some dp)], [dp] the library whose opaque table
-    holds that body ([Opaqueproof.repr o]), also when [dp] is the library
-    holding [c]. Ignored unless logging is enabled. *)
+(** [record_body_read c o]: an extraction, or the walk that computes the
+    library's assumption closures ([KeepFacts]), read the body of [c], the
+    opaque proof [o]. Logs [(c, true, Some dp)], [dp] the library whose opaque
+    table holds that body ([Opaqueproof.repr o]), also when [dp] is the
+    library holding [c]. Ignored unless logging is enabled. *)
 
 val get : unit -> (Constant.t * bool * DirPath.t option) list
 (** The queries logged so far, newest first, with repeats. *)

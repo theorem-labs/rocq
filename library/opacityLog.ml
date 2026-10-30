@@ -38,12 +38,17 @@ open Names
    stock [coqc] writes.
 
    An extraction with AccessOpaque (the default) also reads an opaque proof's
-   BODY, and what it extracts depends on that body, which no label covers.
-   Such a read is logged with the library whose opaque table it read
-   ([record_body_read]): for a copy that a module operation did not
-   strengthen (a functor application, an [Include] of one, at any depth) that
-   table's library is not the one holding the constant read, and nothing else
-   names it. *)
+   BODY, and what it extracts depends on that body, which no label covers; so
+   does the walk that computes a library's assumption closures
+   ([KeepFacts]), whose result is stored. Such a read is logged with the
+   library whose opaque table it read ([record_body_read]): for a copy that a
+   module operation did not strengthen (a functor application, an [Include]
+   of one, at any depth, a sealed module whose implementation is such an
+   expression) that table's library can differ from the one holding the
+   constant read. The library's [foreign_opaque_libraries]
+   ([LibkeyObjects.axiom_report]) names it only for a copy whose [Indirect]
+   reference the compiled form keeps, not for one read from a sealed
+   module's expression. *)
 
 let enabled = ref false
 

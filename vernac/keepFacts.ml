@@ -51,10 +51,13 @@ type t = {
       ([opaque = true]), or whose opaque proof body an extraction read
       ([opaque = true], with [table] the library whose opaque table it read);
       a constant of any other body form is not recorded. A constant of this
-      library is recorded too when an extraction read its body from another
-      library's table (a copy made here, by a functor application, of another
-      library's proof). A constant recorded several ways is [opaque = true] if
-      any record is, with the table of its body read ([collect_opacity]).
+      library is recorded too when an extraction, or the walk that computes
+      [assumptions] ([logging_access]), read its body from another library's
+      table (a copy made here of another library's proof: a functor
+      application, an [Include] of one, a sealed module whose implementation
+      is such an expression). A constant recorded several ways is
+      [opaque = true] if any record is, with the table of its body read
+      ([collect_opacity]).
       Sorted by name. The keep rule rebuilds a dependent when the recorded
       opacity no longer matches the dependency's current one -- the command
       could then error, or stop erroring, on a real recompile -- and keeps a
@@ -337,8 +340,10 @@ let compute_assumptions ~stored access self =
 
    A query is kept when the constant is foreign, and also, for a body read,
    when the table it read is foreign though the constant is this library's:
-   a copy made here of another library's opaque proof (a functor application,
-   at any depth) reads that library's table.
+   a copy made here of another library's opaque proof (a functor application
+   or an [Include] of one, at any depth, a sealed module whose implementation
+   is such an expression) reads that library's table, by an extraction or by
+   the closure walk ([logging_access]).
 
    A constant recorded more than once keeps [opaque = true] if any record has
    it, and the table of its body read. The records of one compile agree but
@@ -372,6 +377,46 @@ let collect_opacity self =
     tbl []
   |> List.sort (fun a b -> String.compare a.constant b.constant)
 
+(* The accessor the closures are computed with: [access], which also logs each
+   opaque body the walk reads, for a constant of this library, from another
+   library's opaque table, as a body-read query ([OpacityLog.record_body_read]:
+   that constant, opaque, the table's library).
+
+   Why. The walk reads a body in another library's table for this library's
+   copy of a proof: a functor application at any depth, an [Include] of one,
+   and a sealed [Module X : T := L.F A], whose constants the walk reads from
+   the expression ([Assumptions.lookup_constant_in_impl]) and which holds no
+   reference the compiled form shows when [T] omits the proof. The closure
+   stored for that copy then depends on the table's library: an edit there
+   that keeps its label (an opaque proof that starts using an axiom) changes
+   the copy's real closure, and a dependent that took the stored one would
+   miss the axiom. The query makes the keep rule require that library's
+   object byte-identical to keep this one, as for an extraction body read.
+
+   What is not logged. A body in this library's own table (this library
+   recomputes it on every compile). A foreign constant's body, which the full
+   walk (ROCQ_KEEPFACTS_FULL_WALK=1, or a library with no stored closures)
+   reads and the stored-closure walk does not: its holder is a dependency,
+   whose own keepfacts log its copies, and whose closures the keep rule's
+   monotone condition checks. So both walks log the same queries, since both
+   walk every constant of this library they reach.
+
+   A fresh accessor per library also starts the walks' reuse afresh
+   ([Assumptions] keys it by the accessor), so no entry made before, which
+   logged nothing, is replayed in place of a read. *)
+let logging_access self (access : Global.indirect_accessor) : Global.indirect_accessor =
+  let note o =
+    match Assumptions.reading_constant () with
+    | Some c when is_self self (Constant.modpath c) ->
+      let (_, _, dp, _) = Opaqueproof.repr o in
+      if not (DirPath.equal dp self) then OpacityLog.record_body_read c o
+    | Some _ | None -> ()
+  in
+  { Global.access_proof = (fun o -> note o; access.Global.access_proof o);
+    access_uncooked_proof = (fun o -> note o; access.Global.access_uncooked_proof o) }
+
 let compute ~access ~stored ~self =
-  { assumptions = compute_assumptions ~stored access self;
-    opacity_queries = collect_opacity self }
+  (* The closures first: their walk logs body reads [collect_opacity] reads
+     (the order a record's fields are evaluated in is unspecified). *)
+  let assumptions = compute_assumptions ~stored (logging_access self access) self in
+  { assumptions; opacity_queries = collect_opacity self }

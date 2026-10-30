@@ -614,26 +614,38 @@ let no_cooking = {
   stays_const = (fun _ -> true);
 }
 
+(* The constant whose opaque body [get_constant_body] is reading through the
+   walk's accessor, while that accessor runs ([reading_constant]). *)
+let reading : Constant.t option ref = ref None
+
+let reading_constant () = !reading
+
 let get_constant_body access kn =
   let cb = lookup_constant kn in
   match cb.const_body with
   | Undef _ | Primitive _ | Symbol _ -> None
   | Def c -> Some (no_discharge c)
   | OpaqueDef o ->
-    (* A failure to read the table is what [Global.force_proof] below would
-       meet and report as a missing body, so it is treated as one here too. *)
-    match (try access.Global.access_uncooked_proof o
-           with e when CErrors.noncritical e -> None) with
-    | Some _ as ans -> ans
-    | None ->
-      (* either the body could not be read -- [force_proof] then fails too --
-         or the discharge cannot be left undone, and we pay for it *)
-      match Global.force_proof access o with
-      | c, _ -> Some (no_discharge c)
-      | exception e when CErrors.noncritical e ->
-        (* missing delayed body, e.g. in vok mode *)
-        incr unreplayable_steps;
-        None
+    reading := Some kn;
+    let read () =
+      (* A failure to read the table is what [Global.force_proof] below would
+         meet and report as a missing body, so it is treated as one here too. *)
+      match (try access.Global.access_uncooked_proof o
+             with e when CErrors.noncritical e -> None) with
+      | Some _ as ans -> ans
+      | None ->
+        (* either the body could not be read -- [force_proof] then fails too --
+           or the discharge cannot be left undone, and we pay for it *)
+        match Global.force_proof access o with
+        | c, _ -> Some (no_discharge c)
+        | exception e when CErrors.noncritical e ->
+          (* missing delayed body, e.g. in vok mode *)
+          incr unreplayable_steps;
+          None
+    in
+    match read () with
+    | ans -> reading := None; ans
+    | exception e -> reading := None; raise e
 
 (* The types of the constants without a body whose walk is in progress,
    innermost first, kept on the heap like [inductive_marks]: the walk would

@@ -363,8 +363,13 @@ let intern_from_file file =
   (* Under [-location-free-label] only: the closures the library stored, read
      now, from the file whose other segments are loaded
      ([stored_closures_table]). Read unvalidated, as the other segments are: a
-     change to [KeepFacts.t] needs a vo_magic bump, which refuses older files
-     (the vo-format chain in vernac/libkeyObjects.mli). *)
+     change to a RELEASED [KeepFacts.t] needs a vo_magic bump, which refuses
+     older files (the vo-format chain in vernac/libkeyObjects.mli). Its query
+     shape changed before release with none (no released build ever wrote
+     this segment); a file of that unreleased shape stays safe to read here,
+     since this takes only [assumptions], whose shape did not change, and
+     never touches the queries; rocq-library-label, which reads them,
+     validates the segment first. *)
   let () =
     if !location_free_label then
       let closures = match ObjFile.marshal_in_segment ch ~segment:keepfacts_seg with

@@ -1161,8 +1161,9 @@ let extract_constant table access env kn inst cb =
      table, the library whose opaque table holds the body read
      ([Opaqueproof.repr c]). For a copy a module operation did not strengthen
      (a functor application, an [Include] of one, at any depth, a sealed
-     [Module X : T := L.F A] rebuilt from its expression) the two differ, and
-     the table's library need not be one the holder's compiled form names.
+     [Module X : T := L.F A] rebuilt from its expression) the two can differ,
+     and the table's library need not be one the holder's compiled form
+     names.
      The keep rule keeps the dependent only when the holder's object and the
      table's object are both byte-identical. *)
   let read_opaque c =

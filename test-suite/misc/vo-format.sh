@@ -46,7 +46,12 @@
 # have, the test fails telling to record the printing, without a bump.
 # Once recorded, the segment's schema is a line like any other: a changed,
 # removed or reordered segment line, or a new segment under a recorded name,
-# is a line gone, and fails as a format change.
+# is a line gone, and fails as a format change. A change to a RELEASED
+# segment's schema needs a vo_magic bump; one to a segment no released build
+# has written can be re-recorded instead (the keepfacts query gained its
+# table field that way: the coqc that reads keepfacts takes only its
+# assumptions, whose shape did not change, and rocq-library-label validates
+# the segment before it reads the queries).
 #
 
 set -e

@@ -140,14 +140,17 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    holding the constant read, and the one whose opaque table holds the body
    read, which for a copy a module operation did not strengthen -- a functor
    application, an [Include] of one, a sealed [Module X : T := L.F A] that the
-   extraction rebuilds from its expression -- is another library, however
+   extraction rebuilds from its expression -- can be another library, however
    many copies away; the keep rule keeps the dependent only when both
-   libraries' objects are byte-identical); and the library's
-   assumption set, which [Print Assumptions] reads (the keep rule recomputes
-   it from the current objects: its monotone axiom condition). The status
-   comparison and the assumption set read a constant's status off
-   [axiom_report], which is why the blinding stops at the constants it lists;
-   a body read reads no status, its check being byte-identity.
+   libraries' objects are byte-identical); and the library's assumption set,
+   which [Print Assumptions] reads (the keep rule compares the closures the
+   library's [keepfacts] stored with those of the current objects: its
+   monotone axiom condition; the walk that computes them reads a copy's body
+   from another library's table the same way, and logs each such read as the
+   same kind of query, [KeepFacts]). The status comparison and the assumption
+   set read a constant's status off [axiom_report], which is why the blinding
+   stops at the constants it lists; a body read reads no status, its check
+   being byte-identity.
    The canonical value also drops the opaque table index of an [OpaqueDef
    (Indirect (_, _, dp, i))]; a dependent that embeds a foreign opaque
    reference into [dp] (a copy of this library's opaque proof that a module
@@ -217,9 +220,10 @@ type axiom_report = {
   foreign_opaque_libraries : DirPath.Set.t;
   (** The libraries, other than this one, whose opaque table this library's
       compiled form holds an [Indirect] reference into. It does not cover the
-      tables an extraction body read reads: a module whose implementation is
-      an algebraic expression holds no reference, and an extraction can
-      rebuild it; such a read records its table itself ([KeepFacts]). *)
+      tables a body read reads: a module whose implementation is an algebraic
+      expression holds no reference, and an extraction or the closure walk
+      reads its constants from that expression; such a read records its table
+      itself ([KeepFacts]). *)
 }
 
 (* The blinded constants of the module signature a dependent sees, with their
@@ -243,9 +247,9 @@ let sig_blinded mp sign =
    the module -- its signature, its interactive implementation and the module
    types of its functor parameters -- so an over-approximation here only makes
    the keep rule more conservative. An [Algebraic] implementation holds an
-   expression, not constants, so the tables an extraction reads when it
-   rebuilds such a module are not here: each body read records its own table
-   ([OpacityLog.record_body_read]). *)
+   expression, not constants, so the tables an extraction or the closure walk
+   reads through such a module are not here: each body read records its own
+   table ([OpacityLog.record_body_read]). *)
 let foreign_opaque_of ~self mb =
   let acc = ref DirPath.Set.empty in
   let note cb =

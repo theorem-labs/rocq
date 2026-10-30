@@ -41,9 +41,11 @@ type t = {
       extraction: [OpacityLog]), or whose opaque proof body an extraction
       read (always [opaque = true], with its [table]), with its library and
       the opacity it saw, sorted by name; also a constant of this library
-      whose body an extraction read from another library's table. Recorded
-      several ways, [opaque = true] with the body read's table. No other body
-      form is recorded. *)
+      whose body an extraction, or the walk that computes [assumptions], read
+      from another library's table (a copy of that library's proof: a functor
+      application, an [Include] of one, a sealed module whose implementation
+      is such an expression). Recorded several ways, [opaque = true] with the
+      body read's table. No other body form is recorded. *)
 }
 
 val compute :
@@ -51,6 +53,11 @@ val compute :
   stored:(DirPath.t -> (string * string list) list option) -> self:DirPath.t -> t
 (** The facts for the library [self], computed from the current environment
     (its constants and inductives, and the opaque bodies [access] reaches).
+    The walk that computes the closures reads bodies through a wrapper of
+    [access] that logs each body of a constant of [self] it reads from
+    another library's table as a body-read query, so a closure stored for a
+    copy is kept only while that table's library is byte-identical; the
+    closures are computed before the queries are collected.
     Call it while the library being saved is still loaded. [stored dp] is the
     [assumptions] field of the keepfacts segment of the loaded library [dp]
     (read with its other segments), or [None]: the closure of a constant of

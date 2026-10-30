@@ -32,7 +32,11 @@
 # which rebuilds X from that expression, records holder H and table A; BXC goes two
 # copies deep (K's lemma, included by L's functor, applied in H): table K; BXF applies a
 # functor in its own library: holder and table A; BXS is H's own extraction of its X:
-# H records it, because the table (A) is foreign. BN runs
+# H records it, because the table (A) is foreign; BXO is A's own extraction of a copy
+# in its own table: dropped. BXA: the walk that computes the closures reads a copy's
+# body through a sealed module's expression too, and H records that read (holder H,
+# table A); after an edit that keeps A's label, E's full walk sees the axiom H's
+# stored closure misses, which is why H must rebuild. BN runs
 # `Transparent Nat.add.`, a transparent definition, which cannot become an axiom or an
 # opaque proof while its library's label stays equal: nothing is recorded.
 #
@@ -402,6 +406,56 @@ if [ "$qs2" = '[{"constant":"Hs.H.X.fc","library":"Hs.H","opaque":true,"table":"
   pass "BXS: a library's extraction of its own copy of A's lemma records the foreign table: $qs2"
 else
   bad "BXS: BXS's opacity_queries for H's own extraction of X: '$qs2'"
+fi
+
+# BXO: a library's extraction of a copy whose body is in its OWN table (BXF's A, ending
+# with its own JSON extraction of X): holder and table are A, so the query is dropped.
+XO=_kfacts/xo
+mkdir -p $XO/a
+{ printf 'From Corelib Require Extraction.\n'; printf "$functorA"
+  printf 'Module X : S := F A0.\nExtraction Language JSON.\nExtraction X.\n'; } > $XO/a/A.v
+if rocq c -q -location-free-label -R $XO/a Ao $XO/a/A.v > $XO/a/out 2>&1; then
+  qo=$(field $XO/a/A.vo opacity_queries)
+else qo="error: $(tr '\n' ' ' < $XO/a/out | cut -c1-600)"; fi
+if [ "$qo" = "[]" ]; then
+  pass "BXO: a body read from the library's own table is dropped: $qo"
+else
+  bad "BXO: BXO's opacity_queries for A's own extraction of its X: '$qo'"
+fi
+
+# BXA: the walk that computes the closures reads a copy's body from another library's
+# table too. A's functor F holds the opaque lemma fc; H seals F's application to T,
+# whose fc is a parameter (`Module X : T := A.F A.A0.`), so the walk reads H.X.fc's body
+# from A's table through X's expression, and H stores the closure it finds. H records
+# the read (holder H, table A), which makes the keep rule require A byte-identical to
+# keep H. Why: A2 changes fc's proof from `exact I` to `exact ax`, A's label stays
+# equal, so a kept H still loads; E proves e with H.X.fc, and against A2 and the old H
+# the walk over H's stored closure gives e none, while the full walk gives ax.
+XA=_kfacts/xa
+mkdir -p $XA/a $XA/a2 $XA/h $XA/e $XA/efull
+fA='Axiom ax : True.\nModule Type S. End S.\nModule F (X : S). Lemma fc : True. Proof. exact %s. Qed. End F.\nModule A0. End A0.\n'
+printf "$fA" I > $XA/a/A.v
+printf "$fA" ax > $XA/a2/A.v
+printf 'Require A.\nModule Type T. Parameter fc : True. End T.\nModule X : T := A.F A.A0.\n' > $XA/h/H.v
+printf 'Require Hdep.H.\nLemma e : True.\nProof. exact Hdep.H.X.fc. Qed.\n' > $XA/e/E.v
+cp $XA/e/E.v $XA/efull/E.v
+rocq c -q -location-free-label -R $XA/a A $XA/a/A.v
+rocq c -q -location-free-label -R $XA/a2 A $XA/a2/A.v
+rocq c -q -location-free-label -R $XA/a A -R $XA/h Hdep $XA/h/H.v
+qa=$(field $XA/h/H.vo opacity_queries)
+if [ "$qa" = '[{"constant":"Hdep.H.X.fc","library":"Hdep.H","opaque":true,"table":"A.A"}]' ]; then
+  pass "BXA: the closure walk's read of H.X.fc's body from A's table is recorded: $qa"
+else
+  bad "BXA: H's opacity_queries (Module X : T := A.F A.A0): '$qa'"
+fi
+rocq c -q -location-free-label -R $XA/a2 A -R $XA/h Hdep -R $XA/e Edep $XA/e/E.v
+ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R $XA/a2 A -R $XA/h Hdep -R $XA/efull Edep $XA/efull/E.v
+xe=$(closure $XA/e/E.vo e); xf=$(closure $XA/efull/E.vo e)
+if [ "$(label $XA/a/A.vo)" = "$(label $XA/a2/A.vo)" ] && [ -z "$xe" ] \
+   && printf '%s' "$xf" | grep -q '"axiom:A\.A\.ax"'; then
+  pass "BXA: after fc's edit (A's label equal), E's full walk gives e $xf, the old H's stored closure none: H must rebuild"
+else
+  bad "BXA: A's labels $(label $XA/a/A.vo) $(label $XA/a2/A.vo), E.e over the old H '$xe', full walk '$xf'"
 fi
 
 # --- control ---
