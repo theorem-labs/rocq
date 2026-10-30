@@ -209,6 +209,12 @@ warning the first time it needs it, and a later command names it.  Both
 proofs are ineligible (`warning`, and `warning_registry` for the second), so
 replay runs them as stock does.
 
+**The third soundness review.**  `vm_named_fv_clearbody`: a proof clears a
+section `Let`'s body, then takes from the machine's cache a value that
+closes over that `Let`; stock rejects the proof, which is ineligible
+(`vm_cached_closure`).  `vm_named_fv_cold_hit` is its control: a proof that
+fills that slot itself replays.
+
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
 one trips, no later proof of the process is replayed, and each is counted as
