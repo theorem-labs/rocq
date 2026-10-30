@@ -270,19 +270,25 @@ let remove_delimiters scope =
          (* XXX info *)
          CErrors.anomaly ~info (str "A delimiter for scope [scope] should exist")
 
+(* BET-84 census row 11: the scope a delimiting key names, read by its key.
+   ONE value function, called by the record site and by the replay evaluator
+   (dev/tools/census/replay_channels.py). The key is the delimiter itself. *)
+let recorded_delimiters_scope key =
+  Option.map (fun scope -> Proof_recorder.digest ~what:"delimiters_scope" scope)
+    (String.Map.find_opt key !delimiters_map)
+
+let () =
+  Proof_replay.register_evaluator "delimiters_scope" (fun key ->
+      Proof_replay.Value (recorded_delimiters_scope key))
+
 let find_delimiters_scope ?loc key =
-  try
-    let scope = String.Map.find key !delimiters_map in
-    if Proof_recorder.active () then
-      Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
-        ~key:(fun () -> key)
-        ~value:(fun () -> Some (Proof_recorder.digest ~what:"delimiters_scope" scope));
-    scope
-  with Not_found ->
-    if Proof_recorder.active () then
-      Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
-        ~key:(fun () -> key)
-        ~value:(fun () -> None);
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
+      ~key:(fun () -> key)
+      ~value:(fun () -> recorded_delimiters_scope key);
+  match String.Map.find_opt key !delimiters_map with
+  | Some scope -> scope
+  | None ->
     user_err ?loc
       (str "Unknown scope delimiting key " ++ str key ++ str ".")
 
