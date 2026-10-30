@@ -495,6 +495,12 @@ and ``rocq repl``, unless stated otherwise:
   typechecked. Subproofs declared by :tacn:`abstract` are still typechecked
   when the tactic runs, and so is a proof declared under :cmd:`Fail` or
   :cmd:`Succeed`, as the :flag:`Skip Qed Typecheck` flag describes.
+  A proof that a command rolling the document back discards, such as
+  :cmd:`Reset`, is typechecked at that command for the same reason, when
+  ``rocq compile`` is building a file. A ``rocq repl`` session compiles no
+  file, so it does not typecheck the proofs it discards.
+  ``rocq compile -vok`` writes no file for ``rocqchk`` to check, so it
+  typechecks every opaque proof and refuses this option.
 
   .. warning:: A library compiled with this option can contain an ill-typed
      proof, for instance one built with ``exact_no_check``, until ``rocqchk``

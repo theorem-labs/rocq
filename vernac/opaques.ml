@@ -49,6 +49,29 @@ type opaque_result =
 | OpaqueValue of Opaqueproof.opaque_proofterm * bool
 (** The boolean is [true] when the kernel did not type the proof. *)
 
+(** The kernel check that a proof declared under the skip did not get, by
+    handle, see {!start_document}. The table is an ordinary reference,
+    outside the backtrackable summary below, because a rollback restores that
+    summary and would restore away the record of the proof it discards. Each
+    check holds the safe environment of its [Qed], where the handle is still
+    unfilled, so it needs none of the state the rollback replaces. *)
+let skipped_checks : (unit -> unit) Opaqueproof.HandleMap.t ref =
+  ref Opaqueproof.HandleMap.empty
+
+(** The error of a check {!Summary.unfreeze} ran. A command that rolls the
+    document back can be one whose error the stm drops, which it does for a
+    command it runs under its resilience, so {!Summary.join} raises it
+    again. *)
+let discarded_error : Exninfo.iexn option ref = ref None
+
+(** Whether this document records those checks at all. *)
+let check_discarded_proofs = ref false
+
+let start_document ~check_discarded_proofs:check =
+  skipped_checks := Opaqueproof.HandleMap.empty;
+  discarded_error := None;
+  check_discarded_proofs := check
+
 (** Current table of opaque terms *)
 
 module Summary =
@@ -57,9 +80,30 @@ struct
   let state : t ref = ref Opaqueproof.HandleMap.empty
   let init () = state := Opaqueproof.HandleMap.empty
   let freeze () = !state
-  let unfreeze s = state := s
+
+  let unfreeze s =
+    (* Restoring the live table, which is what a command that rolls nothing
+       back restores, discards nothing. *)
+    if s != !state then begin
+      let kept, discarded =
+        Opaqueproof.HandleMap.partition
+          (fun i _ -> Opaqueproof.HandleMap.mem i s) !skipped_checks
+      in
+      let () = skipped_checks := kept in
+      let () = state := s in
+      (* In handle order, so that the error is the one of the earliest Qed,
+         as it is without the skip. *)
+      try Opaqueproof.HandleMap.iter (fun _ check -> check ()) discarded
+      with e when CErrors.noncritical e ->
+        let e = Exninfo.capture e in
+        let () = discarded_error := Some e in
+        Exninfo.iraise e
+    end
 
   let join ?(except=Future.UUIDSet.empty) () =
+    (* The error of a check [unfreeze] ran, which the command that rolls back
+       may not have carried out of the document. *)
+    let () = Option.iter Exninfo.iraise !discarded_error in
     let iter i pf = match pf with
     | OpaqueValue _ -> ()
     | OpaqueCertif cert ->
@@ -129,7 +173,17 @@ let declare_defined_opaque ?feedback_id ~poly i (body : Safe_typing.private_cons
   in
   let proof = Future.chain body begin fun pf ->
       let proof =
-        if skip then unchecked_opaque ~poly i pf
+        if skip then
+          (* The check this Qed is not running, see [skipped_checks]. *)
+          let () =
+            if !check_discarded_proofs then
+              let senv = Global.safe_env () in
+              let check () =
+                ignore (Safe_typing.check_opaque senv i pf : Safe_typing.opaque_certificate)
+              in
+              skipped_checks := Opaqueproof.HandleMap.add i check !skipped_checks
+          in
+          unchecked_opaque ~poly i pf
         else Checked (Safe_typing.check_opaque (Global.safe_env ()) i pf)
       in
       let () = Option.iter (fun id -> Feedback.feedback ~id Feedback.Complete) feedback_id in
@@ -217,4 +271,5 @@ let dump ?(except=Future.UUIDSet.empty) () =
     f2t_map
   in
   let f2t_map = Opaqueproof.HandleMap.fold fold !current_opaques Future.UUIDMap.empty in
+  let () = skipped_checks := Opaqueproof.HandleMap.empty in
   (opaque_table, f2t_map)

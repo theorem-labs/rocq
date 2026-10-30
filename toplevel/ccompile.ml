@@ -91,9 +91,20 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       Stm.reset_task_queue ();
       ()
 
+(* -vok writes no library, so nothing it processes ever reaches rocqchk and
+   its exit status is the whole verdict: it typechecks every opaque proof,
+   those of the files it loads first included. The option is refused with it,
+   and the flag, which a file can set at any point, is forced off for the
+   whole document instead. *)
 let compile opts stm_opts copts injections ~echo ~f_in ~f_out =
+  let vok = copts.compilation_mode = BuildVok in
+  if vok && opts.config.skip_qed_typecheck then
+    CErrors.user_err Pp.(str
+      "-vok typechecks the opaque proofs of the file, \
+       so it cannot be used with -skip-qed-typecheck.");
+  let compile () = compile opts stm_opts injections copts ~echo ~f_in ~f_out in
   ignore(CoqworkmgrApi.get 1);
-  compile opts stm_opts injections copts ~echo ~f_in ~f_out;
+  if vok then Opaques.with_qed_typecheck_forced compile else compile ();
   CoqworkmgrApi.giveback 1
 
 let compile_file opts stm_opts copts injections (f_in, echo) =

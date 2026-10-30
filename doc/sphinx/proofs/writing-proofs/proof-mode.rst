@@ -241,6 +241,13 @@ When the proof is completed, you can exit proof mode with commands such as
    :cmd:`Succeed`, which discard the proof: it would reach no :file:`.vo`
    for ``rocqchk`` to check, and skipping its check would change the verdict
    of the control.
+   A command that rolls the document back past such a proof, such as
+   :cmd:`Reset`, discards it in the same way, and typechecks it at that
+   command: the error :cmd:`Qed` raises without the flag is raised there.
+   An interactive session writes no :file:`.vo`, so it does not typecheck
+   the proofs it discards.
+   ``rocq compile -vok`` writes no file for ``rocqchk`` to check, so it
+   typechecks every opaque proof: this flag has no effect there.
 
    .. warning:: A library compiled with this flag on can contain an ill-typed
       proof, for instance one built with ``exact_no_check``, until ``rocqchk``

@@ -2239,6 +2239,14 @@ let init_core () =
 
 let new_doc { doc_type ; injections } =
 
+  (* Before the restore below, which restores the opaque table too. Only a
+     document rocq compile builds checks what a rollback discards: edit_at
+     installs a cached state on a path that handles no error from
+     Opaques.Summary.unfreeze. *)
+  Opaques.start_document
+    ~check_discarded_proofs:
+      (match doc_type with Interactive _ -> false | VoDoc _ | VosDoc _ -> true);
+
   (* We must reset the whole state before creating a document! *)
   State.restore_root_state ();
 
