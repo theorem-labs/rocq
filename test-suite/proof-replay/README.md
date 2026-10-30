@@ -197,6 +197,10 @@ proof.  `warning_error_caught`: a `try` catches a warning raised as an error,
 and stock accepts the proof; the proof is ineligible (`warning_error`), so
 replay does not raise the warning again, and the control replays.
 
+**The second soundness review, of `08e77b30`.**  `vm_named_fv`: a cached
+machine value closes over a section `Let` whose body calls a changed
+constant; stock rejects the proof.
+
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
 one trips, no later proof of the process is replayed, and each is counted as
