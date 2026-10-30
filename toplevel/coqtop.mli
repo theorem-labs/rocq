@@ -35,6 +35,18 @@ val start_coq : ('a * Stm.AsyncOpts.stm_opt,'b) custom_toplevel -> string list -
 
 val init_toploop : Coqargs.t -> Stm.AsyncOpts.stm_opt -> Coqargs.injection_command list -> Vernac.State.t
 
+(** [typecheck_every_qed opts injections] calls
+    {!Opaques.force_qed_typecheck}, and adds to [injections] the warning that
+    [-skip-qed-typecheck] has no effect when it is on: a toplevel writes no
+    library, so nothing it reads ever reaches [rocqchk], and under [-batch]
+    its exit status says whether the files it was given go through. It warns
+    rather than refuses because a project passes that option to every command
+    through its [_CoqProject], an editor among them. Call it before
+    {!init_toploop}, so that the rc file and the files [-l] loads are read
+    under the force, and the warning under the [-w] of the command line. *)
+val typecheck_every_qed :
+  Coqargs.t -> Coqargs.injection_command list -> Coqargs.injection_command list
+
 (** The specific characterization of the coqtop_toplevel *)
 
 type query = PrintTags | PrintModUid of string list

@@ -43,6 +43,7 @@ type injection_command =
   | RequireInjection of require_injection
   | WarnNoNative of string
   | WarnNativeDeprecated
+  | WarnSkipQedTypecheckIgnored
 
 type coqargs_logic_config = {
   impredicative_set : bool;

@@ -22,8 +22,11 @@ good='Lemma kept_good : True.
 Proof. exact I.'
 kernel_error='The term "I" has type "True" while it is expected to have type "False".'
 
-# Options every arm of the next case takes, for a case that needs its own.
+# Options every arm of the next case takes, for a case that needs its own, and
+# the command it runs: rocq compile by default, or one of the toplevels, which
+# read the case through -l.
 extra=()
+tool=compile
 
 # Every arm compiles the same path, so a message that names the file reads the
 # same, and every arm's first line is one line, so a message that names a line
@@ -41,8 +44,14 @@ compile() { # case arm
   cat "$dir/body.v" >> "$dir/case.v"
   # -test-mode prints the message Fail caught, which rocq compile is quiet
   # about, so the comparison below reads it.
-  rocq c -q -test-mode ${extra[@]+"${extra[@]}"} ${args[@]+"${args[@]}"} \
-    -R "$dir" Top "$dir/case.v" > "$dir/$arm.out" 2>&1 || rc=$?
+  case $tool in
+    compile)
+      rocq c -q -test-mode ${extra[@]+"${extra[@]}"} ${args[@]+"${args[@]}"} \
+        -R "$dir" Top "$dir/case.v";;
+    *)
+      $tool -batch -q -test-mode ${extra[@]+"${extra[@]}"} \
+        ${args[@]+"${args[@]}"} -l "$dir/case.v";;
+  esac > "$dir/$arm.out" 2>&1 || rc=$?
   printf '%s\n' "$rc" > "$dir/$arm.rc"
   # A Redirect case writes here, and the next arm would overwrite it.
   if [ -e "$dir/redirected.out" ]; then mv "$dir/redirected.out" "$dir/$arm.redirected"; fi
@@ -280,3 +289,37 @@ same_status vok_load_bad 1 'Definition after_load := 0.'
 says vok_load_bad "$kernel_error" plain set
 says vok_load_bad 'cannot be used with -skip-qed-typecheck' option
 extra=()
+
+# (l) a toplevel writes no library either, and under -batch its exit status
+# says whether the files it was given go through, so it typechecks every Qed
+# proof too: the check is forced on before the session reads anything, the
+# files -l loads included, and the option only warns, since a project passes
+# it to every command through its _CoqProject, an editor among them. These
+# cases read the body through -l, with the proof the session keeps, with one
+# a rollback discards, and with one delegated to a proof worker.
+toplevel_stops() { # case body...
+  local case=$1
+  shift
+  same_status "$case" 1 "$@"
+  says "$case" "$kernel_error" plain option set inline
+  says "$case" 'has no effect here' option
+}
+
+for tool in "rocq repl" coqidetop; do
+  # coqidetop belongs to a package a build can leave out.
+  [ -x "$BIN/${tool%% *}" ] || { echo "skipping $tool: not built"; continue; }
+  name=${tool##* }
+  toplevel_stops "${name}_bad" "$bad" 'Qed.'
+  toplevel_stops "${name}_reset_bad" "$bad" 'Qed.' 'Reset discarded_bad.'
+  extra=(-async-proofs on -async-proofs-j 1)
+  toplevel_stops "${name}_async_bad" "$bad" 'Qed.'
+  # The message is one of the command line's injections, so -w silences it,
+  # and the check stays on.
+  extra=(-w -skip-qed-typecheck-ignored)
+  same_status "${name}_quiet_bad" 1 "$bad" 'Qed.'
+  says "${name}_quiet_bad" "$kernel_error" plain option set inline
+  ! grep -qF 'has no effect here' "$workdir/${name}_quiet_bad/option.out" ||
+    { cat "$workdir/${name}_quiet_bad/option.out" >&2
+      fail "${name}_quiet_bad: -w did not silence the message"; }
+  extra=()
+done

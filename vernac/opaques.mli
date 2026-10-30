@@ -37,6 +37,12 @@ val start_document : check_discarded_proofs:bool -> unit
     document under it, for the same reason: it writes no [.vo]. *)
 val with_qed_typecheck_forced : (unit -> 'a) -> 'a
 
+(** [force_qed_typecheck ()] forces that check on for good, for every proof
+    declared after it. [Coqtop.typecheck_every_qed] calls it before a
+    toplevel reads anything, for the same reason: a toplevel writes no [.vo]
+    either. *)
+val force_qed_typecheck : unit -> unit
+
 val declare_defined_opaque : ?feedback_id:Stateid.t -> poly:bool ->
   Opaqueproof.opaque_handle -> Safe_typing.private_constants const_entry_body -> unit
 val declare_private_opaque : Safe_typing.exported_opaque -> unit

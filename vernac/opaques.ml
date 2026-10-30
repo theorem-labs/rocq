@@ -30,6 +30,8 @@ let qed_typecheck_forced = ref false
 let with_qed_typecheck_forced f =
   Flags.with_modified_ref qed_typecheck_forced (fun _ -> true) f ()
 
+let force_qed_typecheck () = qed_typecheck_forced := true
+
 type opaque_proof =
 | Checked of Safe_typing.opaque_certificate
 | Unchecked of Constr.t * Univ.ContextSet.t Opaqueproof.delayed_universes
