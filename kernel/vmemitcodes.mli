@@ -22,6 +22,9 @@ type patches
 
 val patch : (to_patch * patches) -> (reloc_info -> int) -> Vmvalues.tcode * fv
 
+val patch_globals : patches -> Constant.t list
+(** BET-84: the constants the code calls at run time ([Reloc_getglobal]). *)
+
 type 'a pbody_code =
   | BCdefined of bool array * 'a * patches
   | BCalias of Constant.t
