@@ -173,10 +173,15 @@ module SSet = CString.Set
    entry for every constant and inductive of that library's environment with
    a non-empty closure ([library_roots]); so the object must be one of them:
    it is in the global environment under that library's path, and its user
-   and canonical names agree, which rules out a copy made through a module
-   alias, an [Include] or a functor (those are walked, their bodies lead to
-   the originals). A library without a table (compiled without
-   -location-free-label, or whose closures could not be computed) is walked.
+   and canonical names agree. That rules out a copy made through a module
+   alias or an [Include] of a plain module, whose canonical name stays its
+   origin's: such a copy is walked, and its body leads to the original. A
+   copy made by a functor application or an [Include] of one has agreeing
+   names, and is a root of its own library's table ([library_roots] lists
+   every constant the environment holds under the library's path), so its
+   stored closure is the one that library computed for it. A library without
+   a table (compiled without -location-free-label, or whose closures could
+   not be computed) is walked.
 
    Two traits of [Assumptions.traverse] make what a walk reaches depend on the
    order it visits objects in, which one walk for every root does not

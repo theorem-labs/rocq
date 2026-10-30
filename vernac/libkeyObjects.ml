@@ -235,23 +235,84 @@ let sig_blinded mp sign =
   let _ : Mod_declarations.module_signature = map_own_signature note mp sign in
   !acc
 
-(* Every library, other than [self], that a constant body of [mb] holds an
-   opaque [Indirect] reference into. [map_constants] visits every constant of
-   the module -- its signature, its interactive implementation and the module
-   types of its functor parameters -- so an over-approximation here only makes
-   the keep rule more conservative. *)
+(* The [MPfile] root of a module path, [None] for a bound (functor-parameter)
+   path. *)
+let rec mpfile_root = function
+  | ModPath.MPfile dp -> Some dp
+  | ModPath.MPdot (mp, _) -> mpfile_root mp
+  | ModPath.MPbound _ -> None
+
+(* [add] applied to every module path an algebraic implementation names:
+   the functor, its arguments, and the module a [with Module] clause gives. *)
+let rec alg_expr_paths add = function
+  | Declarations.MEident mp -> add mp
+  | Declarations.MEapply (me, mp) -> alg_expr_paths add me; add mp
+  | Declarations.MEwith (me, Declarations.WithMod (_, mp)) -> alg_expr_paths add me; add mp
+  | Declarations.MEwith (me, Declarations.WithDef _) -> alg_expr_paths add me
+
+let rec functor_alg_paths add = function
+  | Declarations.MENoFunctor me -> alg_expr_paths add me
+  | Declarations.MEMoreFunctor fe -> functor_alg_paths add fe
+
+(* [add] applied to every module path named by an [Algebraic] implementation
+   of [mb] or of a module inside it, at any depth: in its signature, in the
+   signature of a submodule, of a functor parameter and of a module type, and
+   in a sealed module's interactive implementation ([Struct]). *)
+let rec algebraic_sources_module add mb =
+  (match Mod_declarations.mod_expr mb with
+   | Mod_declarations.Algebraic e -> functor_alg_paths add e
+   | Mod_declarations.Struct (_, struc) -> algebraic_sources_struc add struc
+   | Mod_declarations.Abstract | Mod_declarations.FullStruct -> ());
+  algebraic_sources_sign add (Mod_declarations.mod_type mb)
+
+and algebraic_sources_sign add (sign : Mod_declarations.module_signature) =
+  match sign with
+  | Declarations.MoreFunctor (_, mtb, sign) ->
+    algebraic_sources_sign add (Mod_declarations.mod_type mtb);
+    algebraic_sources_sign add sign
+  | Declarations.NoFunctor struc -> algebraic_sources_struc add struc
+
+and algebraic_sources_struc add struc =
+  List.iter (fun (_, sfb) ->
+      match (sfb : Mod_declarations.structure_field_body) with
+      | Declarations.SFBmodule mb -> algebraic_sources_module add mb
+      | Declarations.SFBmodtype mtb -> algebraic_sources_sign add (Mod_declarations.mod_type mtb)
+      | Declarations.SFBconst _ | Declarations.SFBmind _ | Declarations.SFBrules _ -> ())
+    struc
+
+(* Every library, other than [self], whose opaque table this library's
+   compiled form can read a proof from, by two routes:
+   - a constant body of [mb] that holds an opaque [Indirect] reference into
+     it. [map_constants] visits every constant of the module -- its
+     signature, its interactive implementation and the module types of its
+     functor parameters;
+   - an [Algebraic] implementation, at any depth, that names a module of it.
+     A module whose implementation is an algebraic expression, such as a
+     sealed [Module X : T := L.F A], keeps the expression, not its result:
+     [map_constants] does not look inside it ([Mod_declarations]), and the
+     signature [T] can omit an opaque proof of [L.F]'s body. Extraction to a
+     language other than OCaml rebuilds such a module from its expression
+     ([Extract_env.extract_mexpr]) and reads that proof's body from [L]'s
+     table, logging the read under this library. So the [MPfile] root of
+     every module path the expression names (the functor, its arguments, a
+     [with Module] module) counts.
+   Both are over-approximations, which only make the keep rule more
+   conservative: the second names a library even when the expression
+   reaches no opaque proof of it. *)
 let foreign_opaque_of ~self mb =
   let acc = ref DirPath.Set.empty in
+  let add_dp dp = if not (DirPath.equal dp self) then acc := DirPath.Set.add dp !acc in
   let note cb =
     (match cb.Declarations.const_body with
      | Declarations.OpaqueDef o ->
        let (_, _, dp, _) = Opaqueproof.repr o in
-       if not (DirPath.equal dp self) then acc := DirPath.Set.add dp !acc
+       add_dp dp
      | Declarations.Undef _ | Declarations.Def _
      | Declarations.Primitive _ | Declarations.Symbol _ -> ());
     cb
   in
   let _ : Mod_declarations.module_body = Mod_declarations.map_constants note mb in
+  algebraic_sources_module (fun mp -> Option.iter add_dp (mpfile_root mp)) mb;
   !acc
 
 let axiom_report ~(compiled : Safe_typing.compiled_library) : axiom_report =

@@ -289,13 +289,18 @@ type axiom_report = {
       status [Axiom] is the library's assumption set. *)
   foreign_opaque_libraries : DirPath.Set.t;
   (** The libraries, other than this one, whose opaque table this library's
-      compiled form holds an [Indirect] reference into: copies of their
-      opaque proofs that a module operation did not strengthen. It is
-      computed from every constant ([foreign_opaque_of]), so it does not
-      depend on which operations those are. A dependent keeps its registered
-      object across an edit to such a library only when that library's object
-      is byte-identical, because the blinded label no longer pins the opaque
-      index the reference reads. *)
+      compiled form can read a proof from: those it holds an [Indirect]
+      reference into (copies of their opaque proofs that a module operation
+      did not strengthen), computed from every constant, so it does not
+      depend on which operations those are; and those that a module path of
+      an algebraic implementation names, at any depth (a sealed [Module X :
+      T := L.F A] keeps the expression, whose result a non-OCaml extraction
+      rebuilds, reading [L]'s table, while [T] can omit that proof). The
+      second route over-approximates: it names a library whether or not the
+      expression reaches an opaque proof of it. A dependent keeps its
+      registered object across an edit to such a library only when that
+      library's object is byte-identical, because the blinded label no longer
+      pins the opaque index the reference reads. *)
 }
 
 val axiom_report :

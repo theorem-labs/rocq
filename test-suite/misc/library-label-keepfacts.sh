@@ -25,7 +25,10 @@
 # axiom from an opaque proof too, and records (c, opaque=false) against `adm`. BXB
 # extracts opaque proofs whose bodies extraction reads: a lemma in a functor body
 # (`Extraction A.F`, which the global environment does not hold) and one in a sealed
-# module's implementation (`Extraction A.M`): each records opaque=true. BN runs
+# module's implementation (`Extraction A.M`): each records opaque=true. BXH seals a
+# functor application to a module type that omits its lemma (`Module X : A.S :=
+# A.F A.A0.` in H): H's foreign_opaque_libraries names A, and a JSON extraction of
+# H.X, which rebuilds X from that expression, records X.fc opaque=true under H. BN runs
 # `Transparent Nat.add.`, a transparent definition, which cannot become an axiom or an
 # opaque proof while its library's label stays equal: nothing is recorded.
 #
@@ -290,6 +293,38 @@ if [ "$qs" = "[{\"constant\":\"$xlib.M.sn\",\"library\":\"$xlib\",\"opaque\":tru
   pass "B1: an extraction that reads sealed A.M.sn's opaque body records it opaque: $qs"
 else
   bad "B1: BXB's opacity_queries for the sealed A.M.sn: '$qs'"
+fi
+# BXH: H seals a functor application to a module type that omits its opaque lemma,
+# `Module X : A.S := A.F A.A0.`. X keeps the expression as its implementation and S as
+# its signature, so no constant of H holds a reference into A's opaque table; H's
+# report still names A, from the module paths of that implementation. An extraction
+# to a language other than OCaml (JSON here) rebuilds X from the expression and reads
+# A.F.fc's body as X.fc: the query is opaque=true, under H, whose
+# foreign_opaque_libraries then makes the keep rule check A.
+XH=_kfacts/xh
+mkdir -p $XH/a $XH/h $XH/b
+printf 'Module Type S. End S.\nModule F (X : S). Lemma fc : nat. Proof. exact 0. Qed. End F.\nModule A0. End A0.\n' \
+  > $XH/a/A.v
+printf 'Require A.\nModule X : A.S := A.F A.A0.\n' > $XH/h/H.v
+printf 'From Corelib Require Extraction.\nRequire Hdep.H.\nExtraction Language JSON.\nExtraction Hdep.H.X.\n' > $XH/b/B.v
+rocq c -q -location-free-label -R $XH/a A $XH/a/A.v
+rocq c -q -location-free-label -R $XH/a A -R $XH/h Hdep $XH/h/H.v
+xhlib=$(report $XH/a/A.vo | sed -n 's/.*"library":"\([^"]*\)".*/\1/p')
+hfor=$(field $XH/h/H.vo foreign_opaque_libraries)
+if [ "$hfor" = "[\"$xhlib\"]" ]; then
+  pass "BXH: H (Module X : A.S := A.F A.A0) names A in foreign_opaque_libraries: $hfor"
+else
+  bad "BXH: H's foreign_opaque_libraries (Module X : A.S := A.F A.A0): '$hfor', expected [\"$xhlib\"]"
+fi
+if rocq c -q -location-free-label -R $XH/a A -R $XH/h Hdep -R $XH/b Bdep $XH/b/B.v > $XH/b/out 2>&1; then
+  qh=$(field $XH/b/B.vo opacity_queries)
+  if [ "$qh" = '[{"constant":"Hdep.H.X.fc","library":"Hdep.H","opaque":true}]' ]; then
+    pass "BXH: the JSON extraction of H.X reads A.F.fc's body and records it opaque under H: $qh"
+  else
+    bad "BXH: BXH's opacity_queries for the JSON extraction of H.X: '$qh'"
+  fi
+else
+  bad "BXH: the JSON extraction of Hdep.H.X failed: $(tr '\n' ' ' < $XH/b/out | cut -c1-600)"
 fi
 
 # --- control ---

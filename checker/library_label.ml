@@ -53,8 +53,13 @@
      module, which holds none; the DI and DM cases of
      misc/library-label-functor-flip.sh show an [Include] of a functor
      application and a module declared with a module type are refused like
-     the application). An [Admitted -> Qed] edit in a functor body or a
-     module type moves its owner's label (label version 5).
+     the application). It also names every other library a module path of
+     an algebraic implementation names, at any depth: a sealed [Module X :
+     T := L.F A] keeps that expression, which a non-OCaml extraction
+     rebuilds, reading [L]'s table, while [T] can omit the proof
+     (misc/library-label-keepfacts.sh, BXH). An [Admitted -> Qed] edit in a
+     functor body or a module type moves its owner's label (label version
+     5).
    Two modes describe this build and take no file:
    - [--layout-version]: the label's layout version
      ([LibkeyObjects.version]), one line. A reader that keeps labels across
