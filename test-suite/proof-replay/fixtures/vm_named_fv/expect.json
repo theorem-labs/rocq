@@ -1,0 +1,6 @@
+{
+  "doc": "a cached VM value closes over a section Let whose body calls a changed constant: stock rejects the proof that runs it, and replay must reject it too",
+  "files": ["A.v"],
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}

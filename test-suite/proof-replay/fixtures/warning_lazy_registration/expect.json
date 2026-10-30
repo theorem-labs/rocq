@@ -1,0 +1,17 @@
+{
+  "doc": "a proof creates a warning the first time it needs it (a deprecated reference's version warning), and a later command names that warning; the proof is ineligible, so replay creates the warning as stock does, and the later proof replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.target": {"ineligible": ["warning_registry", "warning"], "stores_no_term": true},
+                       "PR.A.later": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.target", "ineligible"], ["PR.A.later", "hit"]]
+    }
+  }
+}

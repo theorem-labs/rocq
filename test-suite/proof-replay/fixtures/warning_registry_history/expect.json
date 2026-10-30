@@ -1,0 +1,20 @@
+{
+  "doc": "an earlier proof that created a disabled warning no longer does: the proof that found the warning created misses on the warning registry it starts with, runs and creates it as stock does, and the later command that names the warning succeeds",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.warm": {"ineligible": ["warning_registry"], "stores_no_term": true},
+                       "PR.A.target": {"eligible": true},
+                       "PR.A.later": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.warm", "ineligible"],
+                   ["PR.A.target", "read", "warnings_registry", "changed"],
+                   ["PR.A.later", "hit"]]
+    }
+  }
+}

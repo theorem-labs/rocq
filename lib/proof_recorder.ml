@@ -33,13 +33,11 @@ type proof_state = {
   p_constraints : string Queue.t;
   p_schemes : string Queue.t;
   p_sources : string Queue.t;
-  p_warnings : (string * string * string) Queue.t;
   p_counters : (string, int) Hashtbl.t;
   p_counter_order : string Queue.t;
   p_wall0 : float;
   p_cpu0 : float;
   mutable p_span_start : int option;  (** first byte of the statement's sentence *)
-  p_base_loc : Loc.t option;  (** the statement's sentence, for warning locations *)
   mutable p_depth : int;  (** 0 for the outermost proof; >0 inside a nested one *)
 }
 
@@ -53,7 +51,6 @@ type file_state = {
   mutable f_proof : proof_state option;
   mutable f_suspended : int;  (** >0 inside [without_recording] *)
   mutable f_pending : ((unit -> string) * (int * int) option) option;  (** the sentence being run *)
-  mutable f_pending_loc : Loc.t option;  (** its location *)
   mutable f_nested_closed : bool;
       (** a nested proof closed during the sentence being run, and the proof
           around it is still open *)
@@ -149,7 +146,6 @@ let start ~library ~source ~source_digest ~toolchain ~skip_qed_typecheck ~tables
       f_proof = None;
       f_suspended = 0;
       f_pending = None;
-      f_pending_loc = None;
       f_nested_closed = false;
     };
   recording := false
@@ -254,13 +250,11 @@ let open_proof ~name ~statement ~position =
           p_constraints = Queue.create ();
           p_schemes = Queue.create ();
           p_sources = Queue.create ();
-          p_warnings = Queue.create ();
           p_counters = Hashtbl.create 8;
           p_counter_order = Queue.create ();
           p_wall0 = Unix.gettimeofday ();
           p_cpu0 = cpu_time ();
           p_span_start = span_start;
-          p_base_loc = st.f_pending_loc;
           p_depth = 0;
         };
       set_recording st;
@@ -283,18 +277,16 @@ let take_pending st p =
 (* The span of the sentence being run, for the closer's end byte. *)
 let pending_span st = match st.f_pending with Some (_, span) -> span | None -> None
 
-let sentence ?span ?loc digest run =
+let sentence ?span digest run =
   match !state with
   | None -> run ()
   | Some st ->
-    let outer = st.f_pending and outer_loc = st.f_pending_loc in
+    let outer = st.f_pending in
     st.f_pending <- Some (digest, span);
-    st.f_pending_loc <- loc;
     st.f_nested_closed <- false;
     let finish () =
       (match st.f_proof with Some p when p.p_depth = 0 -> take_pending st p | Some _ | None -> ());
-      st.f_pending <- outer;
-      st.f_pending_loc <- outer_loc
+      st.f_pending <- outer
     in
     (match run () with
      | v -> finish (); v
@@ -344,7 +336,6 @@ let close_proof ~closer ~kernel_check ~replay =
             constraints = list p.p_constraints;
             schemes = list p.p_schemes;
             constraint_sources = list p.p_sources;
-            warnings_raised = list p.p_warnings;
           };
           kernel_check;
           wall_s = Unix.gettimeofday () -. p.p_wall0;
@@ -408,25 +399,6 @@ let created_in p name =
   && (let n = name () in Queue.fold (fun found s -> found || String.equal s n) false p.p_schemes)
 
 let write_constraint_source s = with_proof (fun p -> Queue.add s p.p_sources)
-
-(* A warning's location is kept relative to the statement's sentence: replay
-   raises it again at the same place in a file where the proof moved. A
-   warning raised with no location is printed at the sentence that raised it,
-   so that sentence's location is kept. *)
-let relative_loc (base : Loc.t option) (loc : Loc.t option) =
-  match base, loc with
-  | Some b, Some l when l.Loc.fname = b.Loc.fname && l.Loc.bp >= b.Loc.bp ->
-    Printf.sprintf "%d,%d,%d,%d,%d,%d"
-      (l.Loc.line_nb - b.Loc.line_nb) (l.Loc.bp - b.Loc.bp) (l.Loc.ep - b.Loc.bp)
-      (l.Loc.bol_pos - b.Loc.bp) (l.Loc.line_nb_last - b.Loc.line_nb) (l.Loc.bol_pos_last - b.Loc.bp)
-  | _ -> ""
-
-let write_warning ?loc ~name ~message () =
-  match !state with
-  | Some ({ f_proof = Some p; _ } as st) ->
-    let loc = match loc with Some _ -> loc | None -> st.f_pending_loc in
-    Queue.add (name, message, relative_loc p.p_base_loc loc) p.p_warnings
-  | Some { f_proof = None; _ } | None -> ()
 
 let write_counters l =
   with_proof (fun p ->

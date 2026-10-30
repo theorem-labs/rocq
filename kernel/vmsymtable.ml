@@ -282,26 +282,112 @@ let envcache_of_rel i envcache = {
    constant is walked once per proof. ONE value function, called here and
    by the replay evaluator (vernac/proof_replay_env.ml;
    dev/tools/census/replay_channels.py). [on_call] receives each constant
-   the code calls; the record site records it, the evaluator ignores it.
+   the code calls; the record site records it, the evaluator passes none.
    The lookups also record the constant's own [constant] and
-   [constant_exists] reads, as the cold path does. *)
-let recorded_vm_global ?(on_call = ignore) env kn =
+   [constant_exists] reads, as the cold path does.
+
+   A code also closes over the section variables it names ([tp_fv]): the
+   cold path evaluates the body of each one that has a body ([Let]), and
+   the value it caches holds that evaluation, which the code's relocations
+   do not name (fixture vm_named_fv). So [on_call] also receives every
+   constant the body of such a variable mentions, through the variables
+   that body names in turn: more than that body's code may call, never
+   less. A variable the environment does not hold has no body to follow.
+   A global's code is compiled with no local binder, so it closes over no
+   [FVrel]. *)
+let named_fv_globals env on_call fv =
+  let seen = ref Id.Set.empty in
+  let rec named id =
+    if not (Id.Set.mem id !seen) then begin
+      seen := Id.Set.add id !seen;
+      match Environ.lookup_named id env with
+      | decl -> Option.iter term (NamedDecl.get_value decl)
+      | exception Not_found -> ()
+    end
+  and term c =
+    match Constr.kind c with
+    | Constr.Const (kn, _) -> on_call kn
+    | Constr.Var id -> named id
+    | Constr.Proj (p, _, _) -> on_call (Projection.constant p); Constr.iter term c
+    | _ -> Constr.iter term c
+  in
+  Array.iter (function FVnamed id -> named id | FVrel _ -> ()) fv
+
+let recorded_vm_global ?on_call env kn =
   ignore (Environ.mem_constant kn env);
   match Environ.lookup_constant_opt kn env with
   | None -> None
   | Some cb ->
     let view = match cb.const_body_code with
       | None | Some BCconstant -> `Accumulator
-      | Some (BCalias kn') -> on_call kn'; `Alias kn'
+      | Some (BCalias kn') -> Option.iter (fun f -> f kn') on_call; `Alias kn'
       | Some (BCdefined (mask, index, patches)) ->
-        List.iter on_call (patch_globals patches);
-        `Code (mask, Environ.lookup_vm_code index env, patches)
+        let code = Environ.lookup_vm_code index env in
+        Option.iter (fun f ->
+            List.iter f (patch_globals patches);
+            named_fv_globals env f (to_patch_fv code))
+          on_call;
+        `Code (mask, code, patches)
     in
     Some (Proof_recorder.digest ~what:"vm_global" view)
 
 let rec record_vm_global env kn =
   Proof_recorder.read_by ~row:"1" ~channel:"vm_global" ~id:kn ~key:(fun () -> Constant.to_string kn)
     ~value:(fun () -> recorded_vm_global ~on_call:(record_vm_global env) env kn)
+
+(* BET-84: a value the machine cached closes over the section variables its
+   code names, as they were in the environment that filled the cache. The
+   walk above reads the CURRENT environment, which can differ: [clearbody]
+   takes a [Let]'s body away from the goal and leaves the cached value, which
+   holds the evaluation of that body (fixture vm_named_fv_clearbody). So a
+   recorded proof that takes a value from the cache, for a constant whose
+   code, or a code it calls, closes over a section variable, is not
+   replayed. A value this proof filled itself was walked in the environment
+   that filled it, and the slots of what it calls were checked then: it is
+   exempt.
+
+   Whether a constant's code, or a code it calls, closes over a section
+   variable is a function of the constants' codes, which do not change once
+   declared, so it is kept for the compile. *)
+let named_fv_memo : bool Cmap_env.t ref = ref Cmap_env.empty
+
+let rec reaches_named_fv env kn =
+  match Cmap_env.find_opt kn !named_fv_memo with
+  | Some b -> b
+  | None ->
+    let b = match Environ.lookup_constant_opt kn env with
+      | None -> false
+      | Some cb ->
+        match cb.const_body_code with
+        | None | Some BCconstant -> false
+        | Some (BCalias kn') -> reaches_named_fv env kn'
+        | Some (BCdefined (_, index, patches)) ->
+          Array.exists (function FVnamed _ -> true | FVrel _ -> false)
+            (to_patch_fv (Environ.lookup_vm_code index env))
+          || List.exists (reaches_named_fv env) (patch_globals patches)
+    in
+    named_fv_memo := Cmap_env.add kn b !named_fv_memo;
+    b
+
+(* The constants whose slot the open proof filled, for the generation of the
+   proof that filled them. *)
+let filled_gen = ref (-1)
+let filled_here : unit Cmap_env.t ref = ref Cmap_env.empty
+
+let note_filled kn =
+  if Proof_recorder.active () then begin
+    let g = Proof_recorder.generation () in
+    if g <> !filled_gen then (filled_gen := g; filled_here := Cmap_env.empty);
+    filled_here := Cmap_env.add kn () !filled_here
+  end
+
+let fence_cached env kn =
+  let filled_in_this_proof =
+    !filled_gen = Proof_recorder.generation () && Cmap_env.mem kn !filled_here
+  in
+  if not filled_in_this_proof
+  && Proof_recorder.without_recording (fun () -> reaches_named_fv env kn) then
+    Proof_recorder.ineligible ~reason:"vm_cached_closure" ~detail:(Constant.to_string kn)
 
 let rec slot_for_getglobal env sigma kn envcache table =
   if Proof_recorder.active () then record_vm_global env kn;
@@ -313,8 +399,9 @@ let rec slot_for_getglobal env sigma kn envcache table =
     else
       ref None
   in
-  try key rk
-  with NotEvaluated ->
+  match key rk with
+  | pos -> if Proof_recorder.active () then fence_cached env kn; pos
+  | exception NotEvaluated ->
     let pos = match cb.const_body_code with
     | BCdefined (_, index, patches) ->
       let code = index () in
@@ -325,6 +412,7 @@ let rec slot_for_getglobal env sigma kn envcache table =
     | BCconstant -> set_global (val_of_constant kn) table
     in
     rk := Some (CEphemeron.create pos);
+    note_filled kn;
     pos
 
 and slot_for_fv env sigma fv envcache table =

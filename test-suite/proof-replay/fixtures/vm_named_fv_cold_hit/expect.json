@@ -1,0 +1,16 @@
+{
+  "doc": "a proof that fills the VM slot of a constant closing over a section Let itself (no warm cache) stays eligible and replays when nothing it reads changes",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.S.target": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.S.target", "hit"]]
+    }
+  }
+}

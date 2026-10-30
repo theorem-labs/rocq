@@ -46,7 +46,7 @@ let sentences = [ String.make 32 'c'; String.make 32 'd' ]
 
 let no_writes : R.writes = R.{
   universe_levels = []; counters = []; constraints = []; schemes = [];
-  constraint_sources = []; warnings_raised = [];
+  constraint_sources = [];
 }
 
 (* The one proof of the record: it read one constant, with the digest the
