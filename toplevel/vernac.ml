@@ -135,7 +135,6 @@ let load_vernac_core ~echo ~check ~state ?source file =
                 which replay cannot make again. *)
              Proof_recorder.sentence
                ?span:(Option.map (fun loc -> (loc.Loc.bp, loc.Loc.ep)) ast.CAst.loc)
-               ?loc:ast.CAst.loc
                (fun () -> Proof_recorder.digest ~locs:source ~what:"sentence" ast)
                (fun () ->
                   if Proof_recorder.active () then begin

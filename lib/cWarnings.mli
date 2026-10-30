@@ -26,11 +26,6 @@ type 'a msg
 val warn : 'a msg -> ?loc:Loc.t -> 'a -> unit
 (** Emit a message in some warning. *)
 
-val warn_again : ?loc:Loc.t -> name:string -> message:string -> unit -> unit
-(** Raises again a warning a replayed proof's record holds (BET-84): the
-    warning [name]'s current status decides, as for {!warn}, and [message]
-    is the document the registration printed, as the record keeps it. *)
-
 val with_enabled_silenced : (unit -> 'a) -> 'a
 (** BET-84: runs [f] with every enabled warning disabled, and restores them
     afterwards, also when [f] raises. A warning that is an error stays an

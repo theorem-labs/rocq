@@ -105,16 +105,19 @@ a later lemma must print the same list in both runs).
 
 **Each replayed write**, each with a later proof in the same file that reads what
 the earlier proof wrote: `write_universes`, `write_constraint_sources`,
-`write_scheme_rewrite`, `write_unchecked_mark`, `write_counters`,
-`write_warning`, `write_warning_as_error` (with `Set Warnings "+..."`, so the
-warning fails the compile in both runs).
+`write_scheme_rewrite`, `write_unchecked_mark`, `write_counters`.  A warning is
+not a replayed write: a proof that raises one is ineligible (reason `warning`),
+so `write_warning` expects its writer `ineligible`, and `write_warning_as_error`
+(with `Set Warnings "+..."` in the edited tree) fails the compile in both runs
+because the writer runs.
 
 `write_scheme_rewrite` uses `rewrite` with a user equality, not `induction` or
 `inversion`.  Measured on speed-r1 with the recorder at `d97df04b`: with
 `Unset Elimination Schemes`, `induction` fails with "Cannot find the elimination
 combinator bit_ind" instead of creating a scheme, and `inversion` on the same
 inductive creates none (`writes.schemes` empty), while `rewrite` with a user
-equality creates `internal_myeq_rew_r` and raises `missing-scheme`.
+equality creates `internal_myeq_rew_r` and raises `missing-scheme`, which the
+fixture disables so that its proofs stay eligible.
 
 **Each ineligible class the recorder knows** (`lib/proof_recorder.mli`, and the
 call sites of `Proof_recorder.ineligible`): `ineligible_timeout`,
@@ -194,12 +197,17 @@ rejects the proof.  `prim_token_warning_threshold`: a number notation's
 warning threshold drops below a number a proof reads, under `Set Warnings
 "+large-number"`; the term and scope do not change, and stock rejects the
 proof.  `warning_error_caught`: a `try` catches a warning raised as an error,
-and stock accepts the proof; the proof is ineligible (`warning_error`), so
+and stock accepts the proof; the proof is ineligible (`warning`), so
 replay does not raise the warning again, and the control replays.
 
 **The second soundness review, of `08e77b30`.**  `vm_named_fv`: a cached
 machine value closes over a section `Let` whose body calls a changed
-constant; stock rejects the proof.
+constant; stock rejects the proof.  `warning_attribute_enabled`: a proof
+sentence's warnings attribute makes an error-level warning a plain one, and
+stock accepts the proof; `warning_lazy_registration`: a proof creates a
+warning the first time it needs it, and a later command names it.  Both
+proofs are ineligible (`warning`, and `warning_registry` for the second), so
+replay runs them as stock does.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once

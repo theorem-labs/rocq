@@ -1,11 +1,10 @@
 {
-  "doc": "rewrite with a user equality creates a scheme and raises a warning; both proofs replay and must write both",
+  "doc": "rewrite with a user equality creates a scheme (its missing-scheme warning disabled); both proofs replay and must write it",
   "files": ["A.v"],
   "records": {"A.v": {
-    "PR.A.writer": {"eligible": true, "writes_nonempty": ["schemes", "warnings_raised", "universe_levels"]},
+    "PR.A.writer": {"eligible": true, "writes_nonempty": ["schemes", "universe_levels"]},
     "PR.A.later_reader": {"eligible": true, "writes_nonempty": ["schemes"]}}},
   "compare_stderr": ["A.v"],
-  "stderr_contains": {"A.v": ["missing-scheme"]},
   "summaries": {
     "A.v": {"proofs": 2, "hits": 2,
       "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},

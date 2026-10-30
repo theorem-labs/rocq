@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-let format_version = 3
+let format_version = 4
 
 type toolchain = {
   binary : string;
@@ -54,12 +54,11 @@ type writes = {
   constraints : string list;
   schemes : string list;
   constraint_sources : string list;
-  warnings_raised : (string * string * string) list;
 }
 
 (* Base64, for the Marshal blobs a record carries (a stored proof term, a
-   universe footprint, a warning's text): the record is JSON, which carries
-   no arbitrary bytes. *)
+   universe footprint): the record is JSON, which carries no arbitrary
+   bytes. *)
 let b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 let encode_blob s =
@@ -193,9 +192,6 @@ let field k add v = (k, fun b -> add b v)
 
 let add_string_pairs = add_list (add_pair add_string add_string)
 
-let add_string_triples =
-  add_list (fun b (x, y, z) -> add_list add_string b [ x; y; z ])
-
 let add_toolchain b (t : toolchain) =
   add_object b [
     field "binary" add_string t.binary;
@@ -236,7 +232,6 @@ let add_writes b w =
     field "constraints" (add_list add_string) w.constraints;
     field "schemes" (add_list add_string) w.schemes;
     field "constraint_sources" (add_list add_string) w.constraint_sources;
-    field "warnings_raised" add_string_triples w.warnings_raised;
   ]
 
 let kind k = field "kind" add_string k
@@ -496,11 +491,6 @@ let to_option f = function Null -> None | v -> Some (f v)
 
 let to_string_pairs what = to_list what (to_pair what (to_str what) (to_str what))
 
-let to_string_triples what =
-  to_list what (function
-      | Arr [ a; b; c ] -> (to_str what a, to_str what b, to_str what c)
-      | _ -> fail "%s: expected a triple" what)
-
 let to_toolchain v : toolchain =
   match fields "toolchain" [ "binary"; "plugins"; "load_order"; "warnings"; "safe_deps"; "stack_limit" ] v with
   | [ b; p; lo; w; sd; sl ] ->
@@ -534,13 +524,13 @@ let to_read v =
 
 let to_writes v =
   match fields "writes"
-          [ "universe_levels"; "counters"; "constraints"; "schemes"; "constraint_sources"; "warnings_raised" ] v with
-  | [ ul; c; cs; sc; src; w ] ->
+          [ "universe_levels"; "counters"; "constraints"; "schemes"; "constraint_sources" ] v with
+  | [ ul; c; cs; sc; src ] ->
     let strs what = to_list what (to_str what) in
     { universe_levels = strs "universe_levels" ul;
       counters = to_list "counters" (to_pair "counters" (to_str "counters") (to_int "counters")) c;
       constraints = strs "constraints" cs; schemes = strs "schemes" sc;
-      constraint_sources = strs "constraint_sources" src; warnings_raised = to_string_triples "warnings_raised" w }
+      constraint_sources = strs "constraint_sources" src }
   | _ -> assert false
 
 let kind_of = function
