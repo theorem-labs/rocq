@@ -22,10 +22,14 @@ open Names
 type query = {
   constant : string;  (** its user name *)
   library : string option;  (** the library holding it; [None] for a functor parameter's *)
-  opaque : bool;  (** whether it was an opaque proof when the command ran *)
+  opaque : bool;
+  (** for a status check, whether it was an opaque proof when the command ran;
+      for a body read, always [true]: an opaque proof whose body was read *)
   table : string option;
-  (** for an extraction that read its opaque proof's body, the library whose
-      opaque table holds that body; [None] for every other query *)
+  (** for a body read -- by an extraction, or by the walk that computes the
+      closures, of a constant of this library -- the library whose opaque
+      table holds that body; [None] for a status check (a strategy command,
+      an extraction's axiom-or-opaque check) *)
 }
 
 type t = {
@@ -164,20 +168,36 @@ module SSet = CString.Set
    since. A library rebuilt to an equal label is loaded by a dependent that
    was compiled against its old build, and the keep rule leaves dependents in
    that state (a keep round): there the stored closure can differ from a walk
-   of the current bodies, and the keep rule makes it a superset of it. It
+   of the current bodies, and the keep rule makes it a superset of it.
+
+   The premise: every kept object is a registration object, and a
+   registration compiles every library from scratch (it never keeps), so
+   every record a registration wrote is exact for its library's own
+   declarations against the objects it was compiled with. The keep rule
    keeps a library only when no declaration's closure in any library of its
-   transitive in-tree closure grew (its monotone condition, s1b), so every
-   closure a kept library recorded still contains the current one: by
-   induction over the dependency order, a library's record is its own
-   declarations' contributions (exact) plus its dependencies' records, each of
-   which contains the dependency's current closure; and a kept object is
-   byte-identical, so its record is the one it wrote. A closure computed here
-   is then a superset of the full walk's, never a subset: it can list an
-   axiom a dependency rebuilt to an equal label no longer uses (an [Admitted]
-   lemma since proved), and it never misses one the bodies use. Outside the
-   keep rule (a hand-made mix of stale and rebuilt objects) nothing makes it
-   a superset. misc/library-label-keepfacts.sh shows both: equal when nothing
-   was recompiled, a strict superset after a dependency's [Admitted -> Qed].
+   transitive in-tree closure grew (its monotone condition, s1b) AND every
+   table named in its own body-read queries is byte-identical: the growth
+   check alone is not enough, since a copy whose body sits in another
+   library's table can gain an axiom while that library's label and every
+   closure it stores stay the same (misc/library-label-keepfacts.sh, BXA).
+   Then every closure a kept library recorded still contains the current
+   one: by induction over the dependency order, a library's record is its
+   own declarations' contributions (exact, by the premise, and unchanged
+   while the tables its copies read are byte-identical) plus its
+   dependencies' records, each of which contains the dependency's current
+   closure; and a kept object is byte-identical, so its record is the one it
+   wrote. A closure computed here is then a superset of the full walk's,
+   never a subset: it can list an axiom a dependency rebuilt to an equal
+   label no longer uses (an [Admitted] lemma since proved), and it never
+   misses one the bodies use. The premise is what rules out the other case:
+   a record computed by [every_walk] (the fallback, or
+   ROCQ_KEEPFACTS_FULL_WALK=1) over a baseline that itself held kept objects
+   walks their current bodies rather than taking their stored closures, so
+   it could be smaller than the stored-closure walk's, and the superset
+   statement above would not hold for it. Outside the keep rule (a hand-made
+   mix of stale and rebuilt objects) nothing makes it a superset.
+   misc/library-label-keepfacts.sh shows both: equal when nothing was
+   recompiled, a strict superset after a dependency's [Admitted -> Qed].
 
    Absence from that table means an empty closure, because the table has an
    entry for every constant and inductive of that library's environment with
@@ -394,12 +414,13 @@ let collect_opacity self =
    object byte-identical to keep this one, as for an extraction body read.
 
    What is not logged. A body in this library's own table (this library
-   recomputes it on every compile). A foreign constant's body, which the full
-   walk (ROCQ_KEEPFACTS_FULL_WALK=1, or a library with no stored closures)
-   reads and the stored-closure walk does not: its holder is a dependency,
-   whose own keepfacts log its copies, and whose closures the keep rule's
-   monotone condition checks. So both walks log the same queries, since both
-   walk every constant of this library they reach.
+   recomputes it on every compile). A foreign constant's body: the full walk
+   (ROCQ_KEEPFACTS_FULL_WALK=1, or the fallback) reads every one it reaches,
+   and the stored-closure walk reads one only for a library that stored no
+   closures, whose constants it walks. Neither walk logs them: their holder
+   is a dependency, whose own keepfacts log its copies, and whose closures
+   the keep rule's monotone condition checks. So both walks log the same
+   queries, since both walk every constant of this library they reach.
 
    A fresh accessor per library also starts the walks' reuse afresh
    ([Assumptions] keys it by the accessor), so no entry made before, which

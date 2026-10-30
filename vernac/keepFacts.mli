@@ -19,13 +19,16 @@ open Names
 type query = {
   constant : string;  (** its user name, as [LibkeyObjects.axiom_report] lists it *)
   library : string option;  (** the library holding it; [None] for a functor parameter's *)
-  opaque : bool;  (** whether it was an opaque proof when the command ran *)
+  opaque : bool;
+  (** for a status check, whether it was an opaque proof when the command ran;
+      for a body read, always [true]: an opaque proof whose body was read *)
   table : string option;
-  (** for an extraction that read its opaque proof's body, the library whose
-      opaque table holds that body: the holder's own, or, for a copy a module
+  (** for a body read -- by an extraction, or by the walk that computes the
+      closures, of a constant of this library -- the library whose opaque
+      table holds that body: the holder's own, or, for a copy a module
       operation did not strengthen, the library whose table the copy's
-      reference points into, however many copies away; [None] for every other
-      query *)
+      reference points into, however many copies away; [None] for a status
+      check (a strategy command, an extraction's axiom-or-opaque check) *)
 }
 
 type t = {

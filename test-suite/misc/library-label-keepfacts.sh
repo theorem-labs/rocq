@@ -432,7 +432,7 @@ fi
 # equal, so a kept H still loads; E proves e with H.X.fc, and against A2 and the old H
 # the walk over H's stored closure gives e none, while the full walk gives ax.
 XA=_kfacts/xa
-mkdir -p $XA/a $XA/a2 $XA/h $XA/e $XA/efull
+mkdir -p $XA/a $XA/a2 $XA/h $XA/hfull $XA/e $XA/efull
 fA='Axiom ax : True.\nModule Type S. End S.\nModule F (X : S). Lemma fc : True. Proof. exact %s. Qed. End F.\nModule A0. End A0.\n'
 printf "$fA" I > $XA/a/A.v
 printf "$fA" ax > $XA/a2/A.v
@@ -442,11 +442,19 @@ cp $XA/e/E.v $XA/efull/E.v
 rocq c -q -location-free-label -R $XA/a A $XA/a/A.v
 rocq c -q -location-free-label -R $XA/a2 A $XA/a2/A.v
 rocq c -q -location-free-label -R $XA/a A -R $XA/h Hdep $XA/h/H.v
-qa=$(field $XA/h/H.vo opacity_queries)
-if [ "$qa" = '[{"constant":"Hdep.H.X.fc","library":"Hdep.H","opaque":true,"table":"A.A"}]' ]; then
+cp $XA/h/H.v $XA/hfull/H.v
+ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R $XA/a A -R $XA/hfull Hdep $XA/hfull/H.v
+bxa_q='[{"constant":"Hdep.H.X.fc","library":"Hdep.H","opaque":true,"table":"A.A"}]'
+qa=$(field $XA/h/H.vo opacity_queries); qaf=$(field $XA/hfull/H.vo opacity_queries)
+if [ "$qa" = "$bxa_q" ]; then
   pass "BXA: the closure walk's read of H.X.fc's body from A's table is recorded: $qa"
 else
   bad "BXA: H's opacity_queries (Module X : T := A.F A.A0): '$qa'"
+fi
+if [ "$qaf" = "$bxa_q" ]; then
+  pass "BXA: the full walk (ROCQ_KEEPFACTS_FULL_WALK=1) records the same query for H: $qaf"
+else
+  bad "BXA: H's opacity_queries under the full walk: '$qaf'"
 fi
 rocq c -q -location-free-label -R $XA/a2 A -R $XA/h Hdep -R $XA/e Edep $XA/e/E.v
 ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R $XA/a2 A -R $XA/h Hdep -R $XA/efull Edep $XA/efull/E.v
@@ -456,6 +464,13 @@ if [ "$(label $XA/a/A.vo)" = "$(label $XA/a2/A.vo)" ] && [ -z "$xe" ] \
   pass "BXA: after fc's edit (A's label equal), E's full walk gives e $xf, the old H's stored closure none: H must rebuild"
 else
   bad "BXA: A's labels $(label $XA/a/A.vo) $(label $XA/a2/A.vo), E.e over the old H '$xe', full walk '$xf'"
+fi
+# E's own reads: by either walk, H.X.fc is H's constant, so E logs nothing for it.
+qe=$(field $XA/e/E.vo opacity_queries); qef=$(field $XA/efull/E.vo opacity_queries)
+if [ "$qe" = "[]" ] && [ "$qef" = "[]" ]; then
+  pass "BXA: E logs no query, by the stored-closure walk ($qe) or the full walk ($qef)"
+else
+  bad "BXA: E's opacity_queries: stored-closure walk '$qe', full walk '$qef'"
 fi
 
 # --- control ---
