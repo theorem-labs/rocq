@@ -171,7 +171,9 @@ binder.  `eval_abbreviation`: what an abbreviation stands for.
 is computed from inputs the proof records before it (the section context,
 the statement, the collections), so a set that changes is always caught
 there first.  `eval_proof_using_collection`: the expression of a named
-collection of section variables.
+collection of section variables.  `eval_bidirectionality_hint`: the hint of
+a variable, whose key is its name; before, the evaluator could not read such
+a key back, so `same` missed with why `unknown`.
 
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
