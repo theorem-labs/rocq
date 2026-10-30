@@ -335,16 +335,19 @@ let rec record_vm_global env kn =
   Proof_recorder.read_by ~row:"1" ~channel:"vm_global" ~id:kn ~key:(fun () -> Constant.to_string kn)
     ~value:(fun () -> recorded_vm_global ~on_call:(record_vm_global env) env kn)
 
-(* BET-84: a value the machine cached closes over the section variables its
-   code names, as they were in the environment that filled the cache. The
-   walk above reads the CURRENT environment, which can differ: [clearbody]
-   takes a [Let]'s body away from the goal and leaves the cached value, which
-   holds the evaluation of that body (fixture vm_named_fv_clearbody). So a
-   recorded proof that takes a value from the cache, for a constant whose
-   code, or a code it calls, closes over a section variable, is not
-   replayed. A value this proof filled itself was walked in the environment
-   that filled it, and the slots of what it calls were checked then: it is
-   exempt.
+(* BET-84: a value the machine computes for a global closes over the
+   section variables its code names, as they were in the environment that
+   filled its slot, and the machine keeps it for the compile. Two things
+   follow that no read can describe. The walk above reads the CURRENT
+   environment, which can differ from the one that filled the slot:
+   [clearbody] takes a [Let]'s body away from the goal and leaves the cached
+   value, which holds the evaluation of that body (fixture
+   vm_named_fv_clearbody). And a replayed proof fills no slot, so a later
+   proof that runs finds it empty where stock finds it filled, and computes
+   it in its own environment (fixture vm_section_closure_creator). So a
+   recorded proof that uses the slot of a constant whose code, or a code it
+   calls, closes over a section variable, whether it fills the slot or takes
+   it from the cache, is not replayed.
 
    Whether a constant's code, or a code it calls, closes over a section
    variable is a function of the constants' codes, which do not change once
@@ -369,28 +372,15 @@ let rec reaches_named_fv env kn =
     named_fv_memo := Cmap_env.add kn b !named_fv_memo;
     b
 
-(* The constants whose slot the open proof filled, for the generation of the
-   proof that filled them. *)
-let filled_gen = ref (-1)
-let filled_here : unit Cmap_env.t ref = ref Cmap_env.empty
-
-let note_filled kn =
-  if Proof_recorder.active () then begin
-    let g = Proof_recorder.generation () in
-    if g <> !filled_gen then (filled_gen := g; filled_here := Cmap_env.empty);
-    filled_here := Cmap_env.add kn () !filled_here
-  end
-
-let fence_cached env kn =
-  let filled_in_this_proof =
-    !filled_gen = Proof_recorder.generation () && Cmap_env.mem kn !filled_here
-  in
-  if not filled_in_this_proof
-  && Proof_recorder.without_recording (fun () -> reaches_named_fv env kn) then
-    Proof_recorder.ineligible ~reason:"vm_cached_closure" ~detail:(Constant.to_string kn)
+let fence_section_closure env kn =
+  if Proof_recorder.without_recording (fun () -> reaches_named_fv env kn) then
+    Proof_recorder.ineligible ~reason:"vm_section_closure" ~detail:(Constant.to_string kn)
 
 let rec slot_for_getglobal env sigma kn envcache table =
-  if Proof_recorder.active () then record_vm_global env kn;
+  if Proof_recorder.active () then begin
+    record_vm_global env kn;
+    fence_section_closure env kn
+  end;
   let cb = CClosure.lookup_constant_handler env sigma.Genlambda.evars_val kn in
   let rk =
     if Environ.mem_constant kn env then
@@ -399,9 +389,8 @@ let rec slot_for_getglobal env sigma kn envcache table =
     else
       ref None
   in
-  match key rk with
-  | pos -> if Proof_recorder.active () then fence_cached env kn; pos
-  | exception NotEvaluated ->
+  try key rk
+  with NotEvaluated ->
     let pos = match cb.const_body_code with
     | BCdefined (_, index, patches) ->
       let code = index () in
@@ -412,7 +401,6 @@ let rec slot_for_getglobal env sigma kn envcache table =
     | BCconstant -> set_global (val_of_constant kn) table
     in
     rk := Some (CEphemeron.create pos);
-    note_filled kn;
     pos
 
 and slot_for_fv env sigma fv envcache table =
