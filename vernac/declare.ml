@@ -2387,11 +2387,15 @@ let return_proof p = (prepare_proof p : closed_proof_output)
    there are too many levels, or when the rebuilt graphs do not answer as
    the recorded ones; the graphs are then kept.
 
-   [rb_univ_start] and [rb_univ_end] are the level and sort counters at
-   the proof's start and after its declaration. A fresh level's name holds
-   the counter, so the stored term's level names are the names stock gives
+   [rb_univ_start], [rb_univ_closer] and [rb_univ_end] are the level and
+   sort counters at the proof's start, at its closer before the
+   declaration, and after the declaration. A fresh level's name holds the
+   counter, so the stored term's level names are the names stock gives
    only when the counter at the proof's start is the same; replay checks
-   that, and leaves the counters where the tactics would have.
+   that. The declaration makes levels of its own (a polymorphic instance's
+   hint, [Classes.instance_hook]), and stock names them from the counter
+   at the closer, so replay puts the counters there before it declares,
+   and checks after it that they reached [rb_univ_end].
 
    [rb_using] is the set of section variables the proof declared it uses,
    at its [Proof using] sentence or its statement. A replay runs no sentence,
@@ -2422,6 +2426,7 @@ type replay_blob = {
   rb_sideff : SideEff.t;
   rb_using : Id.Set.t option;
   rb_univ_start : int * int;
+  rb_univ_closer : int * int;
   rb_univ_end : int * int;
 }
 
@@ -2432,7 +2437,7 @@ type pending_stored = {
   ps_output : closed_proof_output;
   ps_using : Id.Set.t option;
   ps_univ_start : int * int;
-  ps_univ_end : int * int;
+  ps_univ_closer : int * int;
   ps_base : UGraph.t;
 }
 
@@ -2444,7 +2449,7 @@ let stored_term (proof_obj : Proof_object.t) =
     match proof_obj.Proof_object.proof_object with
     | DefaultProof { proof; opaque = true; using; keep_body_ucst_separate = None } ->
       Some { ps_output = proof; ps_using = using; ps_univ_start = !open_counters;
-             ps_univ_end = UnivGen.counters (); ps_base = !open_graph }
+             ps_univ_closer = UnivGen.counters (); ps_base = !open_graph }
     | DefaultProof _ | DeferredOpaqueProof _ -> None
 
 (* The entry's body as the declared constant's opaque table holds it, when
@@ -2512,8 +2517,9 @@ let universe_check (s : pending_stored) ~regular ~(queries : Proof_record_env.de
             else whole "rebuild_differs")
 
 (* The blob of a proof whose declaration just ran, [refs] the globals it
-   declared, in the order of the entries. *)
-let encode_stored (s : pending_stored) ~regular ~refs ~queries =
+   declared, in the order of the entries, [univ_end] the counters the
+   declaration left. *)
+let encode_stored (s : pending_stored) ~regular ~refs ~queries ~univ_end =
   let universes, graph_out = universe_check s ~regular ~queries in
   let entries = s.ps_output.output_entries in
   let rb_entries =
@@ -2528,7 +2534,7 @@ let encode_stored (s : pending_stored) ~regular ~refs ~queries =
   let blob =
     { rb_entries; rb_ustate = (if graph_out then UState.without_graphs uctx else uctx); rb_graph_out = graph_out;
       rb_universes = universes; rb_sideff = s.ps_output.output_sideff; rb_using = s.ps_using;
-      rb_univ_start = s.ps_univ_start; rb_univ_end = s.ps_univ_end }
+      rb_univ_start = s.ps_univ_start; rb_univ_closer = s.ps_univ_closer; rb_univ_end = univ_end }
   in
   match Marshal.to_string blob [] with
   | str -> Some (Proof_record.encode_blob str)
@@ -2599,7 +2605,7 @@ let resolve_ustate b =
 
 (* What the closer about to run declares, put together at the decision
    ([Proof_replay.register_install_check]) and taken by [close_proof]. *)
-let prepared : (string * (closed_proof_output * Id.Set.t option * (int * int))) option ref = ref None
+let prepared : (string * (closed_proof_output * Id.Set.t option * ((int * int) * (int * int)))) option ref = ref None
 
 let prepare_replay blob =
   prepared := None;
@@ -2620,18 +2626,18 @@ let prepare_replay blob =
       | Error miss -> Some miss
       | Ok ustate ->
         let output = { output_entries = entries; output_ustate = ustate; output_sideff = b.rb_sideff } in
-        prepared := Some (blob, (output, b.rb_using, b.rb_univ_end));
+        prepared := Some (blob, (output, b.rb_using, (b.rb_univ_closer, b.rb_univ_end)));
         None
 
 let () = Proof_replay.register_install_check prepare_replay
 
 (* The other side: the stored term, as the proof object the declaration
-   takes, with the counters the declaration must leave behind. The section
-   variables it uses are the record's ([rb_using]); its [pinfo] is this
-   compile's. *)
+   takes, with the counters the declaration must start from and those it
+   must leave behind. The section variables it uses are the record's
+   ([rb_using]); its [pinfo] is this compile's. *)
 let replayed_proof_object ~blob ~(proof : t) =
   match !prepared with
-  | Some (b, (output, using, univ_end)) when b == blob ->
+  | Some (b, (output, using, univ)) when b == blob ->
     prepared := None;
     (* A term read back with [Marshal.from_string] is a fresh copy: not one
        of its blocks is physically shared with this compile's own values,
@@ -2650,7 +2656,7 @@ let replayed_proof_object ~blob ~(proof : t) =
       ( { Proof_object.proof_object =
             DefaultProof { proof = output; opaque = true; using; keep_body_ucst_separate = None };
           pinfo = proof.pinfo },
-        univ_end )
+        univ )
   | Some _ | None -> None
 
 (* The stored term the next closer writes into the record. The compile
@@ -2658,14 +2664,29 @@ let replayed_proof_object ~blob ~(proof : t) =
    [save_lemma_proved_delayed], not [save]; both paths meet here. *)
 let stored_for_record = ref None
 
-(* The universe and sort counters a replayed proof's tactics would have
-   left behind, from its stored term. Put there after the declaration,
-   which makes levels of its own that the record already counts. *)
+(* The universe and sort counters the registration's declaration left
+   behind. The declaration of a replayed proof starts from the counters
+   the record holds at the closer, as stock's does, and makes its own
+   levels from there; after it the counters must stand where the
+   registration's stood.
+
+   They differ only when the declaration made another number of levels
+   than at registration, from an input the record does not hold: its reads
+   are not recorded ([record_close_gen]). The declaration that just ran
+   started from stock's counters and is stock's own, so its names and the
+   counters it left are stock's, and they stay. The record no longer
+   describes this file, so the fence trips: no later proof of the process
+   is replayed. *)
 let replayed_univ_end = ref None
 
-let restore_replayed_counters () =
+let check_replayed_counters () =
   match !replayed_univ_end with
-  | Some e -> UnivGen.set_counters e; replayed_univ_end := None
+  | Some ((u, q) as e) ->
+    replayed_univ_end := None;
+    let (u', q') as now = UnivGen.counters () in
+    if now <> e then
+      Proof_recorder.trip_fence ~reason:"declaration_counters"
+        ~detail:(Printf.sprintf "levels %d sorts %d, recorded %d %d" u' q' u q)
   | None -> ()
 
 let close_proof ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : Proof_object.t =
@@ -2677,16 +2698,18 @@ let close_proof ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : 
        and the counters move where the tactics would have left them, before
        the declaration, which then runs as stock's. *)
     (match replayed_proof_object ~blob ~proof with
-     | Some (obj, univ_end) when opaque = Vernacexpr.Opaque && not keep_body_ucst_separate ->
-       (* The declaration has still to run, and it makes levels of its own.
-          Stock's counters after it are the ones the record holds, so they
-          are put there at the end, by [restore_replayed_counters]. *)
+     | Some (obj, (univ_closer, univ_end)) when opaque = Vernacexpr.Opaque && not keep_body_ucst_separate ->
+       (* The declaration has still to run, and it makes levels of its own
+          from these counters, as stock's does. [check_replayed_counters]
+          compares where it leaves them with the record. *)
+       UnivGen.set_counters univ_closer;
        replayed_univ_end := Some univ_end;
        stored_for_record := None;
        obj
      | Some _ | None ->
        CErrors.anomaly (Pp.str "proof replay: a stored term that passed its check cannot be declared."))
   | None ->
+    replayed_univ_end := None;
     let opaque = match opaque with
     | Vernacexpr.Opaque -> true
     | Vernacexpr.Transparent -> false in
@@ -2792,8 +2815,8 @@ let record_close ~closer ~kernel_check declare =
   record_close_gen ~closer ~kernel_check (fun () -> (declare (), None))
 
 (* A proved proof: its stored term is put together once the declaration has
-   run ([encode_stored]), from the globals [snd res] the declaration made
-   and the universe queries it asked. *)
+   run ([encode_stored]), from the globals [snd res] the declaration made,
+   the universe queries it asked and the counters it left. *)
 let record_close_with_info ~stored ~closer ~kernel_check ~pinfo declare =
   (* [writing] is exactly the state in which [set_name] does something (a
      proof is open, suspended or not), so the path and the string are built
@@ -2812,12 +2835,13 @@ let record_close_with_info ~stored ~closer ~kernel_check ~pinfo declare =
       | None -> (declare (), None)
       | Some s ->
         let res, queries = Proof_record_env.with_declaration_queries declare in
+        let univ_end = UnivGen.counters () in
         let regular =
           match CEphemeron.default pinfo.Proof_info.proof_ending Proof_ending.Regular with
           | Proof_ending.Regular -> true
           | Proof_ending.End_obligation _ | Proof_ending.End_equations _ -> false
         in
-        (res, encode_stored s ~regular ~refs:(snd res) ~queries))
+        (res, encode_stored s ~regular ~refs:(snd res) ~queries ~univ_end))
 
 let save_admitted ~pm ~proof =
   let iproof = get proof in
@@ -2925,7 +2949,7 @@ let save ~pm ~proof ~opaque ~idopt =
     record_close_with_info ~stored:(take_stored ()) ~closer ~kernel_check ~pinfo:proof_info
       (fun () -> finish_proof ~pm proof_obj.proof_object proof_info)
   in
-  restore_replayed_counters ();
+  check_replayed_counters ();
   res
 
 let save_regular ~(proof : t) ~opaque ~idopt =
@@ -2970,7 +2994,7 @@ let save_lemma_proved_delayed ~pm ~proof ~idopt =
     record_close_with_info ~stored:(take_stored ()) ~closer ~kernel_check ~pinfo (fun () ->
         finish_proof ~pm proof.proof_object pinfo)
   in
-  restore_replayed_counters ();
+  check_replayed_counters ();
   pm
 
 end (* Proof module *)

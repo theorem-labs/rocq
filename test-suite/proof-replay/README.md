@@ -443,6 +443,29 @@ only in the sharing of the string "BinInt", as `vm_lia_hit`'s does
 registration's makes a proof miss also when its entries are genuine: the
 value is the file's digest, not each lookup's answer.
 
+**Gate review of 079bc4cb71, reviewer finding R1.**  A declaration can make
+universe levels of its own: the hint of a universe-polymorphic instance takes
+a fresh instance of it (`Classes.instance_hook` to `Hints.add_resolves` to
+`UnivGen.fresh_level`), and the library keeps the hint with those levels.
+Stock names them from the counters at the closer.  The record holds the level
+and sort counters at the proof's start, at its closer and after its
+declaration.  Replay puts the counters at the closer's values before the
+declaration, which then runs as stock's does.  `write_declaration_levels`: a
+universe-polymorphic instance whose tactics make a level, and a
+sort-polymorphic one, each followed by a proof that makes levels, and a hint
+at the end.  Every proof replays, and the `.vo` is value-equal to stock's.
+Before the fix, the replayed instance's hint named its levels from the
+counters at the proof's start, every later proof missed on its key, and the
+`.vo` differed from stock's in 12 values of `library` and 4 of `opaques`.
+After the declaration, replay compares the counters with the record.  They
+can differ only when the declaration made another number of levels, from an
+input that no read records.  The declaration started from stock's counters,
+so its names and the counters it left are stock's, and they stay.  The fence
+then trips (reason `declaration_counters`): the record no longer describes
+the file.  No fixture reaches that branch.  The trigger tried, a `Set
+Universe Polymorphism` before the instance in the registered tree only, makes
+the instance miss on its start-of-proof read of the option tables first.
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
