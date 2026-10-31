@@ -1219,14 +1219,108 @@ let compute_arguments_scope_full env sigma map t =
 let compute_arguments_scope env sigma t =
   fst (compute_arguments_scope_full env sigma !scope_class_map t)
 
+(* BET-84 census row 11: the scopes that Bind Scope attaches to a class, read
+   when a term is interpreted against a type (the class of the expected type,
+   of a cast's type, or Sortclass for a type). A notation or number query is
+   recorded with the scopes it was asked in, so a changed binding changes
+   which query stock asks while the recorded query still gets its answer
+   (gate review, breadth audit gap BA1; fixture verdict_type_scope).
+   The key names the class: S (Sortclass), F (Funclass), a section variable,
+   or the canonical kernel name of a constant, an inductive or a projection,
+   as [Libnames.kername_key] writes it, with the numbers that complete it. Every
+   part has its length, so a key names one class, and [scope_class_of_key]
+   reads it back. The map compares classes by their canonical names. ONE
+   value function, [digest_type_scope] of [type_scope], for the record site
+   and for the replay evaluator (dev/tools/census/replay_channels.py). *)
+let scope_class_key cl =
+  let part s = string_of_int (String.length s) ^ ":" ^ s in
+  let mind m = part (Libnames.kername_key (MutInd.canonical m)) in
+  match cl with
+  | CL_SORT -> "S"
+  | CL_FUN -> "F"
+  | CL_SECVAR id -> "V" ^ part (Id.to_string id)
+  | CL_CONST c -> "C" ^ part (Libnames.kername_key (Constant.canonical c))
+  | CL_IND (m, i) -> "I" ^ mind m ^ part (string_of_int i)
+  | CL_PROJ p ->
+    "P" ^ mind (Projection.Repr.mind p)
+    ^ part (string_of_int (snd (Projection.Repr.inductive p)))
+    ^ part (string_of_int (Projection.Repr.npars p))
+    ^ part (string_of_int (Projection.Repr.arg p))
+    ^ part (Id.to_string (Projection.Repr.label p))
+
+(* The class a [scope_class_key] key names, or [None] for a string that
+   function did not write: the class read back must give the key again. *)
+let scope_class_of_key key =
+  let ( let* ) = Option.bind in
+  let n = String.length key in
+  let pos = ref 1 in
+  let part () =
+    let* j = String.index_from_opt key !pos ':' in
+    match int_of_string_opt (String.sub key !pos (j - !pos)) with
+    | Some len when len >= 0 && j + 1 + len <= n ->
+      pos := j + 1 + len;
+      Some (String.sub key (j + 1) len)
+    | Some _ | None -> None
+  in
+  let int () = let* s = part () in int_of_string_opt s in
+  let id () =
+    let* s = part () in
+    match Id.of_string_soft s with
+    | id -> Some id
+    | exception CErrors.UserError _ -> None
+  in
+  let kn () = let* s = part () in Libnames.kername_of_key s in
+  let cl =
+    if Int.equal n 0 then None
+    else match key.[0] with
+      | 'S' -> Some CL_SORT
+      | 'F' -> Some CL_FUN
+      | 'V' -> let* id = id () in Some (CL_SECVAR id)
+      | 'C' -> let* kn = kn () in Some (CL_CONST (Constant.make1 kn))
+      | 'I' -> let* kn = kn () in let* i = int () in Some (CL_IND (MutInd.make1 kn, i))
+      | 'P' ->
+        let* kn = kn () in
+        let* i = int () in
+        let* proj_npars = int () in
+        let* proj_arg = int () in
+        let* l = id () in
+        Some (CL_PROJ (Projection.Repr.make (MutInd.make1 kn, i) ~proj_npars ~proj_arg l))
+      | _ -> None
+  in
+  match cl with
+  | Some cl when Int.equal !pos n && String.equal (scope_class_key cl) key -> Some cl
+  | Some _ | None -> None
+
+(* The scopes the readers below return for a class, and the value of its
+   read. *)
+let type_scope cl = find_scope_class_opt !scope_class_map (Some cl)
+
+let digest_type_scope scopes = Some (Proof_recorder.digest ~what:"scope_class" scopes)
+
+let () =
+  Proof_replay.register_evaluator "scope_class" (fun key ->
+      match scope_class_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some cl -> Proof_replay.Value (digest_type_scope (type_scope cl)))
+
+let find_type_scope = function
+  | None -> []
+  | Some cl ->
+    let scopes = type_scope cl in
+    if Proof_recorder.active () then
+      Proof_recorder.read_by ~row:"11" ~channel:"scope_class" ~id:cl
+        ~key:(fun () -> scope_class_key cl)
+        ~value:(fun () -> digest_type_scope scopes);
+    scopes
+
 let compute_type_scope env sigma t =
-  find_scope_class_opt !scope_class_map (try Some (compute_scope_class env sigma t) with Not_found -> None)
+  find_type_scope (try Some (compute_scope_class env sigma t) with Not_found -> None)
 
 let current_type_scope_names () =
-   find_scope_class_opt !scope_class_map (Some CL_SORT)
+  find_type_scope (Some CL_SORT)
 
 let compute_glob_type_scope t =
-  find_scope_class_opt !scope_class_map (try Some (find_class_glob_type t) with Not_found -> None)
+  find_type_scope (try Some (find_class_glob_type t) with Not_found -> None)
 
 let scope_class_of_class (x : cl_typ) : scope_class =
   x

@@ -1,0 +1,6 @@
+{
+  "doc": "Bind Scope gives a cast's type another scope, where a notation the proof uses has no interpretation: the stock script fails, so the replay compile must fail too",
+  "files": ["A.v"],
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}
