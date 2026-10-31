@@ -18,6 +18,16 @@ the environment through.  Nothing but `python3` is needed.  Rocq builds are not
 allowed on sami-rocqperf: run this on speed-r1, under
 `scripts/speed_loop/lanes/box/untimed.sh`.
 
+`make -C test-suite proof-replay` runs every fixture, the slow ones too, against
+the Rocq that `make world` built.  Each fixture writes `fixtures/<name>.log`.
+The target prints the counts and fails when a fixture fails or does not run (a
+`SKIP`).  `ineligible_native_compute` needs `native_compute`, so configure with
+`./configure -relocatable -native-compiler ondemand` before `make world`.
+`eval_zify_table`, `ineligible_external_prover` and `vm_lia_hit` load Stdlib:
+`make -f Makefile.ci ci-stdlib` after `make world` installs it beside Corelib.
+The CI job `Proof replay fixtures` (`.github/workflows/ci-github.yml`) does
+these steps and runs the target.
+
 ## What one fixture is
 
 ```
@@ -50,6 +60,19 @@ it the runner compares segments in Python by the MD5 the segment table records;
 it then cannot decide a `vmlibrary`-only difference and reports
 `vmlibrary_bytes`, which fails the fixture.  Each line says which comparison ran.
 
+A fixture on `EXEMPTIBLE_FIXTURES` in `runner.py` whose `vo_exempt` names the
+file may differ from stock in Marshal sharing alone: only the `library`
+segment differs, and `vodiff.py` finds its values equal.  Any other difference
+fails it.  Its channel assertions (`records`, `summaries`) stay as they are.
+The sharing depends on the Corelib `.vo` files and the load path: with a Corelib
+built from this tree, `eval_abbreviation`, `eval_notation`, `eval_prim_token`
+and `eval_option_tables` differ in the sharing of "Datatypes", and
+`eval_ltac2_global`, `eval_ltac2_notation`, `ltac_alias_moved` and
+`ltac_redef_moved` differ in the sharing of "Logic" unless Stdlib is installed
+beside Corelib.  With the Corelib of the lane switch (466ade62 base) the seven
+measured there do not differ; `eval_option_tables` came later and was not
+measured there.
+
 ## expect.json
 
 | Key | Meaning |
@@ -76,7 +99,6 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `stdout_contains`, `stderr_contains` | substrings the replay run must print |
 | `vo_exempt` | file -> reason: a `.vo` difference that the fixture allows |
 | `coqchk` | run `rocqchk` over the replay objects (default true) |
-| `budget`, `replay_wall_max` | the budget mode's seconds |
 | `usage` | the usage mode's expected exit code and message substrings |
 | `mixed` | the mixed mode's `replay_file`, `carry_files` and `check_files` |
 | `alt_register_flags` | register again with these flags, replay from that record in `c/`, and require the same exit codes, hits and `.vo` bytes as from the first record |
@@ -324,15 +346,17 @@ as P.` is now a syntax error, and `Add LoadPath "d".` or `Remove LoadPath
 `-proof-replay-ratio` exits 1, names the ratio and writes no `.vo`.
 
 **The budget.**  `budget_kill` (`--slow`): one file of three slow proofs under
-`-proof-replay-budget 240 -proof-replay-ratio 1`.  Stock is killed by its own
-240-second `timeout`.  Replay charges two replayed proofs, runs the third, and
-its charged clock reaches the budget, so it exits 124 with no `.vo` well before
-240 seconds of real time.  The three times have to separate — the charge of
-the two replayed proofs, which carries the recorder's overhead, below the
-budget, and the stock compile well above it — so the proof's work is
-calibrated, and `replay_wall_max` is tight enough (70 s against a ~92 s proof)
-that a kill which lands only between top-level sentences, instead of inside
-the third proof's tactic, fails the fixture.
+`-proof-replay-budget B -proof-replay-ratio 1`.  The runner sets `B` from the
+registration's record: the recorded wall times of the first two proofs (the
+charge of the two hits) plus 0.3 of the third's (`BUDGET_LAST_SHARE`), so the
+fixture does not depend on the speed of the machine.  Stock is killed by its
+own `B`-second `timeout`.  Replay charges two replayed proofs, runs the third,
+and its charged clock reaches the budget, so it exits 124 with no `.vo` well
+before `B` seconds of real time.  The replay wall must stay under twice the
+part of the budget left for the third proof, so a kill which lands only
+between top-level sentences, instead of inside the third proof's tactic,
+fails the fixture.  The fixture measures time, so `make proof-replay` runs it
+after every other fixture, alone.
 
 **The carry-over.**  `carry_replayed_dep` (`mixed` mode): a grade that reuses
 one registered object and replays the object it was compiled against.  `B.vo`
