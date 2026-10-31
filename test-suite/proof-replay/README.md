@@ -605,6 +605,22 @@ each kind of nested closer (`Qed` in a focused block, `Admitted`, `Defined`,
 after it must stay nested.  A nested `Abort` is not tested: stock refuses it
 ("No proof-editing in progress").
 
+
+**Gate review, breadth audit gap CF6.**  A binder with no name takes the name
+that `Implicit Types` reserves for its type, read from the reverse
+reserved-type table (`Reserve.revert_reserved_type`), and no read recorded that
+table.  Two sites reach the proof term with that name.
+`verdict_reserved_type_rev`: `exact eq_refl` unifies `?f 1` with a variable, so
+unification refines the function evar `?f` into a lambda, and the lambda's
+binder gets the name reserved for `nat`.  `verdict_reserved_type_rev_in`: an
+`in` clause matches an index against `true`, and the return clause binds that
+index with the name reserved for `bool`.  In both, the edited tree reserves
+another name.  Before the fix, the replay installed the stored term, whose
+binder has the old name, and its `.vo` differed from stock's in the opaque
+proofs.  `eval_reserved_type_rev`: the name reserved for `nat` changes, so
+the proof that names a `nat` binder misses on `reserved_type_rev`; the name
+reserved for `bool` does not change, so the proof that names a `bool` binder
+replays.
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its

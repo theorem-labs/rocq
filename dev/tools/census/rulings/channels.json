@@ -55,6 +55,7 @@
     "read:interp/notation.ml:11/scope_class": {"row": "11"},
     "read:interp/notation.ml:11/notation_reference": {"row": "11"},
     "read:interp/reserve.ml:M2/reserved_type": {"row": "M2"},
+    "read:interp/reserve.ml:M2/reserved_type_rev": {"row": "M2"},
 
     "read:kernel/environ.ml:1/constant": {"row": "1"},
     "read:kernel/environ.ml:1/constant_exists": {"row": "1"},
