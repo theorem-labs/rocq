@@ -104,6 +104,7 @@
     "ineligible:plugins/micromega/coq_micromega.ml:external_prover": {"ineligible": "@external_prover"},
     "read:plugins/micromega/persistent_cache.ml:23/micromega_cache": {"row": "23"},
     "ineligible:plugins/micromega/persistent_cache.ml:micromega_cache": {"ineligible": "@micromega_cache"},
+    "read:plugins/funind/indfun_common.ml:15/funind_info": {"row": "15"},
     "read:plugins/micromega/zify.ml:15/zify_table": {"row": "15"},
     "read:plugins/ring/ring.ml:15/ring_carrier_table": {"row": "15"},
     "read:plugins/ring/ring.ml:15/field_carrier_table": {"row": "15"},
