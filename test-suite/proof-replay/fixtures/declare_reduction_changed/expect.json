@@ -1,0 +1,7 @@
+{
+  "doc": "a proof checks the result of a named reduction (Declare Reduction), and the edited tree changes the named expression so that stock fails the check: replay must fail too",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}}},
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}

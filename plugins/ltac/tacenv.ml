@@ -60,7 +60,7 @@ let record_hook : (string -> KerName.t -> string option) ref = ref (fun _ _ -> N
    function through [record_hook], never from that argument. *)
 let record channel k (_found : 'a option) =
   if Proof_recorder.active () then
-    Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> Lib.kername_key k)
+    Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> Libnames.kername_key k)
       ~value:(fun () -> !record_hook channel k)
 
 (* The lookup itself must build no option when the recorder is off: these run
@@ -218,13 +218,13 @@ let () =
        if String.equal channel "tactic_alias" then recorded_tactic_alias k
        else recorded_tactic_definition k)
 
-(* The record holds the kernel name as [Lib.kername_key] writes it, which
+(* The record holds the kernel name as [Libnames.kername_key] writes it, which
    names one kernel name ([KerName.to_string] does not: a bound module loses
    its number, and ["A.B.c"] is both a file's label and a module's). A key
    that does not read back is a miss. *)
 let () =
   let evaluator recorded key =
-    match Lib.kername_of_key key with
+    match Libnames.kername_of_key key with
     | None -> Proof_replay.Unknown
     | Some k -> (match recorded k with v -> Proof_replay.Value v | exception _ -> Proof_replay.Unknown)
   in

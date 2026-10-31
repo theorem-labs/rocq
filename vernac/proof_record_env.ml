@@ -465,6 +465,20 @@ let start_reads () =
              named));
     one "4" "typing_flags" (fun () -> cached flags_slot "typing_flags" (Environ.typing_flags env));
     one "13" "options" (fun () -> Proof_recorder.digest ~what:"options" (Goptions.get_tables ()));
+    (* The tables that Add and Remove change, which [get_tables] leaves out:
+       injection reads Keep Equalities, the printers read the Printing
+       tables, each at the table's own accessor. With an Add removed before
+       an unchanged proof, stock injection fails and a replay with no read
+       of the table installed the stored term (cross-family review of
+       079bc4cb71, finding CF1; fixtures option_table_keep_equalities,
+       eval_option_tables). One view of every table, beside the options,
+       because the accessors are many and hot (detyping asks the Printing
+       tables at each match it detypes), and a table changes only through
+       Add, Remove, or a Require or Import that carries one of them: in a
+       tree whose table commands the edit leaves alone, no proof misses on
+       it. *)
+    one "13" "option_tables" (fun () ->
+        Proof_recorder.digest ~what:"option_tables" (Goptions.get_table_contents ()));
     one "13" "warnings" (fun () -> Proof_recorder.digest ~what:"warnings" (CWarnings.get_flags ()));
     (* The warnings and categories that exist: a warning created the first
        time it is needed (a deprecated reference's version warning) exists

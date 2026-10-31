@@ -64,6 +64,31 @@ type 'a table_of_A =  {
 
 let opts_cat = Libobject.create_category "options"
 
+(* BET-84 row 13: what every table holds, for the start-of-proof read
+   [option_tables] beside the options of [get_tables]. A tactic reads a table
+   at its own accessor ([active], [v]): injection reads Keep Equalities, the
+   printers read the Printing tables. One view of all the tables covers each
+   accessor, in this file and in a plugin (cross-family review of 079bc4cb71,
+   finding CF1). An entry is the table's kind and name, which together are
+   unique (a string table and a ref table can share a name), and its elements
+   in the order of its set, so the order of the Add and Remove commands that
+   made the set does not change the view. An element that the set takes as
+   equal to the registered one but that differs in structure (an inductive
+   under another user name) changes the view: that costs a miss, never a
+   wrong hit. The list is sorted by kind and name when a table is declared,
+   so the order in which modules declare tables does not change it either. *)
+type contents = Contents : 'a list -> contents
+
+type table_contents = ((string * string) * contents) list
+
+let table_views : ((string * string) * (unit -> contents)) list ref = ref []
+
+let compare_table_key (k1, n1) (k2, n2) =
+  let c = String.compare k1 k2 in
+  if c <> 0 then c else String.compare n1 n2
+
+let get_table_contents () = List.map (fun (key, view) -> (key, view ())) !table_views
+
 module MakeTable =
   functor
    (A : sig
@@ -71,6 +96,7 @@ module MakeTable =
           type key
           module Set : CSig.USetS with type elt = t
           val table : (string * key table_of_A) list ref
+          val kind : string
           val encode : Environ.env -> key -> t
           val subst : Mod_subst.substitution -> t -> t
           val check_local : Libobject.locality -> t -> unit
@@ -144,6 +170,11 @@ module MakeTable =
 
     let () = A.table := (nick, table_of_A)::!A.table
 
+    let () =
+      let view () = Contents (MySet.elements !t) in
+      table_views := List.sort (fun (k1, _) (k2, _) -> compare_table_key k1 k2)
+          (((A.kind, nick), view) :: !table_views)
+
     let v () = !t
     let active x = A.Set.mem x !t
     let set local x b = if b then add_option local x else remove_option local x
@@ -166,6 +197,7 @@ struct
   type key = string
   module Set = CString.Set
   let table = string_table
+  let kind = "string"
   let encode _env x = x
   let subst _ x = x
   let check_local _ _ = ()
@@ -203,6 +235,7 @@ struct
   type key = Libnames.qualid
   module Set = A.Set
   let table = ref_table
+  let kind = "ref"
   let encode = A.encode
   let subst = A.subst
   let check_local = A.check_local

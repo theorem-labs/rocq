@@ -1,0 +1,21 @@
+{
+  "doc": "a .lia.cache the registration did not have: the lia proof misses on the micromega_cache read, and the nia proof, whose cache is blocked in both trees, replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.same": {"eligible": true}, "PR.A.changed": {"eligible": true}}},
+  "tree_dirs": {"original": [".nia.cache", ".lia.cache"], "edited": [".nia.cache"]},
+  "tree_files": {"edited": {".lia.cache": "lia-cache.bin"}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.same", "hit"], ["PR.A.changed", "read", "micromega_cache", "changed"]]
+    }
+  },
+  "vo_exempt": {
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of the identifier string \"BinInt\" in the library segment, as in vm_lia_hit (vodiff on 2026-10-31: 0 value differences and 2 sharing differences, the opaques segment equal). GRADE retired byte identity as a correctness gate on 2026-10-26; the contract is value equality."
+  }
+}
