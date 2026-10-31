@@ -384,8 +384,11 @@ let mk_library sd md digests vm =
 let interned_pending : (library_t * (unit -> unit)) option ref = ref None
 
 (* The table writes of [m]'s intern, or nothing for a library this process
-   did not read last; the slot is emptied either way, so it never keeps a
-   refused file's library alive. *)
+   did not read last. Taking empties the slot, before the name check, and
+   so does a failed intern ([intern_library]). A record that never reaches
+   [take_interned] (an exception after [intern_from_file] returned, or an
+   [Intern.t] that returns another record) stays in the slot until the next
+   intern; that is harmless, since only that exact record can take it. *)
 let take_interned m =
   let fill = match !interned_pending with
     | Some (m', fill) when m' == m -> fill
@@ -512,6 +515,7 @@ let rec intern_library ~intern (needed, contents as acc) dir =
         fill ();
         intern_library_deps ~intern acc dir m
       | Error iexn, provenance ->
+        interned_pending := None;
         error_in_intern provenance dir iexn
 
 and intern_library_deps ~intern (needed, contents) dir m =

@@ -39,6 +39,11 @@ module Intern : sig
   end
 
   type t = DirPath.t -> (library_t, Exninfo.iexn) Result.t * Provenance.t
+  (** An [Intern.t] must return [Ok] with the exact record (the same value,
+      not a copy) that its last call of [intern_from_file] returned. For any
+      other record nothing is filled: that library's opaque proofs then fail
+      to read with [Not_found], its stored closures are not used, and its file
+      name reads as ["<unavailable filename>"]. *)
 end
 
 (** Read a .vo file. It fills no table of loaded libraries (file name, opaque

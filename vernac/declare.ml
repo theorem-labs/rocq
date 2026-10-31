@@ -454,12 +454,13 @@ let classify_constant cst = Libobject.Substitute
      stripped, like every location.
    - [cst_kind] is the documentation kind ([Dumpglob.add_constant_kind]): an
      [Axiom]/[Parameter] is [IsAssumption], a [Qed] lemma [IsProof], a
-     [Definition] [IsDefinition], and so on. It reaches only the glob output
-     and vernacular output ([Search is:<kind>] filters on it,
-     vernac/search.ml:85-91), never a [.vo] a dependent loads, and a compile
-     can read printed output only through [Redirect] (a command's output
-     into a file) and a [Load] of that file, which the grading source policy
-     refuses. It is the one place, besides the compiled body, where an
+     [Definition] [IsDefinition], and so on. The library's own [.vo] stores
+     it and a dependent loads it, but in the dependent it reaches only the
+     glob output and vernacular output ([Search is:<kind>] filters on it,
+     vernac/search.ml:85-91), never the [.vo] the dependent writes, and a
+     compile can read printed output only through [Redirect] (a command's
+     output into a file) and a [Load] of that file, which the grading source
+     policy refuses. It is the one place, besides the compiled body, where an
      [Admitted] axiom and a [Qed] proof of the same statement differ (the
      body the label blinds in [LibkeyObjects.blind_constant]). So the view
      reads a single canonical kind, which is what makes [Admitted <-> Qed]

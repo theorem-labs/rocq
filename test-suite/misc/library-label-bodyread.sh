@@ -55,6 +55,11 @@
 #   second proof runs in a replacement. The proof reads the body only after it checks
 #   that it runs in a worker and that its environment has KFPEEK_EXTRA_ENV=1, so a
 #   master, or a worker that did not get extra-env, fails the compile;
+# - review gate 19: B_modfail, `Module M. Require A. Fail Require Y.X. End M.` where
+#   Y.X's file is qed2's A.vo (it holds the name A.A, so its Require fails), then a par:
+#   worker checks that A.c's body is qed1's (shape 1): the failed Require leaves the
+#   loaded A's opaque-proof handle in place, so the replay at End M gives the workers
+#   qed1's proofs, and the read is recorded;
 # - this fixture's compiles use their own TMPDIR, which is empty at the end.
 
 set -e
@@ -271,6 +276,17 @@ printf '%s\n' 'Require Import Ltac2.Ltac2.' 'Declare ML Module "kfpeek".' 'Secti
   'Ltac2 check () := let _ := body_shape constr:(A.c) in ().' 'Set Default Proof Mode "Classic".' \
   'Goal True /\ True.' '  split.' '  par: (ltac2:(check ()); exact I).' 'Qed.' > $D/secpar/B.v
 build secpar qed1
+# Round 19. B_modfail: a failed Require, inside the module, of a file that holds A's
+# name (qed2's A.vo as Y.X), then a par: worker that needs qed1's body (shape 1).
+mkdir -p $D/modfail-qed1 $D/xq2
+cp $D/qed2/A.vo $D/xq2/X.vo
+printf '%s\n' 'Require Import Ltac2.Ltac2.' 'Declare ML Module "kfpeek".' 'Module M. Require A. Fail Require Y.X. End M.' \
+  'Ltac2 @ external body_shape : constr -> int := "kfpeek" "body_shape".' \
+  'Ltac2 check () := if Int.equal (body_shape constr:(A.c)) 1 then () else Control.throw (Tactic_failure (Some (Message.of_string "A.c is not the loaded A.c"))).' \
+  'Set Default Proof Mode "Classic".' 'Goal True /\ True.' '  split.' '  par: (ltac2:(check ()); exact I).' 'Qed.' \
+  > $D/modfail-qed1/B.v
+if comp -R $D/qed1 A -Q $D/xq2 Y -R $D/modfail-qed1 Bdep $D/modfail-qed1/B.v > $D/modfail-qed1/out 2>&1
+then echo ok > $D/modfail-qed1/rc; else echo failed > $D/modfail-qed1/rc; fi
 # A coqc without -location-free-label, with ROCQ_OPACITYLOG_FILE naming a missing file:
 # B_stock runs Transparent on an axiom in the compiling process, B_stockpar reads a body
 # in par: workers.
@@ -407,6 +423,12 @@ if [ "$(cat $D/secpar-qed1/rc)" = ok ] && [ "$qs" = "$q_qed" ]; then
   pass "B_secpar: after Section S. Require A. End S., a par: worker reads A.c's body and records it: $qs"
 else
   bad "B_secpar ($(cat $D/secpar-qed1/rc)): opacity_queries '$qs': $(tr '\n' ' ' < $D/secpar-qed1/out | cut -c1-400)"
+fi
+qmf=$(field $D/modfail-qed1/B.vo opacity_queries)
+if [ "$(cat $D/modfail-qed1/rc)" = ok ] && [ "$qmf" = "$q_qed" ]; then
+  pass "B_modfail: after Module M. Require A. Fail Require Y.X. End M. (Y.X's file holds A.A, from qed2), a par: worker reads the loaded A.c's body (shape 1) and records it: $qmf"
+else
+  bad "B_modfail ($(cat $D/modfail-qed1/rc)): opacity_queries '$qmf'; $(grep -o 'A.c is not the loaded A.c' $D/modfail-qed1/out | head -1); $(tr '\n' ' ' < $D/modfail-qed1/out | cut -c1-400)"
 fi
 for nd in "stock-adm:B_stock (Transparent A.c on an axiom)" "stockpar-qed1:B_stockpar (a par: body read)"; do
   d=$D/${nd%%:*}
