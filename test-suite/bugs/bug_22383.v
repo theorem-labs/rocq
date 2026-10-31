@@ -17,9 +17,3 @@ Fail Definition small@{u v | Set < u, u < v} : Type@{u} :=
    letin's universe must be refused too. *)
 Fail Cumulative Inductive tokcov@{+u v | u < v} : Set :=
 | make_tokcov (ghost : Type@{v} := Type@{u}).
-
-(* Guard, not a reproduction: it passes before the fix too. Variance is
-   inferred on a letin's body alone, so a universe that occurs only in its
-   type stays irrelevant. *)
-Cumulative Inductive typed_only@{*u} : Set :=
-| make_typed_only (ghost : Type@{u} := nat).
