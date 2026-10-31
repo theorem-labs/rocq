@@ -28,6 +28,11 @@ The target prints the counts and fails when a fixture fails or does not run (a
 The CI job `Proof replay fixtures` (`.github/workflows/ci-github.yml`) does
 these steps and runs the target.
 
+`run.sh` calls `runner.py`, the command line.  The docstring of `runner.py`
+names the module beside it that holds each part of the logic: the fixture
+spec, the run of one fixture, the Rocq processes, the trees, the records, and
+the `.vo` comparison.
+
 ## What one fixture is
 
 ```
@@ -62,12 +67,12 @@ PATH` (or `SEGCMP_NORM`) to use that program, which is the rule itself.  Without
 it the runner compares segments in Python by the MD5 the segment table records;
 it then cannot decide a `vmlibrary`-only difference and reports
 `vmlibrary_bytes`, which fails the fixture.  Each line says which comparison ran.
-`objfile.py` is the one reader of the `.vo` segment table that `runner.py`,
+`objfile.py` is the one reader of the `.vo` segment table that the runner,
 `vodiff.py` and `vodiff_all.py` use.  It refuses an object whose table is cut
 short, points outside the file or names a segment twice (`test_objfile.py`).
 
-A fixture on `EXEMPTIBLE_FIXTURES` in `runner.py` whose `vo_exempt` names the
-file may differ from stock in Marshal sharing alone: only the `library`
+A fixture on `EXEMPTIBLE_FIXTURES` in `vo_compare.py` whose `vo_exempt` names
+the file may differ from stock in Marshal sharing alone: only the `library`
 segment differs, and `vodiff.py` finds its values equal.  Any other difference
 fails it.  Its channel assertions (`records`, `summaries`) stay as they are.
 The sharing depends on the Corelib `.vo` files and the load path: with a Corelib
@@ -85,7 +90,7 @@ The runner fails a fixture whose `expect.json` has a key this table does not
 list (a misspelled key would otherwise leave its default), whose `unpublished`
 names a file that `files` does not list, whose `tree_dirs` or `tree_files`
 names a side that is not `original` or `edited`, or whose `tree_files` copies
-a file the fixture does not have (`spec_of` in `runner.py`;
+a file the fixture does not have (`spec_of` in `fixture_spec.py`;
 `test_load_spec.py` tests it).
 
 | Key | Meaning |
@@ -244,7 +249,7 @@ that a proof runs with `vm_compute`; stock rejects the proof.
 library's code table, still replays.  `vm_lia_hit`: two `lia` proofs, whose
 certificate check runs the machine over Stdlib's checker, replay on a cold
 and on a warm cache; its replay `.vo` differs from stock's only in the
-sharing of the string "BinInt" (`EXEMPTIBLE_FIXTURES` in `runner.py`).
+sharing of the string "BinInt" (`EXEMPTIBLE_FIXTURES` in `vo_compare.py`).
 `vm_cache_lib`, `vm_cache_same_file`:
 an `Eval vm_compute` fills the machine's cache with an unchanged constant
 that calls a changed one, and a proof then runs it from the cache; stock
@@ -717,7 +722,7 @@ in both trees, as the grading engine makes them, so no table opens, the
 fence does not trip, and the `nia` and `lia` proofs replay.  Its replay
 `.vo` differs from stock's only in the sharing of the string "BinInt", as
 `vm_lia_hit`'s does, and it takes the place of `eval_micromega_cache`, which
-replays nothing now, in `EXEMPTIBLE_FIXTURES` (`runner.py`).
+replays nothing now, in `EXEMPTIBLE_FIXTURES` (`vo_compare.py`).
 
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 

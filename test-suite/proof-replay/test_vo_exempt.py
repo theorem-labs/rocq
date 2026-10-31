@@ -26,7 +26,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from runner import EXEMPTIBLE_FIXTURES, exemption_allowed  # noqa: E402
+from vo_compare import EXEMPTIBLE_FIXTURES, exemption_allowed  # noqa: E402
 
 LISTED = EXEMPTIBLE_FIXTURES[0]
 

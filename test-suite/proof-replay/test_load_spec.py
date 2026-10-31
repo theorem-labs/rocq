@@ -28,7 +28,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from runner import DEFAULTS, fixture_names, load_spec, spec_of  # noqa: E402
+from fixture_spec import DEFAULTS, fixture_names, load_spec, spec_of  # noqa: E402
 
 
 class LoadSpec(unittest.TestCase):
