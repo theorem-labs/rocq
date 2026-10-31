@@ -72,10 +72,12 @@ let active () = !recording
 
 (* Whether this process records or replays at all. [start] sets it, and so
    does the replay's configuration; nothing clears it, as one process
-   compiles one file. The toplevel and [Declare] test it before they build
-   what a hook takes (a sentence's span and digest closure, a proof's path,
-   position and universe snapshot), so a compile with neither option takes
-   the stock path (deep review of 079bc4cb71, DR-2). *)
+   compiles one file. The toplevel, [Declare] and [Vernacentries] test it
+   before they build what a hook takes (a sentence's span and digest
+   closure, a proof's path, position and universe snapshot, a closer's
+   declaration closure and result pair), so a compile with neither option
+   takes the stock path (deep review of 079bc4cb71, DR-2, and of
+   26528c8a34, R2-1). *)
 let in_use_flag = ref false
 
 let in_use () = !in_use_flag
