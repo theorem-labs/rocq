@@ -192,7 +192,9 @@ let load_vernac_core ~echo ~check ~state ?source file =
     match Proof_replay.remaining_budget () with
     | None -> interp_one ()
     | Some left ->
-      (match Control.timeout left interp_one () with
+      (* The engine's per-file kill, moved inside: not a timeout of the
+         file, so -record-timeouts does not count it (Control.deadline). *)
+      (match Control.deadline left interp_one () with
        | Ok v -> v
        | Error _ -> raise Proof_replay.Budget_exhausted)
   in

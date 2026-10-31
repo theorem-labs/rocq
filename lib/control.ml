@@ -122,6 +122,8 @@ let timeout n f x =
   if Result.is_error res then incr timeouts_fired;
   res
 
+let deadline n f x = !timeout_fun_ref.timeout n f x
+
 let protect_sigalrm f x =
   let timed_out = ref false in
   let timeout_handler _ = timed_out := true in
