@@ -13,18 +13,20 @@ module WQuery = AsyncTaskQueue.MakeWorker(Stm.QueryTask) ()
 module WTactic = AsyncTaskQueue.MakeWorker(Partac.TacTask) ()
 
 let error s () =
-  Format.eprintf "Usage: rocqworker --kind=[compile|repl|proof|query|tactic] $args@\ngot %s\n%!" s;
+  Format.eprintf "Usage: rocqworker --kind=[compile|repl|proof|query|tactic|proof-record-inline] $args@\ngot %s\n%!" s;
   exit 1
 
 type kind =
   | Worker of { init : unit -> unit; loop : unit -> unit }
   | Compile
   | Repl
+  | ProofRecordInline
 
 let start kind args = match kind with
   | Worker { init; loop } -> WorkerLoop.start ~init ~loop args
   | Compile -> Coqc.main args
   | Repl -> Coqtop.(start_coq coqtop_toplevel args)
+  | ProofRecordInline -> Proof_record_inline.main args
 
 let () =
   if Array.length Sys.argv < 2
@@ -37,6 +39,7 @@ let () =
       match kind with
       | "--kind=compile" -> Compile
       | "--kind=repl" -> Repl
+      | "--kind=proof-record-inline" -> ProofRecordInline
       | "--kind=proof" -> Worker { init = WProof.init_stdout; loop = WProof.main_loop }
       | "--kind=query" -> Worker { init = WQuery.init_stdout; loop = WQuery.main_loop }
       | "--kind=tactic" -> Worker { init = WTactic.init_stdout; loop = WTactic.main_loop }

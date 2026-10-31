@@ -69,6 +69,7 @@
     "catchall:vernac/declare.ml:encode_stored/exception e -> Proof_recorder.ineligible ~reason: \"unmarshallable\" ~": {"ruling": "@replay-fail-closed"},
     "catchall:vernac/library.ml:registered_opaques/exception _ -> Error \"changed\"": {"ruling": "@replay-fail-closed"},
     "catchall:vernac/declare.ml:decode_replay/exception _ -> None": {"ruling": "@replay-fail-closed"},
+    "catchall:vernac/declare.ml:inline_blob/exception e -> Error (\"the inline term cannot be marshalled: \" ^ Printexc.to_string e": {"ruling": "@replay-fail-closed"},
     "catchall:vernac/proof_replay_env.ml:global_of_string/exception _ -> Unreadable": {"ruling": "@replay-fail-closed"},
     "catchall:vernac/proof_replay_env.ml:modpath_of_string/exception _ -> Unreadable": {"ruling": "@replay-fail-closed"},
     "catchall:vernac/proof_replay_env.ml:row1/exception _ -> Proof_replay.Unknown": {"ruling": "@replay-fail-closed"},
