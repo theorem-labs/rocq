@@ -40,3 +40,16 @@ Print Assumptions unchecked_large.
 Unset Printing All Assumptions.
 
 Print Typing Flags.
+
+(* The same flag behind an opaque seal: the final environment holds only the
+   interface of Sealed, so rocq check must list Sealed.hidden_or from the
+   implementation it checks. *)
+Module Type HasProp. Parameter P : Prop. End HasProp.
+Module Sealed : HasProp.
+  Unset Test Elimination Checking.
+  Inductive hidden_or (A B : Prop) : Prop :=
+  | hidden_l : A -> hidden_or A B
+  | hidden_r : B -> hidden_or A B.
+  Set Test Elimination Checking.
+  Definition P : Prop := hidden_or True True.
+End Sealed.
