@@ -30,6 +30,8 @@
     "debug-output": "Debug dump flags (CDebug `vmbytecode` and `vmlambda`, kernel/vmbytegen.ml:902, kernel/vmlambda.ml:90). They only print.",
     "native": "Native libraries loaded for native_compute (vernac/library.ml:126,174-176). A proof that uses native_compute is ineligible (spec 'Proofs that always run').",
     "reduction-effect": "reduction_effect_hook calls an ML effect function for a registered constant and returns unit (pretyping/reductionops.ml:44-50). The functions come from effect_table, filled only by declare_reduction_effect, which nothing in Rocq or the pinned plugins calls (`git grep -n declare_reduction_effect` finds only its definition at pretyping/reductionops.ml:63). The table cannot change a term.",
+    "print-assumptions": "Runs only inside the Print Assumptions command (vernac/assumptions.ml, whose one caller is the PrintAssumptions arm of vernac/vernacentries.ml). A command inside a proof makes the proof ineligible (command_in_proof, row 21). Outside a proof the handler only chooses whether the query walks an object again, which decides printed text and the files of ROCQ_ASSUMPTIONS_SHARED_DIR, never a term or a state that a later proof reads.",
+    "label-only": "An object of default_object with no cache, load or open function: loading it changes no state. It holds the Require, Load and Declare ML Module attempts of a library compiled with -location-free-label (vernac/attempts.ml), and only the library label reads it (Attempts.find from vernac/library.ml read_file_label, and the interface key, Key_stripped interface_view). No tactic reads it.",
     "derived-cache": "Process-local cache (`~local:true`) of compiled Ltac2 globals (plugins/ltac2/tac2env.ml, compiled_tacs), which Tac2interp.eval_global runs in place of the global's definition. Nothing in this tree fills it: its only writer is the exported Tac2env.set_compiled_global, so every entry is a closure a plugin installed and is NOT a function of row 10's recorded definitions. The first call trips the process-wide fence (reason plugin_hook, detail Tac2env.set_compiled_global; lib/proof_recorder.ml closure_setter, stock 0), so no proof that can reach an entry is replayed."
   },
   "sites": {
@@ -326,6 +328,7 @@
     "summary:vernac/library.ml:\"LIBRARY\"": {"row": "S2.1"},
     "summary:vernac/library.ml:\"LIBRARY-LOAD\"": {"row": "S2.1"},
     "summary:vernac/library.ml:\"NATIVE-LIBRARY-LOAD\"": {"ruling": "@native"},
+    "object:vernac/attempts.ml:\"ATTEMPTS\"": {"ruling": "@label-only"},
     "object:vernac/library.ml:\"REQUIRE\"": {"row": "S2.1"},
     "object:vernac/library.ml:\"REQUIRE-SYNTAX\"": {"row": "S2.1"},
     "summary:vernac/loadpath.ml:\"LOADPATHS\"": {"row": "S2.1"},
@@ -344,6 +347,7 @@
     "object:vernac/record.ml:\"STRUCTURE\"": {"row": "14"},
     "summary:vernac/tactic_option.ml:declare_tactic_option/(name ^ \"-default-tactic\")": {"row": "N4"},
     "object:vernac/tactic_option.ml:declare_tactic_option/name": {"row": "N4"},
+    "catchall:vernac/assumptions.ml:shallow_walk/exception e -> let e = Exninfo.capture e in": {"ruling": "@print-assumptions"},
     "catchall:vernac/topfmt.ml:pr_cmd_header/e -> str (Printexc.to_string e)": {"ruling": "@printing-only"},
     "catchall:vernac/vernacControl.ml:measure_profile/e -> Error (Exninfo.capture e)": {"ruling": "@reraised-by-caller"},
     "catchall:vernac/vernacControl.ml:with_fail/e -> let _, info as exn = Exninfo": {"ruling": "@reraises-async"},
