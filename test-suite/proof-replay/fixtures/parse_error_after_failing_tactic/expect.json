@@ -1,0 +1,8 @@
+{
+  "doc": "a tactic fails and the next sentence of the proof does not parse: stock reports the tactic's error, and replay, which parses a candidate's sentences ahead, must report the same error",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.target": {"eligible": true}}},
+  "compile_fails": ["A.v"],
+  "compare_stderr": ["A.v"],
+  "coqchk": false
+}

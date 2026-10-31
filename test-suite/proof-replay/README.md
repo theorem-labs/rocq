@@ -358,6 +358,14 @@ proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
+**Gate review of 079bc4cb71, reviewer finding R3.**
+`parse_error_after_failing_tactic`: replay parses the sentences of a proof
+that has a candidate record ahead, up to the closer, before any of them runs.
+In the edited tree a tactic fails and the next sentence does not parse.
+Stock runs the tactic and reports its error.  Replay must run the sentences
+it kept, in order, before it raises the syntax error, so both compiles fail
+with the same stderr (`compare_stderr`).
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
