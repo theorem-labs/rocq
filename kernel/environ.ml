@@ -258,11 +258,15 @@ module Recorded = struct
   let mind tbl = once tbl Mindmap_env.mem Mindmap_env.add MutInd.to_string
   let mpath tbl = once tbl ModPath.Map.mem ModPath.Map.add ModPath.to_string
 
-  (* The library of a kernel name, and that library's .vo digest. A module
-     or module type of a REQUIRED library is recorded by the digest and not
-     by its body: the digest pins every object the library holds, and a
-     module body holds every constant of the module. Constants and
-     inductives are recorded by value ([recorded_constant]). *)
+  (* The library of a kernel name, and the digest that library's .vo stores
+     for itself. A module or module type of a REQUIRED library is recorded
+     by that digest and not by its body. A proof step reads only a module's
+     field names, whether it is a functor, and whether it exists (Ltac2
+     Module primitives, Rocqlib), and the stored digest covers those. It
+     does not cover every value: under -location-free-label it is a label
+     that leaves out whether a constant is an axiom or an opaque proof, and
+     the opaque bodies. So no evaluator reads a constant through this digest:
+     constants and inductives are recorded by value ([recorded_constant]). *)
   let lib_digests = ref DirPath.Map.empty
 
   let rec root_lib = function
