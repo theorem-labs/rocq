@@ -24,6 +24,8 @@ It prints, in order:
 import sys
 from pathlib import Path
 
+from objfile import segments
+
 MAGIC = 0x8495A6BE
 
 
@@ -170,25 +172,9 @@ class Reader:
         return node
 
 
-def segments(data, what):
-    table = int.from_bytes(data[8:16], "big")
-    count = int.from_bytes(data[table:table + 4], "big")
-    off, segs = table + 4, {}
-    for _ in range(count):
-        nlen = int.from_bytes(data[off:off + 4], "big")
-        off += 4
-        name = data[off:off + nlen].decode()
-        off += nlen
-        pos = int.from_bytes(data[off:off + 8], "big")
-        length = int.from_bytes(data[off + 8:off + 16], "big")
-        off += 32
-        segs[name] = (pos, length)
-    return segs
-
-
 def load(path, seg):
     data = Path(path).read_bytes()
-    pos, length = segments(data, path)[seg]
+    pos, length, _ = segments(data, path)[seg]
     r = Reader(data[pos:pos + length])
     r.header()
     root = r.read()

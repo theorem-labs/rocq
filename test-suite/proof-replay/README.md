@@ -62,6 +62,9 @@ PATH` (or `SEGCMP_NORM`) to use that program, which is the rule itself.  Without
 it the runner compares segments in Python by the MD5 the segment table records;
 it then cannot decide a `vmlibrary`-only difference and reports
 `vmlibrary_bytes`, which fails the fixture.  Each line says which comparison ran.
+`objfile.py` is the one reader of the `.vo` segment table that `runner.py`,
+`vodiff.py` and `vodiff_all.py` use.  It refuses an object whose table is cut
+short, points outside the file or names a segment twice (`test_objfile.py`).
 
 A fixture on `EXEMPTIBLE_FIXTURES` in `runner.py` whose `vo_exempt` names the
 file may differ from stock in Marshal sharing alone: only the `library`
@@ -738,8 +741,8 @@ Two traps, both of which have already produced a wrong answer here:
    real count was 262, of which 239 differed only in digests.  It must never be
    the only comparison.
 2. **`vodiff.py` lists at most 20 differences per segment but counts them
-   all.**  The cap is on the listing (`vodiff.py:252,254`); the count printed
-   at `:257` is `len(out["diff"])`, uncapped.  Classifying from the listing
+   all.**  The cap is on the listing (`vodiff.py:238,240`); the count printed
+   at `:243` is `len(out["diff"])`, uncapped.  Classifying from the listing
    gave two false "value differs" objects at 30 and 31 differences, both
    wholly dependency digests.  Judge on the count, or call `compare()` and walk
    `out["diff"]` yourself as `vodiff_all.py` does.

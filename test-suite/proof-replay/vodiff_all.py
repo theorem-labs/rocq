@@ -14,6 +14,8 @@ import json
 import sys
 from pathlib import Path
 
+import objfile
+
 # argv: [VODIFF] REPLAY.vo STOCK.vo SEGMENT.  Outside the suite (a sweep on a lane box) vodiff.py may live
 # elsewhere, so the path stays overridable; inside the suite the sibling is the one to use.
 args = sys.argv[1:]
@@ -56,8 +58,8 @@ def library_md5s(root: Path) -> dict[bytes, str]:
     for vo in root.rglob("*.vo"):
         data = vo.read_bytes()
         try:
-            pos, length = vodiff.segments(data, vo)["library"]
-        except (KeyError, IndexError, ValueError):
+            pos, length, _ = objfile.segments(data, vo)["library"]
+        except (KeyError, ValueError):
             continue
         out[hashlib.md5(data[pos : pos + length]).digest()] = str(vo.relative_to(root))
     return out

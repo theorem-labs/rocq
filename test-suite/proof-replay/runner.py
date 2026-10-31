@@ -59,6 +59,8 @@ import time
 import pathlib
 from pathlib import Path
 
+from objfile import segments
+
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures"
 MISS_KINDS = ("key", "read", "ineligible", "missing_record")
@@ -399,34 +401,6 @@ def parse_record(path):
 
 
 # ------------------------------------------------------- comparing the objects
-
-
-def segments(data, what):
-    """The segment table of a .vo (lib/objFile.ml): name -> (pos, len, md5)."""
-    if len(data) < 16:
-        raise ValueError("%s: shorter than a header" % what)
-    table = int.from_bytes(data[8:16], "big")
-    if table + 4 > len(data):
-        raise ValueError("%s: the segment table is past the end" % what)
-    count = int.from_bytes(data[table:table + 4], "big")
-    off, segs = table + 4, {}
-    for _ in range(count):
-        if off + 4 > len(data):
-            raise ValueError("%s: the segment table is cut short" % what)
-        nlen = int.from_bytes(data[off:off + 4], "big")
-        off += 4
-        name = data[off:off + nlen].decode("utf-8", "replace")
-        off += nlen
-        pos = int.from_bytes(data[off:off + 8], "big")
-        length = int.from_bytes(data[off + 8:off + 16], "big")
-        digest = data[off + 16:off + 32]
-        off += 32
-        if pos + length > len(data):
-            raise ValueError("%s: segment %s is past the end" % (what, name))
-        if name in segs:
-            raise ValueError("%s: segment %s named twice" % (what, name))
-        segs[name] = (pos, length, digest)
-    return segs
 
 
 def compare_vo_python(a, b):
