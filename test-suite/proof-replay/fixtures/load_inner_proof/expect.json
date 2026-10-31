@@ -1,0 +1,24 @@
+{
+  "doc": "a proof of a Load-ed file is ineligible and leaves no candidate open; a proof after the Load is keyed by its reads",
+  "files": ["A.v", "B.v"],
+  "records": {
+    "A.v": {"PR.A.inner": {"ineligible": ["load"], "stores_no_term": true},
+            "PR.A.reads_loaded": {"eligible": true},
+            "PR.A.after": {"eligible": true}},
+    "B.v": {"PR.B.inner": {"ineligible": ["load"], "stores_no_term": true}}
+  },
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.inner", "ineligible", "load", "inside_load"], ["PR.A.reads_loaded", "read"],
+                   ["PR.A.after", "hit"]]
+    }
+  },
+  "compile_fails": ["B.v"],
+  "compare_stderr": ["B.v"]
+}

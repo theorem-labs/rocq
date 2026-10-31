@@ -466,6 +466,20 @@ the file.  No fixture reaches that branch.  The trigger tried, a `Set
 Universe Polymorphism` before the instance in the registered tree only, makes
 the instance miss on its start-of-proof read of the option tables first.
 
+**Gate review, INFRA-361 gap 2.**  `load_inner_proof`: a `Load`ed file's
+sentences run inside the one `Load` sentence, so the toplevel keeps none of
+them as a proof's sentences and decides no proof among them.  A proof that the
+loaded file opens is ineligible (reason `load` in the record, outcome
+`ineligible` on channel `load` in the summary) and leaves no candidate open.
+Before, the candidate stayed open after the `Load`, and the toplevel kept the
+sentences after it as that proof's: in `B.v` it kept a `Proof.` that has no
+proof to act on and reported the syntax error of the next sentence, where
+stock reports the `Proof.`.  In `A.v` the loaded file changes a constant: the
+proof that unfolds it misses on that read, and a later proof replays.  A proof
+after a `Load` needs no rule of its own: the loaded sentences reach it only
+through the global state, which its reads compare, as for a command of the
+file itself.
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its

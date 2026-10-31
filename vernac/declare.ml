@@ -1867,6 +1867,11 @@ let record_open_proof name ~statement =
     ~name:(Lazy.force path)
     ~statement:(fun () -> Proof_recorder.digest ~what:"statement" (statement ()))
     ~position:(Proof_record_env.position ());
+  (* INFRA-361 gap 2: a proof that a [Load]ed file opens runs inside the
+     [Load] sentence, so key item 1 does not hold its own sentences. It
+     stores no term. *)
+  if Proof_recorder.in_load () then
+    Proof_recorder.ineligible ~reason:"load" ~detail:(Lazy.force path);
   Proof_replay.open_proof
     ~name:(Lazy.force path)
     ~statement:(fun () -> Proof_record.digest_value (statement ()))
