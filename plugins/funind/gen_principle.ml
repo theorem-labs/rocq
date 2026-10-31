@@ -1333,7 +1333,16 @@ let make_scheme evd (fas : (Constant.t EConstr.puniverses * UnivGen.QualityOrSet
     match finfos.equation_lemma with
     | None -> Vernacexpr.Transparent (* non recursive definition *)
     | Some equation ->
-      if Declareops.is_opaque (Global.lookup_constant equation) then
+      let cb = Global.lookup_constant equation in
+      (* The generated principle is an opaque proof when the equation lemma
+         is one, and a transparent definition otherwise, which a later
+         [Transparent] on it, or any reduction through it, observes. An
+         admitted equation lemma ([Undef None]) and a proved one
+         ([OpaqueDef]) give the lemma's library the same label, so the
+         status seen is logged for the keep rule (D18, dispatch://INFRA-361;
+         [OpacityLog], as [Redexpr.check_not_fully_opaque] does). *)
+      OpacityLog.record equation cb;
+      if Declareops.is_opaque cb then
         Vernacexpr.Opaque
       else Vernacexpr.Transparent
   in

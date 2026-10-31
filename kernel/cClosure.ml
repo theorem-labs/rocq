@@ -388,8 +388,9 @@ end = struct
 
   let constant_value_in u = function
     | Def b -> injectu b u
-    | OpaqueDef _ -> raise (NotEvaluableConst Opaque)
-    | Undef _ -> raise (NotEvaluableConst NoBody)
+    | OpaqueDef _ | Undef _ ->
+      (* as [Environ.constant_value_in]: not told apart (design D18) *)
+      raise (NotEvaluableConst NoBody)
     | Primitive p -> raise (NotEvaluableConst (IsPrimitive (u,p)))
     | Symbol _ -> assert false
     (*  Should already be dealt with *)

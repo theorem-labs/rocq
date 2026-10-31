@@ -1229,8 +1229,10 @@ let constant_value_in env sigma (kn, u) =
   match cb.const_body with
   | Def l_body ->
     of_constr (CVars.subst_instance_constr u l_body)
-  | OpaqueDef _ -> raise (NotEvaluableConst Opaque)
-  | Undef _ -> raise (NotEvaluableConst NoBody)
+  | OpaqueDef _ | Undef _ ->
+    (* Not told apart, as in [Environ.constant_value_in] (design D18): an
+       escaping exception's text would show the difference. *)
+    raise (NotEvaluableConst NoBody)
   | Primitive p -> raise (NotEvaluableConst (IsPrimitive (u ,p)))
   | Symbol b ->
     let r = Environ.lookup_rewrite_rules kn env in

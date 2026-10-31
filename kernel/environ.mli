@@ -194,15 +194,19 @@ val polymorphic_pconstant : pconstant -> env -> bool
 val type_in_type_constant : Constant.t -> env -> bool
 
 (** {6 ... } *)
-(** [constant_value env c] raises [NotEvaluableConst Opaque] if
-   [c] is opaque, [NotEvaluableConst NoBody] if it has no
-   body, [NotEvaluableConst IsProj] if [c] is a projection,
-   [NotEvaluableConst (IsPrimitive p)] if [c] is primitive [p]
+(** [constant_value env c] raises [NotEvaluableConst NoBody] if [c] has no
+   body or is an opaque proof (the two are not told apart, design D18:
+   an error text that showed the difference would let a dependent observe
+   whether a foreign constant is an axiom or an opaque proof, which the
+   library label does not cover), [NotEvaluableConst (IsPrimitive p)] if [c]
+   is primitive [p], [NotEvaluableConst (HasRules _)] if [c] is a symbol,
    and an anomaly if it does not exist in [env] *)
 
 type const_evaluation_result =
   | NoBody
   | Opaque
+  (** Not raised by this kernel (an opaque proof raises [NoBody]); kept so
+      that plugin code matching it still compiles. *)
   | IsPrimitive of Instance.t * CPrimitives.t
   | HasRules of Instance.t * bool * machine_rewrite_rule list
 exception NotEvaluableConst of const_evaluation_result

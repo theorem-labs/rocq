@@ -651,13 +651,21 @@ let constant_type_in env (kn,u) =
   let cb = lookup_constant kn env in
   subst_instance_constr u cb.const_type
 
+(* An opaque proof raises [NotEvaluableConst NoBody], as an axiom does, not
+   [NotEvaluableConst Opaque] (design D18, dispatch://INFRA-361). No caller
+   tells the two payloads apart, but a caller that lets the exception escape
+   a tactic shows it in the error text ("Uncaught exception
+   Environ.NotEvaluableConst(1)" against "(0)"), which Ltac2 can read
+   ([Message.to_string], [Control.print_err]) and branch on; and the library
+   label deliberately gives an axiom and an opaque proof of a library's own
+   signature the same label, so a dependent kept across an [Admitted -> Qed]
+   edit must not be able to tell them apart this way. *)
 let constant_value_in env (kn,u) =
   let cb = lookup_constant kn env in
   match cb.const_body with
     | Def l_body ->
       subst_instance_constr u l_body
-    | OpaqueDef _ -> raise (NotEvaluableConst Opaque)
-    | Undef _ -> raise (NotEvaluableConst NoBody)
+    | OpaqueDef _ | Undef _ -> raise (NotEvaluableConst NoBody)
     | Primitive p -> raise (NotEvaluableConst (IsPrimitive (u,p)))
     | Symbol b ->
         match Cmap_env.find_opt kn env.symb_pats with
