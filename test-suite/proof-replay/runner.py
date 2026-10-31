@@ -50,7 +50,9 @@ stock-against-stock noise.
 import argparse
 import hashlib
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -61,6 +63,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures"
 MISS_KINDS = ("key", "read", "ineligible", "missing_record")
+
+#: Budget mode: how far into the last proof's recorded wall time the budget
+#: ends.  The stock compile must still outlast the budget, and it runs every
+#: proof at about the recorded speed less the recorder's overhead: 0.3 leaves
+#: about a quarter of a proof between them.
+BUDGET_LAST_SHARE = 0.3
 
 DEFAULTS = {
     "doc": "",
@@ -95,8 +103,6 @@ DEFAULTS = {
     "stderr_contains": {},
     "vo_exempt": {},
     "coqchk": True,
-    "budget": None,
-    "replay_wall_max": None,
     "usage": None,
     "mixed": None,
     "trigger_optional": None,
@@ -303,6 +309,32 @@ def publish_records(spec, reg, records, convert=None, mutation=None):
     return published, None
 
 
+_REPLAY_FIELD = re.compile(rb'"replay":(?:null|"[^"\\]*")')
+_VO_OPAQUES_FIELD = re.compile(rb'"vo_opaques":"[0-9a-f]{64}"')
+
+
+def inline_bytes_kept(before, after):
+    """None when `after` (what `rocq proof-record-inline` wrote for the record
+    `before`) keeps every byte of `before` but each proof line's stored term
+    and the trailer's `vo_opaques`, which must become null; else why not.
+    Bytes, not parsed JSON: one serializer writes both, so nothing else may
+    move (grading-tools `fast_grade._inline_record` checks the same)."""
+    old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    if len(old) != len(new) or len(old) < 2:
+        return "%d lines, the input has %d" % (len(new), len(old))
+    if new[0] != old[0]:
+        return "the header line changed"
+    trailer, count = _VO_OPAQUES_FIELD.subn(b'"vo_opaques":null', old[-1])
+    if count != 1 or new[-1] != trailer:
+        return "the trailer changed beyond vo_opaques becoming null"
+    for n, (a, b) in enumerate(zip(old[1:-1], new[1:-1]), 2):
+        a2, ca = _REPLAY_FIELD.subn(b'"replay":', a)
+        b2, cb = _REPLAY_FIELD.subn(b'"replay":', b)
+        if ca != 1 or cb != 1 or a2 != b2:
+            return "line %d changed beyond its stored term" % n
+    return None
+
+
 def parse_record(path):
     """The record file as (header, [proof...], trailer).  Raises ValueError."""
     header, proofs, trailer = None, [], None
@@ -427,12 +459,27 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: read). eval_micromega_cache replays one nia proof over Z, with the same
 #: two "BinInt" sharing differences (vodiff, 2026-10-31: 0 value
 #: differences, 2 sharing differences, the opaques segment equal).
+#: eval_abbreviation, eval_notation and eval_prim_token share the
+#: string "Datatypes" where stock does, and eval_ltac2_global,
+#: eval_ltac2_notation, ltac_alias_moved and ltac_redef_moved share
+#: "Logic" (vodiff, 2026-10-31, a build of 481ab9697f with
+#: 9.2/library-is-loaded: 0 value differences, 1 or 2 sharing differences,
+#: opaques and vmlibrary equal). Their sharing depends on the Corelib .vo
+#: files and the load path: the same rocq writes equal bytes with the
+#: Corelib of the lane switch (466ade62 base), and not with a Corelib built
+#: from this tree; there the four "Logic" fixtures write equal bytes only
+#: when Stdlib is installed beside Corelib, as in the CI job.
+#: eval_option_tables shares "Datatypes" the same way (vodiff, 2026-10-31,
+#: a build of 6ef3d08b1a: 0 value differences, 2 sharing differences,
+#: opaques and vmlibrary equal).
 #: oracle_checker_memo, oracle_zchecker_memo and oracle_fresh_keyword
 #: replay one of two lia proofs and show the same two "BinInt" sharing
 #: differences (vodiff on the speed-8 replay switch, 2026-10-31: values equal,
 #: 0 value differences, 2 sharing differences each).
 EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite",
-                       "vm_lia_hit", "eval_micromega_cache", "oracle_checker_memo",
+                       "vm_lia_hit", "eval_micromega_cache", "eval_abbreviation", "eval_notation",
+                       "eval_prim_token", "eval_ltac2_global", "eval_ltac2_notation", "ltac_alias_moved",
+                       "ltac_redef_moved", "eval_option_tables", "oracle_checker_memo",
                        "oracle_zchecker_memo", "oracle_fresh_keyword")
 
 
@@ -504,27 +551,24 @@ class Fixture:
 
     def inline_record(self, record, vo, target):
         """`inline_convert`: `rocq proof-record-inline` of the registration's
-        record and `.vo`, written to `target`, then checked: the same header,
-        the same proofs but for their stored terms, a trailer that names no
-        `.vo`, and a new stored term for exactly the proofs `inline_terms`
-        names (those whose term referred to the `.vo`)."""
+        record and `.vo`, written to `target`, then checked (`inline_bytes_kept`):
+        every byte but the stored terms and the trailer's `vo_opaques` is the
+        input's, `vo_opaques` is null, and a new stored term for exactly the
+        proofs `inline_terms` names (those whose term referred to the `.vo`)."""
         res = self.rocq.inline(record, vo, target, self.out)
         self.log("inline-%s" % target.name, res)
         if res["rc"] != 0:
             return "rocq proof-record-inline %s exited %d: %s" % (record.name, res["rc"], last_line(res))
         try:
-            header, proofs, trailer = parse_record(record)
-            iheader, iproofs, itrailer = parse_record(target)
+            _header, proofs, trailer = parse_record(record)
+            _iheader, iproofs, _itrailer = parse_record(target)
         except (ValueError, json.JSONDecodeError) as exc:
             return "the inline record of %s does not parse: %s" % (record.name, exc)
         if trailer.get("vo_opaques") is None:
             return "%s names no .vo: an inline_convert fixture registers with -proof-record-vo-ref" % record.name
-        if itrailer.get("vo_opaques") is not None:
-            return "the inline record of %s still names a .vo (vo_opaques %r)" % (record.name, itrailer["vo_opaques"])
-        if iheader != header or dict(itrailer, vo_opaques=None) != dict(trailer, vo_opaques=None):
-            return "the inline record of %s changed its header or its trailer beyond vo_opaques" % record.name
-        if [dict(p, replay=None) for p in iproofs] != [dict(p, replay=None) for p in proofs]:
-            return "the inline record of %s changed a proof beyond its stored term" % record.name
+        err = inline_bytes_kept(record.read_bytes(), target.read_bytes())
+        if err:
+            return "the inline record of %s: %s" % (record.name, err)
         changed = [p["name"] for p, q in zip(proofs, iproofs) if p.get("replay") != q.get("replay")]
         wanted = self.spec.get("inline_terms")
         if wanted is not None and changed != wanted:
@@ -546,36 +590,40 @@ class Fixture:
             shutil.rmtree(work)
         work.mkdir(parents=True)
         record = record_src(reg, src)
-        changed = work / "changed.vo"
+        flipped = work / "flipped.vo"
         data = bytearray(vo_src(reg, src).read_bytes())
         try:
-            pos, length = opaques_span(bytes(data), changed.name)
+            pos, length = opaques_span(bytes(data), flipped.name)
         except ValueError as exc:
             self.fail(str(exc))
             return
         data[pos + length // 2] ^= 0xFF
-        changed.write_bytes(bytes(data))
+        flipped.write_bytes(bytes(data))
         foreign = work / "foreign.proof-record.jsonl"
         lines = record.read_text().splitlines()
         header = json.loads(lines[0])
         header["toolchain"]["binary"] = "0" * 32
         foreign.write_text("".join(l + "\n" for l in [json.dumps(header, separators=(",", ":"))] + lines[1:]))
-        cases = ((record, changed, "changed"), (record, work / "absent.vo", "missing"),
-                 (foreign, vo_src(reg, src), "another binary"))
-        for rec, vo, why in cases:
-            out = work / ("out-%s.proof-record.jsonl" % why.replace(" ", "-"))
+        # The words Rocq writes for each refusal (`Library.registered_opaques`, `written_by_another_binary`),
+        # matched with what follows them so a file name cannot satisfy the check.
+        cases = ((record, flipped, "changed", ": changed (the record names opaque proofs"),
+                 (record, work / "absent.vo", "missing", ": missing (the record names opaque proofs"),
+                 (foreign, vo_src(reg, src), "another-binary", "the record was written by another binary (0000"))
+        for rec, vo, why, text in cases:
+            out = work / ("out-%s.proof-record.jsonl" % why)
             res = self.rocq.inline(rec, vo, out, work)
-            self.log("inline-refusal-%s" % why.replace(" ", "-"), res)
-            if res["rc"] != 1 or why not in res["err"]:
-                self.fail("rocq proof-record-inline with %s exited %d, wanted 1 naming %r: %s"
-                          % (why, res["rc"], why, last_line(res)))
+            self.log("inline-refusal-%s" % why, res)
+            if res["rc"] != 1 or text not in res["err"]:
+                self.fail("rocq proof-record-inline (%s) exited %d, wanted 1 saying %r: %s"
+                          % (why, res["rc"], text, last_line(res)))
             if out.exists():
-                self.fail("rocq proof-record-inline with %s still wrote %s" % (why, out.name))
-        if sorted(p.name for p in work.iterdir()) != ["changed.vo", foreign.name]:
+                self.fail("rocq proof-record-inline (%s) still wrote %s" % (why, out.name))
+        if sorted(p.name for p in work.iterdir()) != sorted([flipped.name, foreign.name]):
             self.fail("the refused conversions left files behind: %s" % sorted(p.name for p in work.iterdir()))
         inline = work / "inline.proof-record.jsonl"
         again = work / "again.proof-record.jsonl"
         first = self.rocq.inline(record, vo_src(reg, src), inline, work)
+        self.log("inline-identity-first", first)
         second = self.rocq.inline(inline, work / "absent.vo", again, work)
         self.log("inline-identity", second)
         if first["rc"] != 0 or second["rc"] != 0:
@@ -583,6 +631,45 @@ class Fixture:
                       % (second["rc"], first["rc"], last_line(second if first["rc"] == 0 else first)))
         elif inline.read_bytes() != again.read_bytes():
             self.fail("rocq proof-record-inline changed a record that names no .vo")
+        self.check_filtered_conversion(reg, work)
+
+    def check_filtered_conversion(self, reg, work):
+        """`inline_convert`: the input a task cut hands the converter is a
+        FILTERED record, the registration's lines minus the proofs the cut
+        removed, verbatim, with the trailer's `proof_count` digits rewritten
+        (grading-tools `fast_grade._filter_proof_record`).  Drop the first
+        proof `inline_terms` names (its term refers to the `.vo`), convert,
+        and require that the dropped proof stays absent and every byte but
+        the stored terms and `vo_opaques` is the filtered input's."""
+        src = self.spec["files"][0]
+        raw = record_src(reg, src).read_bytes().splitlines(keepends=True)
+        names = [json.loads(line).get("name") for line in raw[1:-1]]
+        wanted = self.spec.get("inline_terms") or []
+        if not wanted or wanted[0] not in names:
+            self.fail("filtered conversion: no proof of %s that inline_terms names to drop" % src)
+            return
+        drop = names.index(wanted[0])
+        kept = [line for i, line in enumerate(raw[1:-1]) if i != drop]
+        trailer, count = re.subn(rb'"proof_count":\d+', b'"proof_count":%d' % len(kept), raw[-1])
+        if count != 1:
+            self.fail("filtered conversion: the trailer has %d proof_count fields" % count)
+            return
+        filtered = work / "filtered.proof-record.jsonl"
+        filtered.write_bytes(b"".join([raw[0], *kept, trailer]))
+        out = work / "filtered-inline.proof-record.jsonl"
+        res = self.rocq.inline(filtered, vo_src(reg, src), out, work)
+        self.log("inline-filtered", res)
+        if res["rc"] != 0:
+            self.fail("rocq proof-record-inline of a filtered record exited %d: %s" % (res["rc"], last_line(res)))
+            return
+        converted = [json.loads(line).get("name") for line in out.read_bytes().splitlines()[1:-1]]
+        if converted != [n for i, n in enumerate(names) if i != drop]:
+            self.fail("the converted filtered record has proofs %s; %s was dropped" % (converted, wanted[0]))
+        err = inline_bytes_kept(filtered.read_bytes(), out.read_bytes())
+        if err:
+            self.fail("the converted filtered record: %s" % err)
+        else:
+            self.notes.append("a filtered record (%s dropped) converts with every other byte kept" % wanted[0])
 
     def check_records(self, reg_tree):
         """Parse every registration record, then apply fixture assertions."""
@@ -956,9 +1043,30 @@ class Fixture:
             self.fail("the refused compile still wrote %s" % vo_src(tree, src).name)
 
     def run_budget_mode(self, records):
+        """The charged clock kills the replay compile inside the last proof.
+
+        The budget comes from this machine's registration, so the fixture
+        holds on a slow box as on a fast one: the recorded wall times of the
+        proofs before the last are the charge of the hits, and the budget ends
+        BUDGET_LAST_SHARE of the way into the last proof's recorded time.  The
+        stock compile, which runs every proof, must outlast that budget.  A
+        kill that lands only after the last proof's tactic finishes takes at
+        least the whole proof, so the replay wall must stay under twice the
+        share.
+        """
         spec = self.spec
-        budget = spec["budget"]
         src = spec["files"][0]
+        try:
+            _, proofs, _ = parse_record(record_src(self.out / "reg", src))
+        except ValueError as exc:
+            self.fail("cannot read the registration's record of %s: %s" % (src, exc))
+            return
+        walls = [p["wall_s"] for p in proofs]
+        if len(walls) < 2:
+            self.fail("the budget needs at least two recorded proofs, %s has %d" % (src, len(walls)))
+            return
+        charge = sum(walls[:-1])
+        budget = int(math.ceil(charge + BUDGET_LAST_SHARE * walls[-1]))
         replay_flags = self.replay_flags(records) + ["-proof-replay-budget", str(budget)]
         a, replay = self.grade("a", replay_flags, timeout_s=budget + 120)
         b, stock = self.grade("b", spec["grade_flags"], timeout_s=budget)
@@ -969,11 +1077,12 @@ class Fixture:
         if rb["rc"] != 124:
             self.fail("the stock compile exited %d, wanted 124 (its own timeout): %s"
                       % (rb["rc"], last_line(rb)))
-        limit = spec["replay_wall_max"] or (budget - 20)
+        limit = 2 * (budget - charge)
         if ra["rc"] == 124 and ra["wall"] >= limit:
-            self.fail("the replay compile ran %.1fs, so the wrapper killed it, not the charged clock"
-                      % ra["wall"])
-        self.notes.append("replay wall %.1fs, stock wall %.1fs, budget %ds" % (ra["wall"], rb["wall"], budget))
+            self.fail("the replay compile ran %.1fs (limit %.1fs), so the kill did not land inside the last "
+                      "proof's tactic" % (ra["wall"], limit))
+        self.notes.append("recorded proofs %s s, charge %.1fs, budget %ds, replay wall %.1fs, stock wall %.1fs"
+                          % ("/".join("%.1f" % w for w in walls), charge, budget, ra["wall"], rb["wall"]))
         for tree, label in ((a, "replay"), (b, "stock")):
             if vo_src(tree, src).exists():
                 self.fail("the killed %s compile still wrote %s" % (label, vo_src(tree, src).name))
@@ -1100,6 +1209,8 @@ def probe(rocq, spec, out, what):
         work.mkdir(parents=True, exist_ok=True)
         src = "NativeProbe.v"
         (work / src).write_text("Lemma probe : 2 + 2 = 4.\nProof. native_compute. reflexivity. Qed.\n")
+        # A Rocq configured without native code only warns and falls back to
+        # vm_compute, so the probe makes that warning an error.
         res = rocq.run([str(rocq.bin / "rocq"), "compile", "-q", "-native-compiler", "ondemand",
                         "-w", "+native-compiler-disabled", "-Q", ".", "Probe", src], work)
         if res["rc"] != 0:
