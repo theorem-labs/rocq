@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 
 # rocq compile -record-timeouts writes <base>.timeouts.json beside the output
-# file: how many wall-clock timeouts the compilation armed, and how many of
-# them fired. Checks the four user-visible timeouts (the Ltac1 timeout tactic,
+# file: how many wall-clock timeouts the compilation armed, how many of
+# them fired, and the sha256 of the output file, which binds the record to the
+# object. Checks the four user-visible timeouts (the Ltac1 timeout tactic,
 # Timeout, Default Timeout and the Ltac2 Control.timeout/timeoutf), a timeout
 # under the par: selector, which a tactic worker runs and reports back, the
 # refusal of -async-proofs and -vos, whose delegated proofs do not report, a
-# timeout that fires, a file with no timeout, a failing compilation, one killed
+# timeout that fires, a file with no timeout, a failing compilation, which
+# records a null hash, one killed
 # by SIGKILL, and that without the option nothing is removed or written and the
 # .vo is unchanged.
 
@@ -26,20 +28,30 @@ compile () { # compile NAME [option...]: compile $D/NAME.v, return its status
   rocq c -q -R "$D" RecordTimeouts "$@" "$D/$n.v" > "$D/$n.out" 2>&1
 }
 
-key () { # key NAME KEY: the value of KEY in NAME's record
-  sed -n 's/^{"format":1,"armed":\([0-9]*\),"fired":\([0-9]*\)}$/\1 \2/p' \
+key () { # key NAME KEY: the value of field KEY (1 armed, 2 fired, 3 hash)
+  sed -n 's/^{"format":2,"armed":\([0-9]*\),"fired":\([0-9]*\),"object_sha256":\(.*\)}$/\1 \2 \3/p' \
       "$D/$1.timeouts.json" 2> /dev/null | cut -d' ' -f"$2"
 }
 
+object_sha256 () { # object_sha256 FILE: the hash the record should hold
+  printf '"%s"' "$(sha256sum "$1" | cut -d' ' -f1)"
+}
+
 check () { # check NAME MIN_ARMED MIN_FIRED
-  local n=$1 mina=$2 minf=$3 a f
+  local n=$1 mina=$2 minf=$3 a f h
   if [ ! -f "$D/$n.timeouts.json" ]; then fail "$n: no record written"; return; fi
   printf '%s: %s\n' "$n" "$(cat "$D/$n.timeouts.json")"
-  a=$(key "$n" 1); f=$(key "$n" 2)
-  if [ -z "$a" ]; then fail "$n: the record is not one {\"format\":1,...} line"; return; fi
+  a=$(key "$n" 1); f=$(key "$n" 2); h=$(key "$n" 3)
+  if [ -z "$a" ]; then fail "$n: the record is not one {\"format\":2,...} line"; return; fi
   [ "$a" -ge "$mina" ] || fail "$n: armed $a, expected at least $mina"
   [ "$f" -ge "$minf" ] || fail "$n: fired $f, expected at least $minf"
   [ "$a" -ge "$f" ] || fail "$n: fired $f more than armed $a"
+  if [ -f "$D/$n.vo" ]; then
+    [ "$h" = "$(object_sha256 "$D/$n.vo")" ] \
+      || fail "$n: the record holds $h, not the sha256 of its .vo"
+  else
+    [ "$h" = null ] || fail "$n: no .vo, but the record holds $h"
+  fi
 }
 
 case_ () { # case_ NAME MIN_ARMED MIN_FIRED [option...] < source
@@ -128,8 +140,14 @@ EOF
 case_ none 0 0 <<'EOF'
 Definition zero := 0.
 EOF
-[ "$(cat "$D/none.timeouts.json")" = '{"format":1,"armed":0,"fired":0}' ] \
-  || fail "none: the record is not an empty one"
+[ "$(cat "$D/none.timeouts.json")" = \
+  "{\"format\":2,\"armed\":0,\"fired\":0,\"object_sha256\":$(object_sha256 "$D/none.vo")}" ] \
+  || fail "none: the record is not an empty one for its own object"
+
+# 9b. The hash is of the object, so a record of another object differs from it,
+#     and a reader can refuse a record moved beside this one.
+[ "$(key none 3)" != "$(key ltac1 3)" ] \
+  || fail "none: two different objects have one hash"
 
 # 10. A failing compilation still writes the record.
 cat > "$D/failing.v" <<'EOF'
@@ -145,7 +163,7 @@ cat > "$D/killed.v" <<'EOF'
 Goal True.
   do 1000000000 idtac.
 EOF
-printf '{"format":1,"armed":0,"fired":0}\n' > "$D/killed.timeouts.json"
+printf '{"format":2,"armed":0,"fired":0,"object_sha256":null}\n' > "$D/killed.timeouts.json"
 rocq c -q -R "$D" RecordTimeouts -record-timeouts "$D/killed.v" > "$D/killed.out" 2>&1 &
 killed_pid=$!
 # Wait for the compilation to remove the stale record, then kill it.

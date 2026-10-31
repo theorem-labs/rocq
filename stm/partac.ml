@@ -100,10 +100,12 @@ end = struct (* {{{ *)
   let on_task_cancellation_or_expiration_or_slave_death = function
     | Some { t_goalno; t_assign; t_kill } ->
       t_kill ();
-      (* The answer this task would have carried is lost, so what it armed is
-         unknown: count one timeout, because a count that is too low would
-         tell a build driver that the compilation never read the clock. *)
-      Control.add_timeout_counts { Control.armed = 1; fired = 0 };
+      (* The answer this task would have carried is lost, so what it armed and
+         what fired are both unknown: count one armed timeout that fired. A
+         count of zero would tell a build driver that no wall clock touched
+         this compilation, and the goal that lost its answer fails, so a try
+         can take another branch for a reason that does not repeat. *)
+      Control.add_timeout_counts { Control.armed = 1; fired = 1 };
       assert (Option.is_empty !t_assign);
       t_assign := Some (RespKilled t_goalno)
     | _ -> ()
