@@ -24,6 +24,7 @@ allowed on sami-rocqperf: run this on speed-r1, under
 fixtures/<name>/original/*.v   the tree that gets registered
 fixtures/<name>/edited/*.v     the tree that gets graded
 fixtures/<name>/expect.json    what must happen
+fixtures/<name>/*              files that `tree_files` copies into a tree
 ```
 
 The runner, per fixture:
@@ -81,6 +82,8 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `alt_register_flags` | register again with these flags, replay from that record in `c/`, and require the same exit codes, hits and `.vo` bytes as from the first record |
 | `vo_mutation` | `remove` or `change` the registered `.vo` published beside each record (one byte of its opaque proofs) |
 | `record_trailers` | per file: `vo_opaques` true or false, whether the record refers to its `.vo` |
+| `tree_dirs` | `original` or `edited` -> paths: an empty directory at each path of every tree made from that side, before any compile (the way the grading engine blocks micromega's certificate caches) |
+| `tree_files` | `original` or `edited` -> path -> a file of the fixture's directory, copied to that path of every tree made from that side, before any compile (a file no compile of the tree writes, such as a `.lia.cache`) |
 
 `outcomes` is a list of `[name, outcome]`, or `[name, outcome, channel]` for a
 `read` miss.  It is checked only when the summary carries the field.
@@ -416,6 +419,29 @@ reason for a record that cannot be read.  The flags-off path of DR-2 (no
 hook work with neither option) has no fixture of its own: the stock compile
 in `b/` of every fixture runs it, and must give the same exit code and
 `.vo` as the replay compile.
+
+**Gate review of 079bc4cb71, finding CF4.**  `lia`, `nia`, `nra` and `psatz`
+look their problem up in a certificate cache (`.lia.cache`, `.nia.cache`,
+`.nra.cache`, `.csdp.cache`, in the compile's working directory) before they
+run their prover, and no read recorded the cache.  The grading engine blocks
+these paths with directories, but the fixture runner and other users of this
+tree do not.  `micromega_cache_unknown`: the edited tree holds a `.lia.cache`
+(`tree_files`) whose one entry is the registration's own entry for the
+proof's problem, with the result changed to `Certificate.Unknown`.
+`make_cache.ml`, beside the fixture, wrote it with the micromega plugin of
+the same build.  Stock reads `Unknown` and `lia` fails, so replay must fail
+too.  Before the fix, replay installed the stored term and compiled the file.
+`eval_micromega_cache`: both trees block `.nia.cache` (`tree_dirs`), as the
+grading engine does, so the `nia` proof `same` reads no entry in both runs
+and replays.  The registration blocks `.lia.cache` too, and the edited tree
+holds the `.lia.cache` that a compile of this tree with no block writes
+(`lia-cache.bin`: `rocq compile -q -Q . PR A.v` in a copy of `original/`).
+So the `lia` proof `changed` misses on `micromega_cache`.  Its entry is
+genuine, so stock and replay compile.  The replay `.vo` differs from stock's
+only in the sharing of the string "BinInt", as `vm_lia_hit`'s does
+(`EXEMPTIBLE_FIXTURES` in `runner.py`).  A cache file that differs from the
+registration's makes a proof miss also when its entries are genuine: the
+value is the file's digest, not each lookup's answer.
 
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 

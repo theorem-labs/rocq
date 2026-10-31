@@ -100,6 +100,8 @@ DEFAULTS = {
     "usage": None,
     "mixed": None,
     "trigger_optional": None,
+    "tree_files": {},
+    "tree_dirs": {},
 }
 
 
@@ -171,6 +173,21 @@ def copy_tree(src, dst):
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
+
+
+def stage_tree(spec, side, dst):
+    """The fixture's `side` tree (`original` or `edited`) at `dst`, with what
+    `tree_dirs` and `tree_files` add to that side: an empty directory at each
+    path (the way the grading engine blocks micromega's certificate caches),
+    and a file of the fixture's directory copied to each path (a cache file
+    no compile of the tree writes)."""
+    copy_tree(FIXTURES / spec["name"] / side, dst)
+    for rel in spec["tree_dirs"].get(side, []):
+        (dst / rel).mkdir(parents=True)
+    for rel, name in spec["tree_files"].get(side, {}).items():
+        target = dst / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(FIXTURES / spec["name"] / name, target)
 
 
 def lib_name(spec, src):
@@ -394,9 +411,11 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: library segment reaches the string "BinInt" through a shared pointer
 #: where the replay's does not (vodiff, 2026-10-30: 0 value differences,
 #: 2 sharing differences; the same on a switch built before the vm_global
-#: read).
+#: read). eval_micromega_cache replays one nia proof over Z, with the same
+#: two "BinInt" sharing differences (vodiff, 2026-10-31: 0 value
+#: differences, 2 sharing differences, the opaques segment equal).
 EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite",
-                       "vm_lia_hit")
+                       "vm_lia_hit", "eval_micromega_cache")
 
 
 def exemption_allowed(fixture, differing_segments, library_values_equal):
@@ -446,7 +465,7 @@ class Fixture:
         spec = self.spec
         flags = spec["register_flags"] if flags is None else flags
         reg = self.out / reg_name
-        copy_tree(FIXTURES / spec["name"] / "original", reg)
+        stage_tree(spec, "original", reg)
         for src in spec["files"]:
             res = self.rocq.compile(spec, reg, flags + ["-proof-record"], src)
             self.log("%s-%s" % (reg_name, src), res)
@@ -530,7 +549,7 @@ class Fixture:
         """
         spec = self.spec
         tree = self.out / tree_name
-        copy_tree(FIXTURES / spec["name"] / "edited", tree)
+        stage_tree(spec, "edited", tree)
         results = []
         for src in (spec["files"] if files is None else files):
             res = self.rocq.compile(spec, tree, flags, src, timeout_s=timeout_s)
@@ -799,7 +818,7 @@ class Fixture:
         if not record.is_file():
             record = records / (lib_name(spec, src).replace(".", "/") + ".proof-record.jsonl")
         tree = self.out / "u"
-        copy_tree(FIXTURES / spec["name"] / "edited", tree)
+        stage_tree(spec, "edited", tree)
         res = self.rocq.compile(spec, tree, ["-proof-replay", str(record)], src)
         self.log("usage-" + src, res)
         want_rc = spec["usage"].get("exit", 1)
@@ -883,7 +902,7 @@ class Fixture:
             return
         self.check_summaries(a, replay)
         m = self.out / "m"
-        copy_tree(FIXTURES / spec["name"] / "edited", m)
+        stage_tree(spec, "edited", m)
         shutil.copyfile(vo_src(a, replay_file), vo_src(m, replay_file))
         for src in carry:
             shutil.copyfile(vo_src(b, src), vo_src(m, src))
