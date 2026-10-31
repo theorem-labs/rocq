@@ -240,6 +240,36 @@ answer is kept with the declaration, not the name.  `late_reset_congruence`:
 proof before it forced; `Reset`, `Back` and `BackTo` are late commands, so
 that proof runs, and replay accepts the later proof as stock does.
 
+**The cross-model review of `777213df6e`.**  Two global inputs that no read
+recorded.  `open_module_contents_assert`: a proof asks Ltac2 for the fields
+of the module it is in, which is open, and asserts that there are none; the
+edited tree declares a definition before it, and stock fails the
+assertion.  `eval_open_module`: that query and Ltac2's `Module.is_functor`
+and `Module.is_modtype` on an open module are reads on channel
+`open_module`; the three answers the edited tree changes (a definition
+before the proof, a functor that becomes a plain module, a module type
+that becomes a plain module) miss on that read, and the answer it does not
+change replays.  Its proofs call the queries through Ltac2 definitions made
+before the first `Qed`, because the source scan takes the word `Module` of
+`Module.module_contents` for a late command.
+`retroknowledge_primitive_changed`: a proof types an int63 literal, whose
+type the kernel takes from its registry of primitive types, and the edited
+tree registers `p` as the float64 type instead of the int63 type; stock
+cannot type the literal.  `eval_retroknowledge`: one more `Primitive`
+between two such proofs; the later one misses on the start-of-proof read
+`retroknowledge`, and the earlier one replays.  A third input of the same
+kind, found while fixing these: `eval_objlabel`.  A proof's `rewrite` with a
+user equality creates a scheme, which the proof term inlines, and the
+scheme's binders are named away from the labels of the module being built
+(`Safe_typing.exists_objlabel`), which the nametab does not show.  The
+edited tree declares `HC` before the proof, so stock writes the binder
+`HC0` where the stored term holds `HC` (vodiff of the opaques segment on
+`777213df6e`: 1 value difference); the proof must miss on the `objlabel`
+read.  It has no replaying proof: a replayed proof that carries a scheme
+writes a library segment whose sharing differs from stock's, which only
+`write_scheme_rewrite` may excuse, and that fixture's proofs read the same
+names unchanged and replay.
+
 A summary's `fence` is `null`, or `"<reason>: <detail>"` of the process-wide
 fence (`Proof_recorder.fence_tripped`) that refused a proof of the file: once
 one trips, no later proof of the process is replayed, and each is counted as

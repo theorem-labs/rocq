@@ -138,6 +138,7 @@ let generalizable_slot = Proof_recorder.slot ()
 let template_slot = Proof_recorder.slot ()
 let universe_slot = Proof_recorder.slot ()
 let warnings_registry_slot = Proof_recorder.slot ()
+let retroknowledge_slot = Proof_recorder.slot ()
 
 let cached slot what v = Proof_recorder.digest_slot slot ~what v
 
@@ -351,7 +352,7 @@ let drop_universe_frames () =
   | _ :: _ -> set_universe_frames []
 
 (* Reads taken once, at each proof's start, for the channels that have no
-   single read point (BET-84, census rows 2, 3, 4, 13, M3, M7). They are
+   single read point (BET-84, census rows 1, 2, 3, 4, 13, M3, M7). They are
    recorded as ordinary reads, so the matcher treats them like the rest.
    Replay evaluates the same list at the proof it is about to replay
    (`Proof_replay_env`), so the two sides can never drift apart. *)
@@ -360,6 +361,21 @@ let start_reads () =
   let one row channel value = Proof_record.{ row; channel; key = ""; value = Some (value ()) } in
   let named = Environ.named_context env in
   [
+    (* Row 1, the kernel's registry of primitive types and of the
+       inductives primitives return (retroknowledge). The kernel reads it
+       with no lookup: an int63 literal's type is the registered constant
+       ([Typeops.type_of_int]), and with none registered the literal does
+       not type. Reduction, the machines and the primitives' types read it
+       too, absence included, at points too many to instrument. A
+       [Primitive] declaration or a [Register ... as kernel.ind_*] of the
+       file being compiled changes it ([Safe_typing.add_retroknowledge]),
+       which neither the loaded libraries in the key nor any constant read
+       sees (cross-model soundness review of 777213df6e, finding 2;
+       fixtures retroknowledge_primitive_changed, eval_retroknowledge). The
+       registry is a small record that only those two commands replace, so
+       the slot digests it again only after one. *)
+    one "1" "retroknowledge" (fun () ->
+        cached retroknowledge_slot "retroknowledge" (Environ.retroknowledge env));
     one "2" "quality_graph" (fun () -> cached qualities_slot "qualities" (Environ.qualities env));
     one "3" "named_context" (fun () -> cached named_slot "named_context" named);
     one "3" "variable_opacity" (fun () ->
@@ -380,6 +396,18 @@ let start_reads () =
     one "M7" "template_default_univs" (fun () ->
         cached template_slot "template_default_univs" (UState.template_default_univs ()));
   ]
+
+(* Row 17: whether a name is a label of the module being built, which the
+   kernel records at [Safe_typing.exists_objlabel]. The key is the name, read
+   back here; the position fixes the module, and the evaluator asks the
+   global environment, as every caller does. *)
+let () =
+  Proof_replay.register_evaluator "objlabel" (fun key ->
+      match Id.of_string_soft key with
+      | id when String.equal (Id.to_string id) key ->
+        Proof_replay.Value (Safe_typing.recorded_objlabel id (Global.safe_env ()))
+      | _ -> Proof_replay.Unknown
+      | exception CErrors.UserError _ -> Proof_replay.Unknown)
 
 (* One footprint per proof the recorder holds open, recorded or not, so the
    stack and the recorder's open proofs stay aligned through nesting. *)
