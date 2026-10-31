@@ -1,0 +1,29 @@
+{
+  "doc": "a Load trips the process-wide fence: a proof after it does not replay, though no read of it sees what the loaded file changed",
+  "files": ["A.v", "B.v"],
+  "records": {
+    "A.v": {"PR.A.before": {"eligible": true},
+            "PR.A.later": {"ineligible": ["load"], "stores_no_term": true}},
+    "B.v": {"PR.B.later": {"eligible": true}}
+  },
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 2, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.before", "ineligible", "rebind", "before_late_command"], ["PR.A.later", "ineligible"]]
+    },
+    "B.v": {
+      "proofs": 1,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": "load: ./L.v",
+      "outcomes": [["PR.B.later", "ineligible"]]
+    }
+  }
+}

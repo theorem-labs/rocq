@@ -497,19 +497,50 @@ the file.  No fixture reaches that branch.  The trigger tried, a `Set
 Universe Polymorphism` before the instance in the registered tree only, makes
 the instance miss on its start-of-proof read of the option tables first.
 
-**Gate review, INFRA-361 gap 2.**  `load_inner_proof`: a `Load`ed file's
-sentences run inside the one `Load` sentence, so the toplevel keeps none of
-them as a proof's sentences and decides no proof among them.  A proof that the
-loaded file opens is ineligible (reason `load` in the record, outcome
-`ineligible` on channel `load` in the summary) and leaves no candidate open.
-Before, the candidate stayed open after the `Load`, and the toplevel kept the
-sentences after it as that proof's: in `B.v` it kept a `Proof.` that has no
-proof to act on and reported the syntax error of the next sentence, where
-stock reports the `Proof.`.  In `A.v` the loaded file changes a constant: the
-proof that unfolds it misses on that read, and a later proof replays.  A proof
-after a `Load` needs no rule of its own: the loaded sentences reach it only
-through the global state, which its reads compare, as for a command of the
-file itself.
+**Gate review, INFRA-361 gap 2.**  A `Load` runs a file that no record
+holds, and the same compile can have written that file.  Replay does not try
+to decide which files a compile could have written.  With the recorder or
+replay on, each `Load` trips the process-wide fence before it parses the
+loaded file (reason `load`, detail the name the `Load` gives), so no proof
+that opens after it replays.  A proof before it does not replay either,
+because `Load` is a late command.  `load_fence`: in `A.v` both trees load
+`L.v`, and the edited `L.v` changes a constant that no read of the later
+proof sees.  The registration marks that proof ineligible (reason `load`),
+and it runs.  In `B.v` only the edited tree has the `Load`, so the record
+keeps the proof eligible, and the grade's own fence refuses it (summary
+`fence` is `load: ./L.v`).  Without the fence, both later proofs replay.
+`load_inner_proof`: a proof that the loaded file opens runs inside the one
+`Load` sentence, so the toplevel keeps none of its sentences and never
+decides it.  It is ineligible (reason `load` in the record, outcome
+`ineligible` on channel `load` in the summary), and replay never takes it as
+a candidate, also when its record is eligible (`B.v`).  Before, the
+candidate stayed open after the `Load`, and the toplevel kept the next
+sentences as that proof's: in `B.v` it kept a `Proof.` that has no proof to
+act on, and it reported the syntax error of the next sentence, where stock
+reports the `Proof.`.  Each fixture loads `./<file>.v` by a relative path:
+the `.vo` keeps the path of the loaded file, and the runner builds replay
+and stock in two directories.
+
+**Gate review of 26528c8a34, finding CF4-R2.**  A micromega certificate
+cache reads an entry it has not read yet from its file's relative path again
+at each lookup, while the proof's `micromega_cache` read is the digest of the
+file its table opened.  A `Cd` makes those two files differ, and no read
+records the working directory.  With the recorder or replay on, each `Cd`
+trips the process-wide fence (reason `cd`), so no proof that opens after it
+replays.  `Cd` is also a late command, so no proof before it replays: a
+replayed proof would leave unopened a cache that stock opened in the old
+directory.  `cd_micromega_cache` is the reviewer's trigger.  `warm` (under
+`Time`, so it always runs) opens the lia cache in `cache0/`, whose one entry
+is the genuine entry for `target`.  After `Cd ".."`, `target`'s lia reads that
+entry from `./.lia.cache`, which holds the genuine entry in the registration
+and the same key with the result `Certificate.Unknown` in the edited tree
+(`tree_files`).  Stock fails with "Cannot find witness", and replay must fail
+too.  On `26528c8a34` the proof's read gave the digest of `cache0/.lia.cache`
+in both runs, and replay installed the stored term.
+`lia-cache-unknown.bin` is the file of `micromega_cache_unknown`.
+`lia-cache.bin` is the `.lia.cache` that `rocq compile -q -Q . PR A.v` writes
+in a copy of `micromega_cache_unknown/original/`, so its one entry is at the
+same offset as the Unknown entry.
 
 **Gate review, breadth audit gap BA6.**  ssreflect reads an index (the count
 of `do k!`, the goal index of `tac; first k` or `tac; last k`) that is a term

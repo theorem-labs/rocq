@@ -395,6 +395,14 @@ let warn_chdir = CWarnings.create ~name:"change-dir-deprecated" ~category:Deprec
 let synterp_chdir = function
   | None -> Feedback.msg_notice (str (Sys.getcwd()))
   | Some path ->
+      (* BET-84, gate review CF4-R2: a file a tactic opens by a relative
+         path (a micromega certificate cache reads its entries from
+         [.lia.cache] again at each lookup) is another file after [Cd], and
+         no read records the working directory. With the recorder or replay
+         on, a [Cd] trips the process-wide fence, so no proof that opens
+         after it replays. A proof before it does not replay either: [Cd] is
+         a late command (Proof_replay.scan_late_rebind). *)
+      if Proof_recorder.in_use () then Proof_recorder.trip_fence ~reason:"cd" ~detail:path;
       warn_chdir ();
       begin
         try Sys.chdir (expand path)
@@ -507,6 +515,15 @@ let rec synterp ~intern ?loc ~atts v =
   | VernacSynPure x -> VernacSynPure x
 
 and synterp_load ~intern verbosely fname =
+  (* BET-84, INFRA-361 gap 2: the loaded file is text that no record holds,
+     and the same compile can have written it. Replay does not decide which
+     files a compile could have written: with the recorder or replay on, a
+     Load trips the process-wide fence, so no proof that opens after it
+     replays. A proof before it does not replay either: Load is a late
+     command (Proof_replay.scan_late_rebind). The fence trips before the file
+     is parsed, so the Requires and the proofs it holds come after it. A
+     compile with neither option does nothing here. *)
+  if Proof_recorder.in_use () then Proof_recorder.trip_fence ~reason:"load" ~detail:fname;
   let fname =
     Envars.expand_path_macros ~warn:(fun x -> Feedback.msg_warning (Pp.str x)) fname in
   let fname = CUnix.make_suffix fname ".v" in
