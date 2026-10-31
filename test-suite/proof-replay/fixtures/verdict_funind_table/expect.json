@@ -1,0 +1,6 @@
+{
+  "doc": "a function loses its funind table entry and keeps every constant: functional induction fails in the stock script, so the replay compile must fail too",
+  "files": ["Lib.v", "B.v"],
+  "compile_fails": ["B.v"],
+  "coqchk": false
+}

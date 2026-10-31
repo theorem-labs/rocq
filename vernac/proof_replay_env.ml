@@ -93,15 +93,6 @@ let row1 () =
   Proof_replay.register_evaluator "vm_global"
     (c (fun k env -> Proof_recorder.without_recording (fun () -> Vmsymtable.recorded_vm_global env k)))
 
-(* Rows 5, 7 and 15 register their evaluators beside their one value
-   function ([Reductionops.ReductionBehaviour], [Hints], [Rocqlib]), so the
-   recorder and the evaluator cannot call two implementations. *)
-let tables () = ()
-
-(* Row 2: the trusted record carries the proof's universe footprint as a
-   base64 Marshal blob, as it carries the stored proof term. The value is the
-   order the current global graph induces on it, made by the recorder's own
-   function. A malformed key is an ordinary safe miss. *)
 let universe_queries () =
   Proof_replay.register_evaluator "universe_constraint" (fun key ->
       match Proof_record_env.universe_footprint_of_key key with
@@ -120,6 +111,5 @@ let providers () =
 
 let init () =
   row1 ();
-  tables ();
   universe_queries ();
   providers ()

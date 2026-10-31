@@ -92,10 +92,6 @@ let class_tab =
 let coercion_tab =
   Summary.ref ~name:"coercion_tab" (CoeTypMap.empty : coe_info_typ CoeTypMap.t)
 
-(* BET-84: ONE value for the class_tab channel, read under the fixed key
-   "" as one digest of the whole table. The record site below and this
-   replay evaluator call the same function, so the value is never computed
-   two ways (dev/tools/census/replay_channels.py). *)
 let recorded_class_tab () =
   Some (Proof_recorder.digest_cached ~what:"class_tab" !class_tab)
 
@@ -110,10 +106,6 @@ let record_class_tab () =
     Proof_recorder.read ~row:"14" ~channel:"class_tab" ~key:(fun () -> "")
       ~value:recorded_class_tab
 
-(* BET-84: ONE value for the coercion_tab channel, read under the fixed key
-   "" as one digest of the whole table. The record site below and this
-   replay evaluator call the same function, so the value is never computed
-   two ways (dev/tools/census/replay_channels.py). *)
 let recorded_coercion_tab () =
   Some (Proof_recorder.digest_cached ~what:"coercion_tab" !coercion_tab)
 
@@ -167,10 +159,6 @@ end
 let inheritance_graph =
   Summary.ref ~name:"inheritance_graph" ClGraph.empty
 
-(* BET-84: ONE value for the coercion_graph channel, read under the fixed key
-   "" as one digest of the whole table. The record site below and this
-   replay evaluator call the same function, so the value is never computed
-   two ways (dev/tools/census/replay_channels.py). *)
 let recorded_coercion_graph () =
   Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph)
 
@@ -541,13 +529,20 @@ let declare_coercion env sigma ?update c =
   let () = add_coercion c.coe_value c in
   add_coercion_in_graph env sigma ?update c
 
-(* For printing purpose *)
+(* The whole tables, for printing and for firstorder, which keeps every
+   coercion folded ([Ground.get_flags]): a coercion declared or removed before
+   a proof changes how firstorder reduces with no other read changing (gate
+   review, breadth audit gap BA3; fixtures verdict_firstorder_coercion and
+   eval_firstorder_coercion). So each is a read of its table (census row 14). *)
 let classes () =
+  record_class_tab ();
   List.rev (ClTypMap.fold (fun x _ acc -> x :: acc) !class_tab [])
 let coercions () =
+  record_coercion_tab ();
   List.rev (CoeTypMap.fold (fun _ y acc -> y::acc) !coercion_tab [])
 
 let inheritance_graph () =
+  record_inheritance_graph ();
   ClGraph.bindings !inheritance_graph
 
 let coercion_of_reference env r =

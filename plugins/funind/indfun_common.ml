@@ -255,8 +255,71 @@ let find_or_none id =
       | _ -> CErrors.anomaly (Pp.str "Not a constant.") )
   with Not_found -> None
 
-let find_Function_infos f = Cmap_env.find_opt f !from_function
-let find_Function_of_graph ind = Indmap_env.find_opt ind !from_graph
+(* BET-84 census row 15: the function table, read by functional induction
+   and functional inversion to find a function's graph and principles. A
+   tree can keep every constant those read and lose the entry (a name that
+   Function declares after the principle is taken, so Function stops before
+   it fills the entry), which no other read sees (gate review of 079bc4cb71,
+   breadth audit; fixtures verdict_funind_table, eval_funind_info). Each
+   lookup is a read, by the constant or by the graph inductive, absent
+   included. Both tables order their keys by the user name and a module
+   alias keeps the canonical one, so a key holds both names, as
+   [Libnames.constant_key] writes a constant's, and a graph key adds the index.
+   ONE value function, called by the record sites and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let function_key f = "C" ^ Libnames.constant_key f
+
+let graph_key (m, i) =
+  let s = Libnames.constant_key (Constant.make (MutInd.user m) (MutInd.canonical m)) in
+  "I" ^ string_of_int (String.length s) ^ ":" ^ s ^ string_of_int i
+
+let funind_query_of_key key =
+  let n = String.length key in
+  if Int.equal n 0 then None
+  else match key.[0] with
+    | 'C' ->
+      Option.map (fun c -> `Function c) (Libnames.constant_of_key (String.sub key 1 (n - 1)))
+    | 'I' ->
+      (match String.index_from_opt key 1 ':' with
+       | None -> None
+       | Some j ->
+         match int_of_string_opt (String.sub key 1 (j - 1)) with
+         | Some len when len >= 0 && j + 1 + len < n ->
+           (match Libnames.constant_of_key (String.sub key (j + 1) len),
+                  int_of_string_opt (String.sub key (j + 1 + len) (n - j - 1 - len)) with
+            | Some c, Some i ->
+              let ind = (MutInd.make (Constant.user c) (Constant.canonical c), i) in
+              if String.equal (graph_key ind) key then Some (`Graph ind) else None
+            | _ -> None)
+         | Some _ | None -> None)
+    | _ -> None
+
+let recorded_funind_info = function
+  | `Function f ->
+    Option.map (fun info -> Proof_recorder.digest ~what:"funind_info" info)
+      (Cmap_env.find_opt f !from_function)
+  | `Graph ind ->
+    Option.map (fun info -> Proof_recorder.digest ~what:"funind_info" info)
+      (Indmap_env.find_opt ind !from_graph)
+
+let () =
+  Proof_replay.register_evaluator "funind_info" (fun key ->
+      match funind_query_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some q -> Proof_replay.Value (recorded_funind_info q))
+
+let record_funind key q =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"funind_info" ~key
+      ~value:(fun () -> recorded_funind_info q)
+
+let find_Function_infos f =
+  record_funind (fun () -> function_key f) (`Function f);
+  Cmap_env.find_opt f !from_function
+
+let find_Function_of_graph ind =
+  record_funind (fun () -> graph_key ind) (`Graph ind);
+  Indmap_env.find_opt ind !from_graph
 
 let update_Function finfo =
   (* Pp.msgnl (pr_info finfo); *)

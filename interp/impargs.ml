@@ -568,9 +568,6 @@ let recorded_implicits ref = Some (Proof_recorder.digest ~what:"implicits" (impl
 
 let () =
   Proof_replay.register_evaluator "implicits" (fun key ->
-      (* The record holds the reference as [GlobRef.print] wrote it. One
-         that does not read back is not taken for another: the proof
-         misses. *)
       match Arguments_renaming.globref_of_string key with
       | None -> Proof_replay.Unknown
       | Some r ->

@@ -385,11 +385,18 @@ remove`); the plain lemma and the two section lemmas refer to it and miss on
 it abstracted) and the section `Let` (a section variable, with no table
 entry) kept their terms inline and replay.  `voref_object_changed`: one byte of
 the registered `.vo`'s opaque proofs changed (`vo_mutation: change`), and the
-proof that refers to it misses on `vo_term`.  `voref_inline_convert`: `rocq
-proof-record-inline` puts the three referenced terms back inline; the
-converted record, published without the `.vo`, replays all five proofs to the
-`.vo` that stock makes and that the vo-ref record replays to with its `.vo`.
-The converter refuses a changed or an absent `.vo`.  `late_qualified_module_word`:
+proof that refers to it misses on `vo_term`.  So a `-proof-record-vo-ref`
+record replays only beside its registered `.vo`.  A file whose registered
+`.vo` cannot ship (a file the task cut edits, whose `.vo` holds the proofs
+the cut removes) never replays from such a record.  For that file,
+`rocq proof-record-inline RECORD VO OUT` (theorem-labs/rocq#20) writes each
+reference back as the inline term before the record ships.  A file whose
+`.vo` ships keeps its reference record, with the `.vo` beside it.
+`voref_inline_convert`: `rocq proof-record-inline` puts the three referenced
+terms back inline; the converted record, published without the `.vo`, replays
+all five proofs to the `.vo` that stock makes and that the vo-ref record
+replays to with its `.vo`.  The converter refuses a changed or an absent
+`.vo`.  `late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
@@ -473,6 +480,153 @@ only in the sharing of the string "BinInt", as `vm_lia_hit`'s does
 registration's makes a proof miss also when its entries are genuine: the
 value is the file's digest, not each lookup's answer.
 
+**Gate review of 079bc4cb71, reviewer finding R1.**  A declaration can make
+universe levels of its own: the hint of a universe-polymorphic instance takes
+a fresh instance of it (`Classes.instance_hook` to `Hints.add_resolves` to
+`UnivGen.fresh_level`), and the library keeps the hint with those levels.
+Stock names them from the counters at the closer.  The record holds the level
+and sort counters at the proof's start, at its closer and after its
+declaration.  Replay puts the counters at the closer's values before the
+declaration, which then runs as stock's does.  `write_declaration_levels`: a
+universe-polymorphic instance whose tactics make a level, and a
+sort-polymorphic one, each followed by a proof that makes levels, and a hint
+at the end.  Every proof replays, and the `.vo` is value-equal to stock's.
+Before the fix, the replayed instance's hint named its levels from the
+counters at the proof's start, every later proof missed on its key, and the
+`.vo` differed from stock's in 12 values of `library` and 4 of `opaques`.
+After the declaration, replay compares the counters with the record.  They
+can differ only when the declaration made another number of levels, from an
+input that no read records.  The declaration started from stock's counters,
+so its names and the counters it left are stock's, and they stay.  The fence
+then trips (reason `declaration_counters`): the record no longer describes
+the file.  No fixture reaches that branch.  The trigger tried, a `Set
+Universe Polymorphism` before the instance in the registered tree only, makes
+the instance miss on its start-of-proof read of the option tables first.
+
+**Gate review, INFRA-361 gap 2.**  `load_inner_proof`: a `Load`ed file's
+sentences run inside the one `Load` sentence, so the toplevel keeps none of
+them as a proof's sentences and decides no proof among them.  A proof that the
+loaded file opens is ineligible (reason `load` in the record, outcome
+`ineligible` on channel `load` in the summary) and leaves no candidate open.
+Before, the candidate stayed open after the `Load`, and the toplevel kept the
+sentences after it as that proof's: in `B.v` it kept a `Proof.` that has no
+proof to act on and reported the syntax error of the next sentence, where
+stock reports the `Proof.`.  In `A.v` the loaded file changes a constant: the
+proof that unfolds it misses on that read, and a later proof replays.  A proof
+after a `Load` needs no rule of its own: the loaded sentences reach it only
+through the global state, which its reads compare, as for a command of the
+file itself.
+
+**Gate review, breadth audit gap BA6.**  ssreflect reads an index (the count
+of `do k!`, the goal index of `tac; first k` or `tac; last k`) that is a term
+by printing the term back as a number, so the number notations attached to its
+head and the open scopes decide the index.  `verdict_ssr_index_number`: the
+edited tree declares the number notation for `nat` of the most recently opened
+scope with a printer that gives 1, so the count is 1, not 2, and the stock
+script fails; the replay compile must fail too (the proof is ineligible,
+reason `printed_number`).
+
+**Gate review, breadth audit gap BA1.**  A notation query is recorded with the
+scopes it was asked in, and `Bind Scope` chooses one of them: the scope of the
+class of the type a term is interpreted against.  `verdict_type_scope`: the
+edited tree binds a cast's type to a scope where the proof's notation has no
+interpretation, so the stock script fails, and the replay compile must fail
+too.  `verdict_sort_scope`: the same with the scope of Sortclass and a term
+read as a type (`assert (H : PP)`).  `eval_scope_class`: the binding of one
+proof's cast type changes and that proof misses on `scope_class`; the proof
+whose type keeps its scope replays.  The fixtures cast rather than give the
+goal's type: Ltac interprets the term of `exact` without its expected type
+(`plugins/ltac/tacinterp.ml`, `interp_gen`).
+
+**Gate review, breadth audit gap BA5.**  functional induction finds a
+function's principle through the function's entry in the table that
+`Function` fills, and the edited trees drop that entry and keep every
+constant: `Lib.v` takes the name of a principle that `Function` declares after
+`f_ind` (`f_rec`), so `Function` gives a warning and stops before it fills the
+entry.  The proofs are in `B.v`, which does not change, so the counters at
+their start are the same in the two trees.  `verdict_funind_table`: the stock
+script fails ("Cannot find induction information on f"), so the replay compile
+must fail too.  `eval_funind_info`: `h` loses its entry and `changed`, whose
+`first` takes its second branch in the stock compile, misses on
+`funind_info`; `g` keeps its entry and `same` replays.
+
+**Gate review, breadth audit gap BA2.**  `unfold "FF"` finds the constant a
+notation names by searching every scope (or the one scope a delimiter names),
+with no notation query to record; when several notations match, the scope the
+open scopes give each one decides.  `verdict_notation_reference`: the edited
+tree adds a notation FF for another constant in a scope that is not open, no
+open scope chooses between the two, so the stock script fails and the replay
+compile must fail too.  `verdict_notation_reference_delimited`: `unfold
+"FF"%a` finds two notations in `a_scope`; the edited tree removes FF x from
+`b_scope`, which is open after `a_scope`, so neither notation is ruled out, the
+stock script fails with "Ambiguous notation", and the replay compile must fail
+too, although `a_scope` and the scope stack do not change.
+`eval_notation_reference`: the notation one proof unfolds names another
+constant, so the stored term is not the stock term, and that proof misses on
+`notation_reference`; the proof whose notation does not change replays.
+
+**Gate review, breadth audit gap BA4.**  zify keeps a process-wide copy of its
+spec table: `init_cache` fills it and `zify_iter_specs` reads it without
+filling it.  `verdict_zify_cache_write`: a proof that ran `zify_op` (the first
+step of lia) replays and the next proof, edited, runs only `zify_iter_specs`;
+replay must leave the copy as `zify_op` left it, else the next proof fails
+only in the replay compile.  `verdict_zify_cache_history`: the copy an earlier
+proof filled holds another spec in the edited tree, so the stock script of an
+unchanged later proof fails, and the replay compile must fail too (that later
+proof misses on key `zify_specs_cache`).
+
+**Gate review, breadth audit gap BA3.**  firstorder keeps every coercion
+folded, and it reads the whole coercion table (`Coercionops.coercions`) to
+know which.  That accessor now records the existing `coercion_tab` read, as
+`classes` and `inheritance_graph` record their tables.
+`verdict_firstorder_coercion`: the edited tree declares a definition a
+coercion, so firstorder no longer sees the disjunction inside it and leaves
+the goal open.  The stock script fails at `Qed`, and the replay compile must
+fail too.  `eval_firstorder_coercion`: the edited tree removes the coercion,
+so firstorder unfolds the definition and builds another term.  That proof
+misses on `coercion_tab` and gives stock's `.vo`, and a proof that runs no
+firstorder replays.  Both proofs run `firstorder auto`: a plain `firstorder`
+reads its default solver, a `tactic_option` read with no evaluator, and never
+replays.
+
+**Gate review of 079bc4cb71, reviewer finding R3.**
+`parse_error_after_failing_tactic`: replay parses the sentences of a proof
+that has a candidate record ahead, up to the closer, before any of them runs.
+In the edited tree a tactic fails and the next sentence does not parse.
+Stock runs the tactic and reports its error.  Replay must run the sentences
+it kept, in order, before it raises the syntax error, so both compiles fail
+with the same stderr (`compare_stderr`).
+
+**Gate review of 079bc4cb71, reviewer finding R5.**  `dropped_proof_stack`:
+`Abort All`, `Reset`, `Succeed` around a statement and `Fail Fail` around a
+statement each drop an open proof.  A grade compile has no recorder, so
+replay must see the drop itself: after each one no proof is open, and the
+proof that follows it replays.  Before the fix, replay took every proof
+after the first drop for a nested proof, so none of them replayed.  This
+changes replay coverage only: a nested proof runs its tactics as stock does.
+`Back` is not tested: a compiled file cannot use it.  `C.v` is the control:
+replay takes a proof stack that a sentence leaves empty for a drop, so after
+each kind of nested closer (`Qed` in a focused block, `Admitted`, `Defined`,
+`Proof term`) the stack must hold the outer proof again, and the inner proofs
+after it must stay nested.  A nested `Abort` is not tested: stock refuses it
+("No proof-editing in progress").
+
+
+**Gate review, breadth audit gap CF6.**  A binder with no name takes the name
+that `Implicit Types` reserves for its type, read from the reverse
+reserved-type table (`Reserve.revert_reserved_type`), and no read recorded that
+table.  Two sites reach the proof term with that name.
+`verdict_reserved_type_rev`: `exact eq_refl` unifies `?f 1` with a variable, so
+unification refines the function evar `?f` into a lambda, and the lambda's
+binder gets the name reserved for `nat`.  `verdict_reserved_type_rev_in`: an
+`in` clause matches an index against `true`, and the return clause binds that
+index with the name reserved for `bool`.  In both, the edited tree reserves
+another name.  Before the fix, the replay installed the stored term, whose
+binder has the old name, and its `.vo` differed from stock's in the opaque
+proofs.  `eval_reserved_type_rev`: the name reserved for `nat` changes, so
+the proof that names a `nat` binder misses on `reserved_type_rev`; the name
+reserved for `bool` does not change, so the proof that names a `bool` binder
+replays.
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its

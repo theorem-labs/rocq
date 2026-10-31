@@ -140,6 +140,14 @@ val close_proof : unit -> unit
 (** A proof ended (its closer or its [Abort]). A proof opened inside another
     one is part of it: it is not counted, and its end only closes it. *)
 
+val proof_open : unit -> bool
+(** Whether a proof is open, as {!open_proof} and {!close_proof} count. *)
+
+val drop_all_proofs : unit -> unit
+(** The proof stack holds no proof any more ([Abort All], [Reset], a
+    [Succeed] around a statement): no proof is open from now on, and the
+    candidate, if any, is abandoned. *)
+
 val register_plugin_audit : (string -> bool) -> unit
 (** [f name] says whether the loaded ML plugin [name] (a findlib package) is
     one this tree builds. While a plugin [f] rejects is loaded, no proof is
@@ -149,8 +157,10 @@ val register_plugin_audit : (string -> bool) -> unit
     ([rocq-read-file.plugin]). *)
 
 val register_hit_hook : (Proof_record.read list -> unit) -> unit
-(** [f reads] runs at each hit with the replayed proof's recorded reads, so
-    the owner of a process-wide cache can count them as looked up. *)
+(** [f reads] runs at each hit with the replayed proof's recorded reads,
+    before its closer runs, so the owner of a process-wide cache can count
+    them as looked up, or make the write to the cache that the skipped
+    tactics made (zify's copies of its tables). *)
 
 val set_vo_path : string -> unit
 (** The [.vo] this compile writes, as its command line gives it. With
@@ -218,8 +228,11 @@ val open_proof :
   unit
 (** Called where the recorder's [open_proof] is. It looks the proof up by
     name and keeps it as the open candidate when its name, statement,
-    position and toolchain key all match and it stored a term. The
-    arguments are computed only when a record is loaded. *)
+    position and toolchain key all match and it stored a term. A proof that
+    opens while a [Load]ed file runs ({!Proof_recorder.in_load}) is never a
+    candidate (outcome [ineligible], channel ["load"]): the toplevel decides
+    a proof only among the sentences it reads itself. The arguments are
+    computed only when a record is loaded. *)
 
 val candidate_open : unit -> bool
 (** Whether the open proof has a candidate: the sentences and the closer
@@ -253,23 +266,11 @@ val register_provider : (unit -> Proof_record.read list) -> unit
     from. A recorded read whose channel a provider covers, but which the
     provider does not list now, is a miss. *)
 
-val register_counter : string -> get:(unit -> int) -> set:(int -> unit) -> unit
-(** A process-wide counter whose advance a proof's record holds (census
-    row 18). A replayed proof's tactics never move it, so replay reads it
-    at the proof's start and {!apply_counters} puts it at start plus the
-    recorded advance. A counter nothing registers cannot be moved, so a
-    proof that moved it is never replayed. The universe and sort counters
-    are not registered: the stored term carries them. *)
-
 val register_summary_counter : string -> unit
 (** A counter kept in the Summary, which the STM rolls back when a proof
     closes: replay leaves it where it is, as stock's rollback does, and a
     proof that moved it can still be replayed. The next proof's
     [counter_start] read checks that the rollback came out the same. *)
-
-val apply_counters : unit -> unit
-(** Puts each counter of the proof just replayed where its tactics would
-    have left it. Call it after the declaration. A no-op with no hit. *)
 
 val provide : channel:string -> key:string -> value:string option -> unit
 (** The value of one read of the proof being opened, known only to the code

@@ -1,0 +1,7 @@
+{
+  "doc": "a new coercion makes firstorder keep a definition folded: the stock script fails, so the replay compile must fail too",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}}},
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}
