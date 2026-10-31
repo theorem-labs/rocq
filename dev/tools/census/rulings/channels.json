@@ -130,6 +130,7 @@
     "ineligible:tactics/equality.ml:catchall": {"ineligible": "@catchall"},
     "read:tactics/hints.ml:18/counter_start": {"row": "18"},
     "read:tactics/hints.ml:7/hint_db": {"row": "7"},
+    "read:tactics/redexpr.ml:15/red_expr": {"row": "15"},
 
     "ineligible:toplevel/vernac.ml:command_in_proof": {"ineligible": "@command_in_proof"},
     "ineligible:toplevel/vernac.ml:recorder_desync": {"ineligible": "@recorder_desync"},
