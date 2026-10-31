@@ -358,6 +358,23 @@ proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
+**Gate review of 079bc4cb71, finding CF2.**  The global nametab's reverse
+lookups, from a reference to its absolute name or its shortest name, had no
+read.  `nametab_reverse_path` (trigger T2): a proof inside `Section S` asks
+Ltac2 for the absolute name of `c` (`Env.path`) and asserts that it has 3
+parts; the edited tree moves `Definition c` from just before `Section S` to
+just inside it.  `c` keeps its kernel name `PR.A.c`, so the forward lookup
+and the kernel reads do not change, but its absolute name becomes
+`PR.A.S.c`.  Stock fails the assertion, so replay must fail too.
+`eval_xreftab_to_path`: the same move under two proofs that read a name and
+assert nothing; the proof that reads `c` misses on `xreftab/to_path`, and the
+proof that reads `d`, whose name does not change, replays.
+`eval_xreftab_shortest_qualid`: two proofs print a constant named by its
+absolute name, and the printer asks for its shortest name; the edited tree
+imports a module that defines another `c` before the proofs, so the
+shortest name of `PR.A.c` becomes `A.c`, and the proof that prints it misses
+on `xreftab/shortest_qualid`.  The proof that prints `d` replays.
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its

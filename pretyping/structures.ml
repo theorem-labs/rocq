@@ -299,10 +299,10 @@ let recorded_canonical_structure env proj =
   | Some m -> Some (Proof_recorder.digest_cached ~what:"canonical_structure" m)
 
 (* The key names the projection, which is always a constant, by
-   [Lib.constant_key] ([GlobRef.print] does not name one constant). Any
+   [Libnames.constant_key] ([GlobRef.print] does not name one constant). Any
    other reference gets a key that no evaluator reads back. *)
 let canonical_structure_key = function
-  | GlobRef.ConstRef c -> "C" ^ Lib.constant_key c
+  | GlobRef.ConstRef c -> "C" ^ Libnames.constant_key c
   | GlobRef.VarRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _ as r ->
     "?" ^ Pp.string_of_ppcmds (GlobRef.print r)
 
@@ -318,7 +318,7 @@ let () =
   Proof_replay.register_evaluator "canonical_structure" (fun key ->
       let n = String.length key in
       if n = 0 || key.[0] <> 'C' then Proof_replay.Unknown
-      else match Lib.constant_of_key (String.sub key 1 (n - 1)) with
+      else match Libnames.constant_of_key (String.sub key 1 (n - 1)) with
         | None -> Proof_replay.Unknown
         | Some c ->
           Proof_replay.Value (recorded_canonical_structure (Global.env ()) (GlobRef.ConstRef c)))
