@@ -480,6 +480,15 @@ after a `Load` needs no rule of its own: the loaded sentences reach it only
 through the global state, which its reads compare, as for a command of the
 file itself.
 
+**Gate review, breadth audit gap BA6.**  ssreflect reads an index (the count
+of `do k!`, the goal index of `tac; first k` or `tac; last k`) that is a term
+by printing the term back as a number, so the number notations attached to its
+head and the open scopes decide the index.  `verdict_ssr_index_number`: the
+edited tree declares the number notation for `nat` of the most recently opened
+scope with a printer that gives 1, so the count is 1, not 2, and the stock
+script fails; the replay compile must fail too (the proof is ineligible,
+reason `printed_number`).
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
