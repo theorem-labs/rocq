@@ -220,3 +220,17 @@ let parse arglist : t =
     let args = List.fold_left add_compile opts extra in
     args
   with any -> fatal_error any
+
+(* BET-84 P3: replay decides a proof at its closer, before any sentence of
+   the proof runs, and on a hit it gives the kept sentences to no one. With
+   async proofs the STM runs a proof later, in a worker or when the
+   document is joined, after replay has dropped the stored term. So replay
+   needs the proofs to run in order (reviewer round 2 of e560ab16e4, X2).
+   [-vos] runs with async proofs too. *)
+let check_async_proofs opts ~async_proofs =
+  if async_proofs && Option.has_some opts.proof_replay then
+    fatal_error
+      (CErrors.UserError
+         Pp.(str "-proof-replay and -proof-replay-dir cannot be used with async proofs "
+             ++ str "(-async-proofs on or lazy, or -vos): replay decides each proof at its closer, "
+             ++ str "and an async proof runs later."))

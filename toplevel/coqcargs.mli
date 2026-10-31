@@ -70,3 +70,8 @@ type t =
 
 val default : t
 val parse : string list -> t
+
+val check_async_proofs : t -> async_proofs:bool -> unit
+(** Exits with a usage error when [-proof-replay] or [-proof-replay-dir] is
+    given and the proofs run async ([async_proofs]: the final STM mode,
+    after [-vos] set it, is not off). *)

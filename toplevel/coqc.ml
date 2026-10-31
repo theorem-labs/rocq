@@ -38,6 +38,7 @@ rocq compile specific options:\
 \n                         the .vo beside the record when the term there is the same\
 \n                         replay needs that .vo (see rocq proof-record-inline)\
 \n  -proof-replay FILE     replay a proof's stored term from that record file\
+\n                         (not with -async-proofs on or lazy, or -vos)\
 \n  -proof-replay-digest SHA256\
 \n                         the record's SHA-256, as 64 hex digits (required with\
 \n                         -proof-replay FILE); a record with another SHA-256\
@@ -108,6 +109,8 @@ let custom_coqc : ((Coqcargs.t * Colors.color) * Stm.AsyncOpts.stm_opt, 'b) Coqt
     let stm_opts, extras = Stmargs.parse_args opts extras in
     let coqc_opts = Coqcargs.parse extras in
     let stm_opts = fix_stm_opts coqc_opts stm_opts in
+    Coqcargs.check_async_proofs coqc_opts
+      ~async_proofs:Stm.AsyncOpts.(stm_opts.async_proofs_mode <> APoff);
     ((coqc_opts, color_mode), stm_opts), []);
   usage = coqc_specific_usage;
   init_extra = coqc_init;

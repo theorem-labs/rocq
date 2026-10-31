@@ -353,6 +353,13 @@ as P.` is now a syntax error, and `Add LoadPath "d".` or `Remove LoadPath
 
 **The options.**  `usage_no_ratio`: `-proof-replay` with no
 `-proof-replay-ratio` exits 1, names the ratio and writes no `.vo`.
+`test-suite/misc/proof-replay-async.sh` (gate review of e560ab16e4, reviewer
+round 2, finding X2): replay decides a proof at its closer, and an async proof
+runs later, so `-proof-replay` or `-proof-replay-dir` with `-async-proofs on`,
+`-async-proofs lazy` or `-vos` exits 1, names the async proofs and writes no
+`.vo`, `.vos` or summary.  The same grade compile without async proofs
+replays every proof.  The runner's usage mode drops the ratio only, so this
+is a misc test.
 
 **The budget.**  `budget_kill` (`--slow`): one file of three slow proofs under
 `-proof-replay-budget B -proof-replay-ratio 1`.  The runner sets `B` from the

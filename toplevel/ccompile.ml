@@ -104,7 +104,8 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
          recorder's counters, caches and fences count per process. A record
          made here would describe the main process only, so every proof of
          this file is ineligible. The fence is sticky: it marks each proof as
-         it opens. *)
+         it opens. Replay with async proofs never gets here: it is a usage
+         error (Coqcargs.check_async_proofs). *)
       let () = if copts.proof_record && not check then
           Proof_recorder.trip_fence ~reason:"async_proofs"
             ~detail:"the proofs of this file run in worker processes"
