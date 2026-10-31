@@ -154,7 +154,12 @@ type proof = {
       a Marshal blob that only this Rocq reads (see {!Proof_replay}), or
       [None] when the proof stores none: it is ineligible, its closer is
       not [Qed] or [Save], or the term could not be marshalled. A reader
-      other than Rocq treats it as an opaque string. *)
+      other than Rocq treats it as an opaque string. Recorded with
+      [-proof-record-no-graph], the blob leaves out the global universe
+      graph, which replay rebuilds from its own; with
+      [-proof-record-vo-ref], it holds the term's index in the opaque
+      proofs of the registered [.vo] beside the record, and the term's
+      digest, instead of the term (see {!trailer.vo_opaques}). *)
 }
 
 (** {6 Trailer} *)
@@ -164,6 +169,11 @@ type trailer = {
   file_cpu_s : float;  (** CPU seconds of the whole compile. *)
   peak_rss_kb : int;  (** Peak resident set, kB ([VmHWM]). *)
   proof_count : int;  (** The number of proof lines. *)
+  vo_opaques : string option;
+  (** The SHA-256, as 64 hex digits, of the opaque-proof segment of the
+      [.vo] this compile wrote, the record's path with
+      [.proof-record.jsonl] replaced by [.vo]; [None] (JSON [null]) when
+      no proof of the record refers to it. *)
 }
 
 type file = { header : header; proofs : proof list; trailer : trailer }

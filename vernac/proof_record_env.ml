@@ -337,9 +337,21 @@ let record_universe_footprint () =
       Proof_recorder.ineligible ~reason:"universe_footprint_missing"
         ~detail:"no universe footprint for the open proof"
 
+(* A collector of the universe queries a declaration makes ([with_declaration_queries]),
+   beside the footprint's own hook. *)
+let collector : (UGraph.t -> UGraph.query -> unit) option ref = ref None
+
+let install_query_hook () =
+  UGraph.set_query_hook
+    (match !collector, !universe_frames with
+     | None, [] -> None
+     | None, _ :: _ -> Some note_universe_query
+     | Some c, [] -> Some c
+     | Some c, _ :: _ -> Some (fun g q -> c g q; note_universe_query g q))
+
 let set_universe_frames frames =
   universe_frames := frames;
-  UGraph.set_query_hook (match frames with [] -> None | _ :: _ -> Some note_universe_query)
+  install_query_hook ()
 
 let drop_universe_frame () =
   match !universe_frames with
@@ -350,6 +362,73 @@ let drop_universe_frames () =
   match !universe_frames with
   | [] -> ()
   | _ :: _ -> set_universe_frames []
+
+(* BET-84: what a proof's declaration asks of the universe graphs, outside
+   the kernel. The kernel checks against the global graph, which a replay
+   has of its own; everything else asks the proof's universe state, whose
+   graphs a record can leave out and a replay rebuilds. A query that reads a
+   whole graph is kept as such: no level set answers for it. *)
+type declaration_queries = { dq_levels : Univ.Level.Set.t; dq_whole : bool }
+
+let with_declaration_queries f =
+  let levels = ref Univ.Level.Set.empty and whole = ref false in
+  let outer = !collector in
+  let collect g q =
+    if not (Global.in_kernel ()) then begin
+      match q with
+      | UGraph.Constraints ls | UGraph.Declared ls ->
+        if not (Univ.Level.Set.subset ls !levels) then levels := Univ.Level.Set.union ls !levels
+      | UGraph.Type_in_type -> ()
+      | UGraph.Domain | UGraph.All_constraints | UGraph.Graph | UGraph.Opaque _ -> whole := true
+    end;
+    Option.iter (fun c -> c g q) outer
+  in
+  collector := Some collect;
+  install_query_hook ();
+  let finish () = collector := outer; install_query_hook () in
+  match f () with
+  | v -> finish (); (v, { dq_levels = !levels; dq_whole = !whole })
+  | exception e ->
+    let bt = Printexc.get_raw_backtrace () in
+    finish ();
+    Printexc.raise_with_backtrace e bt
+
+(* What a universe state's two graphs answer about a list of levels: for
+   each graph, whether it checks universes, the quality variables above
+   [Prop], which levels it declares, and, between each ordered pair of the
+   declared ones, whether it proves a strict, a non-strict or no constraint
+   (with checking on, as the footprint's order). Two states with the same
+   value answer every query on those levels alike. *)
+let universe_state_view ~levels uctx =
+  UGraph.without_query_hook (fun () ->
+      let levels = Array.of_list levels in
+      let n = Array.length levels in
+      let one graph =
+        let declared =
+          Array.map (fun l -> Result.is_ok (UGraph.check_declared_universes graph (Univ.Level.Set.singleton l)))
+            levels
+        in
+        let checked = UGraph.set_type_in_type false graph in
+        let order = Bytes.make (n * n) '.' in
+        for i = 0 to n - 1 do
+          for j = 0 to n - 1 do
+            if i <> j && declared.(i) && declared.(j) then
+              let a = levels.(i) and b = levels.(j) in
+              let c =
+                if UGraph.check_constraint checked (a, Univ.UnivConstraint.Lt, b) then 'l'
+                else if UGraph.check_constraint checked (a, Univ.UnivConstraint.Le, b) then 'e'
+                else '-'
+              in
+              Bytes.set order (i * n + j) c
+          done
+        done;
+        (UGraph.type_in_type graph, Sorts.QVar.Set.elements (UGraph.above_prop_qvars graph),
+         Array.to_list declared, Bytes.to_string order)
+      in
+      Proof_record.digest_value (one (UState.ugraph uctx), one (UState.initial_ugraph uctx)))
+
+let universe_graph_value graph =
+  UGraph.without_query_hook (fun () -> cached universe_slot "universe_graph" graph)
 
 (* Reads taken once, at each proof's start, for the channels that have no
    single read point (BET-84, census rows 1, 2, 3, 4, 13, M3, M7). They are

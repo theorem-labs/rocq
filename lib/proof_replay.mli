@@ -84,7 +84,9 @@ val scan_late_rebind : string -> (string * int) option
     that closes a module or a section inside which one of those appeared —
     with its line; [None] if there is none. Comments and strings are
     skipped; a number is read as Rocq's lexer reads it, and a late word also
-    counts at the end of a longer identifier. *)
+    counts at the end of a longer identifier. A component of a qualified
+    identifier ([Module.module_contents], [M.Register]) is one identifier
+    token to the lexer and is not a late word. *)
 
 val scan_late_events : ?imports_late:bool -> string -> (string * int) option * int option
 (** {!scan_late_rebind}, and the byte offset of the LAST such command's
@@ -152,6 +154,19 @@ val register_precheck : (string -> bool) -> unit
     tactic: the layer that made the blob says whether this compile can
     use it (the universe counters it was made from). A blob that fails it
     is a miss on key item 1. *)
+
+val register_install_check : (string -> (string * string) option) -> unit
+(** [f blob] runs at the closer once every recorded read gave its value
+    again: the layer that made the blob puts together what the declaration
+    takes from it (a term it refers to in the registered [.vo], a universe
+    state it rebuilds) and checks it against what the registration
+    declared. [Some (channel, why)] is a read miss on that channel, for
+    that reason; an exception is a miss on ["stored_term"]. *)
+
+val registered_object : unit -> (string * string option) option
+(** The registration's [.vo], beside the loaded record under the same name,
+    and the SHA-256 of its opaque proofs that the record's trailer holds
+    ({!Proof_record.trailer.vo_opaques}). [None] with no record loaded. *)
 
 val remaining_budget : unit -> float option
 (** What is left of the budget once the charge for the replayed proofs is

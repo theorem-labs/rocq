@@ -25,6 +25,9 @@ type t =
   ; glob_out    : glob_output option
 
   ; proof_record : bool
+  (* BET-84: how a proof's stored term is kept in the record. *)
+  ; proof_record_no_graph : bool
+  ; proof_record_vo_ref : bool
 
   (* BET-84 P3: replay a proof's stored term. A source with no ratio is a
      usage error: the charged clock has no default. *)
@@ -48,6 +51,8 @@ let default =
   ; glob_out = None
 
   ; proof_record = false
+  ; proof_record_no_graph = false
+  ; proof_record_vo_ref = false
 
   ; proof_replay = None
   ; proof_replay_ratio = None
@@ -149,6 +154,10 @@ let parse arglist : t =
         (* Per-proof record (BET-84 P2) and replay (P3) *)
         |"-proof-record" ->
           { oval with proof_record = true }
+        |"-proof-record-no-graph" ->
+          { oval with proof_record_no_graph = true }
+        |"-proof-record-vo-ref" ->
+          { oval with proof_record_vo_ref = true }
         |"-proof-replay" ->
           { oval with proof_replay = Some (Proof_replay.Record_file (next ())) }
         |"-proof-replay-dir" ->
@@ -201,6 +210,8 @@ let parse arglist : t =
       arg_error Pp.(str "-proof-record and -proof-replay cannot be used together.");
     if opts.proof_replay_digest <> None && opts.proof_replay = None then
       arg_error Pp.(str "-proof-replay-digest was given without -proof-replay.");
+    if (opts.proof_record_no_graph || opts.proof_record_vo_ref) && not opts.proof_record then
+      arg_error Pp.(str "-proof-record-no-graph and -proof-record-vo-ref need -proof-record.");
     (* The record is a trusted input, used only when its bytes hash to a
        digest the caller took from a trusted place (reviews P3Deep F1,
        P3Bugs). A directory of records carries one [.sha256] beside each. *)

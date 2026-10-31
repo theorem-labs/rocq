@@ -38,6 +38,13 @@ type t =
 
   ; proof_record : bool
   (** [-proof-record]: write a {!Proof_record} file beside each [.vo]. *)
+  ; proof_record_no_graph : bool
+  (** [-proof-record-no-graph]: a proof's stored universe state leaves out
+      the global universe graph; replay rebuilds it from its own. *)
+  ; proof_record_vo_ref : bool
+  (** [-proof-record-vo-ref]: a proof's stored term is its index in the
+      opaque proofs of the [.vo] beside the record, when the term there is
+      the same; else the term itself. *)
 
   ; proof_replay : Proof_replay.source option
   (** [-proof-replay FILE] or [-proof-replay-dir DIR]: the registration's

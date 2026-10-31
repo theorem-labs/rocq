@@ -55,8 +55,25 @@ let env () = Safe_typing.env_of_safe_env (safe_env ())
 
 (** Turn ops over the safe_environment state monad to ops on the global env *)
 
+(* BET-84: whether the kernel is running a [Safe_typing] operation for the
+   global environment. The proof recorder takes the universe queries a
+   declaration makes outside the kernel: the kernel checks against the
+   global graph, never against the proof's own universe state. *)
+let kernel_depth = ref 0
+
+let in_kernel () = !kernel_depth > 0
+
+let with_kernel f =
+  incr kernel_depth;
+  match f () with
+  | v -> decr kernel_depth; v
+  | exception e ->
+    let bt = Printexc.get_raw_backtrace () in
+    decr kernel_depth;
+    Printexc.raise_with_backtrace e bt
+
 let prof f () =
-  NewProfile.profile "kernel" f ()
+  with_kernel (fun () -> NewProfile.profile "kernel" f ())
 
 let globalize0 f = prof (fun () -> GlobalSafeEnv.set_safe_env (f (safe_env ()))) ()
 

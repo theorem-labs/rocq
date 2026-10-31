@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-let format_version = 4
+let format_version = 5
 
 type toolchain = {
   binary : string;
@@ -123,7 +123,13 @@ type proof = {
   replay : string option;
 }
 
-type trailer = { file_wall_s : float; file_cpu_s : float; peak_rss_kb : int; proof_count : int }
+type trailer = {
+  file_wall_s : float;
+  file_cpu_s : float;
+  peak_rss_kb : int;
+  proof_count : int;
+  vo_opaques : string option;
+}
 
 type file = { header : header; proofs : proof list; trailer : trailer }
 
@@ -281,6 +287,7 @@ let output_trailer b t =
     field "file_cpu_s" add_float t.file_cpu_s;
     field "peak_rss_kb" add_int t.peak_rss_kb;
     field "proof_count" add_int t.proof_count;
+    field "vo_opaques" (add_option add_string) t.vo_opaques;
   ];
   Buffer.add_char b '\n'
 
@@ -571,10 +578,11 @@ let to_proof v =
   | _ -> assert false
 
 let to_trailer v =
-  match fields "trailer" [ "kind"; "file_wall_s"; "file_cpu_s"; "peak_rss_kb"; "proof_count" ] v with
-  | [ _; w; c; r; n ] ->
+  match fields "trailer" [ "kind"; "file_wall_s"; "file_cpu_s"; "peak_rss_kb"; "proof_count"; "vo_opaques" ] v with
+  | [ _; w; c; r; n; vo ] ->
     { file_wall_s = to_float "file_wall_s" w; file_cpu_s = to_float "file_cpu_s" c;
-      peak_rss_kb = to_int "peak_rss_kb" r; proof_count = to_int "proof_count" n }
+      peak_rss_kb = to_int "peak_rss_kb" r; proof_count = to_int "proof_count" n;
+      vo_opaques = to_option (to_str "vo_opaques") vo }
   | _ -> assert false
 
 let parse_string text =

@@ -42,6 +42,26 @@ val drop_universe_frame : unit -> unit
 val drop_universe_frames : unit -> unit
 (** Ends every footprint ([Abort All], a reset). *)
 
+type declaration_queries = {
+  dq_levels : Univ.Level.Set.t;  (** every level a query named *)
+  dq_whole : bool;  (** some query read a whole graph *)
+}
+
+val with_declaration_queries : (unit -> 'a) -> 'a * declaration_queries
+(** Runs a declaration and collects the universe-graph queries it makes
+    outside the kernel ({!Global.in_kernel}): the ones that a proof's own
+    universe state answers. The footprint goes on being taken beside it. *)
+
+val universe_state_view : levels:Univ.Level.t list -> UState.t -> string
+(** A digest of what the two graphs of a universe state answer about these
+    levels: whether each graph checks universes, its quality variables
+    above [Prop], which of the levels it declares, and the order it proves
+    between each pair of the declared ones. *)
+
+val universe_graph_value : UGraph.t -> string
+(** The digest of a whole graph, the one the footprint records when it
+    reads the whole graph. *)
+
 type universe_footprint
 
 val universe_footprint_of_key : string -> universe_footprint option

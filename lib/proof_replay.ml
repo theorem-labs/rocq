@@ -116,6 +116,15 @@ let precheck : (string -> bool) ref = ref (fun _ -> false)
 
 let register_precheck f = precheck := f
 
+(* The last check, once every recorded read gave its value again: the layer
+   that made the blob puts together what the declaration takes (the proof
+   term the blob refers to, the universe state it rebuilds) and says whether
+   it is the same as what the registration declared. A difference is a
+   read miss, on the channel and for the reason it names. *)
+let install_check : (string -> (string * string) option) ref = ref (fun _ -> Some ("stored_term", "unknown"))
+
+let register_install_check f = install_check := f
+
 let provided () =
   let tbl = Hashtbl.create 32 in
   let channels = Hashtbl.create 16 in
@@ -183,6 +192,9 @@ type file_state = {
   f_late_no_imports : late_bound;
       (** the same, [Import] and [Export] not counted: the bound while no
           export-locality registration is loaded *)
+  f_object : (string * string option) option;
+      (** the registered [.vo] beside the record, and the SHA-256 of its
+          opaque proofs the record's trailer holds *)
   mutable f_candidate : candidate option;
 }
 
@@ -716,10 +728,22 @@ let scan_late_commands ?(imports_late = true) text =
       while !j < n && is_run text.[!j] do incr j done;
       let run = String.sub text !i (!j - !i) in
       let lead_letter = is_letter c in
+      (* A component of a qualified identifier, [Module.module_contents] in
+         an Ltac2 tactic or [M.Register], is part of one identifier token to
+         Rocq's lexer, never a command keyword: the run is followed by a dot
+         and an identifier's first character, or follows a dot that follows
+         an identifier character. It is neither a late word nor a command
+         word. The name after a [Module] command keeps the rule below. *)
+      let qualified =
+        not !cmd_module
+        && ((!j + 1 < n && text.[!j] = '.' && (is_letter text.[!j + 1] || text.[!j + 1] = '_'))
+            || (!i >= 2 && text.[!i - 1] = '.' && is_run text.[!i - 2]))
+      in
       let plain_module =
         !at_start && not !under_fail && String.equal run "Module" && plain_module_after !j
       in
-      if plain_module then begin
+      if qualified then at_start := false
+      else if plain_module then begin
         at_start := false;
         frames := ref false :: !frames
       end
@@ -960,6 +984,7 @@ let start ~library ~source ~toolchain =
     Hashtbl.reset proof_provided;
     pending_counters := [];
     let index = Hashtbl.create 256 in
+    let registered_object = ref None in
     let refusal =
       match record_path ~library opts.o_source with
       | None -> Some "bad_record"
@@ -982,8 +1007,18 @@ let start ~library ~source ~toolchain =
                 | Some r -> Some r
                 | None -> peak_refusal opts file.R.trailer)
            in
-           if refusal = None then
+           if refusal = None then begin
              List.iter (fun (p : R.proof) -> Hashtbl.replace index p.R.name p) file.R.proofs;
+             (* The registration's object sits beside its record, under the
+                same name: a registration tree, and a directory of records
+                that a registration published with their objects. *)
+             let base =
+               if Filename.check_suffix path ".proof-record.jsonl" then
+                 Filename.chop_suffix path ".proof-record.jsonl"
+               else Filename.remove_extension path
+             in
+             registered_object := Some (base ^ ".vo", file.R.trailer.R.vo_opaques)
+           end;
            refusal)
     in
     (* The registration ran its process-wide cache fences from its start
@@ -1021,7 +1056,10 @@ let start ~library ~source ~toolchain =
     state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal;
                     f_refused_detail = refused_detail; f_late = late;
                     f_late_no_imports = late_no_imports;
+                    f_object = !registered_object;
                     f_candidate = None }
+
+let registered_object () = match !state with Some st -> st.f_object | None -> None
 
 let check_budget () =
   match !options, !state with
@@ -1241,8 +1279,16 @@ and decide_once ~sentences ~closer =
       | Some blob ->
         if not (!precheck blob) then (miss_key name; None)
         else
+          let install_miss () =
+            match !install_check blob with
+            | r -> r
+            | exception e when CErrors.noncritical e -> Some ("stored_term", "unknown")
+          in
           match first_read_mismatch p ~at_start with
           | Some (channel, why, detail) -> Hashtbl.replace miss_detail name detail; miss_read name channel why; None
+          | None ->
+          match install_miss () with
+          | Some (channel, why) -> miss_read name channel why; None
           | None ->
             counts.n_hits <- counts.n_hits + 1;
             if !first_hit = None then first_hit := Some c_offset;

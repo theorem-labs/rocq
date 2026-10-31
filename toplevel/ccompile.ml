@@ -62,7 +62,9 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       let () = Proof_recorder.set_locs_source (source ldir long_f_dot_in) in
       (* The record covers the proofs of this file only, so it starts after
          the prelude and the init vernaculars are loaded. *)
-      let () = if copts.proof_record then
+      let () = if copts.proof_record then begin
+          Proof_recorder.set_stored_format ~no_graph:copts.proof_record_no_graph
+            ~vo_ref:copts.proof_record_vo_ref;
           Proof_recorder.start
             ~library:(Names.DirPath.to_string ldir)
             ~source:long_f_dot_in
@@ -72,6 +74,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
             ~toolchain:Proof_record_env.toolchain
             ~skip_qed_typecheck:!Opaques.skip_qed_typecheck
             ~tables_at_start:true
+        end
       in
       (* BET-84 P3: the registration's record for this library, and the
          charged clock. A record that is missing or was made under a limit
@@ -125,9 +128,13 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       let () = if mode = BuildVo then
           Library.save_library_to ~output_native_objects Library.ProofsTodoNone ldir long_f_dot_out
       in
-      (* After the .vo: a compile that fails or is killed leaves no record. *)
+      (* After the .vo: a compile that fails or is killed leaves no record.
+         A record that refers to the .vo's opaque proofs binds them by the
+         SHA-256 of their bytes as written. *)
       let () = if copts.proof_record then
-          Proof_recorder.write (Proof_record.path_of_vo long_f_dot_out)
+          Proof_recorder.write
+            ~vo_opaques:(fun () -> Library.opaques_segment_sha256 long_f_dot_out)
+            (Proof_record.path_of_vo long_f_dot_out)
       in
       let () = Proof_replay.write_summary (Proof_replay.summary_path_of_vo long_f_dot_out) in
       let () = Aux_file.record_in_aux_at "vo_compile_time"
