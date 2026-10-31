@@ -82,7 +82,7 @@ let define_global kn e =
   ltac_state := { state with ltac_tactics = KerName.Map.add kn e state.ltac_tactics }
 
 (* BET-84 census row 10: each Ltac2 definition the proof reads, keyed by its
-   kernel name as [Lib.kername_key] writes it ([KerName.to_string] is not
+   kernel name as [Libnames.kername_key] writes it ([KerName.to_string] is not
    injective). ONE value function for the six channels, called by the
    record sites and by the replay evaluators
    (dev/tools/census/replay_channels.py): the digest of what [tbl] holds
@@ -94,7 +94,7 @@ let recorded_ltac2 channel tbl k =
 
 let record ~channel tbl k =
   if Proof_recorder.active () then
-    Proof_recorder.read_by ~row:"10" ~channel ~id:k ~key:(fun () -> Lib.kername_key k)
+    Proof_recorder.read_by ~row:"10" ~channel ~id:k ~key:(fun () -> Libnames.kername_key k)
       ~value:(fun () -> recorded_ltac2 channel tbl k)
 
 (* Ltac2 interpretation resolves a name at every call, so the lookup itself
@@ -114,7 +114,7 @@ let interp_global kn = find ~channel:"ltac2_global" ltac_state.contents.ltac_tac
 (* A key that does not read back to a kernel name is a miss. *)
 let () =
   Proof_replay.register_evaluator "ltac2_global" (fun key ->
-      match Lib.kername_of_key key with
+      match Libnames.kername_of_key key with
       | None -> Proof_replay.Unknown
       | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_global" ltac_state.contents.ltac_tactics k))
 
@@ -123,25 +123,25 @@ let () =
    its code names, so evaluating [ltac2_global] alone replays nothing. *)
 let () =
   Proof_replay.register_evaluator "ltac2_type" (fun key ->
-      match Lib.kername_of_key key with
+      match Libnames.kername_of_key key with
       | None -> Proof_replay.Unknown
       | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_type" ltac_state.contents.ltac_types k))
 
 let () =
   Proof_replay.register_evaluator "ltac2_constructor" (fun key ->
-      match Lib.kername_of_key key with
+      match Libnames.kername_of_key key with
       | None -> Proof_replay.Unknown
       | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_constructor" ltac_state.contents.ltac_constructors k))
 
 let () =
   Proof_replay.register_evaluator "ltac2_projection" (fun key ->
-      match Lib.kername_of_key key with
+      match Libnames.kername_of_key key with
       | None -> Proof_replay.Unknown
       | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_projection" ltac_state.contents.ltac_projections k))
 
 let () =
   Proof_replay.register_evaluator "ltac2_alias" (fun key ->
-      match Lib.kername_of_key key with
+      match Libnames.kername_of_key key with
       | None -> Proof_replay.Unknown
       | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_alias" ltac_state.contents.ltac_aliases k))
 
@@ -205,7 +205,7 @@ let interp_notation kn = find ~channel:"ltac2_notation" !ltac_notations kn
 (* A key that does not read back to a kernel name is a miss. *)
 let () =
   Proof_replay.register_evaluator "ltac2_notation" (fun key ->
-      match Lib.kername_of_key key with
+      match Libnames.kername_of_key key with
       | None -> Proof_replay.Unknown
       | Some k -> Proof_replay.Value (recorded_ltac2 "ltac2_notation" !ltac_notations k))
 

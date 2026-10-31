@@ -1,0 +1,7 @@
+{
+  "doc": "a proof asserts that the absolute name of c (Ltac2 Env.path) has 3 parts, and the edited tree moves c into the section the proof is in: c keeps its kernel name, stock fails the assertion, so replay must fail too",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.S.p": {"eligible": true}}},
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}

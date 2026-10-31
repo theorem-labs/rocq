@@ -1,0 +1,16 @@
+{
+  "doc": "proofs ask Ltac2 for the absolute name of a constant: the one whose name the edited tree changes (moved into the section, same kernel name) misses on the xreftab/to_path read, and the one whose name does not change replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.S.same": {"eligible": true}, "PR.A.S.changed": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.S.same", "hit"], ["PR.A.S.changed", "read", "xreftab/to_path", "changed"]]
+    }
+  }
+}
