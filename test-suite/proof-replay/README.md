@@ -370,6 +370,19 @@ tree removes an `Add Keep Equalities` between two proofs that call
 the entry, and it must miss on that read.  The earlier proof reads the
 unchanged table and replays.
 
+**Gate review of 079bc4cb71, finding CF3.**  A proof's sentences hold the
+name of a `Declare Reduction`, not its expression.
+`declare_reduction_changed` (trigger T3): a proof reduces a beta redex with
+`eval rr` and checks with `is_var` that the result is a variable.  The edited
+tree declares `rr` as `cbv iota` in place of `cbv beta`, so stock fails
+`is_var`, and replay must fail too.  On `481ab9697f` replay installed the
+stored term.  `eval_red_expr`: each lookup of a name is a read on channel
+`red_expr`, keyed by the name.  `changed` uses a name whose expression the
+edited tree changes.  `nested` uses a name whose expression is another name,
+and only that inner name changes.  `absent` tries a name that the original
+tree does not declare and the edited tree declares.  Each of the three must
+miss on that read.  `same` uses a name that does not change, and must replay.
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
