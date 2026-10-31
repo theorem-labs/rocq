@@ -1,0 +1,13 @@
+{
+  "doc": "a replayed polymorphic Instance's declaration makes levels for its hint; the proofs after it name their levels as stock does",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.inst": {"eligible": true}, "PR.A.later": {"eligible": true},
+                      "PR.A.instS": {"eligible": true}, "PR.A.last": {"eligible": true}}},
+  "summaries": {
+    "A.v": {"proofs": 4, "hits": 4,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false, "fence": null,
+              "outcomes": [["PR.A.inst", "hit"], ["PR.A.later", "hit"],
+                           ["PR.A.instS", "hit"], ["PR.A.last", "hit"]]}
+  }
+}
