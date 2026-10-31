@@ -369,7 +369,6 @@ let indirect_accessor = {
 type seg_sum = summary_disk
 type seg_lib = library_disk
 type seg_proofs = Opaques.opaque_disk
-type seg_vm = Vmlibrary.compiled_library
 
 let mk_library sd md digests vm =
   {
@@ -390,7 +389,6 @@ let mk_intern_library sum lib digest_lib proofs digest_proofs vm =
 let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
-let vm_seg : seg_vm ObjFile.id = Vmlibrary.vm_segment
 
 module Intern = struct
   module Provenance = struct
@@ -402,13 +400,20 @@ module Intern = struct
   type t = DirPath.t -> (library_t, Exninfo.iexn) Result.t * Provenance.t
 end
 
+(* The handle is closed on every exit: a file this reader refuses — a .vo whose
+   vmlibrary segment it does not know, or one whose segments do not unmarshal —
+   raises here, and a session that meets one at every Require would otherwise
+   keep a descriptor per attempt. *)
 let intern_from_file file =
-  let ch = raw_intern_library file in
-  let lsd, digest_lsd = ObjFile.marshal_in_segment ch ~segment:summary_seg in
-  let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
-  let del_opaque, digest_opaque = in_delayed file ch ~segment:opaques_seg in
-  let vmlib = Vmlibrary.load lsd.md_name ~file ch in
-  ObjFile.close_in ch;
+  let lsd, lmd, digest_lmd, del_opaque, digest_opaque, vmlib =
+    let open Memprof_coq.Resource_bind in
+    let& ch = Memprof_coq.Masking.with_resource ~acquire:raw_intern_library ~release:ObjFile.close_in file in
+    let lsd, _ = ObjFile.marshal_in_segment ch ~segment:summary_seg in
+    let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
+    let del_opaque, digest_opaque = in_delayed file ch ~segment:opaques_seg in
+    let vmlib = Vmlibrary.load lsd.md_name ~file ch in
+    lsd, lmd, digest_lmd, del_opaque, digest_opaque, vmlib
+  in
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
   register_library_filename lsd.md_name file;
   Library_info.warn_library_info ~transitive:true lsd.md_name lsd.md_info;
@@ -794,7 +799,7 @@ let save_library_base f sum lib proofs vmlib =
     ObjFile.marshal_out_segment ch ~segment:summary_seg sum;
     ObjFile.marshal_out_segment ch ~segment:library_seg lib;
     ObjFile.marshal_out_segment ch ~segment:opaques_seg proofs;
-    ObjFile.marshal_out_segment ch ~segment:vm_seg vmlib
+    Vmlibrary.save ch vmlib
   with exn ->
     let iexn = Exninfo.capture exn in
     Sys.remove f;

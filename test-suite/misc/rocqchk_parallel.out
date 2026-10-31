@@ -10,25 +10,16 @@ exit code: 129
 == ill-typed proof, -j 2
 Fatal Error: Type error: ActualType
              while checking the opaque proof of Lib.l1.
-Fatal Error: Worker process PID exited with code 129
-             while checking 100 opaque proofs (the first is Lib.l1,
-             the last Lib.l397).
 exit code: 129
 == ill-typed proof, -j 4
 Fatal Error: Type error: ActualType
              while checking the opaque proof of Lib.l1.
-Fatal Error: Worker process PID exited with code 129
-             while checking 50 opaque proofs (the first is Lib.l1,
-             the last Lib.l393).
 exit code: 129
 == correct library, -j 4, -worker-budget 0
 exit code: 0
 == ill-typed proof, -j 4, -worker-budget 0
 Fatal Error: Type error: ActualType
              while checking the opaque proof of Lib.l1.
-Fatal Error: Worker process PID exited with code 129
-             while checking 50 opaque proofs (the first is Lib.l1,
-             the last Lib.l393).
 exit code: 129
 == ill-typed late proof, -j 4, -worker-budget 0
 type error reported

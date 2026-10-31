@@ -1,0 +1,10 @@
+Debug: [vmznative] VmNativeArith.padd native pos_add
+Debug: [vmznative] VmNativeArith.padd_carry interpreted
+Debug: [vmznative] VmNativeArith.zpos_sub native pos_sub
+Debug: [vmznative] VmNativeArith.zadd native add
+Debug: [vmznative] VmNativeArith.zsub interpreted
+Debug: [vmznative] VmNativeArith.zadd_bad interpreted
+File "./output/VmNativeArith.v", line 148, characters 0-56:
+The command has indeed failed with message:
+The term "eq_refl" has type "Z.sub = Z.sub" while it is expected to have type
+ "zadd = Z.sub".

@@ -102,42 +102,161 @@ let refcount x = x.refcount
 module Tbl = struct
   type key = t
 
-  (* The API looks like Hashtbl but implemented using Int.Map ref.
+  (* The API looks like Hashtbl, but a table maps each [hash] to the list of
+     every binding whose key has that hash, newest first, and a lookup scans
+     that list for the first binding whose key passes a predicate. [raw_find]
+     lets [of_constr] look up a term that is not hashconsed yet (and a leaf
+     before its subterms are converted) by its hash and a predicate.
 
-     We don't use Hashtbl for 2 reasons:
-     - to provide the pre-hashconsing leaf lookup (not sure why it's so fast but it seems to be)
-       (although note we could do this with Hashtbl by using something like
-       [type key = Real of t | Fake of int (* hash *) * (t -> bool)],
-       equality between [Real] and [Fake] uses the predicate in [Fake],
-       wrap [add] so that we only add [Real] keys,
-       then [raw_find] is [Hashtbl.find_opt] using [Fake].)
+     Upstream kept this map in an [Int.Map.t ref]: it measured that a balanced
+     tree beat [Hashtbl] on an artificial example (a balanced binary tree of
+     distinct primitive ints, with no sharing), and was a bit slower in the
+     real world. On a whole-tree coqchk run the tree walk ([Int.find_opt]) and
+     the path copy of every [add] ([Map.bal], [update]) cost 218 of the 610
+     CPU-seconds of [of_constr], plus the minor GC that promotes the copies.
 
-     - for unclear reasons Int.Map ref is dramatically faster on an artificial example
-       (balanced binary tree whose leaves are all different primitive ints,
-        such that there is no sharing).
-       It is a bit slower in the real world.
-       It seems that hashtbl produces overly large buckets which then need to be linearly scanned.
-       hconsing doesn't seem to have this problem,
-       perhaps because of differences between hashtbl and our hashset implementation. *)
-  type 'a t = (key * 'a) list Int.Map.t ref
+     So the map is an open-addressing table with linear probing: two arrays
+     indexed by slot, one with the hash and one with that hash's list. The
+     list [[]] marks a free slot, as no hash in the table has an empty list.
+     Slot [i] of a hash is the top bits of that hash times an odd constant
+     (Fibonacci hashing), so every bit of the hash moves the slot.
 
-  let create () = ref Int.Map.empty
+     A walk of more than a slot or two means hashes that share a home slot,
+     and the multiplier is invertible: a term can carry hashes chosen so that
+     every one of them has the same home at every size the table takes, and
+     then each insertion and each lookup walks the whole cluster. The hash of
+     a primitive integer literal is the literal plus 126 ([hash_kind] below,
+     [Uint63.hash], [Hashset.Combine.combinesmall]), so a .v file can hold
+     them; the cross-family review of speed-6 measured 65,536 such hashes at
+     4.62 s against 0.095 s for the tree this table replaced, 48.6 times
+     (dispatch://BET-241).
+
+     So a probe walks a hash's home slot and at most [max_probe] slots after
+     it, and a hash with no free slot among them is kept in [spill], an
+     [Int.Map] of the same lists, where a lookup costs what the tree cost.
+     The array keeps the cost of every hash a term gives it in the ordinary
+     way, and no input makes a lookup walk further than the bound. Termination
+     is the bound's, not the load factor's: [grow] puts spilled hashes back
+     into the array, so more than half of the slots can be in use.
+
+     The lists, their order and the predicates are the ones the [Int.Map]
+     held, so every lookup returns the binding it returned: the slot only
+     decides where a hash's list is kept, never which list or binding a
+     lookup finds. *)
+  type 'a t = {
+    mutable slot_hashes : int array;
+    mutable slot_bindings : (key * 'a) list array;
+    (* [Sys.int_size] minus log2 of the number of slots *)
+    mutable shift : int;
+    (* slots whose list is not empty *)
+    mutable used : int;
+    (* the lists of the hashes the array has no room for, by hash *)
+    mutable spill : (key * 'a) list Int.Map.t;
+  }
+
+  let initial_bits = 3
+
+  let create () =
+    let n = 1 lsl initial_bits in
+    { slot_hashes = Array.make n 0; slot_bindings = Array.make n [];
+      shift = Sys.int_size - initial_bits; used = 0; spill = Int.Map.empty }
+
+  (* 2^63 divided by the golden ratio, rounded to odd. [Int64.to_int] takes it
+     modulo the width of an [int], which keeps it odd. *)
+  let golden = Int64.to_int 0x4F1BBCDCBFA53E0BL
+
+  let home shift h = (h * golden) lsr shift
+
+  (* How many slots after a hash's home a probe walks before it gives the hash
+     to [spill]. With the hashes a term gives the table this is rare but not
+     unheard of: measured with [Set Debug "hconstr"] on six stdlib files, 0 to 3
+     hashes of between 4,579 and 119,022 spilled, about one in 84,000, and each
+     of those pays the tree's cost for its own lookups and nothing more. With
+     hashes chosen to share a home, all but [max_probe] + 1 of them spill,
+     which is the point. *)
+  let max_probe = 16
+
+  (* The slot that holds hash [h], the free slot where it would go, or -1 when
+     neither is its home or one of the [max_probe] slots after it. *)
+  let rec probe hashes bindings mask h i fuel =
+    match Array.unsafe_get bindings i with
+    | [] -> i
+    | _ :: _ ->
+      if Int.equal (Array.unsafe_get hashes i) h then i
+      else if Int.equal fuel 0 then -1
+      else probe hashes bindings mask h ((i + 1) land mask) (fuel - 1)
+
+  let slot tbl h =
+    let bindings = tbl.slot_bindings in
+    probe tbl.slot_hashes bindings (Array.length bindings - 1) h
+      (home tbl.shift h) max_probe
+
+  let spilled_bindings tbl h = Option.default [] (Int.Map.find_opt h tbl.spill)
+
+  (* The list of hash [h], empty when the table has none. *)
+  let bindings_of tbl h =
+    let i = slot tbl h in
+    if i < 0 then spilled_bindings tbl h
+    else Array.unsafe_get tbl.slot_bindings i
+
+  (* Growing re-inserts the spilled hashes as well: once the slots move, a hash
+     that had no free slot within the bound may have one, and a lookup that
+     meets a free slot within the bound concludes the hash is not in the table.
+     So a hash sits outside the array only while its home has no free slot
+     within [max_probe] slots, which is what makes that conclusion sound. *)
+  let grow tbl =
+    let old_hashes = tbl.slot_hashes and old_bindings = tbl.slot_bindings in
+    let old_spill = tbl.spill in
+    let n = 2 * Array.length old_bindings in
+    let shift = tbl.shift - 1 in
+    let hashes = Array.make n 0 and bindings = Array.make n [] in
+    let used = ref 0 in
+    let spill = ref Int.Map.empty in
+    let insert h l =
+      let j = probe hashes bindings (n - 1) h (home shift h) max_probe in
+      if j < 0 then spill := Int.Map.add h l !spill
+      else begin
+        hashes.(j) <- h;
+        bindings.(j) <- l;
+        incr used
+      end
+    in
+    Array.iteri (fun i l -> match l with
+        | [] -> ()
+        | _ :: _ -> insert old_hashes.(i) l)
+      old_bindings;
+    Int.Map.iter insert old_spill;
+    tbl.slot_hashes <- hashes;
+    tbl.slot_bindings <- bindings;
+    tbl.shift <- shift;
+    tbl.used <- !used;
+    tbl.spill <- !spill
 
   let add tbl key v =
-    tbl := Int.Map.update key.hash (function
-        | None -> Some [(key,v)]
-        | Some l -> Some ((key,v)::l))
-        !tbl
+    let h = key.hash in
+    let i = slot tbl h in
+    if i < 0 then
+      tbl.spill <- Int.Map.update h (function
+          | None -> Some [(key, v)]
+          | Some l -> Some ((key, v) :: l))
+          tbl.spill
+    else match tbl.slot_bindings.(i) with
+    | [] ->
+      tbl.slot_hashes.(i) <- h;
+      tbl.slot_bindings.(i) <- [(key,v)];
+      tbl.used <- tbl.used + 1;
+      if 2 * tbl.used > Array.length tbl.slot_bindings then grow tbl
+    | l -> tbl.slot_bindings.(i) <- (key,v) :: l
 
   let raw_find tbl h p =
-    match Int.Map.find_opt h !tbl with
-    | None -> None
-    | Some l -> List.find_map (fun (k,v) -> if p k then Some v else None) l
+    match bindings_of tbl h with
+    | [] -> None
+    | l -> List.find_map (fun (k,v) -> if p k then Some v else None) l
 
   let find_opt tbl key =
-    match Int.Map.find_opt key.hash !tbl with
-    | None -> None
-    | Some l ->
+    match bindings_of tbl key.hash with
+    | [] -> None
+    | l ->
       List.find_map (fun (k',v) ->
           if equal key k' then Some v else None)
         l
@@ -146,25 +265,37 @@ module Tbl = struct
     hashes : int;
     bindings : int;
     most_collisions : int;
+    (* hashes kept outside the array *)
+    spilled : int;
   }
 
   let empty_stats = {
     hashes = 0;
     bindings = 0;
     most_collisions = 0;
+    spilled = 0;
   }
 
+  let count_list acc l =
+    let len = List.length l in
+    {
+      acc with
+      hashes = acc.hashes + 1;
+      bindings = acc.bindings + len;
+      most_collisions = max acc.most_collisions len;
+    }
+
   let stats tbl =
-    Int.Map.fold (fun _ l acc ->
-        let len = List.length l in
-        {
-          hashes = acc.hashes + 1;
-          bindings = acc.bindings + len;
-          most_collisions = max acc.most_collisions len;
-        }
-      )
-      !tbl
-      empty_stats
+    let acc =
+      Array.fold_left (fun acc l ->
+          match l with
+          | [] -> acc
+          | _ :: _ -> count_list acc l)
+        empty_stats
+        tbl.slot_bindings
+    in
+    Int.Map.fold (fun _ l acc -> { (count_list acc l) with spilled = acc.spilled + 1 })
+      tbl.spill acc
 
 end
 
@@ -491,7 +622,8 @@ let of_constr env c =
         str "hashes = " ++ int stats.Tbl.hashes ++ spc() ++
         str "bindings = " ++ int stats.Tbl.bindings ++ spc() ++
         str "tree size = " ++ int tree_size ++ spc() ++
-        str "most_collisions = " ++ int stats.Tbl.most_collisions
+        str "most_collisions = " ++ int stats.Tbl.most_collisions ++ spc() ++
+        str "spilled = " ++ int stats.Tbl.spilled
     )
     );
   c

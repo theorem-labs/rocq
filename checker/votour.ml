@@ -390,6 +390,12 @@ type segment = {
   pos : int64;
   len : int64;
   hash : Digest.t;
+  mutable format : int option;
+  (** Format version of the segment, for a segment whose own format starts with
+      one (today: vmlibrary, kernel/vmlibrary.ml). *)
+  mutable data : int64;
+  (** Where the marshalled value starts: the segment's position, or what follows
+      its format version. *)
   mutable header : header;
 }
 
@@ -415,7 +421,7 @@ let input_segment_summary ch =
   let pos = input_int64 ch in
   let len = input_int64 ch in
   let hash = Digest.input ch in
-  { name; pos; len; hash; header = dummy_header }
+  { name; pos; len; hash; format = None; data = pos; header = dummy_header }
 
 let rec input_segment_summaries ch n accu =
   if Int32.equal n 0l then Array.of_list (List.rev accu)
@@ -433,6 +439,18 @@ let parse_segments ch =
   let seg = input_segment_summaries ch nsum [] in
   for i = 0 to Array.length seg - 1 do
     let () = LargeFile.seek_in ch seg.(i).pos in
+    let () =
+      if String.equal seg.(i).name Vmlibrary.segment_name then begin
+        (* A file written before that segment had a format version starts with
+           the marshaller's magic instead, which is negative. *)
+        let v = input_binary_int ch in
+        if v > 0 then begin
+          seg.(i).format <- Some v;
+          seg.(i).data <- LargeFile.pos_in ch
+        end
+        else LargeFile.seek_in ch seg.(i).pos
+      end
+    in
     let header = parse_header ch in
     seg.(i).header <- header
   done;
@@ -449,7 +467,7 @@ let visit_vo f =
     "summary", Values.v_libsum;
     "library", Values.v_lib;
     "opaques", Values.v_opaquetable;
-    "vmlibrary", Values.v_vmlib;
+    Vmlibrary.segment_name, Values.v_vmlib;
   ] in
   let repr =
     if Sys.word_size = 64 then (module ReprMem : S) else (module ReprObj : S)
@@ -463,19 +481,30 @@ let visit_vo f =
     Printf.printf "File format: %ld\n%!" version;
     Printf.printf "The file has %d segments, choose the one to visit:\n"
       (Array.length segments);
-    Array.iteri (fun i ObjFile.{ name; pos; header } ->
+    Array.iteri (fun i ObjFile.{ name; pos; format; header } ->
       let size = if Sys.word_size = 64 then header.size64 else header.size32 in
-      Printf.printf "  %d: %s, starting at byte %Ld (size %iw)\n" i name pos size)
+      let format = match format with
+        | None -> ""
+        | Some v -> Printf.sprintf ", format version %d" v
+      in
+      Printf.printf "  %d: %s, starting at byte %Ld (size %iw)%s\n" i name pos size format)
       segments;
     match read_num (Array.length segments) with
     | CmdChild seg ->
        let seg = segments.(seg) in
        let open ObjFile in
-       LargeFile.seek_in ch seg.pos;
-       let o = Repr.input ch in
-       let () = Visit.init () in
-       let typ = try List.assoc seg.name known_segments with Not_found -> v_any in
-       Visit.visit typ o []
+       (* A segment in a format this build does not know holds values of shapes
+          this build does not describe, so visiting it would report nonsense. *)
+       (match seg.format with
+        | Some v when not (Int.equal v Vmlibrary.format_version) ->
+          Printf.printf "Segment %s is in format version %d; this votour reads \
+                         format version %d.\n%!" seg.name v Vmlibrary.format_version
+        | None | Some _ ->
+          LargeFile.seek_in ch seg.data;
+          let o = Repr.input ch in
+          let () = Visit.init () in
+          let typ = try List.assoc seg.name known_segments with Not_found -> v_any in
+          Visit.visit typ o [])
     | CmdParent | CmdSort | CmdList -> ()
     | CmdHelp ->
       help ()
