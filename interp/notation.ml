@@ -1886,7 +1886,79 @@ let error_notation_not_reference ?loc ntn ntns =
   let env = Global.env () in let sigma = Evd.from_env env in
   Loc.raise ?loc (NotationAsReferenceError (NotationNotReference (env, sigma, ntn, ntns)))
 
+(* BET-84 census row 11: what a notation names when a tactic or a command
+   uses it as a reference ([unfold "+"], [Arguments "+"]). The search reads
+   every scope's notations, or the one scope a delimiter names, with no
+   [interp_notation] query, so a notation added for another constant made the
+   name ambiguous with no recorded read changing (gate review, breadth audit
+   gap BA2; fixture verdict_notation_reference). The value is what the answer
+   is computed from: the notations the search finds, with their
+   interpretations, and for each of them the scope [find_default] gives it
+   under the open scopes, which decides between several. That scope can lie
+   outside the delimited one, so it is read as such and not as the scope stack
+   alone (fixture verdict_notation_reference_delimited). The caller's test and
+   [head] come from the sentence. The key is the notation text and the
+   delimiter, each with its length, and [notation_reference_of_key] reads it
+   back. ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let notation_reference_key ntn sc =
+  let encode s = string_of_int (String.length s) ^ ":" ^ s in
+  "R" ^ encode ntn ^ (match sc with None -> "" | Some key -> "D" ^ encode key)
+
+let notation_reference_of_key key =
+  let n = String.length key in
+  let pos = ref 1 in
+  let decode () =
+    match String.index_from_opt key !pos ':' with
+    | None -> None
+    | Some j ->
+      match int_of_string_opt (String.sub key !pos (j - !pos)) with
+      | Some len when len >= 0 && j + 1 + len <= n ->
+        pos := j + 1 + len;
+        Some (String.sub key (j + 1) len)
+      | Some _ | None -> None
+  in
+  let query =
+    if n = 0 || key.[0] <> 'R' then None
+    else match decode () with
+      | None -> None
+      | Some ntn ->
+        if !pos = n then Some (ntn, None)
+        else if key.[!pos] = 'D' then (incr pos; Option.map (fun k -> (ntn, Some k)) (decode ()))
+        else None
+  in
+  match query with
+  | Some (ntn, sc) when !pos = n && String.equal (notation_reference_key ntn sc) key -> Some (ntn, sc)
+  | Some _ | None -> None
+
+let notation_reference_scopes sc = match sc with
+  | None -> Some !scope_map
+  | Some key ->
+    match String.Map.find_opt key !delimiters_map with
+    | None -> None
+    | Some scope -> Option.map (String.Map.singleton scope) (String.Map.find_opt scope !scope_map)
+
+let recorded_notation_reference ntn sc =
+  let found = Option.map (browse_notation true ntn) (notation_reference_scopes sc) in
+  let defaults = match found with
+    | None -> []
+    | Some l -> List.map (fun (ntn, _, _) -> find_default ntn !scope_stack) l in
+  Some (Proof_recorder.digest ~what:"notation_reference" (found, defaults))
+
+let () =
+  Proof_replay.register_evaluator "notation_reference" (fun key ->
+      match notation_reference_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some (ntn, sc) ->
+        (match recorded_notation_reference ntn sc with
+         | v -> Proof_replay.Value v
+         | exception e when CErrors.noncritical e -> Proof_replay.Unknown))
+
 let interp_notation_as_global_reference_expanded ?loc ~head test ntn sc =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"notation_reference"
+      ~key:(fun () -> notation_reference_key ntn sc)
+      ~value:(fun () -> recorded_notation_reference ntn sc);
   let scopes = match sc with
   | Some sc ->
     let scope = find_delimiters_scope sc in
