@@ -483,10 +483,18 @@ val inline_proof_record : record:string -> vo:string -> (string, string) result
     [vo_opaques] set to [null]. The term put back is the one replay would
     read: the entry at the recorded index, whose digest is the recorded
     digest. A record that refers to no object is returned unchanged. [Error]
-    names why when [vo] is missing, when its opaque proofs do not hash to the
-    trailer's [vo_opaques], or when an entry is not the recorded term. A task
-    cut that removed proofs from a file uses this to ship that file's record
-    without its object, which holds the removed proofs. *)
+    names why when the record was written by another binary than the running
+    one (its stored terms are Marshal values of that binary's types), when
+    [vo] is missing, when its opaque proofs do not hash to the trailer's
+    [vo_opaques], or when an entry is not the recorded term.
+
+    The converter has no filter: it puts back EVERY term the record refers
+    to. A task cut that removed proofs from a file uses this to ship that
+    file's record without its object, which holds the removed proofs, and
+    removed proofs stay off the agent's machine only because the cut drops
+    their lines BEFORE it calls this (grading-tools
+    [fast_grade._cut_proof_records], re-checked by
+    [refuse_removed_proof_lines]). That order must hold. *)
 
 (** {2 Program mode API} *)
 
