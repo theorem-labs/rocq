@@ -15,6 +15,10 @@ val toolchain : unit -> Proof_record.toolchain
     library in load order with their digests, the [-w] flags, the
     safe-loaded libraries, and the stack limit. *)
 
+val binary_digest : unit -> string
+(** {!toolchain}'s [binary]: the digest of the running executable, or
+    ["unknown"] when it cannot be read. *)
+
 val position : unit -> Proof_record.position
 (** Key item 3: the current module path and section prefix ([Lib] state).
     [module_path] is the path the [.glob] file writes for a definition
