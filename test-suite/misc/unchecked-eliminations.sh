@@ -48,7 +48,12 @@ grep -q "check_eliminations: true" log && {
 }
 
 # rocq check must report the inductive in its context summary.
+# `| tee` makes the pipeline's status tee's, and this script has no pipefail,
+# so the checker's own status is read on the next line: without it a checker
+# that CRASHED after printing would pass every grep below.
 rocq check -Q theories UncheckedElim -o -silent -norec UncheckedElim.unchecked 2>&1 | tee chklog
+rc=${PIPESTATUS[0]}
+[ "$rc" -eq 0 ] || { >&2 echo "rocq check exited $rc"; exit 1; }
 
 grep -q "Constants/Inductives relying on unchecked sort eliminations" chklog
 grep -q "UncheckedElim.unchecked.unchecked_or" chklog
@@ -56,3 +61,13 @@ grep -q "UncheckedElim.unchecked.unchecked_or" chklog
 # environment fold cannot see (rocq-prover/rocq#22632). The whole name is
 # matched, so that a listed recursor cannot stand in for the inductive.
 grep -qE '^ +UncheckedElim\.unchecked\.Sealed\.hidden_or$' chklog
+
+# rocq check -statement-report reports it for a constant whose closure reaches
+# the inductive.
+reqs=$(mktemp)
+printf 'large UncheckedElim.unchecked.unchecked_large -\n' > "$reqs"
+rocq check -Q theories UncheckedElim -statement-report "$reqs" -silent -norec UncheckedElim.unchecked 2>&1 | tee srlog
+rc=${PIPESTATUS[0]}
+rm -f "$reqs"
+[ "$rc" -eq 0 ] || { >&2 echo "rocq check -statement-report exited $rc"; exit 1; }
+grep -q "^flag large unchecked-eliminations UncheckedElim.unchecked.unchecked_or$" srlog
