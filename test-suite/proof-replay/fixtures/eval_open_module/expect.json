@@ -1,0 +1,20 @@
+{
+  "doc": "proofs ask Ltac2 for the fields of an open module, or whether it is a functor or a module type: each answer the edited tree changes misses on the open_module read, and the one it does not change replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.M.same": {"eligible": true}, "PR.A.F.functor": {"eligible": true},
+                      "PR.A.N.modtype": {"eligible": true}, "PR.A.contents": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 4,
+      "hits": 1,
+      "misses": {"key": 0, "read": 3, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.M.same", "hit"],
+                   ["PR.A.F.functor", "read", "open_module", "changed"],
+                   ["PR.A.N.modtype", "read", "open_module", "changed"],
+                   ["PR.A.contents", "read", "open_module", "changed"]]
+    }
+  }
+}

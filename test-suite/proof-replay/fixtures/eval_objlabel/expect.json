@@ -1,0 +1,16 @@
+{
+  "doc": "a definition named like a binder of a scheme a proof creates is declared before the proof: stock names the binder another way, so the proof misses on the objlabel read and writes the object stock writes",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.writer": {"eligible": true, "writes_nonempty": ["schemes"]}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 0,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.writer", "read", "objlabel", "changed"]]
+    }
+  }
+}

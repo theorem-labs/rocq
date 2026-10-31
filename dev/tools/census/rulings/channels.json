@@ -34,7 +34,7 @@
   },
   "sites": {
     "ineligible:vernac/declare.ml:unmarshallable": {"ineligible": "@unmarshallable"},
-    "read:vernac/proof_record_env.ml:read_at_start/row/channel": {"ruling": "BET-84 P3: read_at_start records the list start_reads builds, one Proof_record.read per start-of-proof channel; each element is built by a literal `one <row> <channel>` call that has its own entry here (rows 3, 4, 13, M3, M7), and replay evaluates the same list (vernac/proof_replay_env.ml providers)."},
+    "read:vernac/proof_record_env.ml:read_at_start/row/channel": {"ruling": "BET-84 P3: read_at_start records the list start_reads builds, one Proof_record.read per start-of-proof channel; each element is built by a literal `one <row> <channel>` call that has its own entry here (rows 1, 2, 3, 4, 13, M3, M7), and replay evaluates the same list (vernac/proof_replay_env.ml providers)."},
 
     "read:engine/evarutil.ml:18/counter_start": {"row": "18"},
     "read:engine/evd.ml:18/counter_start": {"row": "18"},
@@ -57,6 +57,7 @@
     "read:kernel/environ.ml:1/module": {"row": "1"},
     "read:kernel/environ.ml:1/modtype": {"row": "1"},
     "ineligible:kernel/nativelib.ml:native_compute": {"ineligible": "@native_compute"},
+    "read:kernel/safe_typing.ml:17/objlabel": {"row": "17"},
     "read:kernel/vmsymtable.ml:1/vm_global": {"row": "1"},
     "ineligible:kernel/vmsymtable.ml:vm_section_closure": {"ineligible": "@vm_section_closure"},
 
@@ -84,6 +85,7 @@
     "read:plugins/ltac/tacinterp.ml:17/keyword": {"row": "17"},
     "ineligible:plugins/ltac/tacinterp.ml:ml_tactic": {"ineligible": "@ml_tactic"},
     "ineligible:plugins/ltac2/tac2core.ml:message_to_string": {"ineligible": "@message_to_string"},
+    "read:plugins/ltac2/tac2core.ml:1/open_module": {"row": "1"},
     "read:plugins/ltac2/tac2env.ml:10/ltac2_global": {"row": "10"},
     "read:plugins/ltac2/tac2env.ml:10/ltac2_constructor": {"row": "10"},
     "read:plugins/ltac2/tac2env.ml:10/ltac2_projection": {"row": "10"},
@@ -139,6 +141,7 @@
     "ineligible:vernac/declare.ml:dependent_start": {"ineligible": "@dependent_start"},
     "read:vernac/proof_record_env.ml:2/universe_constraint": {"row": "2"},
     "ineligible:vernac/proof_record_env.ml:universe_footprint_missing": {"ineligible": "@universe_footprint_missing"},
+    "read:vernac/proof_record_env.ml:1/retroknowledge": {"row": "1"},
     "read:vernac/proof_record_env.ml:2/quality_graph": {"row": "2"},
     "read:vernac/proof_record_env.ml:3/named_context": {"row": "3"},
     "read:vernac/proof_record_env.ml:3/variable_opacity": {"row": "3"},
