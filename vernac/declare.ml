@@ -670,7 +670,10 @@ let declare_constant ~loc ?(local = Locality.ImportDefaultBehavior) ~name ~kind 
       | OpaqueDef o ->
         let (_, _, _, i) = Opaqueproof.repr o in
         let poly = Declareops.constant_is_polymorphic cb in
-        Opaques.declare_defined_opaque ?feedback_id ~poly i body
+        (* The kernel checks the proof here ([Safe_typing.check_opaque]),
+           not through [Global]: so the proof recorder leaves its universe
+           queries out too (BET-84, [Global.in_kernel]). *)
+        Global.with_kernel (fun () -> Opaques.declare_defined_opaque ?feedback_id ~poly i body)
       | Def _ | Undef _ | Primitive _ | Symbol _ -> assert false
   in
   let () = check_exists name in
@@ -1839,6 +1842,11 @@ let initialize_named_context_for_proof () =
    counter (BET-84 P3, [replay_blob] below). *)
 let open_counters = ref (0, 0)
 
+(* The global graph at the open proof's start: the graph its universe
+   state was made from, which a record without the graph is rebuilt on
+   ([universe_check] below). *)
+let open_graph = ref UGraph.initial_universes
+
 (* BET-84: the record's entry for a proof opens where the proof does and
    closes where it is saved, aborted or admitted. Replay (P3) looks the
    proof up in the registration's record at the same point, so key items 1
@@ -1856,6 +1864,7 @@ let open_counters = ref (0, 0)
 let record_open_proof name ~statement =
   let path = lazy (Libnames.string_of_path (Lib.make_path name)) in
   open_counters := UnivGen.counters ();
+  open_graph := Environ.universes (Global.env ());
   Proof_recorder.open_proof
     ~name:(Lazy.force path)
     ~statement:(fun () -> Proof_recorder.digest ~what:"statement" (statement ()))
@@ -2343,10 +2352,36 @@ let control_only_guard { proof; pinfo } =
 let return_proof p = (prepare_proof p : closed_proof_output)
 (* BET-84 P3: what a replay of this proof declares.
 
-   [rb_output] is the output of [close_proof] as it stands before the
-   declaration: the entries, the universe state, and the side effects —
-   the schemes the tactics made travel in those, so the declaration makes
-   them again as stock does.
+   [rb_entries], [rb_ustate] and [rb_sideff] are the output of [close_proof]
+   as it stands before the declaration: the entries, the universe state,
+   and the side effects — the schemes the tactics made travel in those, so
+   the declaration makes them again as stock does.
+
+   An entry's body is the term itself ([Body]), or, with
+   [-proof-record-vo-ref], its index in the opaque proofs of the [.vo] this
+   registration writes and the digest of the term ([Vo_opaque]). The index
+   is written only when the term in that table is the term the declaration
+   took, which [vo_reference] compares: a term the kernel changed on the way
+   in (a polymorphic proof's levels, a side effect it inlined), and a term
+   that is not in the table (a transparent entry, a section [Let]), keep
+   [Body].
+
+   [rb_ustate] holds the two universe graphs, the whole global graph each,
+   unless [rb_graph_out] ([-proof-record-no-graph]): then it holds none, and
+   a replay rebuilds them from its own global graph.
+
+   [rb_universes] is what the declaration asks of those two graphs,
+   whichever way they are kept: the replay's own global graph is the one
+   stock's declaration asks, and the registration's is the one the blob
+   holds, so the two must answer alike before a stored term is used.
+   [Ask_levels]: the levels the declaration's queries named outside the
+   kernel, the local levels and the levels of the local constraints, the
+   levels the state added to the global graph it was made from, and a
+   digest of what both graphs answer about those levels
+   ([Proof_record_env.universe_state_view]). [Ask_whole]: the digest of
+   that whole global graph, when the declaration read a whole graph, when
+   there are too many levels, or when the rebuilt graphs do not answer as
+   the recorded ones; the graphs are then kept.
 
    [rb_univ_start] and [rb_univ_end] are the level and sort counters at
    the proof's start and after its declaration. A fresh level's name holds
@@ -2365,11 +2400,36 @@ let return_proof p = (prepare_proof p : closed_proof_output)
    runs its tactics in every grade. The blob is read back only by a binary
    whose digest is key item 2 of the same record, so its type is the type
    this unit was compiled with. *)
+(* [why] says why a body stays in the blob, and why the whole graph is
+   compared: a few bytes a proof, so a registration can count each case. *)
+type stored_body =
+  | Body of { body : Constr.t; why : string }
+  | Vo_opaque of { index : int; digest : string }
+
+type universe_check =
+  | Ask_levels of { levels : Univ.Level.t list; added : (Univ.Level.t * bool) list; view : string }
+  | Ask_whole of { digest : string; why : string }
+
 type replay_blob = {
-  rb_output : closed_proof_output;
+  rb_entries : (stored_body * Constr.t option) list;
+  rb_ustate : UState.t;
+  rb_graph_out : bool;
+  rb_universes : universe_check;
+  rb_sideff : SideEff.t;
   rb_using : Id.Set.t option;
   rb_univ_start : int * int;
   rb_univ_end : int * int;
+}
+
+(* A closed proof the registration will store, once its declaration has
+   run: the opaque table and the declaration's universe queries are known
+   only then. *)
+type pending_stored = {
+  ps_output : closed_proof_output;
+  ps_using : Id.Set.t option;
+  ps_univ_start : int * int;
+  ps_univ_end : int * int;
+  ps_base : UGraph.t;
 }
 
 let stored_term (proof_obj : Proof_object.t) =
@@ -2379,17 +2439,99 @@ let stored_term (proof_obj : Proof_object.t) =
   else
     match proof_obj.Proof_object.proof_object with
     | DefaultProof { proof; opaque = true; using; keep_body_ucst_separate = None } ->
-      let blob =
-        { rb_output = proof; rb_using = using; rb_univ_start = !open_counters;
-          rb_univ_end = UnivGen.counters () }
-      in
-      (match Marshal.to_string blob [] with
-       | s -> Some (Proof_record.encode_blob s)
-       | exception e ->
-         (* The record says why, so a proof that never replays is visible. *)
-         Proof_recorder.ineligible ~reason:"unmarshallable" ~detail:(Printexc.to_string e);
-         None)
+      Some { ps_output = proof; ps_using = using; ps_univ_start = !open_counters;
+             ps_univ_end = UnivGen.counters (); ps_base = !open_graph }
     | DefaultProof _ | DeferredOpaqueProof _ -> None
+
+(* The entry's body as the declared constant's opaque table holds it, when
+   that is the body itself: the table this compile writes into its [.vo],
+   at the constant's index, undischarged and unsubstituted (it has just
+   been declared), and a term whose digest is the body's. *)
+let vo_reference body gref =
+  let keep why = Body { body; why } in
+  match gref with
+  | GlobRef.ConstRef kn ->
+    (match (Global.lookup_constant kn).Declarations.const_body with
+     | Declarations.OpaqueDef o ->
+       let subst, discharge, dp, handle = Opaqueproof.repr o in
+       if not (List.is_empty subst && List.is_empty discharge) then keep "cooked"
+       else if not (DirPath.equal dp (Global.current_dirpath ())) then keep "other_library"
+       else
+         (match Opaques.get_current_opaque handle with
+          | Some ((c, _), _) ->
+            (match Proof_record.digest_value body, Proof_record.digest_value c with
+             | d, d' when String.equal d d' ->
+               Proof_recorder.note_vo_ref ();
+               Vo_opaque { index = Opaqueproof.repr_handle handle; digest = d }
+             | _ -> keep "different_term"
+             | exception Proof_record.Unhashable _ -> keep "unhashable")
+          | None -> keep "not_in_table")
+     | Declarations.Def _ | Declarations.Undef _ | Declarations.Primitive _ | Declarations.Symbol _ ->
+       keep "not_opaque")
+  | GlobRef.VarRef _ -> keep "section_variable"
+  | GlobRef.IndRef _ | GlobRef.ConstructRef _ -> keep "not_opaque"
+
+(* Past this many levels the pairwise order costs too much, and the whole
+   global graph is compared instead. *)
+let universe_view_limit = 128
+
+let universe_check (s : pending_stored) ~regular ~(queries : Proof_record_env.declaration_queries) =
+  let uctx = s.ps_output.output_ustate in
+  let whole why = (Ask_whole { digest = Proof_record_env.universe_graph_value s.ps_base; why }, false) in
+  if not regular then whole "not_regular"
+  else if queries.dq_whole then whole "whole_graph_query"
+  else
+    let locals, csts = UState.universe_context_set uctx in
+    let v =
+      Univ.UnivConstraints.fold (fun (u, _, w) acc -> Univ.Level.Set.add u (Univ.Level.Set.add w acc))
+        csts (Univ.Level.Set.add Univ.Level.set (Univ.Level.Set.union locals queries.dq_levels))
+    in
+    if Univ.Level.Set.cardinal v > universe_view_limit then whole "too_many_levels"
+    else
+      let levels = Univ.Level.Set.elements v in
+      UGraph.without_query_hook (fun () ->
+          let declared g l = Result.is_ok (UGraph.check_declared_universes g (Univ.Level.Set.singleton l)) in
+          let initial = UState.initial_ugraph uctx in
+          let added =
+            List.filter_map (fun l ->
+                if declared initial l && not (declared s.ps_base l) then
+                  Some (l, UGraph.check_constraint initial (Univ.Level.set, Univ.UnivConstraint.Lt, l))
+                else None)
+              levels
+          in
+          match UState.with_rebuilt_graphs uctx ~base:s.ps_base ~levels:added with
+          | exception e when CErrors.noncritical e -> whole "rebuild_failed"
+          | rebuilt ->
+            let view = Proof_record_env.universe_state_view ~levels uctx in
+            if String.equal view (Proof_record_env.universe_state_view ~levels rebuilt) then
+              (Ask_levels { levels; added; view }, Proof_recorder.stored_without_graph ())
+            else whole "rebuild_differs")
+
+(* The blob of a proof whose declaration just ran, [refs] the globals it
+   declared, in the order of the entries. *)
+let encode_stored (s : pending_stored) ~regular ~refs ~queries =
+  let universes, graph_out = universe_check s ~regular ~queries in
+  let entries = s.ps_output.output_entries in
+  let rb_entries =
+    if not regular then List.map (fun (body, typ) -> (Body { body; why = "not_regular" }, typ)) entries
+    else if not (Proof_recorder.stored_by_vo_ref ()) then
+      List.map (fun (body, typ) -> (Body { body; why = "no_flag" }, typ)) entries
+    else if List.length refs <> List.length entries then
+      List.map (fun (body, typ) -> (Body { body; why = "entries" }, typ)) entries
+    else List.map2 (fun (body, typ) gref -> (vo_reference body gref, typ)) entries refs
+  in
+  let uctx = s.ps_output.output_ustate in
+  let blob =
+    { rb_entries; rb_ustate = (if graph_out then UState.without_graphs uctx else uctx); rb_graph_out = graph_out;
+      rb_universes = universes; rb_sideff = s.ps_output.output_sideff; rb_using = s.ps_using;
+      rb_univ_start = s.ps_univ_start; rb_univ_end = s.ps_univ_end }
+  in
+  match Marshal.to_string blob [] with
+  | str -> Some (Proof_record.encode_blob str)
+  | exception e ->
+    (* The record says why, so a proof that never replays is visible. *)
+    Proof_recorder.ineligible ~reason:"unmarshallable" ~detail:(Printexc.to_string e);
+    None
 
 let decode_replay blob =
   match Proof_record.decode_blob blob with
@@ -2405,14 +2547,89 @@ let () =
       | None -> false
       | Some b -> b.rb_univ_start = UnivGen.counters ())
 
+(* The opaque proofs of the registered [.vo], read and checked once per
+   compile. *)
+let registered_table : (string * (Opaques.opaque_disk, string) result) option ref = ref None
+
+let registered_opaques () =
+  match Proof_replay.registered_object () with
+  | None | Some (_, None) -> Error "missing"
+  | Some (file, Some sha256) ->
+    match !registered_table with
+    | Some (f, r) when String.equal f file -> r
+    | _ ->
+      let r = Library.registered_opaques ~file ~sha256 in
+      registered_table := Some (file, r);
+      r
+
+(* A reference into the registered [.vo] gives the term only when the entry
+   at its index is a term with the recorded digest. *)
+let resolve_body = function
+  | Body { body; _ } -> Ok body
+  | Vo_opaque { index; digest } ->
+    match registered_opaques () with
+    | Error why -> Error ("vo_term", why)
+    | Ok table ->
+      match Opaques.opaque_disk_entry index table with
+      | Some ((c, _), _) when String.equal (Proof_record.digest_value c) digest -> Ok c
+      | Some _ | None -> Error ("vo_term", "changed")
+
+(* The universe state the declaration takes: the global graph is this
+   compile's, at the closer, as it was at the proof's start (no sentence of
+   a replayed proof runs before its closer). A state whose graphs answer
+   the declaration's queries otherwise than the registration's did is not
+   used. *)
+let resolve_ustate b =
+  let base = Environ.universes (Global.env ()) in
+  match b.rb_universes with
+  | Ask_whole { digest = d; _ } ->
+    if b.rb_graph_out then Error ("universe_rebuild", "failed")
+    else if String.equal (Proof_record_env.universe_graph_value base) d then Ok b.rb_ustate
+    else Error ("universe_rebuild", "changed")
+  | Ask_levels { levels; added; view } ->
+    match UState.with_rebuilt_graphs b.rb_ustate ~base ~levels:added with
+    | exception e when CErrors.noncritical e -> Error ("universe_rebuild", "failed")
+    | rebuilt ->
+      if not (String.equal (Proof_record_env.universe_state_view ~levels rebuilt) view) then
+        Error ("universe_rebuild", "changed")
+      else Ok (if b.rb_graph_out then rebuilt else b.rb_ustate)
+
+(* What the closer about to run declares, put together at the decision
+   ([Proof_replay.register_install_check]) and taken by [close_proof]. *)
+let prepared : (string * (closed_proof_output * Id.Set.t option * (int * int))) option ref = ref None
+
+let prepare_replay blob =
+  prepared := None;
+  match decode_replay blob with
+  | None -> Some ("stored_term", "unknown")
+  | Some b ->
+    let rec bodies acc = function
+      | [] -> Ok (List.rev acc)
+      | (body, typ) :: rest ->
+        (match resolve_body body with
+         | Ok c -> bodies ((c, typ) :: acc) rest
+         | Error e -> Error e)
+    in
+    match bodies [] b.rb_entries with
+    | Error miss -> Some miss
+    | Ok entries ->
+      match resolve_ustate b with
+      | Error miss -> Some miss
+      | Ok ustate ->
+        let output = { output_entries = entries; output_ustate = ustate; output_sideff = b.rb_sideff } in
+        prepared := Some (blob, (output, b.rb_using, b.rb_univ_end));
+        None
+
+let () = Proof_replay.register_install_check prepare_replay
+
 (* The other side: the stored term, as the proof object the declaration
    takes, with the counters the declaration must leave behind. The section
    variables it uses are the record's ([rb_using]); its [pinfo] is this
    compile's. *)
 let replayed_proof_object ~blob ~(proof : t) =
-  match decode_replay blob with
-  | None -> None
-  | Some b ->
+  match !prepared with
+  | Some (b, (output, using, univ_end)) when b == blob ->
+    prepared := None;
     (* A term read back with [Marshal.from_string] is a fresh copy: not one
        of its blocks is physically shared with this compile's own values,
        and a [.vo] marshals the library with its sharing. So the object
@@ -2425,15 +2642,13 @@ let replayed_proof_object ~blob ~(proof : t) =
        the universe state joins the copy to this compile's own values, as
        the kernel's own hashconsing does for a term the tactics built. *)
     Impargs.refresh_flags ();
-    let output =
-      { b.rb_output with output_ustate = UState.hcons_univs b.rb_output.output_ustate }
-    in
+    let output = { output with output_ustate = UState.hcons_univs output.output_ustate } in
     Some
       ( { Proof_object.proof_object =
-            DefaultProof { proof = output; opaque = true; using = b.rb_using;
-                           keep_body_ucst_separate = None };
+            DefaultProof { proof = output; opaque = true; using; keep_body_ucst_separate = None };
           pinfo = proof.pinfo },
-        b.rb_univ_end )
+        univ_end )
+  | Some _ | None -> None
 
 (* The stored term the next closer writes into the record. The compile
    closes a [Qed] through the STM, which calls [close_proof] and then
@@ -2562,16 +2777,22 @@ let finish_admitted ~pm ~pinfo ~sec_vars typs =
    of the kernel check and of the declaration itself are not recorded: a
    registration compile types the proof and a grade compile does not
    (-skip-qed-typecheck), and the two read sets must be equal. *)
-let record_close ?(replay = None) ~closer ~kernel_check declare =
+let record_close_gen ~closer ~kernel_check run =
   let held = Proof_recorder.writing () in
   Proof_record_env.record_universe_footprint ();
-  let res = Proof_recorder.without_recording declare in
+  let res, replay = Proof_recorder.without_recording run in
   Proof_recorder.close_proof ~closer ~kernel_check ~replay;
   Proof_replay.close_proof ();
   if held then Proof_record_env.drop_universe_frame ();
   res
 
-let record_close_with_info ?(replay = None) ~closer ~kernel_check ~pinfo declare =
+let record_close ~closer ~kernel_check declare =
+  record_close_gen ~closer ~kernel_check (fun () -> (declare (), None))
+
+(* A proved proof: its stored term is put together once the declaration has
+   run ([encode_stored]), from the globals [refs res] the declaration made
+   and the universe queries it asked. *)
+let record_close_with_info ~stored ~closer ~kernel_check ~pinfo ~refs declare =
   (* [writing] is exactly the state in which [set_name] does something (a
      proof is open, suspended or not), so the path and the string are built
      at a [Qed] only with the recorder on. Only a proof that declares one
@@ -2584,7 +2805,17 @@ let record_close_with_info ?(replay = None) ~closer ~kernel_check ~pinfo declare
       Proof_recorder.set_name (Libnames.string_of_path (Lib.make_path name))
     | _ -> ()
   in
-  record_close ~replay ~closer ~kernel_check declare
+  record_close_gen ~closer ~kernel_check (fun () ->
+      match stored with
+      | None -> (declare (), None)
+      | Some s ->
+        let res, queries = Proof_record_env.with_declaration_queries declare in
+        let regular =
+          match CEphemeron.default pinfo.Proof_info.proof_ending Proof_ending.Regular with
+          | Proof_ending.Regular -> true
+          | Proof_ending.End_obligation _ | Proof_ending.End_equations _ -> false
+        in
+        (res, encode_stored s ~regular ~refs:(refs res) ~queries))
 
 let save_admitted ~pm ~proof =
   let iproof = get proof in
@@ -2691,8 +2922,8 @@ let save ~pm ~proof ~opaque ~idopt =
     | Vernacexpr.Transparent -> true
   in
   let res =
-    record_close_with_info ~replay:(take_stored ()) ~closer ~kernel_check ~pinfo:proof_info (fun () ->
-        finish_proof ~pm proof_obj.proof_object proof_info)
+    record_close_with_info ~stored:(take_stored ()) ~closer ~kernel_check ~pinfo:proof_info ~refs:snd
+      (fun () -> finish_proof ~pm proof_obj.proof_object proof_info)
   in
   restore_replayed_counters ();
   res
@@ -2735,13 +2966,12 @@ let save_lemma_proved_delayed ~pm ~proof ~idopt =
     | Some _, "Qed" -> "Save"
     | _ -> closer
   in
-  let res =
-    record_close_with_info ~replay:(take_stored ()) ~closer ~kernel_check ~pinfo (fun () ->
-        let pm, _ = finish_proof ~pm proof.proof_object pinfo in
-        pm)
+  let pm, _ =
+    record_close_with_info ~stored:(take_stored ()) ~closer ~kernel_check ~pinfo ~refs:snd (fun () ->
+        finish_proof ~pm proof.proof_object pinfo)
   in
   restore_replayed_counters ();
-  res
+  pm
 
 end (* Proof module *)
 

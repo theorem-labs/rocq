@@ -114,10 +114,23 @@ val table_reads : unit -> Proof_record.read list
     that checks a record evaluates this list at the proof it is about to
     replay. *)
 
-val write : string -> unit
+val write : ?vo_opaques:(unit -> string option) -> string -> unit
 (** Writes the record to that path and turns the recorder off. Call it
     after the [.vo], so that a compile that fails leaves no record. A no-op
-    when the recorder is off. *)
+    when the recorder is off. [vo_opaques] gives the trailer's field of the
+    same name; it is called only when a proof stored a reference into the
+    [.vo] ({!note_vo_ref}). *)
+
+val set_stored_format : no_graph:bool -> vo_ref:bool -> unit
+(** How a proof's stored term is kept ([-proof-record-no-graph],
+    [-proof-record-vo-ref]): without the global universe graph, and with
+    the proof term as a reference into the [.vo]. Both off by default. *)
+
+val stored_without_graph : unit -> bool
+val stored_by_vo_ref : unit -> bool
+
+val note_vo_ref : unit -> unit
+(** A proof of this file stored a reference into the [.vo]. *)
 
 val stop : unit -> unit
 (** Turns the recorder off and drops what it holds, with no file. *)

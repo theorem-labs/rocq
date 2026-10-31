@@ -61,7 +61,8 @@ let proof : R.proof = R.{
    stores no term, and a proof the STM closed late has no source span. *)
 let proof_without_v2 : R.proof = { proof with span = None; replay = None }
 
-let trailer : R.trailer = R.{ file_wall_s = 12.25; file_cpu_s = 11.; peak_rss_kb = 123456; proof_count = 1 }
+let trailer : R.trailer =
+  R.{ file_wall_s = 12.25; file_cpu_s = 11.; peak_rss_kb = 123456; proof_count = 1; vo_opaques = None }
 
 let file : R.file = R.{ header; proofs = [ proof ]; trailer }
 
@@ -96,7 +97,8 @@ let bad_input =
   let header_line = List.hd (String.split_on_char '\n' good) in
   let trailer_line n =
     Printf.sprintf
-      "{\"kind\":\"trailer\",\"file_wall_s\":1,\"file_cpu_s\":1,\"peak_rss_kb\":1,\"proof_count\":%d}\n" n in
+      "{\"kind\":\"trailer\",\"file_wall_s\":1,\"file_cpu_s\":1,\"peak_rss_kb\":1,\"proof_count\":%d,\
+       \"vo_opaques\":null}\n" n in
   mk_bool_test "proof-record-refused"
     "another format version, a missing header or trailer, an extra field, a wrong proof count and a line after the \
      trailer are refused"
@@ -191,7 +193,9 @@ let vo_path =
 (* Format v3 rejects v2 records: v3 replaces the whole [universe_graph] start
    read with per-query universe records, so an older record must run stock.
    Format v4 drops the writes' [warnings_raised]: a proof that raises a
-   warning is ineligible, so no warning is raised again. *)
+   warning is ineligible, so no warning is raised again. Format v5 adds the
+   trailer's [vo_opaques]: a stored term can refer to the registered [.vo],
+   and a v4 reader would not bind it. *)
 let written_with p =
   let buf = Buffer.create 1024 in
   R.output_header buf header;
@@ -211,13 +215,21 @@ let without_suffix suffix text =
 
 let v3_fields =
   let with_values = written_with proof and with_nulls = written_with proof_without_v2 in
+  let vo = { trailer with vo_opaques = Some (String.make 64 'a') } in
+  let with_vo =
+    let buf = Buffer.create 1024 in
+    R.output_header buf header; R.output_proof buf proof; R.output_trailer buf vo; Buffer.contents buf
+  in
   mk_bool_test "proof-record-v3-fields"
-    "span and replay round-trip, a v2 proof line is refused, and the format is version 4"
+    "span, replay and vo_opaques round-trip, a v2 proof line and a v4 trailer are refused, and the format \
+     is version 5"
     (R.parse_string with_values = R.{ header; proofs = [ proof ]; trailer }
      && R.parse_string with_nulls = R.{ header; proofs = [ proof_without_v2 ]; trailer }
+     && R.parse_string with_vo = R.{ header; proofs = [ proof ]; trailer = vo }
      && refused (without_suffix ",\"span\":null,\"replay\":null" with_nulls)
      && refused (without_suffix ",\"replay\":null" with_nulls)
-     && R.format_version = 4)
+     && refused (without_suffix ",\"vo_opaques\":null" with_nulls)
+     && R.format_version = 5)
 
 (* The memo of blocks lives from one call to the next, so a persistent value
    digested again after a change costs its delta. It must not change a digest:

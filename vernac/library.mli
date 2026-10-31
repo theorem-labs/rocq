@@ -75,6 +75,20 @@ val save_library_to :
     [require_library_syntax_from_dirpath] *)
 val save_library : DirPath.t -> library_t
 
+(** {6 The opaque proofs of a registered object (BET-84)} *)
+
+val opaques_segment_sha256 : string -> string option
+(** The SHA-256 of the opaque-proof segment's bytes in the object file
+    [f], as 64 hex digits; [None] when [f] cannot be read or is not an
+    object file of this version. *)
+
+val registered_opaques :
+  file:string -> sha256:string -> (Opaques.opaque_disk, string) result
+(** The opaque proofs of the object file [file], when the bytes of that
+    segment hash to [sha256]. The file is read once, so the bytes hashed
+    are the bytes read back. [Error "missing"] when the file cannot be read,
+    [Error "changed"] when it is not such an object or the segment differs. *)
+
 (** {6 Interrogate the status of libraries } *)
 
   (** - Tell if a library is loaded *)

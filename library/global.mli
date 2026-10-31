@@ -21,6 +21,15 @@ open Mod_declarations
 val safe_env : unit -> Safe_typing.safe_environment
 val env : unit -> Environ.env
 
+val in_kernel : unit -> bool
+(** Whether a [Safe_typing] operation on the global environment is running,
+    every operation below included. The proof recorder leaves out the
+    universe queries the kernel makes (BET-84). *)
+
+val with_kernel : (unit -> 'a) -> 'a
+(** Runs a kernel operation that does not go through this module, so that
+    {!in_kernel} holds while it runs. *)
+
 val universes : unit -> UGraph.t
 val qualities : unit -> Sorts.QVar.Set.t
 val elim_graph : unit -> QGraph.t

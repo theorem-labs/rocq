@@ -121,7 +121,23 @@ let cpu_time () = let t = Unix.times () in t.Unix.tms_utime +. t.Unix.tms_stime
 
 let peak_rss_kb () = Proof_limits.peak_rss_kb ()
 
+(* BET-84: how a proof's stored term is kept. Off, the blob is the whole
+   closed proof, the global universe graph included. [no_graph] leaves the
+   graph out (replay rebuilds it); [vo_ref] keeps the proof term as its
+   index in the opaque table of the [.vo] this compile writes. *)
+let opt_no_graph = ref false
+let opt_vo_ref = ref false
+
+(* Whether a proof of this file stored a reference into its [.vo]. *)
+let vo_referred = ref false
+
+let set_stored_format ~no_graph ~vo_ref = opt_no_graph := no_graph; opt_vo_ref := vo_ref
+let stored_without_graph () = !opt_no_graph
+let stored_by_vo_ref () = !opt_vo_ref
+let note_vo_ref () = vo_referred := true
+
 let start ~library ~source ~source_digest ~toolchain ~skip_qed_typecheck ~tables_at_start =
+  vo_referred := false;
   let header = R.{
       version = R.format_version;
       library; source; source_digest;
@@ -186,6 +202,7 @@ let slot () = let s = ref None in slots := s :: !slots; s
 
 let stop () =
   state := None; recording := false; Addr.reset digest_cache; R.reset_memo ();
+  vo_referred := false;
   List.iter (fun s -> s := None) !slots
 
 (* The digest memo and the address cache hold a strong reference to every
@@ -194,7 +211,7 @@ let stop () =
    proof's reads (review P3Deep F7). *)
 let reset_caches () = Addr.reset digest_cache; R.reset_memo ()
 
-let write path =
+let write ?(vo_opaques = fun () -> None) path =
   match !state with
   | None -> ()
   | Some st ->
@@ -203,6 +220,7 @@ let write path =
         file_cpu_s = cpu_time () -. st.f_cpu0;
         peak_rss_kb = peak_rss_kb ();
         proof_count = st.f_count;
+        vo_opaques = (if !vo_referred then vo_opaques () else None);
       };
     let oc = open_out_bin path in
     Buffer.output_buffer oc st.f_buf;

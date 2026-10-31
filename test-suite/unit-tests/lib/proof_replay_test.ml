@@ -73,7 +73,7 @@ let proof : R.proof = R.{
 }
 
 let trailer : R.trailer =
-  R.{ file_wall_s = 3.0; file_cpu_s = 3.0; peak_rss_kb = 1024; proof_count = 1 }
+  R.{ file_wall_s = 3.0; file_cpu_s = 3.0; peak_rss_kb = 1024; proof_count = 1; vo_opaques = None }
 
 let record_bytes ?(header = header) ?(proof = proof) () =
   let buf = Buffer.create 1024 in
@@ -99,8 +99,13 @@ let () = Replay.register_evaluator "unit_test_channel" (fun _ -> !current)
 
 (* The layer that owns the stored term accepts it; [Declare] does this in
    the real compile. Without one, every proof misses, which is the
-   fail-closed default. *)
+   fail-closed default. The install check is that layer's last word, once
+   the reads matched: the tests move it. *)
 let () = Replay.register_precheck (fun _ -> true)
+
+let install = ref None
+
+let () = Replay.register_install_check (fun _ -> !install)
 
 let setup ?(budget = None) ?(proof = proof) ?(now = toolchain) ?(header = header) ?(perm = 0o444)
     ?digest ?(library = "Top.File") ?(source = None) () =
@@ -342,6 +347,17 @@ let rebind_scan =
      && s "Definition d := 0. Reset d. Lemma a : True. Qed." = None
      && s "Section S. Reset S. Section T. Lemma a : True. Qed. End T." = Some ("End (after a Reset or Back)", 1)
      && s "Lemma Resets : True. Qed." = None
+     (* A component of a qualified identifier is not a command word. *)
+     && s "Lemma a : True. Qed. Lemma b : True. Proof. ltac2:(let _ := Module.module_contents in ()). Qed." = None
+     && s "Lemma a : True. Qed. Lemma b : True. Proof. Module.is_functor (). Qed." = None
+     && s "Lemma a : True. Qed. Check M.Register." = None
+     && s "Lemma a : True. Qed. Check M.Register.x." = None
+     && s "Lemma a : True. Qed. Check x1.Import." = None
+     (* A late word that ends its sentence, or is followed by a space, still counts. *)
+     && s "Lemma a : True. Qed. Module.\n" = Some ("Module", 1)
+     && s "Lemma a : True. Qed. Import M.Register." = Some ("Import", 1)
+     && s "Lemma a : True. Qed. Module Import M.N." = Some ("Module", 1)
+     && s "Lemma a : True. Qed. Module M.N. End M.N." = Some ("Module", 1)
      && s "" = None)
 
 (* The scan also gives the offset of the LAST late command: every proof that
@@ -410,6 +426,34 @@ let miss_reason =
      let none = why () in
      has changed "\"why\":\"changed\"" && has unknown "\"why\":\"unknown\""
      && has none "\"why\":\"no_evaluator\"")
+
+(* The term a blob refers to, or the universe state it rebuilds, that is not
+   the registration's is a read miss on the channel the check names, after
+   every read matched; an exception there is a miss too. *)
+let install_check_misses =
+  let summary_text () =
+    let path = Filename.temp_file "proof-replay" ".json" in
+    Replay.write_summary path;
+    let ic = open_in_bin path in
+    let text = really_input_string ic (in_channel_length ic) in
+    close_in ic; Sys.remove path; text
+  in
+  let has text s = CString.string_contains ~where:text ~what:s in
+  mk_bool_test "proof-replay-install-check"
+    "a stored term whose referred term or rebuilt universe state differs is a read miss on its channel"
+    (current := Replay.Value (Some (String.make 32 'e'));
+     install := Some ("vo_term", "changed");
+     let vo = hits () in
+     let vo_text = summary_text () in
+     install := Some ("universe_rebuild", "changed");
+     let rebuild = hits () in
+     let rebuild_text = summary_text () in
+     install := None;
+     let fine = hits () in
+     (not vo) && (not rebuild) && fine
+     && has vo_text "\"channel\":\"vo_term\",\"why\":\"changed\""
+     && has rebuild_text "\"channel\":\"universe_rebuild\",\"why\":\"changed\""
+     && has rebuild_text "\"read\":1")
 
 (* A plugin this tree does not build can add commands and closures no read
    sees: while one is loaded, no proof is replayed, and the summary names it. *)
@@ -600,7 +644,8 @@ let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
     binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
-    rebind_scan; late_events_scan; hit_hook_runs; miss_reason; plugin_audit_refuses; plugin_allowlist;
+    rebind_scan; late_events_scan; hit_hook_runs; miss_reason; install_check_misses; plugin_audit_refuses;
+    plugin_allowlist;
     require_scan; require_rule; require_tripwire;
     (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]

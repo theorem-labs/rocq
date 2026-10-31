@@ -547,6 +547,25 @@ let hcons_univs uctx =
      same values as the ones the set holds. *)
   { uctx with local = (set univs, (qcst, snd (Univ.UnivConstraints.hcons ucst))) }
 
+(* BET-84: the two graphs hold the whole global graph, which is almost all
+   of a proof record's bytes when every proof keeps its own copy. A replay
+   rebuilds them from its own global graph: the levels the state added to
+   the initial one, then the local constraints, which is how
+   [normalize_variables] and [minimize] remake the current graph. The
+   caller checks that the rebuilt state answers what the declaration asks
+   of it as the recorded one did. *)
+let without_graphs uctx =
+  { uctx with universes = UGraph.initial_universes; initial_universes = UGraph.initial_universes }
+
+let with_rebuilt_graphs uctx ~base ~levels =
+  let initial_universes =
+    List.fold_left (fun g (l, strict) -> UGraph.add_universe l ~strict g) base levels
+  in
+  let universes = UGraph.merge_constraints (PContextSet.univ_constraints uctx.local) initial_universes in
+  { uctx with universes; initial_universes }
+
+let initial_ugraph uctx = uctx.initial_universes
+
 let universe_context_set uctx =
   let us, (_, ucst) = uctx.local in
   us, ucst

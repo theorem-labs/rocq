@@ -61,6 +61,23 @@ val hcons_univs : t -> t
     compiled against the one object refuses to load against the other
     (BET-84 P3, measured 2026-10-25). *)
 
+val without_graphs : t -> t
+(** This state with both of its universe graphs replaced by the empty one.
+    The global graph is most of a proof's state by bytes, and a proof record
+    that keeps it holds one copy of it per proof (BET-84): a replay rebuilds
+    it with {!with_rebuilt_graphs}. *)
+
+val with_rebuilt_graphs : t -> base:UGraph.t -> levels:(Univ.Level.t * bool) list -> t
+(** [with_rebuilt_graphs u ~base ~levels]: [u] with its initial graph made of
+    [base] and each of [levels] (strict: above [Set]), and its current graph
+    made of that and the local constraints of [u]. Raises
+    {!UGraph.AlreadyDeclared} when a level is already in [base], and
+    {!UGraph.UniverseInconsistency} when a local constraint contradicts it. *)
+
+val initial_ugraph : t -> UGraph.t
+(** The graph at the creation of the state, with its local levels and
+    without its local constraints. *)
+
 (** {5 Projections and other destructors} *)
 
 val universe_context_set : t -> Univ.ContextSet.t

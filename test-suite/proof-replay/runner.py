@@ -182,24 +182,59 @@ def vo_src(tree, src):
     return tree / (src[:-2] + ".vo")
 
 
+def opaques_span(data, what):
+    """(position, length) of the `opaques` segment of a .vo's bytes."""
+    seg = segments(data, what).get("opaques")
+    if seg is None:
+        raise ValueError("%s: no opaques segment" % what)
+    return seg[0], seg[1]
+
+
 def publish_records(spec, reg, records):
-    """The registration's records, under the names -proof-replay-dir reads."""
+    """The registration's records, under the names -proof-replay-dir reads.
+
+    Each record's `.vo` is published beside it under the same name, as a
+    registration tree holds it: a record made with `-proof-record-vo-ref`
+    refers to the opaque proofs of that object.  `vo_mutation` then removes
+    those objects (`remove`), or changes one byte inside their opaque proofs
+    (`change`), so a fixture can show what a referring proof does without
+    the object it was registered with.
+    """
     published = []
+    objects = []
     for src in spec["files"]:
         rec = record_src(reg, src)
         if not rec.is_file():
             return None, "registration wrote no record for %s" % src
         name = lib_name(spec, src)
+        targets = []
         if spec["record_layout"] in ("dotted", "both"):
-            dotted = records / (name + ".proof-record.jsonl")
-            dotted.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(rec, dotted)
-            published.append(dotted)
+            targets.append(records / (name + ".proof-record.jsonl"))
         if spec["record_layout"] in ("slashed", "both"):
-            slashed = records / (name.replace(".", "/") + ".proof-record.jsonl")
-            slashed.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(rec, slashed)
-            published.append(slashed)
+            targets.append(records / (name.replace(".", "/") + ".proof-record.jsonl"))
+        for target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(rec, target)
+            published.append(target)
+            obj = Path(str(target)[:-len(".proof-record.jsonl")] + ".vo")
+            shutil.copyfile(vo_src(reg, src), obj)
+            objects.append(obj)
+    mutation = spec.get("vo_mutation")
+    for obj in objects:
+        if mutation == "remove":
+            obj.unlink()
+            continue
+        if mutation == "change":
+            data = bytearray(obj.read_bytes())
+            try:
+                pos, length = opaques_span(bytes(data), obj.name)
+            except ValueError as exc:
+                return None, str(exc)
+            data[pos + length // 2] ^= 0xFF
+            obj.write_bytes(bytes(data))
+        elif mutation is not None:
+            return None, "unknown vo_mutation %r" % mutation
+        os.chmod(obj, 0o444)
     # `record_patch` sets one recorded read's value before the digest is
     # taken, so a fixture can hold a record no registration of its tree would
     # write (a null read inside an open section, say) and still be bound.
@@ -398,18 +433,19 @@ class Fixture:
         (self.logs / (tag + ".json")).write_text(json.dumps(res, indent=1))
 
     # -- phases ------------------------------------------------------------
-    def register(self):
+    def register(self, flags=None, reg_name="reg", records_name="records"):
         spec = self.spec
-        reg = self.out / "reg"
+        flags = spec["register_flags"] if flags is None else flags
+        reg = self.out / reg_name
         copy_tree(FIXTURES / spec["name"] / "original", reg)
         for src in spec["files"]:
-            res = self.rocq.compile(spec, reg, spec["register_flags"] + ["-proof-record"], src)
-            self.log("reg-" + src, res)
+            res = self.rocq.compile(spec, reg, flags + ["-proof-record"], src)
+            self.log("%s-%s" % (reg_name, src), res)
             if res["rc"] != 0:
                 self.fail("registration of %s exited %d: %s"
                           % (src, res["rc"], last_line(res)))
                 return None
-        records = self.out / "records"
+        records = self.out / records_name
         if records.exists():
             shutil.rmtree(records)
         records.mkdir(parents=True)
@@ -424,10 +460,15 @@ class Fixture:
         for src in self.spec["files"]:
             path = record_src(reg_tree, src)
             try:
-                _header, proofs, _trailer = parse_record(path)
+                _header, proofs, trailer = parse_record(path)
             except (ValueError, json.JSONDecodeError) as exc:
                 self.fail("record of %s does not parse: %s" % (src, exc))
                 continue
+            # `record_trailers`: whether the record refers to its `.vo`.
+            want_vo = self.spec.get("record_trailers", {}).get(src, {}).get("vo_opaques")
+            if want_vo is not None and (trailer.get("vo_opaques") is not None) != want_vo:
+                self.fail("record of %s: trailer vo_opaques is %r, wanted %s"
+                          % (src, trailer.get("vo_opaques"), "a digest" if want_vo else "null"))
             by_name = {p.get("name"): p for p in proofs}
             wanted = self.spec["records"].get(src, {})
             for name, want in wanted.items():
@@ -462,6 +503,15 @@ class Fixture:
                                           "(format v1: the recorder stores no term yet)" % name)
                     elif proof["replay"] is not None:
                         self.fail("%s: the registration stored a term for an ineligible proof" % name)
+                # The stored blob's size: a record without the global universe
+                # graph keeps a proof in a few kB, with it in tens.
+                blob = proof.get("replay") or ""
+                if "replay_max_bytes" in want and len(blob) > want["replay_max_bytes"]:
+                    self.fail("%s: the stored term is %d bytes, wanted at most %d"
+                              % (name, len(blob), want["replay_max_bytes"]))
+                if "replay_min_bytes" in want and len(blob) < want["replay_min_bytes"]:
+                    self.fail("%s: the stored term is %d bytes, wanted at least %d"
+                              % (name, len(blob), want["replay_min_bytes"]))
 
     def grade(self, tree_name, flags, timeout_s=None, files=None):
         """Compile the edited tree in `tree_name`; stop at the first failure.
@@ -685,6 +735,38 @@ class Fixture:
         compiled = self.check_objects(a, b, replay)
         self.check_coqchk(a, compiled)
         self.check_output(replay, stock)
+        if not stock_control and spec.get("alt_register_flags") is not None:
+            self.compare_alt_format(a, replay)
+
+    def compare_alt_format(self, a, replay):
+        """`alt_register_flags`: register the same tree again with those flags
+        (another record format), replay the edited tree from that record in
+        `c/`, and require the same exit codes, the same hits and the same
+        `.vo` bytes as the replay from the first record: the two formats
+        replay to one outcome."""
+        spec = self.spec
+        records = self.register(flags=spec["alt_register_flags"], reg_name="rgb", records_name="recordz")
+        if records is None:
+            return
+        flags = (spec["grade_flags"] + spec["replay_extra_flags"]
+                 + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
+        c, other = self.grade("c", flags)
+        ra = [(s, r["rc"]) for s, r in replay]
+        rc = [(s, r["rc"]) for s, r in other]
+        if ra != rc:
+            self.fail("the two record formats disagree on exit codes: %s against %s" % (ra, rc))
+            return
+        for src, res in replay:
+            if res["rc"] != 0:
+                continue
+            ha = json.loads(summary_src(a, src).read_text()).get("hits")
+            hc = json.loads(summary_src(c, src).read_text()).get("hits")
+            if ha != hc:
+                self.fail("%s: %r hits from the first record, %r from the other format" % (src, ha, hc))
+            if vo_src(a, src).read_bytes() != vo_src(c, src).read_bytes():
+                self.fail("%s: the .vo replayed from the two record formats differ" % src)
+        self.notes.append("the record format %s replays to the same .vo bytes"
+                          % (" ".join(spec["alt_register_flags"]) or "with no format flag"))
 
     def run_usage_mode(self, records):
         """`-proof-replay` with no ratio: a usage error before any compile."""

@@ -76,6 +76,9 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `budget`, `replay_wall_max` | the budget mode's seconds |
 | `usage` | the usage mode's expected exit code and message substrings |
 | `mixed` | the mixed mode's `replay_file`, `carry_files` and `check_files` |
+| `alt_register_flags` | register again with these flags, replay from that record in `c/`, and require the same exit codes, hits and `.vo` bytes as from the first record |
+| `vo_mutation` | `remove` or `change` the registered `.vo` published beside each record (one byte of its opaque proofs) |
+| `record_trailers` | per file: `vo_opaques` true or false, whether the record refers to its `.vo` |
 
 `outcomes` is a list of `[name, outcome]`, or `[name, outcome, channel]` for a
 `read` miss.  It is checked only when the summary carries the field.
@@ -250,8 +253,8 @@ and `Module.is_modtype` on an open module are reads on channel
 before the proof, a functor that becomes a plain module, a module type
 that becomes a plain module) miss on that read, and the answer it does not
 change replays.  Its proofs call the queries through Ltac2 definitions made
-before the first `Qed`, because the source scan takes the word `Module` of
-`Module.module_contents` for a late command.
+before the first `Qed`, which the source scan needed before
+`late_qualified_module_word` fixed it.
 `retroknowledge_primitive_changed`: a proof types an int63 literal, whose
 type the kernel takes from its registry of primitive types, and the edited
 tree registers `p` as the float64 type instead of the int63 type; stock
@@ -330,6 +333,30 @@ is compiled against the STOCK `A.vo`, then placed beside the REPLAYED `A.vo`,
 and `C.v` is compiled on top.  It must behave as the all-stock control does,
 and `rocqchk` must accept the reused object.  The control runs first, so a
 broken setup fails there instead of looking like a pass.
+
+**The record format** (`-proof-record-no-graph`, `-proof-record-vo-ref`).
+Measured on r484-final, 99.6% of a stored term's bytes were the global
+universe graph its universe state carries, and 0.25% the proof term.
+`rebuild_replay`: with `-proof-record-no-graph` the stored terms are a few
+hundred bytes instead of about 64 kB (`replay_max_bytes`), both proofs replay
+through a rebuilt graph, and to the same `.vo` as from a record that keeps the
+graph (`alt_register_flags`).  `rebuild_graph_changed_hit`: the global graph
+changes in a way the universe footprint allows, and the proof still replays.
+`rebuild_state_differs`: a universe state of 130 levels is checked against the
+digest of the whole global graph, and a constraint between two universes the
+proof never queries makes it miss on `universe_rebuild`.  `voref_replay`: with
+`-proof-record-vo-ref` the proof's term is an index into the registered
+`.vo`'s opaque proofs and the proof replays through it.  `voref_same_vo`: five
+proofs replay to the same `.vo` bytes from references as from inline terms.
+`voref_inline_cases`: the registered `.vo` is missing (`vo_mutation:
+remove`); the plain lemma and the two section lemmas refer to it and miss on
+`vo_term`, the polymorphic lemma (its term names its level, the table holds
+it abstracted) and the section `Let` (a section variable, with no table
+entry) kept their terms inline and replay.  `voref_object_changed`: one byte of
+the registered `.vo`'s opaque proofs changed (`vo_mutation: change`), and the
+proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
+`Module.module_contents` in a tactic is a qualified identifier, not a late
+command, and every proof of the file replays.
 
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 

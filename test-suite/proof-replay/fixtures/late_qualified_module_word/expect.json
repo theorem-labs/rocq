@@ -1,0 +1,10 @@
+{
+  "doc": "Module.module_contents in a tactic is a qualified identifier, not a late command: every proof replays",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {"proofs": 3, "hits": 3,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "refused_detail": null, "killed": false,
+              "outcomes": [["PR.A.first", "hit"], ["PR.A.second", "hit"], ["PR.A.third", "hit"]]}
+  }
+}

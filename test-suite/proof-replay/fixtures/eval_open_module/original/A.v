@@ -11,8 +11,8 @@
    Nothing in the edited tree after the first Qed is a late command, which
    would keep the proofs before it from replaying: the module type T comes
    before it, and the proofs call the queries through Ltac2 definitions made
-   before it too, because the replay's source scan takes the word [Module]
-   of [Module.module_contents] for a late command. *)
+   before it too, which the replay's source scan needed until it read
+   [Module.module_contents] as one identifier (late_qualified_module_word). *)
 From Ltac2 Require Import Ltac2.
 
 Module Type T. End T.
