@@ -30,6 +30,7 @@ module type PHashtable = sig
   val add : 'a t -> key -> 'a -> unit
   val memo : string -> (key -> 'a) -> key -> 'a
   val memo_cond : string -> (key -> bool) -> (key -> 'a) -> key -> 'a
+  val lazy_table : string -> 'a t option Lazy.t
 end
 
 open Hashtbl
