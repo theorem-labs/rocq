@@ -738,9 +738,9 @@ let rec modpath_key = function
   | ModPath.MPbound mbid ->
     let (n, id, dp) = MBId.repr mbid in
     "B" ^ key_part (string_of_int n) ^ key_part (Id.to_string id) ^ modpath_key (ModPath.MPfile dp)
-  | ModPath.MPdot (mp, l) -> "D" ^ key_part (Label.to_string l) ^ modpath_key mp
+  | ModPath.MPdot (mp, l) -> "D" ^ key_part (Id.to_string l) ^ modpath_key mp
 
-let kername_key kn = key_part (Label.to_string (KerName.label kn)) ^ modpath_key (KerName.modpath kn)
+let kername_key kn = key_part (Id.to_string (KerName.label kn)) ^ modpath_key (KerName.modpath kn)
 
 (* The reader of [kername_key], from byte [start] of [key]: the kernel name
    and the position after it. A bound module cannot be rebuilt from its
@@ -784,7 +784,7 @@ let kername_parse key start =
       | 'D' ->
         (match part () with
          | None -> None
-         | Some l -> Option.map (fun mp -> ModPath.MPdot (mp, Label.of_id l)) (modpath ()))
+         | Some l -> Option.map (fun mp -> ModPath.MPdot (mp, l)) (modpath ()))
       | _ -> None
     end
   in

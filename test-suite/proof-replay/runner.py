@@ -93,6 +93,7 @@ DEFAULTS = {
     "usage": None,
     "mixed": None,
     "trigger_optional": None,
+    "inline_convert": False,
 }
 
 
@@ -156,6 +157,10 @@ class Rocq:
         argv = [str(self.bin / "rocqchk"), "-silent", "-Q", ".", spec["root"]] + libs
         return self.run(argv, cwd)
 
+    def inline(self, record, vo, out, cwd):
+        """`rocq proof-record-inline RECORD VO OUT`."""
+        return self.run([str(self.bin / "rocq"), "proof-record-inline", str(record), str(vo), str(out)], cwd)
+
 
 # ------------------------------------------------------------------- the trees
 
@@ -190,15 +195,19 @@ def opaques_span(data, what):
     return seg[0], seg[1]
 
 
-def publish_records(spec, reg, records):
+def publish_records(spec, reg, records, convert=None, mutation=None):
     """The registration's records, under the names -proof-replay-dir reads.
 
     Each record's `.vo` is published beside it under the same name, as a
     registration tree holds it: a record made with `-proof-record-vo-ref`
-    refers to the opaque proofs of that object.  `vo_mutation` then removes
-    those objects (`remove`), or changes one byte inside their opaque proofs
-    (`change`), so a fixture can show what a referring proof does without
-    the object it was registered with.
+    refers to the opaque proofs of that object.  `mutation` (the fixture's
+    `vo_mutation`) then removes those objects (`remove`), or changes one byte
+    inside their opaque proofs (`change`), so a fixture can show what a
+    referring proof does without the object it was registered with.
+
+    `convert(record, vo, target)` writes `target` in place of the copy: the
+    `inline_convert` fixtures publish what `rocq proof-record-inline` makes of
+    the registration's record and `.vo`.  It returns an error, or None.
     """
     published = []
     objects = []
@@ -214,12 +223,16 @@ def publish_records(spec, reg, records):
             targets.append(records / (name.replace(".", "/") + ".proof-record.jsonl"))
         for target in targets:
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(rec, target)
+            if convert is None:
+                shutil.copyfile(rec, target)
+            else:
+                err = convert(rec, vo_src(reg, src), target)
+                if err:
+                    return None, err
             published.append(target)
             obj = Path(str(target)[:-len(".proof-record.jsonl")] + ".vo")
             shutil.copyfile(vo_src(reg, src), obj)
             objects.append(obj)
-    mutation = spec.get("vo_mutation")
     for obj in objects:
         if mutation == "remove":
             obj.unlink()
@@ -453,11 +466,85 @@ class Fixture:
         if records.exists():
             shutil.rmtree(records)
         records.mkdir(parents=True)
-        published, err = publish_records(spec, reg, records)
+        convert = self.inline_record if spec["inline_convert"] else None
+        published, err = publish_records(spec, reg, records, convert=convert, mutation=spec.get("vo_mutation"))
         if err:
             self.fail(err)
             return None
         return records
+
+    def inline_record(self, record, vo, target):
+        """`inline_convert`: `rocq proof-record-inline` of the registration's
+        record and `.vo`, written to `target`, then checked: the same header,
+        the same proofs but for their stored terms, a trailer that names no
+        `.vo`, and a new stored term for exactly the proofs `inline_terms`
+        names (those whose term referred to the `.vo`)."""
+        res = self.rocq.inline(record, vo, target, self.out)
+        self.log("inline-%s" % target.name, res)
+        if res["rc"] != 0:
+            return "rocq proof-record-inline %s exited %d: %s" % (record.name, res["rc"], last_line(res))
+        try:
+            header, proofs, trailer = parse_record(record)
+            iheader, iproofs, itrailer = parse_record(target)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return "the inline record of %s does not parse: %s" % (record.name, exc)
+        if trailer.get("vo_opaques") is None:
+            return "%s names no .vo: an inline_convert fixture registers with -proof-record-vo-ref" % record.name
+        if itrailer.get("vo_opaques") is not None:
+            return "the inline record of %s still names a .vo (vo_opaques %r)" % (record.name, itrailer["vo_opaques"])
+        if iheader != header or dict(itrailer, vo_opaques=None) != dict(trailer, vo_opaques=None):
+            return "the inline record of %s changed its header or its trailer beyond vo_opaques" % record.name
+        if [dict(p, replay=None) for p in iproofs] != [dict(p, replay=None) for p in proofs]:
+            return "the inline record of %s changed a proof beyond its stored term" % record.name
+        changed = [p["name"] for p, q in zip(proofs, iproofs) if p.get("replay") != q.get("replay")]
+        wanted = self.spec.get("inline_terms")
+        if wanted is not None and changed != wanted:
+            return "rocq proof-record-inline changed the stored terms of %s, wanted %s" % (changed, wanted)
+        self.notes.append("%s: rocq proof-record-inline put %d term(s) back inline: %s"
+                          % (record.name, len(changed), ", ".join(changed) or "none"))
+        return None
+
+    def check_inline_refusals(self, reg):
+        """`inline_convert`: the converter exits 1 and writes nothing when the
+        object's opaque proofs are not the ones the record names (one byte
+        changed) or the object is absent, and returns a record that names no
+        object byte for byte."""
+        src = self.spec["files"][0]
+        work = self.out / "inline-refusals"
+        if work.exists():
+            shutil.rmtree(work)
+        work.mkdir(parents=True)
+        record = record_src(reg, src)
+        changed = work / "changed.vo"
+        data = bytearray(vo_src(reg, src).read_bytes())
+        try:
+            pos, length = opaques_span(bytes(data), changed.name)
+        except ValueError as exc:
+            self.fail(str(exc))
+            return
+        data[pos + length // 2] ^= 0xFF
+        changed.write_bytes(bytes(data))
+        for vo, why in ((changed, "changed"), (work / "absent.vo", "missing")):
+            out = work / ("out-%s.proof-record.jsonl" % why)
+            res = self.rocq.inline(record, vo, out, work)
+            self.log("inline-refusal-%s" % why, res)
+            if res["rc"] != 1 or why not in res["err"]:
+                self.fail("rocq proof-record-inline with a %s .vo exited %d, wanted 1 naming %r: %s"
+                          % (why, res["rc"], why, last_line(res)))
+            if out.exists():
+                self.fail("rocq proof-record-inline with a %s .vo still wrote %s" % (why, out.name))
+        if sorted(p.name for p in work.iterdir()) != ["changed.vo"]:
+            self.fail("the refused conversions left files behind: %s" % sorted(p.name for p in work.iterdir()))
+        inline = work / "inline.proof-record.jsonl"
+        again = work / "again.proof-record.jsonl"
+        first = self.rocq.inline(record, vo_src(reg, src), inline, work)
+        second = self.rocq.inline(inline, work / "absent.vo", again, work)
+        self.log("inline-identity", second)
+        if first["rc"] != 0 or second["rc"] != 0:
+            self.fail("converting an inline record exited %d after %d: %s"
+                      % (second["rc"], first["rc"], last_line(second if first["rc"] == 0 else first)))
+        elif inline.read_bytes() != again.read_bytes():
+            self.fail("rocq proof-record-inline changed a record that names no .vo")
 
     def check_records(self, reg_tree):
         """Parse every registration record, then apply fixture assertions."""
@@ -741,6 +828,8 @@ class Fixture:
         self.check_output(replay, stock)
         if not stock_control and spec.get("alt_register_flags") is not None:
             self.compare_alt_format(a, replay)
+        if not stock_control and spec["inline_convert"]:
+            self.compare_vo_ref(a, replay)
 
     def compare_alt_format(self, a, replay):
         """`alt_register_flags`: register the same tree again with those flags
@@ -752,13 +841,34 @@ class Fixture:
         records = self.register(flags=spec["alt_register_flags"], reg_name="rgb", records_name="recordz")
         if records is None:
             return
+        self.compare_replays(a, replay, records, "c", "the record format %s"
+                             % (" ".join(spec["alt_register_flags"]) or "with no format flag"))
+
+    def compare_vo_ref(self, a, replay):
+        """`inline_convert`: publish the registration's vo-ref records as they
+        are, each with its `.vo`, replay the edited tree from them in `d/`, and
+        require the same exit codes, the same hits and the same `.vo` bytes as
+        the replay from the converted records: putting the terms back inline
+        changes no replayed term."""
+        records = self.out / "recordv"
+        if records.exists():
+            shutil.rmtree(records)
+        records.mkdir(parents=True)
+        _published, err = publish_records(self.spec, self.out / "reg", records)
+        if err:
+            self.fail(err)
+            return
+        self.compare_replays(a, replay, records, "d", "the vo-ref record with its .vo")
+
+    def compare_replays(self, a, replay, records, tree_name, what):
+        spec = self.spec
         flags = (spec["grade_flags"] + spec["replay_extra_flags"]
                  + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
-        c, other = self.grade("c", flags)
+        c, other = self.grade(tree_name, flags)
         ra = [(s, r["rc"]) for s, r in replay]
         rc = [(s, r["rc"]) for s, r in other]
         if ra != rc:
-            self.fail("the two record formats disagree on exit codes: %s against %s" % (ra, rc))
+            self.fail("%s disagrees with the first record on exit codes: %s against %s" % (what, rc, ra))
             return
         for src, res in replay:
             if res["rc"] != 0:
@@ -766,11 +876,10 @@ class Fixture:
             ha = json.loads(summary_src(a, src).read_text()).get("hits")
             hc = json.loads(summary_src(c, src).read_text()).get("hits")
             if ha != hc:
-                self.fail("%s: %r hits from the first record, %r from the other format" % (src, ha, hc))
+                self.fail("%s: %r hits from the first record, %r from %s" % (src, ha, hc, what))
             if vo_src(a, src).read_bytes() != vo_src(c, src).read_bytes():
-                self.fail("%s: the .vo replayed from the two record formats differ" % src)
-        self.notes.append("the record format %s replays to the same .vo bytes"
-                          % (" ".join(spec["alt_register_flags"]) or "with no format flag"))
+                self.fail("%s: the .vo replayed from the first record and from %s differ" % (src, what))
+        self.notes.append("%s replays to the same .vo bytes" % what)
 
     def run_usage_mode(self, records):
         """`-proof-replay` with no ratio: a usage error before any compile."""
@@ -889,6 +998,8 @@ class Fixture:
         if records is None:
             return
         self.check_records(self.out / "reg")
+        if self.spec["inline_convert"]:
+            self.check_inline_refusals(self.out / "reg")
         if register_only or self.skip:
             return
         if stock_control:

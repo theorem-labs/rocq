@@ -229,8 +229,8 @@ module Recorded = struct
   let cst_rules = ref Cmap_env.empty
   let minds = ref Mindmap_env.empty
   let minds_exists = ref Mindmap_env.empty
-  let modules = ref MPmap.empty
-  let modtypes = ref MPmap.empty
+  let modules = ref ModPath.Map.empty
+  let modtypes = ref ModPath.Map.empty
 
   let fresh () =
     let g = Proof_recorder.generation () in
@@ -241,8 +241,8 @@ module Recorded = struct
       cst_rules := Cmap_env.empty;
       minds := Mindmap_env.empty;
       minds_exists := Mindmap_env.empty;
-      modules := MPmap.empty;
-      modtypes := MPmap.empty
+      modules := ModPath.Map.empty;
+      modtypes := ModPath.Map.empty
     end
 
   let once tbl mem add print key ~channel value =
@@ -256,7 +256,7 @@ module Recorded = struct
 
   let constant tbl = once tbl Cmap_env.mem Cmap_env.add Constant.to_string
   let mind tbl = once tbl Mindmap_env.mem Mindmap_env.add MutInd.to_string
-  let mpath tbl = once tbl MPmap.mem MPmap.add ModPath.to_string
+  let mpath tbl = once tbl ModPath.Map.mem ModPath.Map.add ModPath.to_string
 
   (* The library of a kernel name, and that library's .vo digest. A module
      or module type of a REQUIRED library is recorded by the digest and not
@@ -400,7 +400,7 @@ let lookup_rewrite_rules cst env =
 (* Mutual Inductives *)
 let lookup_mind_key kn env =
   match Mindmap_env.find_opt kn env.env_inductives with
-  | Some ((mb, _, _) as v) ->
+  | Some v ->
     if Proof_recorder.active () then
       Recorded.mind Recorded.minds kn ~channel:"inductive"
         (fun () -> recorded_inductive kn env);

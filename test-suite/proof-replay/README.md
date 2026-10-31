@@ -79,6 +79,8 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `alt_register_flags` | register again with these flags, replay from that record in `c/`, and require the same exit codes, hits and `.vo` bytes as from the first record |
 | `vo_mutation` | `remove` or `change` the registered `.vo` published beside each record (one byte of its opaque proofs) |
 | `record_trailers` | per file: `vo_opaques` true or false, whether the record refers to its `.vo` |
+| `inline_convert` | publish what `rocq proof-record-inline` makes of each registration record and its `.vo` (the record must refer to its `.vo`); check that the converted record keeps every field but the stored terms and a null `vo_opaques`; check that the converter exits 1 and writes nothing for a changed or an absent `.vo`, and leaves a record that names no `.vo` unchanged; then replay from the records as they were, each with its `.vo`, in `d/`, and require the same exit codes, hits and `.vo` bytes |
+| `inline_terms` | with `inline_convert`: the proofs whose stored term the conversion must change, in record order |
 
 `outcomes` is a list of `[name, outcome]`, or `[name, outcome, channel]` for a
 `read` miss.  It is checked only when the summary carries the field.
@@ -354,7 +356,11 @@ remove`); the plain lemma and the two section lemmas refer to it and miss on
 it abstracted) and the section `Let` (a section variable, with no table
 entry) kept their terms inline and replay.  `voref_object_changed`: one byte of
 the registered `.vo`'s opaque proofs changed (`vo_mutation: change`), and the
-proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
+proof that refers to it misses on `vo_term`.  `voref_inline_convert`: `rocq
+proof-record-inline` puts the three referenced terms back inline; the
+converted record, published without the `.vo`, replays all five proofs to the
+`.vo` that stock makes and that the vo-ref record replays to with its `.vo`.
+The converter refuses a changed or an absent `.vo`.  `late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
