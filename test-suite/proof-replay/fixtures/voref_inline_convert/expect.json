@@ -1,0 +1,19 @@
+{
+  "doc": "rocq proof-record-inline puts each term a vo-ref record refers to back inline: the converted record, published without its .vo, replays every proof to the .vo stock makes and to the .vo the vo-ref record replays to with its object",
+  "files": ["A.v"],
+  "register_flags": ["-proof-record-no-graph", "-proof-record-vo-ref"],
+  "record_trailers": {"A.v": {"vo_opaques": true}},
+  "inline_convert": true,
+  "inline_terms": ["PR.A.plus_zero", "PR.A.S.k_plus_zero", "PR.A.S.l_eq"],
+  "vo_mutation": "remove",
+  "summaries": {
+    "A.v": {"proofs": 5, "hits": 5,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.plus_zero", "hit"],
+                           ["PR.A.id_type", "hit"],
+                           ["PR.A.S.k_plus_zero", "hit"],
+                           ["PR.A.S.l", "hit"],
+                           ["PR.A.S.l_eq", "hit"]]}
+  }
+}

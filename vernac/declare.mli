@@ -474,6 +474,20 @@ val definition_message : Id.t -> unit
 val assumption_message : Id.t -> unit
 val fixpoint_message : int array option -> Id.t list -> unit
 
+(** {2 Proof records (BET-84)} *)
+
+val inline_proof_record : record:string -> vo:string -> (string, string) result
+(** [inline_proof_record ~record ~vo] is the proof record [record] (the bytes
+    of a [.proof-record.jsonl]) with each stored term that refers to the
+    opaque proofs of the object file [vo] put back inline, and the trailer's
+    [vo_opaques] set to [null]. The term put back is the one replay would
+    read: the entry at the recorded index, whose digest is the recorded
+    digest. A record that refers to no object is returned unchanged. [Error]
+    names why when [vo] is missing, when its opaque proofs do not hash to the
+    trailer's [vo_opaques], or when an entry is not the recorded term. A task
+    cut that removed proofs from a file uses this to ship that file's record
+    without its object, which holds the removed proofs. *)
+
 (** {2 Program mode API} *)
 
 (** Rocq's Program mode support. This mode extends declarations of
