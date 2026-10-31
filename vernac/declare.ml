@@ -2006,7 +2006,8 @@ let start_proof_core ~name ~pinfo ?using sigma goals =
     ; sideff = SideEff.empty
     }
   in
-  replay_start := (if Proof_replay.candidate_open () then Some ps else None);
+  if Proof_recorder.in_use () then
+    replay_start := (if Proof_replay.candidate_open () then Some ps else None);
   ps
 
 (** [start_proof ~info ~cinfo sigma] starts a proof of [cinfo].
@@ -2694,8 +2695,26 @@ let check_replayed_counters () =
         ~detail:(Printf.sprintf "levels %d sorts %d, recorded %d %d" u' q' u q)
   | None -> ()
 
+(* [close_proof]'s object when no stored term takes the proof's place: the
+   object stock's [close_proof] makes. *)
+let prepared_proof_object ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : Proof_object.t =
+  let opaque = match opaque with
+  | Vernacexpr.Opaque -> true
+  | Vernacexpr.Transparent -> false in
+  let keep_body_ucst_separate = if keep_body_ucst_separate then Some proof.initial_euctx else None in
+  { Proof_object.proof_object =
+      DefaultProof { proof = prepare_proof ?warn_incomplete proof; opaque; using = proof.using; keep_body_ucst_separate }
+  ; pinfo = proof.pinfo
+  }
+
 let close_proof ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : Proof_object.t =
   NewProfile.profile "close_proof" (fun () ->
+  (* With neither -proof-record nor -proof-replay, stock's object, and no
+     pending term, counter or stored term to look at (deep review of
+     26528c8a34, R2-1). *)
+  if not (Proof_recorder.in_use ()) then
+    prepared_proof_object ?warn_incomplete ~opaque ~keep_body_ucst_separate proof
+  else
   match Proof_replay.take_pending () with
   | Some blob ->
     (* BET-84 P3: the proof's tactics never ran, so there is nothing to
@@ -2715,16 +2734,7 @@ let close_proof ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : 
        CErrors.anomaly (Pp.str "proof replay: a stored term that passed its check cannot be declared."))
   | None ->
     replayed_univ_end := None;
-    let opaque = match opaque with
-    | Vernacexpr.Opaque -> true
-    | Vernacexpr.Transparent -> false in
-    let keep_body_ucst_separate = if keep_body_ucst_separate then Some proof.initial_euctx else None in
-    let obj =
-      { Proof_object.proof_object =
-          DefaultProof { proof = prepare_proof ?warn_incomplete proof; opaque; using = proof.using; keep_body_ucst_separate }
-      ; pinfo = proof.pinfo
-      }
-    in
+    let obj = prepared_proof_object ?warn_incomplete ~opaque ~keep_body_ucst_separate proof in
     stored_for_record := stored_term obj;
     obj) ()
 
@@ -2806,7 +2816,11 @@ let finish_admitted ~pm ~pinfo ~sec_vars typs =
 (* BET-84: close the record entry around the declaration, so that the reads
    of the kernel check and of the declaration itself are not recorded: a
    registration compile types the proof and a grade compile does not
-   (-skip-qed-typecheck), and the two read sets must be equal. *)
+   (-skip-qed-typecheck), and the two read sets must be equal.
+
+   Each closer runs this only when [Proof_recorder.in_use]. Otherwise it
+   runs stock's declaration directly, with no closure, pair, footprint or
+   close hook (deep review of 26528c8a34, R2-1). *)
 let record_close_gen ~closer ~kernel_check run =
   let held = Proof_recorder.writing () in
   Proof_record_env.record_universe_footprint ();
@@ -2858,8 +2872,10 @@ let save_admitted ~pm ~proof =
   let sigma = Evd.minimize_universes sigma in
   let uctx = Evd.ustate sigma in
   let typs = List.map (fun typ -> (EConstr.to_constr sigma typ, uctx)) typs in
-  record_close ~closer:"Admitted" ~kernel_check:false (fun () ->
-      finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs)
+  if not (Proof_recorder.in_use ()) then finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs
+  else
+    record_close ~closer:"Admitted" ~kernel_check:false (fun () ->
+        finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs)
 
 (************************************************************************)
 (* Saving a lemma-like constant                                         *)
@@ -2941,6 +2957,8 @@ let save ~pm ~proof ~opaque ~idopt =
   (* Env and sigma are just used for error printing in save_remaining_recthms *)
   let proof_obj = close_proof ~opaque ~keep_body_ucst_separate:false proof in
   let proof_info = process_idopt_for_save ~idopt proof.pinfo in
+  if not (Proof_recorder.in_use ()) then finish_proof ~pm proof_obj.proof_object proof_info
+  else
   let closer = match opaque, idopt with
     | Vernacexpr.Opaque, Some _ -> "Save"
     | Vernacexpr.Opaque, None -> "Qed"
@@ -2984,12 +3002,19 @@ let save_lemma_admitted_delayed ~pm ~proof =
   (* If the proof is partial, do we want to take the (restriction on
      visible uvars of) uctx so far or (as done below) the initial ones
      that refers to only the types *)
-  record_close ~closer:"Admitted" ~kernel_check:false (fun () ->
-      finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs)
+  if not (Proof_recorder.in_use ()) then finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs
+  else
+    record_close ~closer:"Admitted" ~kernel_check:false (fun () ->
+        finish_admitted ~pm ~pinfo:proof.pinfo ~sec_vars typs)
 
 let save_lemma_proved_delayed ~pm ~proof ~idopt =
   (* vio2vo used to call this with invalid [pinfo], now it should work fine. *)
   let pinfo = process_idopt_for_save ~idopt proof.Proof_object.pinfo in
+  if not (Proof_recorder.in_use ()) then begin
+    let pm, _ = finish_proof ~pm proof.proof_object pinfo in
+    pm
+  end
+  else
   let closer, kernel_check = delayed_closer proof.Proof_object.proof_object in
   let closer = match idopt, closer with
     | Some _, "Qed" -> "Save"
