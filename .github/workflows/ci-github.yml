@@ -94,7 +94,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 🧪 Fixture runner tests
-        run: python3 test-suite/proof-replay/test_vo_exempt.py
+        run: python3 -m unittest discover -s test-suite/proof-replay -p 'test_*.py' -v
 
       - name: 🐫 Setup OCaml
         uses: ocaml/setup-ocaml@v3

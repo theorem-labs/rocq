@@ -69,8 +69,12 @@ MISS_KINDS = ("key", "read", "ineligible", "missing_record")
 #: about a quarter of a proof between them.
 BUDGET_LAST_SHARE = 0.3
 
+#: Every key `expect.json` may set, with its default.  `files` has none: a
+#: fixture must set it.
 DEFAULTS = {
     "doc": "",
+    # A comment for the reader, like `doc`; the runner does not print it.
+    "note": "",
     "root": "PR",
     "mode": "replay",
     "slow": False,
@@ -104,21 +108,72 @@ DEFAULTS = {
     "coqchk": True,
     "usage": None,
     "mixed": None,
+    "alt_register_flags": None,
+    "vo_mutation": None,
+    "record_patch": [],
+    "record_trailers": {},
     "trigger_optional": None,
     "tree_files": {},
     "tree_dirs": {},
 }
+REQUIRED = ("files",)
+SIDES = ("original", "edited")
 
 
 def fixture_names():
     return sorted(p.name for p in FIXTURES.iterdir() if (p / "expect.json").is_file())
 
 
-def load_spec(name):
+def spec_of(name, raw, where):
+    """The spec of the fixture `name`, from its `expect.json` object `raw`;
+    `where` is the fixture's directory.
+
+    Every key has a default, so a misspelled key would take no effect and
+    the fixture would test another tree than its author wrote.  Thus a key
+    that `DEFAULTS` does not declare is an error, and so is a staging or
+    publishing control that names a side, a file or a source the fixture
+    does not have.  The ValueError names every problem.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("fixtures/%s/expect.json: not a JSON object" % name)
+    problems = []
+    unknown = sorted(set(raw) - set(DEFAULTS) - set(REQUIRED))
+    if unknown:
+        problems.append("unknown key %s" % ", ".join(map(repr, unknown)))
     spec = dict(DEFAULTS)
-    spec.update(json.loads((FIXTURES / name / "expect.json").read_text()))
+    spec.update(raw)
     spec["name"] = name
+    files = spec.get("files")
+    if not isinstance(files, list) or not files:
+        problems.append("`files` must be a non-empty list of the .v files")
+        files = []
+    if not isinstance(spec["unpublished"], list):
+        problems.append("`unpublished` must be a list of files")
+    else:
+        stray = [src for src in spec["unpublished"] if src not in files]
+        if stray:
+            problems.append("`unpublished` names %s, which `files` does not list" % ", ".join(map(repr, stray)))
+    for key, kind in (("tree_dirs", list), ("tree_files", dict)):
+        if not isinstance(spec[key], dict):
+            problems.append("`%s` must map a side to its paths" % key)
+            continue
+        for side, paths in spec[key].items():
+            if side not in SIDES:
+                problems.append("`%s` side %r is not %s" % (key, side, " or ".join(SIDES)))
+            if not isinstance(paths, kind):
+                problems.append("`%s` side %r must be a JSON %s" % (key, side, "list" if kind is list else "object"))
+            elif kind is dict:
+                for rel, src in paths.items():
+                    if not (isinstance(src, str) and (where / src).is_file()):
+                        problems.append("`tree_files` copies %r to %r, and the fixture has no such file" % (src, rel))
+    if problems:
+        raise ValueError("fixtures/%s/expect.json: %s" % (name, "; ".join(problems)))
     return spec
+
+
+def load_spec(name):
+    where = FIXTURES / name
+    return spec_of(name, json.loads((where / "expect.json").read_text()), where)
 
 
 # ---------------------------------------------------------------- the compiler
@@ -1050,7 +1105,10 @@ def main(argv=None):
 
     if args.list:
         for name in names:
-            spec = load_spec(name)
+            try:
+                spec = load_spec(name)
+            except ValueError as exc:
+                raise SystemExit(str(exc))
             mark = " [slow]" if spec["slow"] else ""
             print("%-28s%s %s" % (name, mark, spec["doc"]))
         return 0
@@ -1067,7 +1125,12 @@ def main(argv=None):
 
     failed, skipped, passed = [], [], []
     for name in names:
-        spec = load_spec(name)
+        try:
+            spec = load_spec(name)
+        except ValueError as exc:  # a broken expect.json fails its fixture
+            print("FAIL %s: %s" % (name, exc), flush=True)
+            failed.append(name)
+            continue
         if spec["slow"] and not args.slow:
             print("SKIP %s: slow; pass --slow" % name, flush=True)
             skipped.append(name)
