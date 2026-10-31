@@ -366,6 +366,20 @@ Stock runs the tactic and reports its error.  Replay must run the sentences
 it kept, in order, before it raises the syntax error, so both compiles fail
 with the same stderr (`compare_stderr`).
 
+**Gate review of 079bc4cb71, reviewer finding R5.**  `dropped_proof_stack`:
+`Abort All`, `Reset`, `Succeed` around a statement and `Fail Fail` around a
+statement each drop an open proof.  A grade compile has no recorder, so
+replay must see the drop itself: after each one no proof is open, and the
+proof that follows it replays.  Before the fix, replay took every proof
+after the first drop for a nested proof, so none of them replayed.  This
+changes replay coverage only: a nested proof runs its tactics as stock does.
+`Back` is not tested: a compiled file cannot use it.  `C.v` is the control:
+replay takes a proof stack that a sentence leaves empty for a drop, so after
+each kind of nested closer (`Qed` in a focused block, `Admitted`, `Defined`,
+`Proof term`) the stack must hold the outer proof again, and the inner proofs
+after it must stay nested.  A nested `Abort` is not tested: stock refuses it
+("No proof-editing in progress").
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
