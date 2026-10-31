@@ -24,7 +24,7 @@ let known_names = Summary.ref [] ~name:"proofusing-nameset"
    replay evaluator (dev/tools/census/replay_channels.py): the digest of
    the collection's expression, or absent. *)
 let find_known_name id =
-  List.find_map (fun (name, expr) -> if Id.equal id name then Some expr else None) !known_names
+  List.assoc_f_opt Id.equal id !known_names
 
 let recorded_proof_using_collection id =
   Option.map (Proof_recorder.digest ~what:"proof_using_collection") (find_known_name id)

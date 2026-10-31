@@ -41,7 +41,6 @@ module EraseObj =
 struct
   type ('raw, 'glb, 'top) obj = 'glb -> 'glb
   let name = "erase_locations"
-  (* A type with no registered eraser is kept as it is. *)
   let default _ = Some (fun v -> v)
 end
 

@@ -792,8 +792,6 @@ let kername_parse key start =
   | None -> None
   | Some l -> Option.map (fun mp -> (KerName.make mp l, !pos)) (modpath ())
 
-(* The whole key must be read, and the name read back must print back as
-   the key. *)
 let kername_of_key key =
   match kername_parse key 0 with
   | Some (kn, e) when e = String.length key && String.equal (kername_key kn) key -> Some kn

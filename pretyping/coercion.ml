@@ -569,11 +569,6 @@ let activate_hook ~name =
    gave it (Claude gate at 0f8d815732, finding 4). Rocq registers no hook, so
    a stock proof reads the empty list, and a proof that asks an active hook
    stores no term. *)
-(* BET-84: ONE value for the coercion_hooks channel, read under the fixed key
-   "" as the digest of the active names. The record site below and this
-   replay evaluator call the same function, so the value is never computed
-   two ways (dev/tools/census/replay_channels.py). A registration that read
-   the empty list replays only while the list is still empty. *)
 let recorded_coercion_hooks () =
   Some (Proof_recorder.digest ~what:"coercion_hooks" !active_hooks)
 
