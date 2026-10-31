@@ -75,9 +75,18 @@ measured there.
 
 ## expect.json
 
+The runner fails a fixture whose `expect.json` has a key this table does not
+list (a misspelled key would otherwise leave its default), whose `unpublished`
+names a file that `files` does not list, whose `tree_dirs` or `tree_files`
+names a side that is not `original` or `edited`, or whose `tree_files` copies
+a file the fixture does not have (`spec_of` in `runner.py`;
+`test_load_spec.py` tests it).
+
 | Key | Meaning |
 |---|---|
 | `doc` | one line, printed by `--list` |
+| `note` | a comment for the reader; the runner does not print it |
+| `root` | the logical root the trees are bound to with `-Q . <root>` (default `PR`) |
 | `files` | the `.v` files, in compile order; both trees use this list |
 | `mode` | `replay` (default), `usage`, `budget`, or `mixed` |
 | `slow` | run only with `--slow` |
@@ -106,6 +115,8 @@ measured there.
 | `record_trailers` | per file: `vo_opaques` true or false, whether the record refers to its `.vo` |
 | `tree_dirs` | `original` or `edited` -> paths: an empty directory at each path of every tree made from that side, before any compile (the way the grading engine blocks micromega's certificate caches) |
 | `tree_files` | `original` or `edited` -> path -> a file of the fixture's directory, copied to that path of every tree made from that side, before any compile (a file no compile of the tree writes, such as a `.lia.cache`) |
+| `record_patch` | a list of `{proof, channel, key, value}`: each published record's read of that proof, channel and key gets that value before the record's digest is written (a record no registration of the tree writes) |
+| `trigger_optional` | the text of the SKIP line when a proof the `records` block marks ineligible is not marked so (the fixture's trigger did not fire on this Rocq) |
 
 `outcomes` is a list of `[name, outcome]`, or `[name, outcome, channel]` for a
 `read` miss.  It is checked only when the summary carries the field.
