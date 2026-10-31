@@ -23,21 +23,29 @@ let source ldir file = Loc.InFile {
 
 (* -record-timeouts: count the timeouts this compilation arms and the ones
    that fire, so that a build driver can tell an object a timeout could have
-   changed from one it could not. A record of an earlier compilation is
-   removed before this one starts, and the new one is written by an [at_exit]
-   handler, hence after the output file on success and after the error on
-   failure; a compilation killed by a signal Rocq does not catch leaves none.
-   A tactic worker of par: sends its counts back with each answer (Partac),
-   and -async-proofs and -vos, whose delegated proofs do not, are refused
-   (Coqc.check_countable_timeouts). *)
+   changed from one it could not. The record names the object by the SHA-256
+   of its bytes, read back from the disk after the compilation wrote them, so
+   that a record beside another object does not vouch for it; a compilation
+   that wrote no output file records a null hash. A record of an earlier
+   compilation is removed before this one starts, and the new one is written
+   by an [at_exit] handler, hence after the output file on success and after
+   the error on failure; a compilation killed by a signal Rocq does not catch
+   leaves none. A tactic worker of par: sends its counts back with each answer
+   (Partac), and -async-proofs and -vos, whose delegated proofs do not, are
+   refused (Coqc.check_countable_timeouts). *)
 let record_timeouts_at_exit ~target =
   let file = safe_chop_extension target ^ ".timeouts.json" in
   let () = try Sys.remove file with Sys_error _ -> () in
   at_exit (fun () ->
       let { Control.armed; fired } = Control.timeout_counts () in
       try
+        let object_sha256 =
+          if Sys.file_exists target then "\"" ^ Sha256.file target ^ "\""
+          else "null" in
         let ch = open_out file in
-        Printf.fprintf ch "{\"format\":1,\"armed\":%d,\"fired\":%d}\n" armed fired;
+        Printf.fprintf ch
+          "{\"format\":2,\"armed\":%d,\"fired\":%d,\"object_sha256\":%s}\n"
+          armed fired object_sha256;
         close_out ch
       with Sys_error msg -> prerr_endline ("Error: cannot write " ^ file ^ ": " ^ msg))
 
