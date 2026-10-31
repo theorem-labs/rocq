@@ -358,6 +358,18 @@ proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
+**Gate review of 079bc4cb71, finding CF1.**  The tables that `Add` and
+`Remove` change (`Goptions` `MakeTable`, for example Keep Equalities) had
+no read: the start-of-proof `options` read holds the options only.
+`option_table_keep_equalities`: the edited tree removes `Add Keep
+Equalities bar.` before an unchanged proof whose `injection` needs it, and
+stock fails.  Replay must fail too.  `eval_option_tables`: the contents of
+every table are now one start-of-proof read, `option_tables`.  The edited
+tree removes an `Add Keep Equalities` between two proofs that call
+`injection`.  The later proof's term holds the injected equality only with
+the entry, and it must miss on that read.  The earlier proof reads the
+unchanged table and replays.
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
