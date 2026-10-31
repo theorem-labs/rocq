@@ -7,8 +7,8 @@
 # under the par: selector, which a tactic worker runs and reports back, the
 # refusal of -async-proofs and -vos, whose delegated proofs do not report, a
 # timeout that fires, a file with no timeout, a failing compilation, one killed
-# by SIGKILL, and that without the option nothing is removed or written and the
-# .vo is unchanged.
+# by SIGKILL, that without the option nothing is removed or written and the
+# .vo is unchanged, and that proof replay's budget is not counted.
 
 set -u
 
@@ -169,6 +169,33 @@ cp "$D/ltac1.vo" "$D/ltac1-without.vo"
   || fail "no option: the record was touched"
 compile ltac1 -record-timeouts || fail "with option: compilation failed"
 cmp "$D/ltac1-without.vo" "$D/ltac1.vo" || fail "the option changed the .vo"
+
+# 13. Proof replay's budget (BET-84) runs each sentence under a deadline that
+#     stands for the build driver's own per-file kill. It is not a timeout of
+#     the file: a replay compile records what the same compile without replay
+#     records, none for a file with no timeout and the Timeout's own for one
+#     with a Timeout. The record directory is
+#     empty, so no proof replays and the budget alone is under test.
+mkdir -p "$D/norecords"
+budget () { # budget NAME SECONDS: compile NAME with replay's budget
+  compile "$1" -record-timeouts -proof-replay-dir "$D/norecords" \
+    -proof-replay-ratio 1 -proof-replay-budget "$2"
+}
+cat > "$D/budget_none.v" <<'EOF'
+Lemma budget_lemma : True.
+Proof. exact I. Qed.
+EOF
+budget budget_none 3600 || fail "budget_none: compilation failed: $(tail -n 3 "$D/budget_none.out")"
+[ "$(cat "$D/budget_none.timeouts.json" 2> /dev/null)" = '{"format":1,"armed":0,"fired":0}' ] \
+  || fail "budget_none: the record is not an empty one: $(cat "$D/budget_none.timeouts.json" 2>&1)"
+cat > "$D/budget_one.v" <<'EOF'
+Timeout 3600 Check nat.
+EOF
+compile budget_one -record-timeouts || fail "budget_one: compilation without replay failed"
+plain=$(cat "$D/budget_one.timeouts.json" 2> /dev/null)
+budget budget_one 3600 || fail "budget_one: compilation failed: $(tail -n 3 "$D/budget_one.out")"
+[ -n "$plain" ] && [ "$(cat "$D/budget_one.timeouts.json" 2> /dev/null)" = "$plain" ] \
+  || fail "budget_one: replay recorded $(cat "$D/budget_one.timeouts.json" 2>&1), without replay $plain"
 
 if [ $rc = 0 ]; then rm -rf "$D"; fi
 exit $rc
