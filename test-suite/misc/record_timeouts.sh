@@ -8,7 +8,8 @@
 # refusal of -async-proofs and -vos, whose delegated proofs do not report, a
 # timeout that fires, a file with no timeout, a failing compilation, one killed
 # by SIGKILL, that without the option nothing is removed or written and the
-# .vo is unchanged, and that proof replay's budget is not counted.
+# .vo is unchanged, and that proof replay's budget is not counted and a
+# compilation it ends leaves no record.
 
 set -u
 
@@ -196,6 +197,20 @@ plain=$(cat "$D/budget_one.timeouts.json" 2> /dev/null)
 budget budget_one 3600 || fail "budget_one: compilation failed: $(tail -n 3 "$D/budget_one.out")"
 [ -n "$plain" ] && [ "$(cat "$D/budget_one.timeouts.json" 2> /dev/null)" = "$plain" ] \
   || fail "budget_one: replay recorded $(cat "$D/budget_one.timeouts.json" 2>&1), without replay $plain"
+
+# 14. A compile that replay's budget ends exits 124, as the driver's kill
+#     does, and leaves no record, as a compile killed by SIGKILL leaves none.
+cat > "$D/budget_killed.v" <<'EOF'
+Goal True.
+  do 1000000000 idtac.
+EOF
+printf '{"format":1,"armed":0,"fired":0}\n' > "$D/budget_killed.timeouts.json"
+budget budget_killed 2
+st=$?
+[ "$st" = 124 ] || fail "budget_killed: exit status $st, expected 124: $(tail -n 3 "$D/budget_killed.out")"
+if [ -f "$D/budget_killed.timeouts.json" ]; then
+  fail "budget_killed: a record is there: $(cat "$D/budget_killed.timeouts.json")"
+fi
 
 if [ $rc = 0 ]; then rm -rf "$D"; fi
 exit $rc
