@@ -31,6 +31,9 @@ rocq compile specific options:\
 \n  -vos                   process statements but ignore opaque proofs, and produce a .vos file\
 \n  -vok                   process the file by loading .vos instead of .vo files for\
 \n                         dependencies, and produce an empty .vok file on success\
+\n  -record-timeouts       write f.timeouts.json beside the output file, saying how\
+\n                         many timeouts this compilation armed and how many\
+\n                         fired, tactic workers included; refuses -async-proofs and -vos\
 \n"
 }
 
@@ -60,7 +63,24 @@ let coqc_run copts ~opts injections =
     let exit_code = CErrors.exit_code exn in
     exit exit_code
 
-let fix_stm_opts opts stm_opts = match opts.Coqcargs.compilation_mode with
+(* -record-timeouts reports the timeouts of this process, and the tactic
+   workers of the par: selector send theirs back with each answer
+   (Partac.TacTask). A delegated proof does not, so the two ways of asking
+   for one are refused rather than silently uncounted: -async-proofs, and
+   -vos, which turns asynchronous proofs on below. The compilation is
+   otherwise the one without the option. *)
+let check_countable_timeouts opts stm_opts =
+  let open Stm.AsyncOpts in
+  let refuse what =
+    CErrors.user_err
+      Pp.(str "-record-timeouts is incompatible with " ++ str what ++
+          str ": a timeout armed in a delegated proof is not counted.") in
+  if stm_opts.async_proofs_mode <> APoff then refuse "-async-proofs";
+  if opts.Coqcargs.compilation_mode = Coqcargs.BuildVos then refuse "-vos"
+
+let fix_stm_opts opts stm_opts =
+  let () = if opts.Coqcargs.record_timeouts then check_countable_timeouts opts stm_opts in
+  match opts.Coqcargs.compilation_mode with
   | BuildVos ->
     (* We need to disable error resiliency, otherwise some errors
        will be ignored in batch mode. c.f. #6707
