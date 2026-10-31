@@ -237,7 +237,8 @@ let own_limits_refusal () =
    - its bytes hash (SHA-256) to an expected digest, which is mandatory:
      [-proof-replay-digest], which the grading engine takes from the
      registration's root-owned manifest, or with [-proof-replay-dir] a
-     [<record>.sha256] file beside each record, as unwritable as it;
+     [<record>.sha256] file beside each record, as unwritable as it, in
+     directories as unwritable as it;
    - nobody but its owner can write it, and the compiling user cannot
      write it at all: write permission is what would let a principal that
      runs as that user replace a record between the hash and the read. For
@@ -270,13 +271,38 @@ let expected_digest path =
        | exception (Sys_error _ | End_of_file) -> None)
   | Some { o_source = Record_file _; o_digest = None; _ } | None -> None
 
+(* With [-proof-replay-dir] and no [-proof-replay-digest], the digest file
+   is the authority, and it sits beside the record. A principal that can
+   write a directory from [DIR] down to the record can put a new record and
+   a new digest file there, each made read-only, and both pass the file
+   tests. So [DIR] and each directory below it on the way to the record
+   must be as unwritable as the record (reviewer round 2 of e560ab16e4,
+   X4). With [-proof-replay-digest] the command line binds the bytes, and
+   the directories decide nothing. [path] is the one {!record_path} built,
+   [Filename.concat dir place] with [place] relative; any other path is
+   refused. *)
+let record_dirs_writable path =
+  match !options with
+  | Some { o_source = Record_dir dir; o_digest = None; _ } ->
+    let prefix = Filename.concat dir "" in
+    let n = String.length prefix in
+    if String.length path < n || not (String.equal (String.sub path 0 n) prefix) then true
+    else
+      let rec below d = function
+        | [] | [ _ ] -> false
+        | c :: rest -> let d = Filename.concat d c in writable_by_us d || below d rest
+      in
+      writable_by_us dir
+      || below dir (String.split_on_char '/' (String.sub path n (String.length path - n)))
+  | Some _ | None -> false
+
 let binding_refusal ~library ~path ~bytes (h : R.header) =
   match expected_digest path with
   | None -> Some "digest"
   | Some d when not (String.equal (String.lowercase_ascii d) (Proof_sha256.digest_hex bytes)) ->
     Some "digest"
   | Some _ ->
-    if writable_by_us path then Some "writable"
+    if writable_by_us path || record_dirs_writable path then Some "writable"
     else if not (String.equal h.R.library library) then Some "library"
     else if not h.R.tables_at_start then Some "format"
     else None

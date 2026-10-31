@@ -306,6 +306,62 @@ let no_record_refuses =
      Sys.rmdir dir;
      Replay.refused () = Some "no_record" && decide () = None)
 
+(* With [-proof-replay-dir] and no [-proof-replay-digest], the record's
+   expected SHA-256 is the [<record>.sha256] file beside it. A principal
+   that can write a directory from DIR down to the record can put a new
+   record and its digest file there, both read-only. So each of those
+   directories must be as unwritable as the record (reviewer round 2 of
+   e560ab16e4, X4). Both layouts are tried: the dotted name in DIR, and the
+   slashed one in a directory under DIR. The same record in a directory
+   that nobody can write must hit. *)
+let sidecar_dir_refuses =
+  let bytes = record_bytes () in
+  let put path =
+    List.iter
+      (fun (p, s) ->
+         let oc = open_out_bin p in
+         output_string oc s;
+         close_out oc;
+         Unix.chmod p 0o444)
+      [ (path, bytes); (path ^ ".sha256", Proof_sha256.digest_hex bytes ^ "\n") ]
+  in
+  let remove path = Sys.remove path; Sys.remove (path ^ ".sha256") in
+  let attempt dir =
+    Replay.configure ~source:(Replay.Record_dir dir) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
+      ~digest:None;
+    Replay.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain);
+    (Replay.refused (), decide ())
+  in
+  current := Replay.Value (Some (String.make 32 'e'));
+  let dir = Filename.temp_file "proof-replay" ".dir" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o755;
+  let dotted = Filename.concat dir "Top.File.proof-record.jsonl" in
+  put dotted;
+  let dotted_writable = attempt dir in
+  Unix.chmod dir 0o555;
+  let dotted_closed = attempt dir in
+  Unix.chmod dir 0o755;
+  remove dotted;
+  let sub = Filename.concat dir "Top" in
+  Sys.mkdir sub 0o755;
+  let slashed = Filename.concat sub "File.proof-record.jsonl" in
+  put slashed;
+  Unix.chmod dir 0o555;
+  let slashed_writable = attempt dir in
+  Unix.chmod sub 0o555;
+  let slashed_closed = attempt dir in
+  Unix.chmod sub 0o755;
+  Unix.chmod dir 0o755;
+  remove slashed;
+  Sys.rmdir sub;
+  Sys.rmdir dir;
+  let refused (r, d) = r = Some "writable" && d = None in
+  let hit (r, d) = r = None && d <> None in
+  mk_bool_test "proof-replay-sidecar-dir"
+    "with -proof-replay-dir and no digest option, a record under a directory the compiling user can write is refused"
+    (refused dotted_writable && hit dotted_closed && refused slashed_writable && hit slashed_closed)
+
 (* The SHA-256 the binding uses is the standard one: FIPS 180-4's own
    test vectors. *)
 let sha256_vectors =
@@ -674,7 +730,7 @@ let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
     binding_refusals; overcommit_unknown_refuses; unreadable_record_refuses; no_record_refuses;
-    sha256_vectors; charged_clock; summary_counts;
+    sidecar_dir_refuses; sha256_vectors; charged_clock; summary_counts;
     rebind_scan; late_events_scan; hit_hook_runs; miss_reason; install_check_misses; plugin_audit_refuses;
     plugin_allowlist;
     require_scan; require_rule; require_tripwire;

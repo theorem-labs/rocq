@@ -40,7 +40,10 @@ fixtures/<name>/*              files that `tree_files` copies into a tree
 The runner, per fixture:
 
 1. compiles `original/` with `-proof-record` (the registration) and publishes
-   the records under the names `-proof-replay-dir` reads;
+   the records under the names `-proof-replay-dir` reads, each read-only with
+   its SHA-256 beside it in a read-only `.sha256` file, in read-only
+   directories (the runner gives the directories their write bit back after
+   the fixture);
 2. checks `expect.json`'s `records` block against the registration's records;
 3. compiles `edited/` in the tree `a/` with
    `-proof-replay-dir <records> -proof-replay-ratio <r>` and checks each

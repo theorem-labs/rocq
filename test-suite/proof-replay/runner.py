@@ -229,6 +229,19 @@ class Rocq:
 # ------------------------------------------------------------------- the trees
 
 
+def open_dirs(path):
+    """Give the write permission back to every directory under `path`, the
+    record directories `publish_records` made read-only included."""
+    for d, _, _ in os.walk(path):
+        os.chmod(d, 0o755)
+
+
+def remove_tree(path):
+    """`shutil.rmtree`, which cannot empty a read-only directory."""
+    open_dirs(path)
+    shutil.rmtree(path)
+
+
 def copy_tree(src, dst):
     if dst.exists():
         shutil.rmtree(dst)
@@ -342,11 +355,16 @@ def publish_records(spec, reg, records):
     # A record the compiling user can write is refused, and so is one with no
     # digest to check it against (P3Deep F1, P3Bugs): a registration publishes
     # its records read-only with their SHA-256 beside them, so the fixtures do.
+    # With `-proof-replay-dir` and no digest option, the directories from the
+    # records directory down to each record must be read-only too (reviewer
+    # round 2 of e560ab16e4, X4): `open_dirs` gives the write bit back.
     for path in published:
         side = Path(str(path) + ".sha256")
         side.write_text(hashlib.sha256(path.read_bytes()).hexdigest() + "\n")
         os.chmod(side, 0o444)
         os.chmod(path, 0o444)
+    for d, _, _ in os.walk(records):
+        os.chmod(d, 0o555)
     return published, None
 
 
@@ -551,7 +569,7 @@ class Fixture:
                 return None
         records = self.out / records_name
         if records.exists():
-            shutil.rmtree(records)
+            remove_tree(records)
         records.mkdir(parents=True)
         published, err = publish_records(spec, reg, records)
         if err:
@@ -1147,13 +1165,17 @@ def main(argv=None):
             continue
         work = out / name
         if work.exists():
-            shutil.rmtree(work)
+            remove_tree(work)
         work.mkdir(parents=True)
         fix = Fixture(spec, rocq, work, segcmp)
         try:
             fix.run(register_only=args.register_only, stock_control=args.stock_control)
         except Exception as exc:  # a broken fixture is a failure, not a crash
             fix.fail("the runner raised %s: %s" % (type(exc).__name__, exc))
+        finally:
+            # The read-only record directories would stop `rm -rf` of the
+            # output directory (`make clean`).
+            open_dirs(work)
         notes = (" | " + "; ".join(fix.notes)) if fix.notes else ""
         if fix.bad:
             print("FAIL %s: %s%s" % (name, "; ".join(fix.bad), notes), flush=True)

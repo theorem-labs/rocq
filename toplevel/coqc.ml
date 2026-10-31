@@ -51,7 +51,8 @@ rocq compile specific options:\
 \n                         its SHA-256 is -proof-replay-digest if given, else the\
 \n                         first 64 characters of the file <record>.sha256 beside\
 \n                         it; with no such file, or one that group, others or the\
-\n                         compiling user can write, the record is not used\
+\n                         compiling user can write, or such a directory from DIR\
+\n                         down to the record, the record is not used\
 \n  -proof-replay-ratio R  the grade-to-registration ratio of per-file wall time,\
 \n                         at the top of its spread (required with -proof-replay)\
 \n  -proof-replay-budget S the per-file wall budget the charged clock runs against\

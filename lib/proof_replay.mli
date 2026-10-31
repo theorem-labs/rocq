@@ -55,7 +55,10 @@ val configure :
     [digest] when one is given (the grading engine passes the digest from
     the registration's root-owned manifest), the compiling user cannot
     write it and nobody but its owner can, and its header names this
-    library. Otherwise the whole file runs as stock and the summary names
+    library. With a [Record_dir] and no [digest], the digest comes from the
+    [<record>.sha256] file beside the record, and the same write rule holds
+    for that file, for [DIR] and for each directory between [DIR] and the
+    record. Otherwise the whole file runs as stock and the summary names
     the reason ([digest], [writable], [library], [format]). *)
 
 val configured : unit -> bool
