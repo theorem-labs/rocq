@@ -47,6 +47,7 @@
     "read:interp/notation.ml:11/prim_token": {"row": "11"},
     "read:interp/notation.ml:11/notation": {"row": "11"},
     "read:interp/notation.ml:11/arguments_scope": {"row": "11"},
+    "read:interp/notation.ml:11/scope_class": {"row": "11"},
     "read:interp/reserve.ml:M2/reserved_type": {"row": "M2"},
 
     "read:kernel/environ.ml:1/constant": {"row": "1"},
