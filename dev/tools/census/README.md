@@ -80,7 +80,7 @@ site stores no term). `@name` refers to an entry in the file's `reasons` object.
 | Tree | Commit | Scope | Sites | Result |
 |---|---|---|---|---|
 | theorem-labs/rocq | 03d5bb248e (9.2/qed-skip-typecheck) | every directory linked into `rocq compile` or a plugin it loads | 269: summary 104, object 78, nosummary-option 3, catchall 84 | 0 problems |
-| theorem-labs/rocq, recorder read sites (`rulings/channels.json`) | the commit that last changed `rulings/channels.json` (`git log -1 -- dev/tools/census/rulings/channels.json`), a child of e16e9d2ae4 on 9.2/proof-replay | the same | 124: read 91, ineligible 33 | 0 problems |
+| theorem-labs/rocq, recorder read sites (`rulings/channels.json`) | the commit that last changed `rulings/channels.json` (`git log -1 -- dev/tools/census/rulings/channels.json`), a child of e16e9d2ae4 on 9.2/proof-replay | the same | 126: read 91, ineligible 35 | 0 problems |
 | coqhammer (coq-hammer-tactics 1.3.2+9.2) | 1d581299c2 | `src/lib`, `src/tactics` (the installed package; `src/plugin` is not installed) | 7 catchall | 0 problems |
 | smpl (rocq-smpl.dev) | 1c3578c1f6 | `src` | summary 1, object 1 | 0 problems |
 | rocq-read-file 0.0.2 | 68887ad0c3 | `src` | 2 catchall | 0 problems |
