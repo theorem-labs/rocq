@@ -42,7 +42,7 @@ let fold f acc =
   KerName.Map.fold f !abbrev_table acc
 
 (* BET-84 row M1: each abbreviation the proof reads, keyed by its kernel name
-   as [Lib.kername_key] writes it ([KerName.to_string] is not injective).
+   as [Libnames.kername_key] writes it ([KerName.to_string] is not injective).
    ONE value function, called by the record site and by the replay
    evaluator (dev/tools/census/replay_channels.py). *)
 let recorded_abbreviation k =
@@ -52,13 +52,13 @@ let recorded_abbreviation k =
 let record k =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"M1" ~channel:"abbreviation"
-      ~key:(fun () -> Lib.kername_key k)
+      ~key:(fun () -> Libnames.kername_key k)
       ~value:(fun () -> recorded_abbreviation k)
 
 (* A key that does not read back to a kernel name is a miss. *)
 let () =
   Proof_replay.register_evaluator "abbreviation" (fun key ->
-      match Lib.kername_of_key key with
+      match Libnames.kername_of_key key with
       | None -> Proof_replay.Unknown
       | Some k -> Proof_replay.Value (recorded_abbreviation k))
 
