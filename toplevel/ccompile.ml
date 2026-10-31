@@ -21,6 +21,11 @@ let source ldir file = Loc.InFile {
     file = file;
   }
 
+(* A compile that proof replay's charged clock ends (BET-84) ends as the
+   engine's per-file kill ends a stock compile, which leaves no
+   -record-timeouts record. *)
+let timeouts_record_dropped = ref false
+
 (* -record-timeouts: count the timeouts this compilation arms and the ones
    that fire, so that a build driver can tell an object a timeout could have
    changed from one it could not. A record of an earlier compilation is
@@ -34,12 +39,14 @@ let record_timeouts_at_exit ~target =
   let file = safe_chop_extension target ^ ".timeouts.json" in
   let () = try Sys.remove file with Sys_error _ -> () in
   at_exit (fun () ->
-      let { Control.armed; fired } = Control.timeout_counts () in
-      try
-        let ch = open_out file in
-        Printf.fprintf ch "{\"format\":1,\"armed\":%d,\"fired\":%d}\n" armed fired;
-        close_out ch
-      with Sys_error msg -> prerr_endline ("Error: cannot write " ^ file ^ ": " ^ msg))
+      if not !timeouts_record_dropped then begin
+        let { Control.armed; fired } = Control.timeout_counts () in
+        try
+          let ch = open_out file in
+          Printf.fprintf ch "{\"format\":1,\"armed\":%d,\"fired\":%d}\n" armed fired;
+          close_out ch
+        with Sys_error msg -> prerr_endline ("Error: cannot write " ^ file ^ ": " ^ msg)
+      end)
 
 (* Compile a vernac file *)
 let compile opts stm_options injections copts ~echo ~f_in ~f_out =
@@ -135,8 +142,10 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
              engine's wrapper records as a per-file kill. *)
           Proof_replay.killed_summary (Proof_replay.summary_path_of_vo long_f_dot_out);
           (* The .glob was opened before the file ran, and a killed file
-             writes none, as stock's timeout leaves none. *)
+             writes none, as stock's timeout leaves none. Nor does it leave
+             a -record-timeouts record. *)
           (try Sys.remove (Filename.remove_extension long_f_dot_out ^ ".glob") with Sys_error _ -> ());
+          timeouts_record_dropped := true;
           prerr_endline "KILLED: proof replay charged clock reached the per-file budget";
           flush stderr;
           exit 124
