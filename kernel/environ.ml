@@ -318,14 +318,14 @@ let recorded_constant kn env =
        body, and the kernel never unfolds an opaque body, so a proof sees an
        opaque constant only through its type: a changed proof of an
        unchanged statement is the same input (fixture lib_opaque_proof_changed). *)
-    let body = match cb.const_body with
-      | Undef inline -> `Undef inline
-      | Def c -> `Def c
-      | OpaqueDef _ -> `Opaque
-      | Primitive p -> `Primitive p
-      | Symbol rules -> `Symbol rules
-    in
     Some (Proof_recorder.digest_cached_by ~what:"constant" ~key:cb (fun () ->
+        let body = match cb.const_body with
+          | Undef inline -> `Undef inline
+          | Def c -> `Def c
+          | OpaqueDef _ -> `Opaque
+          | Primitive p -> `Primitive p
+          | Symbol rules -> `Symbol rules
+        in
         (cb.const_hyps, cb.const_univ_hyps, body, cb.const_type, cb.const_relevance,
          cb.const_universes, cb.const_inline_code, cb.const_typing_flags)))
 

@@ -92,10 +92,6 @@ let class_tab =
 let coercion_tab =
   Summary.ref ~name:"coercion_tab" (CoeTypMap.empty : coe_info_typ CoeTypMap.t)
 
-(* BET-84: ONE value for the class_tab channel, read under the fixed key
-   "" as one digest of the whole table. The record site below and this
-   replay evaluator call the same function, so the value is never computed
-   two ways (dev/tools/census/replay_channels.py). *)
 let recorded_class_tab () =
   Some (Proof_recorder.digest_cached ~what:"class_tab" !class_tab)
 
@@ -110,10 +106,6 @@ let record_class_tab () =
     Proof_recorder.read ~row:"14" ~channel:"class_tab" ~key:(fun () -> "")
       ~value:recorded_class_tab
 
-(* BET-84: ONE value for the coercion_tab channel, read under the fixed key
-   "" as one digest of the whole table. The record site below and this
-   replay evaluator call the same function, so the value is never computed
-   two ways (dev/tools/census/replay_channels.py). *)
 let recorded_coercion_tab () =
   Some (Proof_recorder.digest_cached ~what:"coercion_tab" !coercion_tab)
 
@@ -167,10 +159,6 @@ end
 let inheritance_graph =
   Summary.ref ~name:"inheritance_graph" ClGraph.empty
 
-(* BET-84: ONE value for the coercion_graph channel, read under the fixed key
-   "" as one digest of the whole table. The record site below and this
-   replay evaluator call the same function, so the value is never computed
-   two ways (dev/tools/census/replay_channels.py). *)
 let recorded_coercion_graph () =
   Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph)
 

@@ -986,7 +986,7 @@ let () =
       | v -> Proof_replay.Value v
       | exception _ -> Proof_replay.Unknown)
 
-let record_db name (_db : Hint_db.t option) =
+let record_db name =
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"7" ~channel:"hint_db" ~id:name ~key:(fun () -> name)
       ~value:(fun () -> recorded_hint_db name)
@@ -998,7 +998,7 @@ let record_db_domain () =
 
 let searchtable_map name =
   let db = Hintdbmap.find_opt name !searchtable in
-  record_db name db;
+  record_db name;
   (match db with Some db -> db | None -> raise Not_found)
 let searchtable_add (name, db) =
   (* XXX see #21114 *)
@@ -1013,7 +1013,7 @@ let current_db_names () =
 let current_db () =
   record_db_domain ();
   let all = Hintdbmap.bindings !searchtable in
-  List.iter (fun (name, db) -> record_db name (Some db)) all;
+  List.iter (fun (name, _) -> record_db name) all;
   all
 
 let current_pure_db () = List.map snd (current_db ())

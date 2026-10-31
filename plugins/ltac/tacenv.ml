@@ -55,33 +55,27 @@ let register_alias key tac =
    The value comes from the one function per channel below. *)
 let record_hook : (string -> KerName.t -> string option) ref = ref (fun _ _ -> None)
 
-(* The lookup passes what it found, so that it builds no option when the
-   recorder is off; the recorded value still comes from the shared value
-   function through [record_hook], never from that argument. *)
-let record channel k (_found : 'a option) =
+let record channel k =
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> Libnames.kername_key k)
       ~value:(fun () -> !record_hook channel k)
 
-(* The lookup itself must build no option when the recorder is off: these run
-   at every call of a tactic notation. [record] is reached with an already
-   allocated [Some] only under [active]. *)
 let interp_alias key =
   match KerName.Map.find key !alias_map with
   | v ->
-    if Proof_recorder.active () then record "tactic_alias" key (Some v);
+    record "tactic_alias" key;
     v
   | exception Not_found ->
-    record "tactic_alias" key None;
+    record "tactic_alias" key;
     CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
 
 let check_alias key =
   match KerName.Map.find key !alias_map with
-  | v ->
-    if Proof_recorder.active () then record "tactic_alias" key (Some v);
+  | _ ->
+    record "tactic_alias" key;
     true
   | exception Not_found ->
-    record "tactic_alias" key None;
+    record "tactic_alias" key;
     false
 
 (** ML tactic extensions (TacML) *)
@@ -157,19 +151,19 @@ let ltac_entries () = !mactab
 let interp_ltac r =
   match KerName.Map.find r !mactab with
   | e ->
-    if Proof_recorder.active () then record "tactic_definition" r (Some e);
+    record "tactic_definition" r;
     e.tac_body
   | exception Not_found ->
-    record "tactic_definition" r None;
+    record "tactic_definition" r;
     raise Not_found
 
 let is_ltac_for_ml_tactic r =
   match KerName.Map.find r !mactab with
   | e ->
-    if Proof_recorder.active () then record "tactic_definition" r (Some e);
+    record "tactic_definition" r;
     e.tac_for_ml
   | exception Not_found ->
-    record "tactic_definition" r None;
+    record "tactic_definition" r;
     raise Not_found
 
 (* BET-84: ONE value for each of the two Ltac channels. The record sites

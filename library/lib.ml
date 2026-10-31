@@ -718,3 +718,4 @@ let global_of_kernel_string s =
        in
        go (Libnames.dirpath_of_path (cwd ()))
      | _ -> raise Not_found)
+
