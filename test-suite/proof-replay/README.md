@@ -489,6 +489,18 @@ scope with a printer that gives 1, so the count is 1, not 2, and the stock
 script fails; the replay compile must fail too (the proof is ineligible,
 reason `printed_number`).
 
+**Gate review, breadth audit gap BA1.**  A notation query is recorded with the
+scopes it was asked in, and `Bind Scope` chooses one of them: the scope of the
+class of the type a term is interpreted against.  `verdict_type_scope`: the
+edited tree binds a cast's type to a scope where the proof's notation has no
+interpretation, so the stock script fails, and the replay compile must fail
+too.  `verdict_sort_scope`: the same with the scope of Sortclass and a term
+read as a type (`assert (H : PP)`).  `eval_scope_class`: the binding of one
+proof's cast type changes and that proof misses on `scope_class`; the proof
+whose type keeps its scope replays.  The fixtures cast rather than give the
+goal's type: Ltac interprets the term of `exact` without its expected type
+(`plugins/ltac/tacinterp.ml`, `interp_gen`).
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
