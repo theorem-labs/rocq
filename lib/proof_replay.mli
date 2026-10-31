@@ -80,13 +80,16 @@ val start :
     and why. [toolchain] is this compile's: a record whose header names
     another binary, plugin set, load order, safe-dependency set or stack
     limit is refused for the whole file, before any of its proofs is
-    declared (reason ["toolchain"]). In a file with a command after its
-    first [Qed] or [Save] that can rebind a Rocqlib name or load code, every
-    proof that opens before the last such command runs its tactics (outcome
-    [ineligible], channel ["rebind"]), and [refused_detail] names the first
-    command and its line; a [Require] counts only while a library it names
-    is not loaded at the proof's opening. An unreadable source is refused
-    whole (reason ["rebind"]). *)
+    declared (reason ["toolchain"]). So is a record when this compile could
+    not read the digest of its binary or of a plugin's files
+    ({!Proof_record.unknown_digest}); a plugin with such a digest that loads
+    later makes each later proof [ineligible]. In a file with a command
+    after its first [Qed] or [Save] that can rebind a Rocqlib name or load
+    code, every proof that opens before the last such command runs its
+    tactics (outcome [ineligible], channel ["rebind"]), and [refused_detail]
+    names the first command and its line; a [Require] counts only while a
+    library it names is not loaded at the proof's opening. An unreadable
+    source is refused whole (reason ["rebind"]). *)
 
 val scan_late_rebind : string -> (string * int) option
 (** The first command in this source text, after its first [Qed] or [Save],

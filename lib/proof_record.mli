@@ -187,6 +187,18 @@ type file = { header : header; proofs : proof list; trailer : trailer }
 
 val toolchain_key : toolchain -> toolchain_key
 
+val unknown_digest : string
+(** What the toolchain holds for a digest of the binary or of a plugin's
+    files that could not be read ([vernac/proof_record_env.ml]). *)
+
+val toolchain_unknown : toolchain -> string option
+(** The first part of the toolchain whose digest is {!unknown_digest}:
+    ["binary"], or ["plugin <findlib name>"]. Two unknown digests are equal
+    whatever the files were, so the recorder marks a proof made under such
+    a toolchain ineligible (reason ["toolchain_unknown"]), and replay
+    refuses such a record or toolchain (reviewer round 2 of e560ab16e4,
+    X5). *)
+
 (** {6 Writing} *)
 
 val output_header : Buffer.t -> header -> unit

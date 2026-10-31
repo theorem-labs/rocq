@@ -10,11 +10,13 @@
 
 open Names
 
-(* The running executable is one file for the whole compile. *)
+(* The running executable is one file for the whole compile. A digest that
+   cannot be read is [Proof_record.unknown_digest], which refuses replay on
+   both sides (Proof_record.toolchain_unknown). *)
 let binary_digest =
   lazy (match Digest.file Sys.executable_name with
       | d -> Digest.to_hex d
-      | exception Sys_error _ -> "unknown")
+      | exception Sys_error _ -> Proof_record.unknown_digest)
 
 (* A plugin's files do not change during a compile, so each is hashed once,
    not at every proof's start. *)
@@ -29,7 +31,7 @@ let plugins () =
        | None ->
          let files = match Mltop.PluginSpec.digest p with
            | ds -> List.map Digest.to_hex ds
-           | exception Sys_error _ -> [ "unknown" ]
+           | exception Sys_error _ -> [ Proof_record.unknown_digest ]
          in
          let d = String.concat "," files in
          Hashtbl.add plugin_digests name d;

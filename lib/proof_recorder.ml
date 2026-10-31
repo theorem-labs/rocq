@@ -263,6 +263,11 @@ let add_ineligible p ~reason ~detail =
     Queue.add R.{ reason; detail } p.p_ineligible
   end
 
+let ineligible ~reason ~detail =
+  match !state with
+  | None | Some { f_proof = None; _ } -> ()
+  | Some { f_proof = Some p; _ } -> add_ineligible p ~reason ~detail
+
 let open_proof ~name ~statement ~position =
   match !state with
   | None -> ()
@@ -282,11 +287,12 @@ let open_proof ~name ~statement ~position =
       (* The proof is opened first, so that a table this cannot digest marks
          this proof ineligible and not the one before it. *)
       incr gen;
+      let toolchain = st.f_toolchain () in
       st.f_proof <- Some {
           p_name = name;
           p_statement = statement ();
           p_position = position;
-          p_toolchain_key = R.toolchain_key (st.f_toolchain ());
+          p_toolchain_key = R.toolchain_key toolchain;
           p_start_tables = [];
           p_reads = Queue.create ();
           p_seen = ReadTbl.create 256;
@@ -305,6 +311,12 @@ let open_proof ~name ~statement ~position =
           p_depth = 0;
         };
       set_recording st;
+      (* A digest of the binary or of a plugin's files that could not be
+         read is the same string in every compile that meets it, so a record
+         another binary made would match this one: the proof stores no term
+         (reviewer round 2 of e560ab16e4, X5). *)
+      Option.iter (fun what -> ineligible ~reason:"toolchain_unknown" ~detail:what)
+        (R.toolchain_unknown toolchain);
       (match st.f_proof with
        | None -> ()
        | Some p ->
@@ -501,11 +513,6 @@ let read_by ~row ~channel ~id ~key ~value =
       read ~row ~channel ~key ~value
     end
   end
-
-let ineligible ~reason ~detail =
-  match !state with
-  | None | Some { f_proof = None; _ } -> ()
-  | Some { f_proof = Some p; _ } -> add_ineligible p ~reason ~detail
 
 let trip_fence ~reason ~detail =
   (match !fence_state with None -> fence_state := Some (reason, detail) | Some _ -> ());

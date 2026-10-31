@@ -326,12 +326,20 @@ let peak_refusal opts (t : R.trailer) =
    that requires it is exactly the file replay exists for. Its contents
    reach a proof only through the reads, which are checked one by one. The
    warnings are not compared here: they are a per-proof key item, and a
-   file can change them with [Set Warnings]. *)
+   file can change them with [Set Warnings].
+
+   A digest of the binary or of a plugin's files that could not be read is
+   {!R.unknown_digest} in every compile that meets it, so two of them are
+   equal whatever the files were. A record must not match through them:
+   its stored terms would be unmarshalled as this binary's types. So a
+   toolchain with such a digest is refused too (reviewer round 2 of
+   e560ab16e4, X5). *)
 let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
   let r = h.R.toolchain in
   if r.R.binary <> now.R.binary || r.R.plugins <> now.R.plugins
      || List.map fst r.R.load_order <> List.map fst now.R.load_order
      || r.R.safe_deps <> now.R.safe_deps || r.R.stack_limit <> now.R.stack_limit
+     || R.toolchain_unknown now <> None
   then Some "toolchain"
   else None
 
@@ -406,7 +414,7 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    later position: a late word inside a quotation, a notation's text or an
    identifier ending in one ([x_Register]) counts too. A command a [Load]ed
    file builds is covered because [Load] counts; one a plugin adds is
-   covered by the plugin audit below ({!unaudited_plugin}), not by this
+   covered by the plugin audit below ({!toolchain_fence}), not by this
    scan. *)
 let restoring_words = [ "Reset"; "Back"; "BackTo" ]
 
@@ -834,13 +842,23 @@ let register_plugin_audit f = plugin_audit := f
 
 let toolchain_now : (unit -> R.toolchain) option ref = ref None
 
-let unaudited_plugin () =
+(* The toolchain's own fences, checked at each decision: a loaded plugin
+   outside the audited set, or a digest of the binary or of a plugin's files
+   that could not be read. The start refuses a record whose toolchain has
+   such a digest ({!toolchain_refusal}); a plugin that loads after the start
+   is caught here (reviewer round 2 of e560ab16e4, X5). *)
+let toolchain_fence () =
   match !toolchain_now with
   | None -> None
   | Some tc ->
-    List.find_opt
-      (fun (name, _) -> not (!plugin_audit name || List.mem name audited_outside_tree))
-      (tc ()).R.plugins
+    let tc = tc () in
+    match
+      List.find_opt
+        (fun (name, _) -> not (!plugin_audit name || List.mem name audited_outside_tree))
+        tc.R.plugins
+    with
+    | Some (name, _) -> Some ("unaudited_plugin", name)
+    | None -> Option.map (fun what -> ("toolchain_unknown", what)) (R.toolchain_unknown tc)
 
 let late_bound commands =
   let rec go requires = function
@@ -1263,8 +1281,8 @@ and decide_once ~sentences ~closer =
        stored term would be used, so a trip anywhere before the closer
        counts. *)
     let tripped =
-      match unaudited_plugin () with
-      | Some (name, _) -> Some ("unaudited_plugin", name)
+      match toolchain_fence () with
+      | Some _ as t -> t
       | None -> Proof_recorder.fence_tripped ()
     in
     match tripped with

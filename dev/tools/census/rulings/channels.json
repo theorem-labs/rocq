@@ -34,6 +34,7 @@
     "rocqlib_rebound": "Row 15: a Rocqlib key whose answer changed after a process-wide lazy may have cached the first one (a re-registration, a registration after a miss, a section end that restores the table). Every proof from then on in the process is ineligible, in the registration and in the replay (library/rocqlib.ml observe, lib/proof_recorder.ml trip_fence; cross-model delta review D4).",
     "subproof": "Row 21: an abstract or other sub-proof, whose result depends on the names already taken (proofs/subproof.ml).",
     "timeout": "Row 22: every Control.timeout, the one point that Timeout, timeout and Ltac2 timeout pass through (lib/control.ml timeout).",
+    "toolchain_unknown": "Any row: the digest of the running binary or of a loaded plugin's files could not be read, so the toolchain holds the string \"unknown\" (Proof_record.unknown_digest) in its place. Two unknown digests are equal whatever the files were, so a record that another binary made would match this one, and its stored terms would be unmarshalled as this binary's types. A proof opened under such a toolchain stores no term (lib/proof_recorder.ml open_proof). Replay refuses the record for the whole file when the compile's toolchain has such a digest at the start, and makes each later proof ineligible once a plugin with such a digest loads (lib/proof_replay.ml toolchain_refusal, toolchain_fence; reviewer round 2 of e560ab16e4, X5).",
     "unhashable": "Any row: a value the recorder cannot digest (a closure, an unforced lazy, an object or an abstract block). Proof_recorder.digest returns \"unhashable\" and marks the proof, and digest_cached and digest_slot mark every proof that reuses a kept \"unhashable\" (lib/proof_recorder.ml digest, digest_cached, digest_slot).",
     "universe_footprint_missing": "Row 2: the recorder holds a proof with no universe footprint, so its universe reads are unknown. The proof runs stock (vernac/proof_record_env.ml record_universe_footprint)."
   },
@@ -76,6 +77,7 @@
     "ineligible:lib/proof_recorder.ml:nested_proof": {"ineligible": "@nested_proof"},
     "ineligible:lib/proof_recorder.ml:unhashable": {"ineligible": "@unhashable"},
     "ineligible:lib/proof_recorder.ml:plugin_hook": {"ineligible": "@plugin_hook"},
+    "ineligible:lib/proof_recorder.ml:toolchain_unknown": {"ineligible": "@toolchain_unknown"},
 
     "read:library/nametab.ml:locate/\"6\"/ch_locate": {"row": "6"},
     "read:library/nametab.ml:locate_upto/\"6\"/ch_locate_upto": {"row": "6"},

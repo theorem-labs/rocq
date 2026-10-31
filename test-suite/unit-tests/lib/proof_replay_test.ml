@@ -584,6 +584,49 @@ let plugin_allowlist =
      let other = with_plugins [ ("rocq-read-file.plugin", "d"); ("some.other.plugin", "d") ] in
      alone <> None && other = None)
 
+(* A digest of the binary or of a plugin's files that could not be read is
+   "unknown" (vernac/proof_record_env.ml), the same string in every compile
+   that meets it. Two unknowns compare equal, so a record an older binary
+   made would be read back as this binary's stored terms (reviewer round 2
+   of e560ab16e4, X5). Such a record is refused for the whole file. A
+   plugin with an unknown digest that loads after the start is caught at
+   the decision: the start saw no such plugin. rocq-read-file.plugin is
+   used because the audit takes it, so only the digest decides. *)
+let unknown_toolchain_refuses =
+  let case tc =
+    let h = R.{ header with toolchain = tc } in
+    let p = R.{ proof with toolchain_key = R.toolchain_key tc } in
+    setup ~header:h ~proof:p ~now:tc ();
+    let r = Replay.refused () in
+    Replay.open_proof ~name:"Top.File.lemma" ~statement:(fun () -> statement)
+      ~position:(fun () -> position) ~toolchain_key:(fun () -> R.toolchain_key tc);
+    (r, Replay.decide ~sentences ~closer:"Qed")
+  in
+  let later () =
+    let now = ref toolchain in
+    let path = write_record () in
+    Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
+      ~digest:(Some (Proof_sha256.digest_hex (record_bytes ())));
+    Replay.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> !now);
+    Unix.chmod path 0o644;
+    Sys.remove path;
+    now := R.{ toolchain with plugins = [ ("rocq-read-file.plugin", "unknown") ] };
+    let d = decide () in
+    now := toolchain;
+    (Replay.refused (), d)
+  in
+  let refused (r, d) = r = Some "toolchain" && d = None in
+  mk_bool_test "proof-replay-unknown-toolchain"
+    "a binary or plugin digest that could not be read refuses the record, at the start and at a decision"
+    (current := Replay.Value (Some (String.make 32 'e'));
+     let binary = case R.{ toolchain with binary = "unknown" } in
+     let plugin = case R.{ toolchain with plugins = [ ("rocq-read-file.plugin", "unknown") ] } in
+     let known = case R.{ toolchain with plugins = [ ("rocq-read-file.plugin", "d") ] } in
+     let loaded_later = later () in
+     refused binary && refused plugin
+     && fst known = None && snd known <> None
+     && fst loaded_later = None && snd loaded_later = None)
+
 (* A Require the text spells out in full carries its From prefix and its
    names; a late word the scan cannot read that way carries none, so it is
    late whatever is loaded. *)
@@ -732,7 +775,7 @@ let tests =
     binding_refusals; overcommit_unknown_refuses; unreadable_record_refuses; no_record_refuses;
     sidecar_dir_refuses; sha256_vectors; charged_clock; summary_counts;
     rebind_scan; late_events_scan; hit_hook_runs; miss_reason; install_check_misses; plugin_audit_refuses;
-    plugin_allowlist;
+    plugin_allowlist; unknown_toolchain_refuses;
     require_scan; require_rule; require_tripwire;
     (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]

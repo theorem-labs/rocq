@@ -328,6 +328,15 @@ let toolchain_key (t : toolchain) : toolchain_key =
     toolchain_key_memo := Some (t, k);
     k
 
+let unknown_digest = "unknown"
+
+let toolchain_unknown (t : toolchain) =
+  if String.equal t.binary unknown_digest then Some "binary"
+  else
+    List.find_map
+      (fun (name, d) -> if String.equal d unknown_digest then Some ("plugin " ^ name) else None)
+      t.plugins
+
 let path_of_vo vo =
   let base = match Filename.chop_suffix_opt ~suffix:".vo" vo with Some b -> b | None -> vo in
   base ^ ".proof-record.jsonl"

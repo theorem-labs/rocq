@@ -16,10 +16,10 @@ let toolchain : R.toolchain = R.{
   stack_limit = "unlimited";
 }
 
-let start ?(tables = false) () =
+let start ?(tables = false) ?(tc = toolchain) () =
   reset ();
   Rec.start ~library:"Top.File" ~source:"dir/File.v" ~source_digest:(String.make 32 'a')
-    ~toolchain:(fun () -> toolchain) ~skip_qed_typecheck:false ~tables_at_start:tables
+    ~toolchain:(fun () -> tc) ~skip_qed_typecheck:false ~tables_at_start:tables
 
 let open_proof ?(name = "Top.File.lemma") () =
   Rec.open_proof ~name ~statement:(fun () -> String.make 32 'b')
@@ -331,6 +331,26 @@ let slot_unhashable =
     (d1 = "unhashable" && d2 = "unhashable"
      && List.map reasons f.R.proofs = [ [ "unhashable" ]; [ "unhashable" ] ])
 
+(* A digest of the binary or of a plugin's files that could not be read is
+   "unknown" (vernac/proof_record_env.ml), the same string in every compile
+   that meets it: a record another binary made would match this one. So the
+   proof stores no term (reviewer round 2 of e560ab16e4, X5). *)
+let unknown_toolchain =
+  let reasons tc =
+    start ~tc ();
+    open_proof ();
+    close_proof ();
+    List.map (fun i -> (i.R.reason, i.R.detail)) (List.hd (the_file ()).R.proofs).R.ineligible
+  in
+  let binary = reasons R.{ toolchain with binary = "unknown" } in
+  let plugin = reasons R.{ toolchain with plugins = [ ("some.plugin", "unknown") ] } in
+  let known = reasons R.{ toolchain with plugins = [ ("some.plugin", "d") ] } in
+  mk_bool_test "recorder-unknown-toolchain"
+    "a proof made where the binary's or a plugin's digest could not be read is ineligible"
+    (binary = [ ("toolchain_unknown", "binary") ]
+     && plugin = [ ("toolchain_unknown", "plugin some.plugin") ]
+     && known = [])
+
 (* A closure setter called [stock] times trips nothing; one more call trips
    the process-wide fence, and the proof open during that call must carry it
    when it closes, not only the proofs opened after it (P3 review of the
@@ -356,6 +376,7 @@ let closure_fence =
 
 let tests =
   [ inert; one_proof; outside; dedup; first_value; read_by; ineligible_reasons; admitted; nested;
-    start_tables; dropped; renamed; sentences; writes; slot_reuse; slot_unhashable; closure_fence ]
+    start_tables; dropped; renamed; sentences; writes; slot_reuse; slot_unhashable; unknown_toolchain;
+    closure_fence ]
 
 let _ = run_tests __FILE__ log_out_ch tests
