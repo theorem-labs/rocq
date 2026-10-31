@@ -2574,6 +2574,71 @@ let resolve_body = function
       | Some ((c, _), _) when String.equal (Proof_record.digest_value c) digest -> Ok c
       | Some _ | None -> Error ("vo_term", "changed")
 
+(* BET-84: a record made with [-proof-record-vo-ref] is usable only beside
+   the [.vo] it was written with, and that [.vo] holds every opaque proof of
+   its file. A consumer that must not hand out some of those proofs (a task
+   cut that removed them) cannot ship the [.vo]. It ships the record with
+   each referenced term put back inline instead: the term replay would have
+   read, the table entry at the recorded index whose digest is the recorded
+   digest. Nothing else of the blob changes, so the inline record replays
+   exactly as the reference did. *)
+let inline_stored_body table = function
+  | Body _ as body -> Ok body
+  | Vo_opaque { index; digest } ->
+    match Opaques.opaque_disk_entry index table with
+    | Some ((c, _), _) when String.equal (Proof_record.digest_value c) digest ->
+      Ok (Body { body = c; why = "inlined" })
+    | Some _ -> Error (Printf.sprintf "opaque proof %d of the object is not the recorded term" index)
+    | None -> Error (Printf.sprintf "the object has no opaque proof %d" index)
+
+(* A blob with no reference is returned as it was, byte for byte. *)
+let inline_blob table blob =
+  match decode_replay blob with
+  | None -> Error "a stored term cannot be read back"
+  | Some b when List.for_all (function (Body _, _) -> true | (Vo_opaque _, _) -> false) b.rb_entries -> Ok blob
+  | Some b ->
+    let rec entries acc = function
+      | [] -> Ok (List.rev acc)
+      | (body, typ) :: rest ->
+        (match inline_stored_body table body with
+         | Ok body -> entries ((body, typ) :: acc) rest
+         | Error _ as e -> e)
+    in
+    match entries [] b.rb_entries with
+    | Error _ as e -> e
+    | Ok rb_entries ->
+      (match Marshal.to_string { b with rb_entries } [] with
+       | s -> Ok (Proof_record.encode_blob s)
+       | exception e -> Error ("the inline term cannot be marshalled: " ^ Printexc.to_string e))
+
+let inline_proof_record ~record ~vo =
+  match Proof_record.parse_string record with
+  | exception Proof_record.Parse_error why -> Error ("not a proof record: " ^ why)
+  | { Proof_record.trailer = { Proof_record.vo_opaques = None; _ }; _ } -> Ok record
+  | { Proof_record.header; proofs; trailer = { Proof_record.vo_opaques = Some sha256; _ } as trailer } ->
+    match Library.registered_opaques ~file:vo ~sha256 with
+    | Error why ->
+      Error (Printf.sprintf "%s: %s (the record names opaque proofs with SHA-256 %s)" vo why sha256)
+    | Ok table ->
+      let rec inline acc = function
+        | [] -> Ok (List.rev acc)
+        | (p : Proof_record.proof) :: rest ->
+          match p.Proof_record.replay with
+          | None -> inline (p :: acc) rest
+          | Some blob ->
+            match inline_blob table blob with
+            | Ok blob -> inline ({ p with Proof_record.replay = Some blob } :: acc) rest
+            | Error why -> Error (Printf.sprintf "%s: %s" p.Proof_record.name why)
+      in
+      match inline [] proofs with
+      | Error _ as e -> e
+      | Ok proofs ->
+        let b = Buffer.create (String.length record) in
+        Proof_record.output_header b header;
+        List.iter (Proof_record.output_proof b) proofs;
+        Proof_record.output_trailer b { trailer with Proof_record.vo_opaques = None };
+        Ok (Buffer.contents b)
+
 (* The universe state the declaration takes: the global graph is this
    compile's, at the closer, as it was at the proof's start (no sentence of
    a replayed proof runs before its closer). A state whose graphs answer
@@ -2974,6 +3039,8 @@ let save_lemma_proved_delayed ~pm ~proof ~idopt =
   pm
 
 end (* Proof module *)
+
+let inline_proof_record = Proof.inline_proof_record
 
 let _ = Ind_tables.set_declare_definition_scheme declare_definition_scheme
 let _ = Ind_tables.set_register_definition_scheme register_definition_scheme
