@@ -159,7 +159,10 @@ let load_vernac_core ~echo ~check ~state ?source file =
                   (match Proof_recorder.current_name () with
                    | None -> ()
                    | Some held ->
-                     match Vernacstate.Declare.get_all_proof_names () with
+                     (* This loop does not hold the interp state: the STM
+                        installs it, and [interp_vernac] reads the top proof
+                        from the same compatibility module. *)
+                     match Vernacstate.Declare.get_all_proof_names () [@ocaml.warning "-3"] with
                      | [] when Proof_recorder.nested_closed () ->
                        (* The STM empties the stack after a nested proof's
                           closer and restores the proof around it at the
