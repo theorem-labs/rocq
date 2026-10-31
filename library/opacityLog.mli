@@ -34,9 +34,11 @@ val env_var : string
 val set_enabled : bool -> unit
 (** [set_enabled true]: collect the queries of this compilation.
     [Library.set_location_free_label] calls it, before any tactic runs: the
-    queries are collected only under [-location-free-label]. When the
-    environment names no log yet, this process creates one and exports its
-    path in {!env_var}; otherwise it appends to the one named there. *)
+    queries are collected only under [-location-free-label]. This process
+    then creates its own log and exports its path in {!env_var}, overwriting
+    any inherited value (it never writes into a log it did not create); if
+    the log cannot be made, {!get} answers [None]. Worker processes are not
+    given the flag, so they never call this and use the inherited log. *)
 
 val reset : unit -> unit
 (** Forget the queries logged so far, and empty the log file if this
@@ -48,7 +50,9 @@ val record : Constant.t -> Declarations.constant_body -> unit
     is an opaque proof ([OpaqueDef]), [opaque = false] when it is
     [Undef None], and nothing for any other body. It is kept in memory when
     this process collects queries, and appended to the log file when the
-    environment names one. *)
+    environment names one. A process other than the log's owner that cannot
+    open that log or write the record raises an error, before the caller
+    uses the answer it records. *)
 
 val record_body_read : Constant.t -> Opaqueproof.opaque -> unit
 (** [record_body_read c o]: an extraction, a caller of
@@ -61,5 +65,6 @@ val record_body_read : Constant.t -> Opaqueproof.opaque -> unit
 val get : unit -> query list option
 (** The queries logged so far, with repeats: those the log file holds (every
     process's) and those of this process. [None] when the log could not be
-    created, written or read back, or holds a line that is not a record: the
-    caller then stores no opacity queries at all, never an empty list. *)
+    created, opened, written or read back, holds a line that is not a record,
+    or does not end with a newline (a torn last line): the caller then stores
+    no opacity queries at all, never an empty list. *)

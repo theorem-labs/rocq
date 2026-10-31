@@ -216,14 +216,34 @@ let add_opaque_table dp st =
    under coqc, and an [-async-proofs] proof runs in one) gets the state but
    interns no library, so a foreign opaque body read there (a plugin's
    [Global.body_of_constant], coq-hammer's [sunfolding]) found no table and
-   raised [Not_found]. These handles are part of the state the worker gets,
-   so it registers the table on first use ([stored_opaque]); [fetch_delayed]
-   checks the stored digest, so a file changed since the library was loaded
-   is refused, never read. (Design D18, dispatch://INFRA-361: the keep rule's
-   records from a worker reach the library through the opacity log, and the
-   read they record must then succeed there as in the compiling process.) *)
+   raised [Not_found]. So the handles are part of the state the worker gets
+   ([opaque_disk_handles], a summary entry), and the worker registers a
+   table from them on first use ([stored_opaque]). [fetch_delayed]
+   unmarshals the segment and then compares the digest stored after it with
+   the one recorded when the library was loaded, so a file rebuilt since with
+   other opaque proofs is refused, never used. (Design D18,
+   dispatch://INFRA-361: the keep rule's records from a worker reach the
+   library through the opacity log, and the read they record must then
+   succeed there as in the compiling process.)
+
+   A summary entry is rolled back when a module or a section closes, and
+   [mk_intern_library] runs once per library, so the entry is also filled
+   where the loaded library itself is registered for the state:
+   [register_one_syntax], which the REQUIRE-SYNTAX object runs when it is
+   cached and when it is replayed (at [End M] after a [Require] inside [M]),
+   from [opaque_handles_interned], which is per-process and never rolled
+   back. The handle is not a field of [library_t], whose type the REQUIRE
+   kind's payload reaches (misc/vo-format.sh prints it). *)
+let opaque_handles_interned : Opaques.opaque_disk delayed DirPath.Map.t ref =
+  ref DirPath.Map.empty
+
 let opaque_disk_handles : Opaques.opaque_disk delayed DirPath.Map.t ref =
   Summary.ref DirPath.Map.empty ~stage:Summary.Stage.Synterp ~name:"LIBRARY-OPAQUE-HANDLES"
+
+let publish_opaque_handle dp =
+  match DirPath.Map.find_opt dp !opaque_handles_interned with
+  | Some f -> opaque_disk_handles := DirPath.Map.add dp f !opaque_disk_handles
+  | None -> ()
 
 let access_table what tables dp i =
   let t = match DirPath.Map.find dp !tables with
@@ -348,7 +368,7 @@ let mk_library sd md digests vm =
 
 let mk_intern_library sum lib digest_lib proofs vm =
   add_opaque_table sum.md_name (ToFetch proofs);
-  opaque_disk_handles := DirPath.Map.add sum.md_name proofs !opaque_disk_handles;
+  opaque_handles_interned := DirPath.Map.add sum.md_name proofs !opaque_handles_interned;
   let open Safe_typing in
   mk_library sum lib (Dvo_or_vi digest_lib) vm
 
@@ -663,7 +683,9 @@ let register_safe_library m =
    are only imported kernel-side. Interleaving the two in one object preserves
    the order (a full library's object replay may rely on an earlier one). *)
 
-let register_one_syntax (mode, root, m) = match mode with
+let register_one_syntax (mode, root, m) =
+  publish_opaque_handle m.library_name;
+  match mode with
   | ModeFull -> register_library_syntax ~root m
   | ModeSafe -> register_safe_library_syntax ~root m
 

@@ -43,9 +43,11 @@ done
 
 cd misc
 rm -rf _bodyread
-mkdir -p _bodyread/{pkg/kfpeek,adm,qed1,qed2,client}
+mkdir -p _bodyread/{pkg/kfpeek,adm,qed1,qed2,client,tmp}
 D=_bodyread
-touch $D/start
+# This fixture's compiles make their opacity logs here, so that the check at the end
+# that none is left cannot see another test's (make -j).
+export TMPDIR="$PWD/$D/tmp"
 
 fail=0
 pass() { echo "PASS $*"; }
@@ -77,11 +79,13 @@ let () =
        | Constr.Const (cst, _) -> shape cst
        | _ -> -1)
 
-(* The same read, in a forked child that exits at once: the parent learns
+(* The same read, in a forked child that then exits through [exit], which
+   runs the at_exit handlers the child inherited (the opacity log's owner
+   check keeps the child from removing the parent's log): the parent learns
    nothing from it (as with a losing candidate of coq-hammer's best). *)
 let fork_shape c =
   match Unix.fork () with
-  | 0 -> (try ignore (shape c) with _ -> ()); Unix._exit 0
+  | 0 -> (try ignore (shape c) with _ -> ()); exit 0
   | pid -> ignore (Unix.waitpid [] pid); 0
 
 let () =
@@ -92,6 +96,27 @@ let () =
        match EConstr.kind sigma c with
        | Constr.Const (cst, _) -> fork_shape cst
        | _ -> -1)
+
+(* Tamper with the live opacity log, to test what a broken log does. *)
+let log_path () = Option.default "" (Sys.getenv_opt "ROCQ_OPACITYLOG_FILE")
+
+let str_ext name f =
+  Tac2externals.define
+    { Tac2expr.mltac_plugin = "kfpeek"; mltac_tactic = name }
+    Tac2externals.(Tac2ffi.string @-> ret Tac2ffi.int) f
+
+(* Append raw text to the log, with '|' written as a tab and '~' as a
+   newline (Ltac2 string literals have no escapes). *)
+let () = str_ext "log_append_raw" (fun s ->
+    let s = String.map (function '|' -> '\t' | '~' -> '\n' | c -> c) s in
+    let oc = open_out_gen [Open_wronly; Open_append] 0o600 (log_path ()) in
+    output_string oc s; close_out oc; 0)
+
+(* Move the log to [s] (its workers then cannot open it). *)
+let () = str_ext "log_move_to" (fun s -> Sys.rename (log_path ()) s; 0)
+
+(* Point the variable workers inherit at [s]. *)
+let () = str_ext "log_env_set" (fun s -> Unix.putenv "ROCQ_OPACITYLOG_FILE" s; 0)
 EOF
 ( cd $D/pkg/kfpeek && ocamlfind ocamlopt -thread -shared -package rocq-runtime.plugins.ltac2 -o p.cmxs p.ml > build.log 2>&1 ) ||
   { echo "FAIL cannot build the test plugin kfpeek"; cat $D/pkg/kfpeek/build.log; exit 1; }
@@ -112,7 +137,10 @@ head='Require Import Ltac2.Ltac2.
 Declare ML Module "kfpeek".
 Require A.
 Ltac2 @ external body_shape : constr -> int := "kfpeek" "body_shape".
-Ltac2 @ external fork_body_shape : constr -> int := "kfpeek" "fork_body_shape".'
+Ltac2 @ external fork_body_shape : constr -> int := "kfpeek" "fork_body_shape".
+Ltac2 @ external log_append_raw : string -> int := "kfpeek" "log_append_raw".
+Ltac2 @ external log_move_to : string -> int := "kfpeek" "log_move_to".
+Ltac2 @ external log_env_set : string -> int := "kfpeek" "log_env_set".'
 # b NAME BODY: the B file NAME, whose goal True is closed after BODY.
 b() {
   mkdir -p $D/$1
@@ -144,6 +172,33 @@ parb par 'if Int.equal (body_shape constr:(A.c)) 0 then () else Control.throw (T
 parb parany 'let _ := body_shape constr:(A.c) in ().'
 b fork 'let _ := fork_body_shape constr:(A.c) in ().'
 build par adm; build par qed1; build parany qed1; build fork adm; build fork qed1
+
+# Round 16. B_modpar: A is required inside a module (the summary is rolled back at
+# End M and the REQUIRE-SYNTAX object replayed), then a par: worker reads A.c's body.
+mkdir -p $D/modpar
+printf '%s\n' 'Require Import Ltac2.Ltac2.' 'Declare ML Module "kfpeek".' 'Module M. Require A. End M.' \
+  'Ltac2 @ external body_shape : constr -> int := "kfpeek" "body_shape".' \
+  'Ltac2 check () := let _ := body_shape constr:(A.c) in ().' 'Set Default Proof Mode "Classic".' \
+  'Goal True /\ True.' '  split.' '  par: (ltac2:(check ()); exact I).' 'Qed.' > $D/modpar/B.v
+build modpar qed1
+# B_torn: a valid record with no newline appended last; B_bad: a line that is not a record.
+b torn 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "R|A.A.c|A.A|1|A.A" in ().'
+b bad 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "garbage~" in ().'
+build torn qed1; build bad qed1
+# B_wmissing: the workers' variable names a file in a missing directory; B_wmoved: the
+# log is moved away before the par:, so the workers cannot open it.
+parx() { # NAME PRE: B_parany with the toplevel command PRE before the goal
+  mkdir -p $D/$1
+  printf '%s\n%s\nLtac2 check () := let _ := body_shape constr:(A.c) in ().\nSet Default Proof Mode "Classic".\nGoal True /\\ True.\n  split.\n  par: (ltac2:(check ()); exact I).\nQed.\n' \
+    "$head" "$2" > $D/$1/B.v
+}
+parx wmissing "Ltac2 Eval (log_env_set \"$PWD/$D/missing/x.log\")."
+parx wmoved "Ltac2 Eval (log_move_to \"$PWD/$D/moved.log\")."
+build wmissing qed1; build wmoved qed1
+# B_notmp: TMPDIR is a missing directory, so the log cannot be made.
+mkdir -p $D/notmp-qed1; cp $D/print/B.v $D/notmp-qed1/B.v
+if TMPDIR="$PWD/$D/nodir" comp -R $D/qed1 A -R $D/notmp-qed1 Bdep $D/notmp-qed1/B.v > $D/notmp-qed1/out 2>&1
+then echo ok > $D/notmp-qed1/rc; else echo failed > $D/notmp-qed1/rc; fi
 
 s0=$(sed -n 's/^SHAPE //p' $D/print-adm/out); s1=$(sed -n 's/^SHAPE //p' $D/print-qed1/out); s2=$(sed -n 's/^SHAPE //p' $D/print-qed2/out)
 if [ "$s0/$s1/$s2" = "0/1/2" ]; then
@@ -205,12 +260,42 @@ if [ "$(cat $D/fork-adm/rc)" = ok ] && [ "$qf" = "$q_adm" ] && [ "$qfq" = "$q_qe
 else
   bad "B_fork ($(cat $D/fork-adm/rc)) opacity_queries from a forked child: '$qf' (Admitted A), '$qfq' (proved A): $(tr '\n' ' ' < $D/fork-adm/out | cut -c1-300)"
 fi
-# Each compile's log is private and removed at exit.
-left=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'rocq-opacitylog*.log' -newer $D/start 2>/dev/null | head -3 | tr '\n' ' ')
-if [ -z "$left" ]; then
-  pass "no opacity log this test's compiles made is left in ${TMPDIR:-/tmp}"
+
+# Round 16: a broken log never gives an incomplete record.
+qm=$(field $D/modpar-qed1/B.vo opacity_queries)
+if [ "$(cat $D/modpar-qed1/rc)" = ok ] && [ "$qm" = "$q_qed" ]; then
+  pass "B_modpar: after Module M. Require A. End M., a par: worker reads A.c's body and records it: $qm"
 else
-  bad "opacity logs left in ${TMPDIR:-/tmp}: $left"
+  bad "B_modpar ($(cat $D/modpar-qed1/rc)): opacity_queries '$qm': $(tr '\n' ' ' < $D/modpar-qed1/out | cut -c1-400)"
+fi
+nulls() { # NAME TEXT: rc ok, and the report has no keepfacts (assumptions and opacity_queries null)
+  local d=$D/$1-qed1 a q
+  a=$(field $d/B.vo assumptions); q=$(field $d/B.vo opacity_queries)
+  if [ "$(cat $d/rc)" = ok ] && [ "$a" = null ] && [ "$q" = null ]; then
+    pass "$2: compiles, and the library has no keepfacts (assumptions null, opacity_queries null)"
+  else
+    bad "$2 ($(cat $d/rc)): assumptions '$a', opacity_queries '$q': $(tr '\n' ' ' < $d/out | cut -c1-300)"
+  fi
+}
+nulls torn "B_torn: a log whose last line has no newline"
+nulls bad "B_bad: a log with a line that is not a record"
+nulls notmp "B_notmp: TMPDIR is a missing directory"
+cantwrite() { # NAME TEXT: the compile fails with the opacity log's write error
+  local d=$D/$1-qed1
+  if [ "$(cat $d/rc)" = failed ] && grep -q "Cannot write a record to the keep rule's opacity log" $d/out; then
+    pass "$2: the compile fails with the write error"
+  else
+    bad "$2 ($(cat $d/rc)): $(tr '\n' ' ' < $d/out | cut -c1-400)"
+  fi
+}
+cantwrite wmissing "B_wmissing: a worker whose log is in a missing directory"
+cantwrite wmoved "B_wmoved: a worker whose log was moved away"
+# Each compile's log is private and removed at exit: this fixture's TMPDIR is empty.
+left=$(find "$TMPDIR" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
+if [ -z "$left" ]; then
+  pass "this fixture's TMPDIR ($TMPDIR) is empty: every opacity log was removed"
+else
+  bad "opacity logs left in $TMPDIR: $left"
 fi
 
 exit $fail

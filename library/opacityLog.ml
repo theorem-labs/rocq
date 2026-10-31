@@ -67,23 +67,26 @@ open Names
    tries each candidate in a forked child); none of them sends its records
    back. So under [-location-free-label] the compiling process creates a
    private log file ([Filename.temp_file], mode 0600, in TMPDIR) when the flag
-   is set, before any tactic runs, and exports its path in [ROCQ_OPACITYLOG_FILE];
-   a spawned worker inherits the variable (the worker pool passes the
-   environment, [AsyncTaskQueue]), a forked child the open descriptor. Every
-   process that has the variable appends each record to that file as one line
-   with one write on an [O_APPEND] descriptor, so the lines of several
-   processes do not interleave, besides keeping it in memory. The compiling
-   process reads the file back with its own records ([get]) when it saves the
-   library and removes it at exit. A record a forked child made for a
-   candidate the parent then dropped is kept: that only makes the keep rule
-   rebuild more. A log that could not be created, written or read back makes
-   [get] answer [None], and the library is saved with no [keepfacts] segment,
-   which the keep rule rebuilds; a process other than the compiling one that
-   cannot write a record fails its tactic. A coqc started with the variable
-   already set (a worker that parses [-location-free-label] too, or a coqc
-   that another one started) appends to that file and does not own it; its
-   records reach the owner's library too, which again only makes the keep
-   rule rebuild more. *)
+   is set, before any tactic runs, and exports its path in
+   [ROCQ_OPACITYLOG_FILE], overwriting any value it inherited: it never
+   writes its records into a log it did not create (one named by an outer
+   process, or a sink such as /dev/null, would lose them). A spawned worker
+   inherits the variable (the worker pool passes the environment,
+   [AsyncTaskQueue]; workers are not given [-location-free-label], so they
+   never create a log of their own), a forked child the open descriptor.
+   Every process that has the variable appends each record to that file as
+   one line with one write on an [O_APPEND] descriptor, so the lines of
+   several processes do not interleave, besides keeping it in memory. The
+   compiling process reads the file back with its own records ([get]) when it
+   saves the library and removes it at exit. A record a forked child made for
+   a candidate the parent then dropped is kept: that only makes the keep rule
+   rebuild more. A log that could not be created, written or read back whole
+   (every line a record, the last one ended) makes [get] answer [None], and
+   the library is saved with no [keepfacts] segment, which the keep rule
+   rebuilds. A process other than the compiling one that cannot open the log
+   its environment names, or cannot write a record to it, raises an error
+   before the caller gets the answer it records ([record],
+   [record_body_read]), so its tactic fails having used nothing unrecorded. *)
 
 type query = {
   constant : string;
@@ -99,7 +102,7 @@ let enabled = ref false
 (* The log file: its path, a descriptor opened on it in this process, the
    pid of the process that created it (only that one reads it back and
    removes it; a forked child inherits these refs, not the ownership), and
-   whether a write or the creation failed. *)
+   whether a write or the creation failed in the owner. *)
 let path : string option ref = ref None
 let fd : Unix.file_descr option ref = ref None
 let owner_pid : int option ref = ref None
@@ -108,7 +111,9 @@ let tried_env = ref false
 
 let open_append p =
   try Some (Unix.openfile p [Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CLOEXEC] 0o600)
-  with Unix.Unix_error _ -> broken := true; None
+  with Unix.Unix_error _ -> None
+
+let owner () = match !owner_pid with Some p -> p = Unix.getpid () | None -> false
 
 (* A process that did not create the log opens the one its environment names,
    once, on its first record. *)
@@ -124,24 +129,22 @@ let current_fd () =
     end;
     !fd
 
-let owner () = match !owner_pid with Some p -> p = Unix.getpid () | None -> false
-
 let set_enabled b =
   enabled := b;
-  if b && Option.is_empty !fd then
-    match Sys.getenv_opt env_var with
-    | Some p when p <> "" -> tried_env := true; path := Some p; fd := open_append p
-    | Some _ | None ->
-      (* created empty, mode 0600, in TMPDIR *)
-      match Filename.temp_file "rocq-opacitylog" ".log" with
-      | p ->
-        path := Some p;
-        owner_pid := Some (Unix.getpid ());
-        tried_env := true;
-        fd := open_append p;
-        Unix.putenv env_var p;
-        at_exit (fun () -> if owner () then try Sys.remove p with Sys_error _ -> ())
-      | exception Sys_error _ -> broken := true
+  if b && not (owner ()) then begin
+    (* Created empty, mode 0600, in TMPDIR; never an inherited log. *)
+    tried_env := true;
+    fd := None;
+    owner_pid := Some (Unix.getpid ());
+    match Filename.temp_file "rocq-opacitylog" ".log" with
+    | p ->
+      path := Some p;
+      at_exit (fun () -> if owner () then try Sys.remove p with Sys_error _ -> ());
+      (match open_append p with
+       | Some d -> fd := Some d; Unix.putenv env_var p
+       | None -> broken := true; Unix.putenv env_var "")
+    | exception Sys_error _ -> path := None; broken := true; Unix.putenv env_var ""
+  end
 
 let queries : query list ref = ref []
 
@@ -171,20 +174,24 @@ let query_of_line l =
      | _ -> None)
   | _ -> None
 
-(* Appends [q]'s line to the log with one write. *)
+let cannot_write why =
+  CErrors.user_err Pp.(str "Cannot write a record to the keep rule's opacity log " ++
+                       str (Option.default "" !path) ++ str ": " ++ str why ++ str ".")
+
+(* Appends [q]'s line to the log with one write. A process with no log to
+   write to (none named, or the owner whose log could not be made) adds
+   nothing here; the owner's [get] then answers [None]. *)
 let append_to_log q =
   match current_fd () with
-  | None -> ()
+  | None ->
+    if Option.has_some !path then
+      if owner () then broken := true else cannot_write "it cannot be opened"
   | Some d ->
     let l = line_of q in
     let ok = try Unix.write_substring d l 0 (String.length l) = String.length l
       with Unix.Unix_error _ -> false in
-    if not ok then begin
-      broken := true;
-      if not (owner ()) then
-        CErrors.user_err Pp.(str "Cannot write a record to the keep rule's opacity log " ++
-                             str (Option.default "" !path) ++ str ".")
-    end
+    if not ok then
+      if owner () then broken := true else cannot_write "the write failed"
 
 let add c ~opaque ~table =
   let q = {
@@ -214,14 +221,15 @@ let get () =
     | Some p ->
       match In_channel.with_open_text p In_channel.input_all with
       | exception Sys_error _ -> None
+      | text when text <> "" && text.[String.length text - 1] <> '\n' ->
+        None (* a torn last line *)
       | text ->
-        let lines = String.split_on_char '\n' text in
         let rec parse acc = function
-          | [] -> Some acc
-          | [""] -> Some acc
+          | [] | [""] -> Some acc
           | l :: rest ->
             match query_of_line l with
             | Some q -> parse (q :: acc) rest
             | None -> None
         in
-        Option.map (fun from_file -> from_file @ !queries) (parse [] lines)
+        Option.map (fun from_file -> from_file @ !queries)
+          (parse [] (String.split_on_char '\n' text))
