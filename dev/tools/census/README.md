@@ -80,7 +80,7 @@ site stores no term). `@name` refers to an entry in the file's `reasons` object.
 | Tree | Commit | Scope | Sites | Result |
 |---|---|---|---|---|
 | theorem-labs/rocq | 03d5bb248e (9.2/qed-skip-typecheck) | every directory linked into `rocq compile` or a plugin it loads | 269: summary 104, object 78, nosummary-option 3, catchall 84 | 0 problems |
-| theorem-labs/rocq, recorder read sites (`rulings/channels.json`) | the commit that last changed `rulings/channels.json` (`git log -1 -- dev/tools/census/rulings/channels.json`), a child of e16e9d2ae4 on 9.2/proof-replay | the same | 111: read 82, ineligible 29 | 0 problems |
+| theorem-labs/rocq, recorder read sites (`rulings/channels.json`) | the commit that last changed `rulings/channels.json` (`git log -1 -- dev/tools/census/rulings/channels.json`), a child of e16e9d2ae4 on 9.2/proof-replay | the same | 112: read 83, ineligible 29 | 0 problems |
 | coqhammer (coq-hammer-tactics 1.3.2+9.2) | 1d581299c2 | `src/lib`, `src/tactics` (the installed package; `src/plugin` is not installed) | 7 catchall | 0 problems |
 | smpl (rocq-smpl.dev) | 1c3578c1f6 | `src` | summary 1, object 1 | 0 problems |
 | rocq-read-file 0.0.2 | 68887ad0c3 | `src` | 2 catchall | 0 problems |
@@ -140,7 +140,7 @@ cache that no choke point can reach (a `lazy` of a `lib_ref`). Those reads go in
 | 23 | Files and external processes | Ineligible: `native_compute` (`native_compute`) and the external prover `csdpcert` that `psatz` calls (`external_prover`). Micromega's certificate caches are already blocked in grading | `kernel/nativelib.ml` `compile`; `plugins/micromega/coq_micromega.ml` `really_call_csdpcert` |
 | 24 | Resource limits | Recorded in the header: `stack_limit` (in key item 2), `memory_cap`, `rlimit_as`, `rlimit_data`, `overcommit_memory`. The cap is recorded and never compared (GRADE, 12:19Z); replay is refused when an address-space limit is set or `overcommit_memory` is 2 | `lib/proof_limits.ml` |
 | M1 | Abbreviations | Recorded: each `find_opt` and `find_interp`, by kernel name (as `Lib.kername_key` writes it). Replay: the evaluator reads the name back (`Lib.kername_of_key`) and digests the entry with the record site's `recorded_abbreviation` | `interp/abbreviation.ml` |
-| M2 | Reserved types | Recorded: each `find_reserved_type`, by identifier root. Replay: the evaluator looks the root up again with the record site's `recorded_reserved_type` | `interp/reserve.ml` |
+| M2 | Reserved types | Recorded: each `find_reserved_type`, by identifier root, and each lookup of the reverse table (`revert_reserved_type`, channel `reserved_type_rev`), by the head reference of the type, absent included: a binder with no name takes the name reserved for its type (the lambda that refines a function evar, the index that an `in` clause matches against a pattern), and that name reaches the proof term (gate review, breadth audit gap CF6). Replay: the evaluator looks the root up again with the record site's `recorded_reserved_type`, and the head with `recorded_reserved_type_rev` | `interp/reserve.ml` |
 | M3 | Generalizable variables | Recorded: one digest of the table at each proof's start | `proof_record_env.ml`; `interp/implicit_quantifiers.ml` `generalizable_idents` |
 | M4 | Schemes created (write) | Write: each scheme the proof created, by name | `tactics/ind_tables.ml` `define` |
 | M5 | Universe constraint sources (write) | Write: the constant whose declaration wrote a constraint-source record | `vernac/declare.ml` `declare_constant` |
