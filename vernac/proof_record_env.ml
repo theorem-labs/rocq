@@ -11,10 +11,12 @@
 open Names
 
 (* The running executable is one file for the whole compile. *)
-let binary_digest =
+let binary_digest_value =
   lazy (match Digest.file Sys.executable_name with
       | d -> Digest.to_hex d
       | exception Sys_error _ -> "unknown")
+
+let binary_digest () = Lazy.force binary_digest_value
 
 (* A plugin's files do not change during a compile, so each is hashed once,
    not at every proof's start. *)
@@ -95,7 +97,7 @@ let toolchain () : Proof_record.toolchain =
       && List.equal same_plugin mods0 mods -> tc
   | Some _ | None ->
     let tc : Proof_record.toolchain = Proof_record.{
-        binary = Lazy.force binary_digest;
+        binary = binary_digest ();
         plugins = plugins ();
         load_order = load_order ();
         warnings;
