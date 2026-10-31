@@ -46,6 +46,15 @@
 #   (`Section S. Require A. End S.`, then a par: body read) records it; a coqc without
 #   -location-free-label and with ROCQ_OPACITYLOG_FILE=/nonexistent/x compiles a
 #   Transparent on an axiom (B_stock) and a par: body read (B_stockpar);
+# - review gate 18: B_asyncenv, a proof delegated to a proof worker (-async-proofs on)
+#   that reads A.c's body there, with -async-proofs-private-flags
+#   extra-env=KFPEEK_EXTRA_ENV=1;ROCQ_OPACITYLOG_FILE=/dev/null: the worker pool gives
+#   the worker the compile's own log anyway, so the read is recorded. The pool spawns
+#   its first workers before it parses extra-env, and gives extra-env only to a worker
+#   spawned later; a proof worker is replaced after each proof, so with one worker the
+#   second proof runs in a replacement. The proof reads the body only after it checks
+#   that it runs in a worker and that its environment has KFPEEK_EXTRA_ENV=1, so a
+#   master, or a worker that did not get extra-env, fails the compile;
 # - this fixture's compiles use their own TMPDIR, which is empty at the end.
 
 set -e
@@ -138,6 +147,16 @@ let () = str_ext "log_dir_move_to" (fun s -> Sys.rename (Filename.dirname (log_p
 (* Set the variable in the compiling process, which a spawned worker would
    inherit if the worker pool did not set it itself. *)
 let () = str_ext "log_env_set" (fun s -> Unix.putenv "ROCQ_OPACITYLOG_FILE" s; 0)
+
+(* 1 when this process's environment sets the variable [s] to 1, else 0. *)
+let () = str_ext "env_is_1" (fun s -> if Sys.getenv_opt s = Some "1" then 1 else 0)
+
+(* 1 in a worker process (a par: or an -async-proofs proof worker), else 0. *)
+let () =
+  Tac2externals.define
+    { Tac2expr.mltac_plugin = "kfpeek"; mltac_tactic = "in_worker" }
+    Tac2externals.(Tac2ffi.unit @-> ret Tac2ffi.int)
+    (fun () -> if Flags.async_proofs_is_worker () then 1 else 0)
 EOF
 ( cd $D/pkg/kfpeek && ocamlfind ocamlopt -thread -shared -package rocq-runtime.plugins.ltac2 -o p.cmxs p.ml > build.log 2>&1 ) ||
   { echo "FAIL cannot build the test plugin kfpeek"; cat $D/pkg/kfpeek/build.log; exit 1; }
@@ -162,7 +181,9 @@ Ltac2 @ external fork_body_shape : constr -> int := "kfpeek" "fork_body_shape".
 Ltac2 @ external log_append_raw : string -> int := "kfpeek" "log_append_raw".
 Ltac2 @ external log_move_to : string -> int := "kfpeek" "log_move_to".
 Ltac2 @ external log_dir_move_to : string -> int := "kfpeek" "log_dir_move_to".
-Ltac2 @ external log_env_set : string -> int := "kfpeek" "log_env_set".'
+Ltac2 @ external log_env_set : string -> int := "kfpeek" "log_env_set".
+Ltac2 @ external in_worker : unit -> int := "kfpeek" "in_worker".
+Ltac2 @ external env_is_1 : string -> int := "kfpeek" "env_is_1".'
 # b NAME BODY: the B file NAME, whose goal True is closed after BODY.
 b() {
   mkdir -p $D/$1
@@ -261,6 +282,20 @@ for nd in stock-adm:adm stockpar-qed1:qed1; do
   if ROCQ_OPACITYLOG_FILE=/nonexistent/x rocq c -q -R $D/$a A -R $d Bdep $d/B.v > $d/out 2>&1
   then echo ok > $d/rc; else echo failed > $d/rc; fi
 done
+# Round 18. B_asyncenv: a delegated proof whose worker's variable extra-env points at
+# /dev/null. One proof worker (-async-proofs-j 1): l0 runs in the first one, which the
+# pool spawned before it parsed extra-env, and l in its replacement, which gets
+# extra-env (KFPEEK_EXTRA_ENV=1 shows it did).
+mkdir -p $D/asyncenv $D/asyncenv-qed1
+{ printf '%s\n' "$head"
+  printf '%s\n' 'Lemma l0 : True.' 'Proof. exact I. Qed.' 'Lemma l : True.' \
+    'Proof. (if Int.equal (in_worker ()) 1 then () else Control.throw (Tactic_failure (Some (Message.of_string "not in a proof worker")))); (if Int.equal (env_is_1 "KFPEEK_EXTRA_ENV") 1 then () else Control.throw (Tactic_failure (Some (Message.of_string "the proof worker did not get extra-env")))); let _ := body_shape constr:(A.c) in exact I. Qed.'
+} > $D/asyncenv/B.v
+cp $D/asyncenv/B.v $D/asyncenv-qed1/B.v
+if comp -async-proofs on -async-proofs-j 1 -async-proofs-delegation-threshold 0 \
+     -async-proofs-private-flags "extra-env=KFPEEK_EXTRA_ENV=1;ROCQ_OPACITYLOG_FILE=/dev/null" \
+     -R $D/qed1 A -R $D/asyncenv-qed1 Bdep $D/asyncenv-qed1/B.v > $D/asyncenv-qed1/out 2>&1
+then echo ok > $D/asyncenv-qed1/rc; else echo failed > $D/asyncenv-qed1/rc; fi
 
 s0=$(sed -n 's/^SHAPE //p' $D/print-adm/out); s1=$(sed -n 's/^SHAPE //p' $D/print-qed1/out); s2=$(sed -n 's/^SHAPE //p' $D/print-qed2/out)
 if [ "$s0/$s1/$s2" = "0/1/2" ]; then
@@ -381,6 +416,12 @@ for nd in "stock-adm:B_stock (Transparent A.c on an axiom)" "stockpar-qed1:B_sto
     bad "${nd#*:}: a coqc without the flag failed on the inherited variable: $(tr '\n' ' ' < $d/out | cut -c1-400)"
   fi
 done
+qa18=$(field $D/asyncenv-qed1/B.vo opacity_queries)
+if [ "$(cat $D/asyncenv-qed1/rc)" = ok ] && [ "$qa18" = "$q_qed" ]; then
+  pass "B_asyncenv: a proof worker that got extra-env naming /dev/null still records into the compile's log: $qa18"
+else
+  bad "B_asyncenv ($(cat $D/asyncenv-qed1/rc)): opacity_queries '$qa18': $(tr '\n' ' ' < $D/asyncenv-qed1/out | cut -c1-400)"
+fi
 # Each compile's log is private and removed at exit: this fixture's TMPDIR is empty.
 left=$(find "$TMPDIR" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
 if [ -z "$left" ]; then

@@ -67,24 +67,35 @@ open Names
    tries each candidate in a forked child); none of them sends its records
    back. So under [-location-free-label] the compiling process creates a
    private log file ([Filename.temp_file], mode 0600, in TMPDIR) when the flag
-   is set, before any tactic runs, and exports its path in
-   [ROCQ_OPACITYLOG_FILE], overwriting any value it inherited: it never
-   writes its records into a log it did not create (one named by an outer
-   process, or a sink such as /dev/null, would lose them). A spawned worker
-   gets the variable from the worker pool, which sets it to the value
+   is set, before any tactic runs. It never writes its records into a log it
+   did not create (one named by an outer process, or a sink such as
+   /dev/null, would lose them). A spawned worker gets the log's path from the
+   worker pool, which sets [ROCQ_OPACITYLOG_FILE] to the value
    [worker_env_value] gives, whatever the inherited environment or
-   [-async-proofs-private-flags] say ([AsyncTaskQueue.spawn]): the owner's
-   log, or empty when the spawning process owns none, so the workers of a
-   coqc without [-location-free-label] record nothing. Workers are not given
+   [-async-proofs-private-flags] say ([AsyncTaskQueue.spawn]): the log the
+   spawning process has open (the owner's, a worker's or a forked child's),
+   in a worker that has not opened it yet the value it inherited, and
+   otherwise empty, so the workers of a coqc without [-location-free-label]
+   record nothing. The compiling process also
+   sets the variable in its own environment (empty when no log was made), but
+   nothing in this tree reads it there: it is kept only so a tool running in
+   the same process can find the live log (the test plugin of
+   misc/library-label-bodyread.sh reads it to damage the log on purpose), and
+   so such a tool never finds an inherited path. Workers are not given
    [-location-free-label], so they never call [set_enabled true]. Only a
    worker ([Flags.async_proofs_is_worker]) reads the variable; a forked child
    inherits the open descriptor instead, and any other process ignores the
    variable, so a coqc without the flag never writes to, or fails on, a log
-   an outer process named. Every process with a log appends each record to
-   that file as one line with one write on an [O_APPEND] descriptor, so the
-   lines of several processes do not interleave, besides keeping it in
-   memory. The compiling process reads the file back with its own records
-   ([get]) when it saves the library and removes it at exit. A record a
+   an outer process named. Only these append: the owner, a worker (through
+   the variable) and a forked child of either (through the descriptor). A
+   process outside them -- a separate rocq process a plugin starts by its own
+   means, rather than through the worker pool -- is outside the log; no plugin
+   the BET image installs starts one (design D18's observer sweep). Each of
+   them appends each record to that file as one line with one write on an
+   [O_APPEND] descriptor, so the lines of several processes do not
+   interleave, besides keeping it in memory. The compiling process reads the
+   file back with its own records ([get]) when it saves the library and
+   removes it at exit. A record a
    forked child made for a candidate the parent then dropped is kept: that
    only makes the keep rule rebuild more. A log that could not be created,
    written or read back whole (every line a record, the last one ended)
@@ -141,7 +152,11 @@ let current_fd () =
 let set_enabled b =
   enabled := b;
   if b && not (owner ()) then begin
-    (* Created empty, mode 0600, in TMPDIR; never an inherited log. *)
+    (* Created empty, mode 0600, in TMPDIR; never an inherited log. The
+       [putenv]s are not read by anything in this tree (workers get
+       [worker_env_value] from the worker pool): they let a tool in this
+       process find the live log, the test plugin of
+       misc/library-label-bodyread.sh, and clear an inherited path. *)
     tried_env := true;
     fd := None;
     owner_pid := Some (Unix.getpid ());
@@ -155,9 +170,9 @@ let set_enabled b =
   end
 
 let worker_env_value () =
-  if owner () then (match !fd, !path with Some _, Some p -> p | _ -> "")
-  else if Flags.async_proofs_is_worker () then Option.default "" (Sys.getenv_opt env_var)
-  else ""
+  match !fd, !path with
+  | Some _, Some p -> p
+  | _ -> if Flags.async_proofs_is_worker () then Option.default "" (Sys.getenv_opt env_var) else ""
 
 let queries : query list ref = ref []
 

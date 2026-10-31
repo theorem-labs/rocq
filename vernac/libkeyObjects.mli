@@ -121,7 +121,13 @@ open Names
     does not cover body reads. The status comparison and the assumption set
     read a constant's status off [axiom_report], so the blinding covers only
     the constants it lists; a body read reads no status, its check being
-    byte-identity. Every other constant the compiled form holds -- in a
+    byte-identity. What the label strips still reaches vernacular output:
+    [About] prints a declaration's location, [Search is:<kind>] filters on
+    its documentation kind, and [Print] shows its status and an opaque
+    proof's body. A compile can read printed output only through [Redirect]
+    (a command's output into a file) and a [Load] of that file, which the
+    grading source policy refuses; that route is outside the label's
+    guarantee. Every other constant the compiled form holds -- in a
     functor's body, in a functor parameter's module type, in a module type,
     in the implementation of a sealed module -- keeps an opaque proof
     distinct from an axiom, read as one fixed opaque body with no table

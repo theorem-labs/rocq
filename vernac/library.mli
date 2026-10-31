@@ -41,6 +41,10 @@ module Intern : sig
   type t = DirPath.t -> (library_t, Exninfo.iexn) Result.t * Provenance.t
 end
 
+(** Read a .vo file. It fills no table of loaded libraries (file name, opaque
+    proofs, stored closures): [require_library_syntax_from_dirpath] fills them
+    only once the file holds the library it asked for, so a failed [Require]
+    of a file that holds another library's name changes nothing. *)
 val intern_from_file : CUnix.physical_path ->
   (library_t, Exninfo.iexn) Result.t * Intern.Provenance.t
 

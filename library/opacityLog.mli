@@ -35,17 +35,22 @@ val set_enabled : bool -> unit
 (** [set_enabled true]: collect the queries of this compilation.
     [Library.set_location_free_label] calls it, before any tactic runs: the
     queries are collected only under [-location-free-label]. This process
-    then creates its own log and exports its path in {!env_var}, overwriting
-    any inherited value (it never writes into a log it did not create); if
-    the log cannot be made, {!get} answers [None]. Worker processes are not
-    given the flag, so they never call [set_enabled true]; a worker
+    then creates its own log (it never writes into a log it did not create);
+    if the log cannot be made, {!get} answers [None]. It also sets {!env_var}
+    in its own environment to the log's path (empty when none was made),
+    which nothing in this tree reads there: the worker pool gives workers
+    {!worker_env_value} instead. It is kept only so a tool running in this
+    process can find the live log (the test plugin of
+    misc/library-label-bodyread.sh). Worker processes are not given the flag,
+    so they never call [set_enabled true]; a worker
     ([Flags.async_proofs_is_worker]) instead opens the log {!env_var} names
     on its first record. *)
 
 val worker_env_value : unit -> string
-(** The value of {!env_var} a worker this process spawns must get: this
-    process's log when it owns one, the inherited value when this process is
-    a worker, and [""] (no log: the worker records nothing) otherwise.
+(** The value of {!env_var} a worker this process spawns must get: the log
+    this process has open (the owner's, a worker's, or a forked child's),
+    else, in a worker that has not opened it yet, the inherited value, and
+    [""] (no log: the worker records nothing) otherwise.
     [AsyncTaskQueue.spawn] sets it in place of any inherited or extra-env
     entry. *)
 
@@ -58,10 +63,11 @@ val record : Constant.t -> Declarations.constant_body -> unit
     axiom or an opaque proof. Logs [c] with [opaque = true] when [cb]'s body
     is an opaque proof ([OpaqueDef]), [opaque = false] when it is
     [Undef None], and nothing for any other body. It is kept in memory when
-    this process collects queries, and appended to the log file when the
-    environment names one. A process other than the log's owner that cannot
-    open that log or write the record raises an error, before the caller
-    uses the answer it records. *)
+    this process collects queries, and appended to the log file by the only
+    processes that append: the owner, a worker (the log {!env_var} names) and
+    a forked child of either (the descriptor it inherited). A worker or child
+    that cannot open the log or write the record raises an error, before the
+    caller uses the answer it records. *)
 
 val record_body_read : Constant.t -> Opaqueproof.opaque -> unit
 (** [record_body_read c o]: an extraction, a caller of

@@ -123,11 +123,14 @@ let location_free_label = ref false
    digest of its library segment, read with its other segments
    ([intern_from_file]): [KeepFacts.compute] takes a constant's closure from
    here instead of walking it. Each intern of a library sets or removes its
-   entry, so the entry is that of the file interned last, which is the file
-   loaded (a loaded library is not interned again), and the reader also
-   requires the digest the loaded library has. Not a field of [library_t],
-   whose type the REQUIRE kind's payload reaches (misc/vo-format.sh prints
-   it), and not synchronized, like [libraries_filename_table]. *)
+   entry once the file is known to hold the library asked for
+   ([take_interned], after [intern_library]'s name check), so the entry is
+   that of the file interned last for that name, which is the file loaded (a
+   loaded library is not interned again, and a file that holds another name,
+   such as a loaded library's, writes nothing), and the reader also requires
+   the digest the loaded library has. Not a field of [library_t], whose type
+   the REQUIRE kind's payload reaches (misc/vo-format.sh prints it), and not
+   synchronized, like [libraries_filename_table]. *)
 let stored_closures_table :
   (Safe_typing.vodigest * (string * string list) list) DirPath.Map.t ref =
   ref DirPath.Map.empty
@@ -226,9 +229,10 @@ let add_opaque_table dp st =
    library through the opacity log, and the read they record must then
    succeed there as in the compiling process.)
 
-   A summary entry is rolled back when a module or a section closes, and
-   [mk_intern_library] runs once per library, so the entry is also filled
-   where the loaded library itself is registered for the state:
+   A summary entry is rolled back when a module or a section closes, and a
+   library's intern fills [opaque_handles_interned] only once
+   ([take_interned]), so the entry is also filled where the loaded library
+   itself is registered for the state:
    [register_one_syntax], which the REQUIRE-SYNTAX object runs when it is
    cached and when it is replayed (at [End M] after a [Require] inside [M]),
    from [opaque_handles_interned], which is per-process and never rolled
@@ -366,11 +370,29 @@ let mk_library sd md digests vm =
     library_vm = vm;
   }
 
-let mk_intern_library sum lib digest_lib proofs vm =
-  add_opaque_table sum.md_name (ToFetch proofs);
-  opaque_handles_interned := DirPath.Map.add sum.md_name proofs !opaque_handles_interned;
-  let open Safe_typing in
-  mk_library sum lib (Dvo_or_vi digest_lib) vm
+(* The tables a library's intern fills, under the name its file holds:
+   [libraries_filename_table], [opaque_tables], [opaque_handles_interned] and,
+   under [-location-free-label], [stored_closures_table]. None of them is
+   synchronized, so a [Fail Require] does not roll them back. [intern_from_file]
+   therefore only reads the file; [intern_library] fills them
+   ([take_interned]) once the file is known to hold the library asked for.
+   Before, a failed Require of a file that holds a loaded library's name (for
+   example a copy of that library's file built with other proofs, at another
+   logical path) replaced the loaded library's entries with that file's: its
+   stored closures, which the next save of a dependent took as the loaded
+   library's, and its opaque proofs. (Design D18, dispatch://INFRA-361.) *)
+let interned_pending : (library_t * (unit -> unit)) option ref = ref None
+
+(* The table writes of [m]'s intern, or nothing for a library this process
+   did not read last; the slot is emptied either way, so it never keeps a
+   refused file's library alive. *)
+let take_interned m =
+  let fill = match !interned_pending with
+    | Some (m', fill) when m' == m -> fill
+    | Some _ | None -> ignore
+  in
+  interned_pending := None;
+  fill
 
 let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
@@ -410,22 +432,30 @@ let intern_from_file file =
      since this takes only [assumptions], whose shape did not change, and
      never touches the queries; rocq-library-label, which reads them,
      validates the segment first. *)
-  let () =
+  let closures =
     if !location_free_label then
-      let closures = match ObjFile.marshal_in_segment ch ~segment:keepfacts_seg with
-        | ({ KeepFacts.assumptions; _ }, _) -> assumptions
-        | exception Not_found -> None
-      in
-      stored_closures_table := match closures with
-        | Some a ->
-          DirPath.Map.add lsd.md_name (Safe_typing.Dvo_or_vi digest_lmd, a) !stored_closures_table
-        | None -> DirPath.Map.remove lsd.md_name !stored_closures_table
+      Some (match ObjFile.marshal_in_segment ch ~segment:keepfacts_seg with
+          | ({ KeepFacts.assumptions; _ }, _) -> assumptions
+          | exception Not_found -> None)
+    else None
   in
   ObjFile.close_in ch;
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
-  register_library_filename lsd.md_name file;
   Library_info.warn_library_info ~transitive:true lsd.md_name lsd.md_info;
-  mk_intern_library lsd lmd digest_lmd del_opaque vmlib
+  let m = mk_library lsd lmd (Safe_typing.Dvo_or_vi digest_lmd) vmlib in
+  let fill () =
+    register_library_filename lsd.md_name file;
+    add_opaque_table lsd.md_name (ToFetch del_opaque);
+    opaque_handles_interned := DirPath.Map.add lsd.md_name del_opaque !opaque_handles_interned;
+    match closures with
+    | None -> ()
+    | Some (Some a) ->
+      stored_closures_table :=
+        DirPath.Map.add lsd.md_name (Safe_typing.Dvo_or_vi digest_lmd, a) !stored_closures_table
+    | Some None -> stored_closures_table := DirPath.Map.remove lsd.md_name !stored_closures_table
+  in
+  interned_pending := Some (m, fill);
+  m
 
 let intern_from_file file =
   let provenance = ("file", file) in
@@ -477,7 +507,9 @@ let rec intern_library ~intern (needed, contents as acc) dir =
       (* We intern the library, and then intern the deps *)
       match intern dir with
       | Ok m, provenance ->
+        let fill = take_interned m in
         check_library_expected_name ~provenance dir m.library_name;
+        fill ();
         intern_library_deps ~intern acc dir m
       | Error iexn, provenance ->
         error_in_intern provenance dir iexn

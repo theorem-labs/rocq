@@ -36,7 +36,11 @@
 # in its own table: dropped. BXA: the walk that computes the closures reads a copy's
 # body through a sealed module's expression too, and H records that read (holder H,
 # table A); after an edit that keeps A's label, E's full walk sees the axiom H's
-# stored closure misses, which is why H must rebuild. BN runs
+# stored closure misses, which is why H must rebuild. BFR: a failed Require of a file
+# that holds a loaded library's logical name (a copy of A built with another proof of
+# l, at another logical path) leaves the loaded library's stored closures and opaque
+# proofs in place, so D's closure through A.l is the loaded A's, by the stored-closure
+# walk and by the full walk, which reads l's proof. BN runs
 # `Transparent Nat.add.`, a transparent definition, which cannot become an axiom or an
 # opaque proof while its library's label stays equal: nothing is recorded.
 #
@@ -471,6 +475,48 @@ if [ "$qe" = "[]" ] && [ "$qef" = "[]" ]; then
   pass "BXA: E logs no query, by the stored-closure walk ($qe) or the full walk ($qef)"
 else
   bad "BXA: E's opacity_queries: stored-closure walk '$qe', full walk '$qef'"
+fi
+
+# BFR: A (logical name A.A) in two variants with equal labels, l proved from ax (a1) and
+# from I (a2); X.vo is a2's file at another logical path, Y.X. D loads a1, then
+# `Fail Require Y.X.` fails (the file holds A.A, not Y.X: Dbad, the same Require without
+# Fail, is refused for that reason), then proves d with A.l. D.d's closure must be a1's,
+# with ax: by the stored-closure walk (a1's stored closure for l) and by the full walk
+# (l's proof, from A's opaque table).
+FR=_kfacts/fr
+mkdir -p $FR/a1 $FR/a2 $FR/x $FR/d $FR/dfull $FR/dbad
+printf 'Axiom ax : True.\nLemma l : True.\nProof. exact %s. Qed.\n' ax > $FR/a1/A.v
+printf 'Axiom ax : True.\nLemma l : True.\nProof. exact %s. Qed.\n' I > $FR/a2/A.v
+rocq c -q -location-free-label -R $FR/a1 A $FR/a1/A.v
+rocq c -q -location-free-label -R $FR/a2 A $FR/a2/A.v
+cp $FR/a2/A.vo $FR/x/X.vo
+printf 'Require A.A.\nFail Require Y.X.\nLemma d : True.\nProof. exact A.A.l. Qed.\n' > $FR/d/D.v
+cp $FR/d/D.v $FR/dfull/D.v
+printf 'Require A.A.\nRequire Y.X.\n' > $FR/dbad/D.v
+if rocq c -q -location-free-label -R $FR/a1 A -Q $FR/x Y -R $FR/dbad Ddep $FR/dbad/D.v > $FR/dbad/out 2>&1; then
+  echo ok > $FR/dbad/rc; else echo failed > $FR/dbad/rc; fi
+if rocq c -q -location-free-label -R $FR/a1 A -Q $FR/x Y -R $FR/d Ddep $FR/d/D.v > $FR/d/out 2>&1; then
+  echo ok > $FR/d/rc; else echo failed > $FR/d/rc; fi
+if ROCQ_KEEPFACTS_FULL_WALK=1 rocq c -q -location-free-label -R $FR/a1 A -Q $FR/x Y -R $FR/dfull Ddep \
+     $FR/dfull/D.v > $FR/dfull/out 2>&1; then
+  echo ok > $FR/dfull/rc; else echo failed > $FR/dfull/rc; fi
+if [ "$(label $FR/a1/A.vo)" = "$(label $FR/a2/A.vo)" ] && [ "$(closure $FR/a1/A.vo l)" = '["axiom:A.A.ax"]' ] \
+   && [ -z "$(closure $FR/a2/A.vo l)" ] && [ "$(cat $FR/dbad/rc)" = failed ] \
+   && tr '\n' ' ' < $FR/dbad/out | grep -q 'contains library *A\.A *and not library *Y\.X'; then
+  pass "BFR: a1 and a2 have equal labels, l's closure is [axiom:A.A.ax] in a1 and empty in a2, and Require Y.X is refused (the file holds A.A)"
+else
+  bad "BFR setup: labels $(label $FR/a1/A.vo) $(label $FR/a2/A.vo), l '$(closure $FR/a1/A.vo l)' / '$(closure $FR/a2/A.vo l)', Dbad ($(cat $FR/dbad/rc)): $(tr '\n' ' ' < $FR/dbad/out | cut -c1-300)"
+fi
+fd=$(closure $FR/d/D.vo d); ff=$(closure $FR/dfull/D.vo d)
+if [ "$(cat $FR/d/rc)" = ok ] && [ "$fd" = '["axiom:A.A.ax"]' ]; then
+  pass "BFR: after the failed Require, D.d's closure is the loaded A's by the stored-closure walk: $fd"
+else
+  bad "BFR ($(cat $FR/d/rc)): D.d's closure by the stored-closure walk after the failed Require: '$fd'"
+fi
+if [ "$(cat $FR/dfull/rc)" = ok ] && [ "$ff" = '["axiom:A.A.ax"]' ]; then
+  pass "BFR: after the failed Require, D.d's closure is the loaded A's by the full walk (l's proof from A's opaque table): $ff"
+else
+  bad "BFR ($(cat $FR/dfull/rc)): D.d's closure by the full walk after the failed Require: '$ff'"
 fi
 
 # --- control ---
