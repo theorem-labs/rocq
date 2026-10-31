@@ -507,8 +507,10 @@ class Fixture:
     def check_inline_refusals(self, reg):
         """`inline_convert`: the converter exits 1 and writes nothing when the
         object's opaque proofs are not the ones the record names (one byte
-        changed) or the object is absent, and returns a record that names no
-        object byte for byte."""
+        changed), when the object is absent, and when another binary wrote
+        the record (its header's `toolchain.binary` differs from the running
+        one: the stored terms are that binary's Marshal values); and it
+        returns a record that names no object byte for byte."""
         src = self.spec["files"][0]
         work = self.out / "inline-refusals"
         if work.exists():
@@ -524,16 +526,23 @@ class Fixture:
             return
         data[pos + length // 2] ^= 0xFF
         changed.write_bytes(bytes(data))
-        for vo, why in ((changed, "changed"), (work / "absent.vo", "missing")):
-            out = work / ("out-%s.proof-record.jsonl" % why)
-            res = self.rocq.inline(record, vo, out, work)
-            self.log("inline-refusal-%s" % why, res)
+        foreign = work / "foreign.proof-record.jsonl"
+        lines = record.read_text().splitlines()
+        header = json.loads(lines[0])
+        header["toolchain"]["binary"] = "0" * 32
+        foreign.write_text("".join(l + "\n" for l in [json.dumps(header, separators=(",", ":"))] + lines[1:]))
+        cases = ((record, changed, "changed"), (record, work / "absent.vo", "missing"),
+                 (foreign, vo_src(reg, src), "another binary"))
+        for rec, vo, why in cases:
+            out = work / ("out-%s.proof-record.jsonl" % why.replace(" ", "-"))
+            res = self.rocq.inline(rec, vo, out, work)
+            self.log("inline-refusal-%s" % why.replace(" ", "-"), res)
             if res["rc"] != 1 or why not in res["err"]:
-                self.fail("rocq proof-record-inline with a %s .vo exited %d, wanted 1 naming %r: %s"
+                self.fail("rocq proof-record-inline with %s exited %d, wanted 1 naming %r: %s"
                           % (why, res["rc"], why, last_line(res)))
             if out.exists():
-                self.fail("rocq proof-record-inline with a %s .vo still wrote %s" % (why, out.name))
-        if sorted(p.name for p in work.iterdir()) != ["changed.vo"]:
+                self.fail("rocq proof-record-inline with %s still wrote %s" % (why, out.name))
+        if sorted(p.name for p in work.iterdir()) != ["changed.vo", foreign.name]:
             self.fail("the refused conversions left files behind: %s" % sorted(p.name for p in work.iterdir()))
         inline = work / "inline.proof-record.jsonl"
         again = work / "again.proof-record.jsonl"
@@ -1042,12 +1051,17 @@ def probe(rocq, spec, out, what):
     if what == "csdp":
         return None if shutil.which("csdp") else "no csdp in PATH"
     if what == "native":
+        # A Rocq built without native code still accepts native_compute: it
+        # warns (native-compiler-disabled) and runs vm_compute instead, so a
+        # probe that only checks the exit code passes there and the fixture
+        # then fails for want of native code.  The warning is made an error,
+        # so the probe passes only where native_compute really runs.
         work = out / "probe-native"
         work.mkdir(parents=True, exist_ok=True)
         src = "NativeProbe.v"
         (work / src).write_text("Lemma probe : 2 + 2 = 4.\nProof. native_compute. reflexivity. Qed.\n")
         res = rocq.run([str(rocq.bin / "rocq"), "compile", "-q", "-native-compiler", "ondemand",
-                        "-Q", ".", "Probe", src], work)
+                        "-w", "+native-compiler-disabled", "-Q", ".", "Probe", src], work)
         if res["rc"] != 0:
             return "native_compute does not run here: " + last_line(res)
         return None

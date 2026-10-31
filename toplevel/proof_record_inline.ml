@@ -13,6 +13,8 @@ let usage = "Usage: rocq proof-record-inline RECORD VO OUT\n\
 Write to OUT the proof record RECORD with every stored term that refers to\n\
 the opaque proofs of the object file VO put back inline, and the trailer's\n\
 vo_opaques set to null. VO is the object the record was written beside.\n\
+A record that another rocq binary wrote is refused. No proof line is\n\
+dropped: remove the lines of proofs that must not ship before this.\n\
 OUT may be RECORD. On an error, nothing is written.\n"
 
 let fail fmt = Printf.kfprintf (fun _ -> exit 1) stderr ("rocq proof-record-inline: " ^^ fmt ^^ "\n%!")

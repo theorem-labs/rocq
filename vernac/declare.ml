@@ -2634,9 +2634,23 @@ let inline_blob table blob =
        | s -> Ok (Proof_record.encode_blob s)
        | exception e -> Error ("the inline term cannot be marshalled: " ^ Printexc.to_string e))
 
-let inline_proof_record ~record ~vo =
-  match Proof_record.parse_string record with
-  | exception Proof_record.Parse_error why -> Error ("not a proof record: " ^ why)
+(* The stored blob is a Marshal value of this binary's types, so only the
+   binary that wrote a record may read it back and write it again: a record
+   another binary wrote is refused, whatever it holds.
+
+   The converter has no filter: it puts back EVERY term the record refers
+   to. A caller that must not hand out some proofs of the file (a task cut
+   that removed them) drops their lines from the record BEFORE it calls this
+   (grading-tools fast_grade._cut_proof_records, re-checked by
+   refuse_removed_proof_lines); that order must hold. *)
+let written_by_another_binary (file : Proof_record.file) =
+  let toolchain : Proof_record.toolchain = file.Proof_record.header.Proof_record.toolchain in
+  let recorded = toolchain.Proof_record.binary and here = Proof_record_env.binary_digest () in
+  if String.equal recorded here && not (String.equal here "unknown") then None
+  else Some (Printf.sprintf "the record was written by another binary (%s); this binary is %s" recorded here)
+
+let inline_references ~record ~vo (file : Proof_record.file) =
+  match file with
   | { Proof_record.trailer = { Proof_record.vo_opaques = None; _ }; _ } -> Ok record
   | { Proof_record.header; proofs; trailer = { Proof_record.vo_opaques = Some sha256; _ } as trailer } ->
     match Library.registered_opaques ~file:vo ~sha256 with
@@ -2661,6 +2675,14 @@ let inline_proof_record ~record ~vo =
         List.iter (Proof_record.output_proof b) proofs;
         Proof_record.output_trailer b { trailer with Proof_record.vo_opaques = None };
         Ok (Buffer.contents b)
+
+let inline_proof_record ~record ~vo =
+  match Proof_record.parse_string record with
+  | exception Proof_record.Parse_error why -> Error ("not a proof record: " ^ why)
+  | file ->
+    match written_by_another_binary file with
+    | Some why -> Error why
+    | None -> inline_references ~record ~vo file
 
 (* The universe state the declaration takes: the global graph is this
    compile's, at the closer, as it was at the proof's start (no sentence of
