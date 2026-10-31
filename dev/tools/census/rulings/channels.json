@@ -147,6 +147,7 @@
     "read:vernac/proof_record_env.ml:3/variable_opacity": {"row": "3"},
     "read:vernac/proof_record_env.ml:4/typing_flags": {"row": "4"},
     "read:vernac/proof_record_env.ml:13/options": {"row": "13"},
+    "read:vernac/proof_record_env.ml:13/option_tables": {"row": "13"},
     "read:vernac/proof_record_env.ml:13/warnings": {"row": "13"},
     "read:vernac/proof_record_env.ml:13/warnings_registry": {"row": "13"},
     "read:vernac/proof_record_env.ml:M3/generalizable": {"row": "M3"},
