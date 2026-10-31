@@ -170,8 +170,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
                        ()
                      | [] ->
                        Proof_recorder.drop_all_proofs ();
-                       Proof_record_env.drop_universe_frames ();
-                       Proof_replay.abandon ()
+                       Proof_record_env.drop_universe_frames ()
                      | live ->
                        let base = match String.rindex_opt held '.' with
                          | None -> held
@@ -183,6 +182,16 @@ let load_vernac_core ~echo ~check ~state ?source file =
                            ~detail:(held ^ " vs " ^ String.concat "," (List.map Names.Id.to_string live));
                          Proof_replay.abandon ()
                        end);
+                  (* Replay counts the open proofs for itself, and must see
+                     the same drops: a grade compile has no recorder. A stack
+                     left empty after a sentence holds no proof. After a
+                     nested proof's closer the stack holds the proof around
+                     it again (fixture dropped_proof_stack, C.v). Without
+                     [check] the STM did not run the sentence, so the stack
+                     says nothing. *)
+                  if check && Proof_replay.proof_open ()
+                     && not (Vernacstate.Declare.there_are_pending_proofs () [@ocaml.warning "-3"])
+                  then Proof_replay.drop_all_proofs ();
                   v)) ())
       ()
       (fun () ->

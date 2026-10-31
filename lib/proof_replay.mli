@@ -132,6 +132,14 @@ val close_proof : unit -> unit
 (** A proof ended (its closer or its [Abort]). A proof opened inside another
     one is part of it: it is not counted, and its end only closes it. *)
 
+val proof_open : unit -> bool
+(** Whether a proof is open, as {!open_proof} and {!close_proof} count. *)
+
+val drop_all_proofs : unit -> unit
+(** The proof stack holds no proof any more ([Abort All], [Reset], a
+    [Succeed] around a statement): no proof is open from now on, and the
+    candidate, if any, is abandoned. *)
+
 val register_plugin_audit : (string -> bool) -> unit
 (** [f name] says whether the loaded ML plugin [name] (a findlib package) is
     one this tree builds. While a plugin [f] rejects is loaded, no proof is
