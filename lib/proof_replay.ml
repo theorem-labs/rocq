@@ -1108,6 +1108,13 @@ let open_proof ~name ~statement ~position ~toolchain_key =
     counts.n_proofs <- counts.n_proofs + 1;
     (match Hashtbl.find_opt st.f_index name with
      | None -> counts.m_missing <- counts.m_missing + 1; outcome name "missing_record" None
+     | Some _ when Proof_recorder.in_load () ->
+       (* A [Load]ed file's proof runs inside the [Load] sentence, where the
+          toplevel never decides it. A candidate set here would stay open
+          after the [Load], and the toplevel would then keep the next
+          sentences as this proof's (INFRA-361 gap 2). *)
+       counts.m_ineligible <- counts.m_ineligible + 1;
+       outcome name "ineligible" (Some ("load", "inside_load"))
      | Some _ when opens_before_late_command st ->
        counts.m_ineligible <- counts.m_ineligible + 1;
        outcome name "ineligible" (Some ("rebind", "before_late_command"))

@@ -87,6 +87,16 @@ val generation : unit -> int
     number changes, so that it digests each key once per proof instead of
     once per lookup. *)
 
+val loading : (unit -> 'a) -> 'a
+(** [loading f] runs [f], the sentences of a [Load]ed file. *)
+
+val in_load : unit -> bool
+(** Whether a [Load]ed file's sentences run now. They run inside the one
+    sentence that loads the file, so the toplevel keeps none of them as a
+    proof's sentences and decides no proof among them: a proof that opens
+    here is ineligible (reason ["load"]), and replay never takes it as a
+    candidate. *)
+
 (** {6 The compile} *)
 
 val start :

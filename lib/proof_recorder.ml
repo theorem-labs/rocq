@@ -126,6 +126,21 @@ let current_name () =
   | Some { f_proof = Some p; _ } -> Some p.p_name
   | Some { f_proof = None; _ } | None -> None
 
+(* The [Load]s that run now. A loaded file's sentences run inside the one
+   sentence that loads it, so the toplevel keeps none of them as a proof's
+   sentences (key item 1) and decides no proof among them (INFRA-361 gap 2). *)
+let load_depth = ref 0
+
+let in_load () = !load_depth > 0
+
+let loading f =
+  incr load_depth;
+  match f () with
+  | v -> decr load_depth; v
+  | exception e ->
+    let bt = Printexc.get_raw_backtrace () in
+    decr load_depth; Printexc.raise_with_backtrace e bt
+
 let set_recording st =
   recording := st.f_suspended = 0 && st.f_proof <> None
 

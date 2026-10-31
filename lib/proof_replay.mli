@@ -218,8 +218,11 @@ val open_proof :
   unit
 (** Called where the recorder's [open_proof] is. It looks the proof up by
     name and keeps it as the open candidate when its name, statement,
-    position and toolchain key all match and it stored a term. The
-    arguments are computed only when a record is loaded. *)
+    position and toolchain key all match and it stored a term. A proof that
+    opens while a [Load]ed file runs ({!Proof_recorder.in_load}) is never a
+    candidate (outcome [ineligible], channel ["load"]): the toplevel decides
+    a proof only among the sentences it reads itself. The arguments are
+    computed only when a record is loaded. *)
 
 val candidate_open : unit -> bool
 (** Whether the open proof has a candidate: the sentences and the closer
