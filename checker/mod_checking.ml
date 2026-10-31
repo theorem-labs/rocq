@@ -310,6 +310,66 @@ let rec collect_constants_without_body sign mp accu =
   | NoFunctor struc ->
      List.fold_left (fun s (lab,mb) -> collect_field s lab mb) accu struc
 
+(* The Axioms section of the summary folds over the final environment, which
+   holds a sealed module's interface and not its implementation, so an axiom
+   declared inside [Module M : T] is invisible to it.
+   [register_opacified_constant] above recovers one that a sealed constant's
+   own body names, but a helper that also lives in the implementation has a
+   body, and the fold over its uses keeps only bodyless constants, so the
+   axioms behind such a helper are lost (dispatch://BET-245). The walk below
+   records every axiom declared in an implementation the environment does
+   not hold, whether or not a proof reaches it, which is what the fold does
+   for the axioms it can see.
+
+   It reports an axiom where it is declared, which for a functor's field is
+   the module each application makes ([App.in_f]), the name the environment
+   fold and [Print Assumptions] both use. Upstream rocq-prover/rocq#22623
+   makes the other choice and reports [F.in_f]; keeping ours is deliberate,
+   for the two joins in the BET grader (TrueJudge.lean, grade.py).
+
+   It would rather leave an axiom unreported, which both joins fail closed
+   on, than report a name no [Print Assumptions] prints, which they read as
+   a smuggled assumption. So it stops at a module an expression defines (an
+   application and [Module M : T := E] alike): all it has there is that
+   module's type, which says nothing about what the expression leaves
+   assumed, whether in a field of its own or in a structure under it that
+   the type, not the expression, declares. The known cost is that an axiom
+   reached that way goes unreported: a functor's own axiom through an
+   application inside a seal, the body of a sealed functor, a seal a functor
+   body declares. Where a sealed implementation reaches a sibling's axiom
+   through an [Include], an alias or an ascription of it, the two accounts
+   name one axiom twice: the walk reports it where it is declared, while
+   [Print Assumptions] names the path the proof wrote. That pair fails both
+   joins closed, as it does without this walk, where the axiom goes
+   unreported instead. *)
+let rec record_sealed_axioms ~hidden mp mb =
+  match mod_type mb, mod_expr mb with
+  | MoreFunctor _, _ ->
+    (* A functor: its fields have no name of their own, see above. *)
+    ()
+  | NoFunctor _, Struct (_, impl) ->
+    (* [Module M : T. ... End M]: a structure of its own, which the
+       environment replaces with T, so all of it is hidden. *)
+    record_sealed_structure ~hidden:true mp impl
+  | NoFunctor _, Algebraic _ ->
+    (* [Module M := E] and [Module M : T := E], see above. *)
+    ()
+  | NoFunctor struc, (Abstract | FullStruct) ->
+    (* The type is all there is of this module ([Declare Module M : T] or a
+       plain [Module M]), and the environment holds it unless an enclosing
+       implementation hides it. *)
+    record_sealed_structure ~hidden mp struc
+
+and record_sealed_structure ~hidden mp struc =
+  let record_field (lab, field) = match field with
+  | SFBconst cb ->
+    if hidden && not (Declareops.constant_has_body cb) then
+      Check_stat.record_axiom (Constant.make2 mp lab)
+  | SFBmodule msb -> record_sealed_axioms ~hidden (MPdot (mp, lab)) msb
+  | SFBmind _ | SFBrules _ | SFBmodtype _ -> ()
+  in
+  List.iter record_field struc
+
 let rec check_mexpr env opac mse mp_mse res = match mse with
   | MEident mp ->
     let mb = lookup_module mp env in
@@ -382,10 +442,15 @@ and check_structure_field env opac mp lab res opacify = function
   | SFBconst cb ->
       let kn = KerName.make mp lab in
       let kn = Mod_subst.constant_of_delta_kn res kn in
+      let () = Check_stat.record_constant kn cb in
       check_constant_declaration env opac kn cb (Cset.mem kn opacify)
   | SFBmind mib ->
       let kn = KerName.make mp lab in
       let kn = Mod_subst.mind_of_delta_kn res kn in
+      let () =
+        let indices_matter = (Environ.typing_flags env).indices_matter in
+        Check_stat.record_inductive ~indices_matter kn mib
+      in
       CheckInductive.check_inductive env kn mib, opac
   | SFBmodule msb ->
       let mp = MPdot(mp, lab) in
@@ -412,7 +477,13 @@ and check_signature env opac sign mp_mse res opacify = match sign with
       opac
 
 let check_module env opac mp mb =
-  NewProfile.profile "check_module"
-    ~args:(fun () -> [("name", `String (ModPath.to_string mp))])
-    (fun () -> check_module env opac mp mb Cset.empty)
-    ()
+  let opac =
+    NewProfile.profile "check_module"
+      ~args:(fun () -> [("name", `String (ModPath.to_string mp))])
+      (fun () -> check_module env opac mp mb Cset.empty)
+      ()
+  in
+  let () =
+    if Check_stat.summary_enabled () then record_sealed_axioms ~hidden:false mp mb
+  in
+  opac

@@ -512,6 +512,7 @@ let run senv =
 
 let main () =
   let senv = init() in
+  Check_stat.start_summary !Check_stat.output_context;
   let senv, opac = run senv in
   Check_stat.stats (Safe_typing.env_of_safe_env senv) opac;
   exit 0
