@@ -50,6 +50,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -277,6 +278,32 @@ def publish_records(spec, reg, records, convert=None, mutation=None):
     return published, None
 
 
+_REPLAY_FIELD = re.compile(rb'"replay":(?:null|"[^"\\]*")')
+_VO_OPAQUES_FIELD = re.compile(rb'"vo_opaques":"[0-9a-f]{64}"')
+
+
+def inline_bytes_kept(before, after):
+    """None when `after` (what `rocq proof-record-inline` wrote for the record
+    `before`) keeps every byte of `before` but each proof line's stored term
+    and the trailer's `vo_opaques`, which must become null; else why not.
+    Bytes, not parsed JSON: one serializer writes both, so nothing else may
+    move (grading-tools `fast_grade._inline_record` checks the same)."""
+    old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    if len(old) != len(new) or len(old) < 2:
+        return "%d lines, the input has %d" % (len(new), len(old))
+    if new[0] != old[0]:
+        return "the header line changed"
+    trailer, count = _VO_OPAQUES_FIELD.subn(b'"vo_opaques":null', old[-1])
+    if count != 1 or new[-1] != trailer:
+        return "the trailer changed beyond vo_opaques becoming null"
+    for n, (a, b) in enumerate(zip(old[1:-1], new[1:-1]), 2):
+        a2, ca = _REPLAY_FIELD.subn(b'"replay":', a)
+        b2, cb = _REPLAY_FIELD.subn(b'"replay":', b)
+        if ca != 1 or cb != 1 or a2 != b2:
+            return "line %d changed beyond its stored term" % n
+    return None
+
+
 def parse_record(path):
     """The record file as (header, [proof...], trailer).  Raises ValueError."""
     header, proofs, trailer = None, [], None
@@ -471,27 +498,24 @@ class Fixture:
 
     def inline_record(self, record, vo, target):
         """`inline_convert`: `rocq proof-record-inline` of the registration's
-        record and `.vo`, written to `target`, then checked: the same header,
-        the same proofs but for their stored terms, a trailer that names no
-        `.vo`, and a new stored term for exactly the proofs `inline_terms`
-        names (those whose term referred to the `.vo`)."""
+        record and `.vo`, written to `target`, then checked (`inline_bytes_kept`):
+        every byte but the stored terms and the trailer's `vo_opaques` is the
+        input's, `vo_opaques` is null, and a new stored term for exactly the
+        proofs `inline_terms` names (those whose term referred to the `.vo`)."""
         res = self.rocq.inline(record, vo, target, self.out)
         self.log("inline-%s" % target.name, res)
         if res["rc"] != 0:
             return "rocq proof-record-inline %s exited %d: %s" % (record.name, res["rc"], last_line(res))
         try:
-            header, proofs, trailer = parse_record(record)
-            iheader, iproofs, itrailer = parse_record(target)
+            _header, proofs, trailer = parse_record(record)
+            _iheader, iproofs, _itrailer = parse_record(target)
         except (ValueError, json.JSONDecodeError) as exc:
             return "the inline record of %s does not parse: %s" % (record.name, exc)
         if trailer.get("vo_opaques") is None:
             return "%s names no .vo: an inline_convert fixture registers with -proof-record-vo-ref" % record.name
-        if itrailer.get("vo_opaques") is not None:
-            return "the inline record of %s still names a .vo (vo_opaques %r)" % (record.name, itrailer["vo_opaques"])
-        if iheader != header or dict(itrailer, vo_opaques=None) != dict(trailer, vo_opaques=None):
-            return "the inline record of %s changed its header or its trailer beyond vo_opaques" % record.name
-        if [dict(p, replay=None) for p in iproofs] != [dict(p, replay=None) for p in proofs]:
-            return "the inline record of %s changed a proof beyond its stored term" % record.name
+        err = inline_bytes_kept(record.read_bytes(), target.read_bytes())
+        if err:
+            return "the inline record of %s: %s" % (record.name, err)
         changed = [p["name"] for p, q in zip(proofs, iproofs) if p.get("replay") != q.get("replay")]
         wanted = self.spec.get("inline_terms")
         if wanted is not None and changed != wanted:
@@ -513,36 +537,40 @@ class Fixture:
             shutil.rmtree(work)
         work.mkdir(parents=True)
         record = record_src(reg, src)
-        changed = work / "changed.vo"
+        flipped = work / "flipped.vo"
         data = bytearray(vo_src(reg, src).read_bytes())
         try:
-            pos, length = opaques_span(bytes(data), changed.name)
+            pos, length = opaques_span(bytes(data), flipped.name)
         except ValueError as exc:
             self.fail(str(exc))
             return
         data[pos + length // 2] ^= 0xFF
-        changed.write_bytes(bytes(data))
+        flipped.write_bytes(bytes(data))
         foreign = work / "foreign.proof-record.jsonl"
         lines = record.read_text().splitlines()
         header = json.loads(lines[0])
         header["toolchain"]["binary"] = "0" * 32
         foreign.write_text("".join(l + "\n" for l in [json.dumps(header, separators=(",", ":"))] + lines[1:]))
-        cases = ((record, changed, "changed"), (record, work / "absent.vo", "missing"),
-                 (foreign, vo_src(reg, src), "another binary"))
-        for rec, vo, why in cases:
-            out = work / ("out-%s.proof-record.jsonl" % why.replace(" ", "-"))
+        # The words Rocq writes for each refusal (`Library.registered_opaques`, `written_by_another_binary`),
+        # matched with what follows them so a file name cannot satisfy the check.
+        cases = ((record, flipped, "changed", ": changed (the record names opaque proofs"),
+                 (record, work / "absent.vo", "missing", ": missing (the record names opaque proofs"),
+                 (foreign, vo_src(reg, src), "another-binary", "the record was written by another binary (0000"))
+        for rec, vo, why, text in cases:
+            out = work / ("out-%s.proof-record.jsonl" % why)
             res = self.rocq.inline(rec, vo, out, work)
-            self.log("inline-refusal-%s" % why.replace(" ", "-"), res)
-            if res["rc"] != 1 or why not in res["err"]:
-                self.fail("rocq proof-record-inline with %s exited %d, wanted 1 naming %r: %s"
-                          % (why, res["rc"], why, last_line(res)))
+            self.log("inline-refusal-%s" % why, res)
+            if res["rc"] != 1 or text not in res["err"]:
+                self.fail("rocq proof-record-inline (%s) exited %d, wanted 1 saying %r: %s"
+                          % (why, res["rc"], text, last_line(res)))
             if out.exists():
-                self.fail("rocq proof-record-inline with %s still wrote %s" % (why, out.name))
-        if sorted(p.name for p in work.iterdir()) != ["changed.vo", foreign.name]:
+                self.fail("rocq proof-record-inline (%s) still wrote %s" % (why, out.name))
+        if sorted(p.name for p in work.iterdir()) != sorted([flipped.name, foreign.name]):
             self.fail("the refused conversions left files behind: %s" % sorted(p.name for p in work.iterdir()))
         inline = work / "inline.proof-record.jsonl"
         again = work / "again.proof-record.jsonl"
         first = self.rocq.inline(record, vo_src(reg, src), inline, work)
+        self.log("inline-identity-first", first)
         second = self.rocq.inline(inline, work / "absent.vo", again, work)
         self.log("inline-identity", second)
         if first["rc"] != 0 or second["rc"] != 0:
@@ -550,6 +578,45 @@ class Fixture:
                       % (second["rc"], first["rc"], last_line(second if first["rc"] == 0 else first)))
         elif inline.read_bytes() != again.read_bytes():
             self.fail("rocq proof-record-inline changed a record that names no .vo")
+        self.check_filtered_conversion(reg, work)
+
+    def check_filtered_conversion(self, reg, work):
+        """`inline_convert`: the input a task cut hands the converter is a
+        FILTERED record, the registration's lines minus the proofs the cut
+        removed, verbatim, with the trailer's `proof_count` digits rewritten
+        (grading-tools `fast_grade._filter_proof_record`).  Drop the first
+        proof `inline_terms` names (its term refers to the `.vo`), convert,
+        and require that the dropped proof stays absent and every byte but
+        the stored terms and `vo_opaques` is the filtered input's."""
+        src = self.spec["files"][0]
+        raw = record_src(reg, src).read_bytes().splitlines(keepends=True)
+        names = [json.loads(line).get("name") for line in raw[1:-1]]
+        wanted = self.spec.get("inline_terms") or []
+        if not wanted or wanted[0] not in names:
+            self.fail("filtered conversion: no proof of %s that inline_terms names to drop" % src)
+            return
+        drop = names.index(wanted[0])
+        kept = [line for i, line in enumerate(raw[1:-1]) if i != drop]
+        trailer, count = re.subn(rb'"proof_count":\d+', b'"proof_count":%d' % len(kept), raw[-1])
+        if count != 1:
+            self.fail("filtered conversion: the trailer has %d proof_count fields" % count)
+            return
+        filtered = work / "filtered.proof-record.jsonl"
+        filtered.write_bytes(b"".join([raw[0], *kept, trailer]))
+        out = work / "filtered-inline.proof-record.jsonl"
+        res = self.rocq.inline(filtered, vo_src(reg, src), out, work)
+        self.log("inline-filtered", res)
+        if res["rc"] != 0:
+            self.fail("rocq proof-record-inline of a filtered record exited %d: %s" % (res["rc"], last_line(res)))
+            return
+        converted = [json.loads(line).get("name") for line in out.read_bytes().splitlines()[1:-1]]
+        if converted != [n for i, n in enumerate(names) if i != drop]:
+            self.fail("the converted filtered record has proofs %s; %s was dropped" % (converted, wanted[0]))
+        err = inline_bytes_kept(filtered.read_bytes(), out.read_bytes())
+        if err:
+            self.fail("the converted filtered record: %s" % err)
+        else:
+            self.notes.append("a filtered record (%s dropped) converts with every other byte kept" % wanted[0])
 
     def check_records(self, reg_tree):
         """Parse every registration record, then apply fixture assertions."""
