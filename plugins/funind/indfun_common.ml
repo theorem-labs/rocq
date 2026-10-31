@@ -241,9 +241,11 @@ let pr_table env sigma tb =
 
 let in_Function : function_info -> Libobject.obj =
   let open Libobject in
+  (* Interface key: function_info holds only kernel names and a bool. *)
   declare_object
-  @@ superglobal_object "FUNCTIONS_DB" ~cache:cache_Function
-       ~subst:(Some subst_Function) ~discharge:discharge_Function
+    { (superglobal_object "FUNCTIONS_DB" ~cache:cache_Function
+         ~subst:(Some subst_Function) ~discharge:discharge_Function)
+      with interface_key = Key_as_is }
 
 let find_or_none id =
   try

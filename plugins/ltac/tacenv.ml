@@ -173,7 +173,8 @@ let inMD : tacdef -> obj =
      load_function = load_md;
      open_function = filtered_open open_md;
      subst_function = subst_md;
-     classify_function = classify_md}
+     classify_function = classify_md;
+     interface_key = Key_stripped (fun d -> { d with expr = Tacstrip.strip_tactic d.expr })}
 
 let register_ltac for_ml local ?deprecation id tac =
   Lib.add_leaf (inMD {local; id; for_ml; expr=tac; depr=deprecation})
@@ -217,7 +218,8 @@ let inReplace : tacreplace -> obj =
         module containing the redef instead of a parent? *)
      open_function = filtered_open open_replace;
      subst_function = subst_replace;
-     classify_function = classify_replace}
+     classify_function = classify_replace;
+     interface_key = Key_stripped (fun r -> { r with repl_expr = Tacstrip.strip_tactic r.repl_expr })}
 
 let redefine_ltac repl_local repl_tac repl_expr =
   Lib.add_leaf (inReplace {repl_local; repl_tac; repl_expr})

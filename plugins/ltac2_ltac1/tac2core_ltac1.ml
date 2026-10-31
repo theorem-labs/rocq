@@ -125,6 +125,12 @@ let ltac1_core n = core_prefix Tac2env.ltac1_prefix n
 let t_ltac1 = ltac1_core "t"
 let ltac1_lambda = ltac1_core "lambda"
 
+(* The payload of an ltac1:(...) or ltac1val:(...) quotation: the bound
+   identifiers hold no location, the tactic goes through the stripper of
+   Ltac1's tactic argument. *)
+let strip_ltac1_quotation (ids, tac) =
+  (ids, Genstrip.strip Ltac_plugin.Tacarg.wit_tactic tac)
+
 let () =
   let intern ist (ids, tac) =
     let map { CAst.v = id } = id in
@@ -181,7 +187,8 @@ let () =
     ml_print = print;
     ml_raw_print = raw_print;
   } in
-  define_ml_object Tac2quote_ltac1.wit_ltac1 obj
+  define_ml_object Tac2quote_ltac1.wit_ltac1 obj;
+  define_ml_strip Tac2quote_ltac1.wit_ltac1 strip_ltac1_quotation
 
 let () =
   let open Ltac_plugin in
@@ -238,7 +245,8 @@ let () =
     ml_print = print;
     ml_raw_print = raw_print;
   } in
-  define_ml_object Tac2quote_ltac1.wit_ltac1val obj
+  define_ml_object Tac2quote_ltac1.wit_ltac1val obj;
+  define_ml_strip Tac2quote_ltac1.wit_ltac1val strip_ltac1_quotation
 
 (** Ltac2 in Ltac1 *)
 
@@ -310,6 +318,10 @@ let () =
 let () = Gensubst.register_subst0 wit_ltac2in1 (fun s (ids, e) -> ids, Tac2intern.subst_expr s e)
 let () = Gensubst.register_subst0 wit_ltac2in1_val Tac2intern.subst_expr
 
+(* The bound identifiers hold no location. *)
+let () = Genstrip.register_strip0 wit_ltac2in1 (fun (ids, e) -> (ids, Tac2strip.glb_tacexpr e))
+let () = Genstrip.register_strip0 wit_ltac2in1_val Tac2strip.glb_tacexpr
+
 let () =
   let create name wit =
     let e = Tac2entries.Pltac.tac2expr_in_env in
@@ -340,6 +352,8 @@ let () =
   let subst_fun s v = v in
   let () = Genintern.register_intern0 wit_ltac2_val intern_fun in
   let () = Gensubst.register_subst0 wit_ltac2_val subst_fun in
+  (* the argument is unit *)
+  let () = Genstrip.register_strip0 wit_ltac2_val (fun () -> ()) in
   (* These are bound names and not relevant *)
   let tac_id = Id.of_string "F" in
   let arg_id = Id.of_string "X" in

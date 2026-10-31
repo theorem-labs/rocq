@@ -143,6 +143,7 @@ type argument_ext = {
   argext_interp : (string option * code) option;
   argext_glob : code option;
   argext_subst : code option;
+  argext_strip : code option;
   argext_rprinter : code option;
   argext_gprinter : code option;
   argext_tprinter : code option;

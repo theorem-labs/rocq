@@ -81,7 +81,12 @@ let declare_tactic_option ?default name =
         (* can't simple_open: crappy behaviour when superglobal *)
         open_function = filtered_open import;
         classify_function = classify;
-        subst_function = subst}
+        subst_function = subst;
+        (* A locality and a tactic (Program Obligation Tactic and the
+           like): only the tactic holds source locations. *)
+        interface_key =
+          Key_stripped (fun (local, tac) ->
+              (local, Option.map Gentactic.strip tac))}
   in
   let put ?loc local tac =
     let () = match local with

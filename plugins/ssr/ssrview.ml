@@ -48,9 +48,11 @@ module AdaptorDb = struct
 
   let in_db =
     let open Libobject in
-    declare_object @@ global_object_nodischarge "VIEW_ADAPTOR_DB"
+    (* Interface key: the kind holds no location; the term is a glob_constr. *)
+    let strip_adaptor (k, t) = (k, GlobStrip.glob_constr t) in
+    declare_object { (global_object_nodischarge "VIEW_ADAPTOR_DB"
       ~cache:cache_adaptor
-      ~subst:(Some subst_adaptor)
+      ~subst:(Some subst_adaptor)) with interface_key = Key_stripped strip_adaptor }
 
   let declare kind terms =
     List.iter (fun term -> Lib.add_leaf (in_db (kind,term)))

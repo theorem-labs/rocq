@@ -680,6 +680,15 @@ let print_ast fmt arg =
   | None, None ->
     fprintf fmt "@[Tacentries.ArgSubstFun (fun s v -> v)@]"
   in
+  let strip fmt () = match arg.argext_strip, arg.argext_glob, arg.argext_type with
+  | Some f, _, _ ->
+    fprintf fmt "@ ~strip:@[(Tacentries.ArgStripFun (%a))@]" print_code f
+  | None, None, Some t ->
+    fprintf fmt "@ ~strip:@[(Tacentries.ArgStripWit (%a))@]" print_wit t
+  | None, Some _, _ | None, None, None ->
+    (* Tacentries.argument_extend's default: the value as it is. *)
+    ()
+  in
   let interp fmt () = match arg.argext_interp, arg.argext_type with
   | Some (None, f), (None | Some _) ->
     fprintf fmt "@[Tacentries.ArgInterpSimple (%a)@]" print_code f
@@ -706,7 +715,7 @@ let print_ast fmt arg =
   | None -> default_printer
   in
   let pr fmt () =
-    fprintf fmt "Tacentries.argument_extend ~plugin:\"%s\" ~name:%a ~ignore_kw:%a@ @[{@\n\
+    fprintf fmt "Tacentries.argument_extend ~plugin:\"%s\" ~name:%a ~ignore_kw:%a%a@ @[{@\n\
       Tacentries.arg_parsing =@ %a;@\n\
       Tacentries.arg_tag = @[%a@];@\n\
       Tacentries.arg_intern = @[%a@];@\n\
@@ -716,6 +725,7 @@ let print_ast fmt arg =
       (force_is_plugin ~what:"ARGUMENT EXTEND" ())
       print_string name
       print_ignore_kw ()
+      strip ()
       VernacArgumentExt.print_rules (name, arg.argext_rules)
       pr_tag arg.argext_type
       intern () subst () interp () print_code rpr print_code gpr print_code tpr

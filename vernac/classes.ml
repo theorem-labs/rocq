@@ -127,7 +127,10 @@ let instance_input : instance -> obj =
       open_function = filtered_open ~cat:Hints.hint_cat open_instance;
       classify_function = classify_instance;
       discharge_function = discharge_instance;
-      subst_function = subst_instance }
+      subst_function = subst_instance;
+      (* Global references, a priority, a kernel pattern
+         ([Pattern.constr_pattern]) and a locality: no source location. *)
+      interface_key = Key_as_is }
 
 module Event = struct
   type t =
@@ -253,6 +256,9 @@ let class_input : typeclass -> obj =
       classify_function = (fun x -> Substitute);
       discharge_function = (fun a -> Some (discharge_class a));
       subst_function = subst_class;
+      (* Universes, global references, kernel contexts, method names and
+         constants, and flags: no source location. *)
+      interface_key = Key_as_is;
     }
 
 let add_class cl =

@@ -346,6 +346,12 @@ let fresh_memo () = { entries = GlobRef.Map_env.empty; weight = 0; verified = Wa
 
 let memo = ref (fresh_memo ())
 
+(** [Some stop] while {!reach} walks: no entry is read or recorded (the walk
+    is not a query of the reuse above), and an object for which [stop] holds
+    is not walked: it is put in [data] with no edges (see {!reach}). [None]
+    for every other walk, which is then exactly as without this. *)
+let walk_stop : (GlobRef.t -> bool) option ref = ref None
+
 (** The weight of the heaviest query in the environment before the current
     one, and of the current query. They only decide when the entries are
     cleared, so an interrupted update that leaves them stale costs reuse or
@@ -469,7 +475,8 @@ let block_entries members contents entries =
 let record_block mind mib contents =
   let members = block_members mind mib in
   let cached r = GlobRef.Set_env.mem r members || has_entry r in
-  if GlobRef.Set_env.for_all user_name_unrecorded members
+  if Option.is_empty !walk_stop
+     && GlobRef.Set_env.for_all user_name_unrecorded members
      && GlobRef.Set_env.for_all cached contents then
     let m = !memo in
     let entries, weight = block_entries members contents m.entries in
@@ -627,26 +634,38 @@ let no_cooking = {
   stays_const = (fun _ -> true);
 }
 
+(* The constant whose opaque body [get_constant_body] is reading through the
+   walk's accessor, while that accessor runs ([reading_constant]). *)
+let reading : Constant.t option ref = ref None
+
+let reading_constant () = !reading
+
 let get_constant_body access kn =
   let cb = lookup_constant kn in
   match cb.const_body with
   | Undef _ | Primitive _ | Symbol _ -> None
   | Def c -> Some (no_discharge c)
   | OpaqueDef o ->
-    (* A failure to read the table is what [Global.force_proof] below would
-       meet and report as a missing body, so it is treated as one here too. *)
-    match (try access.Global.access_uncooked_proof o
-           with e when CErrors.noncritical e -> None) with
-    | Some _ as ans -> ans
-    | None ->
-      (* either the body could not be read -- [force_proof] then fails too --
-         or the discharge cannot be left undone, and we pay for it *)
-      match Global.force_proof access o with
-      | c, _ -> Some (no_discharge c)
-      | exception e when CErrors.noncritical e ->
-        (* missing delayed body, e.g. in vok mode *)
-        incr unreplayable_steps;
-        None
+    reading := Some kn;
+    let read () =
+      (* A failure to read the table is what [Global.force_proof] below would
+         meet and report as a missing body, so it is treated as one here too. *)
+      match (try access.Global.access_uncooked_proof o
+             with e when CErrors.noncritical e -> None) with
+      | Some _ as ans -> ans
+      | None ->
+        (* either the body could not be read -- [force_proof] then fails too --
+           or the discharge cannot be left undone, and we pay for it *)
+        match Global.force_proof access o with
+        | c, _ -> Some (no_discharge c)
+        | exception e when CErrors.noncritical e ->
+          (* missing delayed body, e.g. in vok mode *)
+          incr unreplayable_steps;
+          None
+    in
+    match read () with
+    | ans -> reading := None; ans
+    | exception e -> reading := None; raise e
 
 (* The types of the constants without a body whose walk is in progress,
    innermost first, kept on the heap like [inductive_marks]: the walk would
@@ -794,7 +813,8 @@ let[@inline never] record mark value edges obj =
     in
     shallow_result :=
       Some { wr_kind; wr_refs = edges; wr_replayable = Int.equal mark !unreplayable_steps }
-  else if Int.equal mark !unreplayable_steps && user_name_unrecorded obj
+  else if Option.is_empty !walk_stop
+     && Int.equal mark !unreplayable_steps && user_name_unrecorded obj
      && edges_have_entries obj edges
   then add_entry value edges obj
 
@@ -820,6 +840,18 @@ let[@inline never] empty_match cooking current ctx (curr, data, ax2ty) oty kn =
     try let l = GlobRef.Map_env.find obj ax2ty in GlobRef.Map_env.add obj (ty::l) ax2ty
     with Not_found -> GlobRef.Map_env.add obj [ty] ax2ty in
   (GlobRef.Set_env.add obj curr, data, ax2ty)
+
+(* An inductive block {!reach} does not walk ([walk_stop]): every member in
+   [data] with no edges, which keeps the invariant of [traverse_inductive]. *)
+let[@inline never] stopped_block mind data =
+  let none = Some GlobRef.Set_env.empty in
+  Array.fold_left_i (fun n data oib ->
+      let ind = (mind, n) in
+      let data = GlobRef.Map_env.add (GlobRef.IndRef ind) none data in
+      Array.fold_left_i (fun k data _ ->
+          GlobRef.Map_env.add (GlobRef.ConstructRef (ind, k+1)) none data)
+        data oib.mind_consnames)
+    data (lookup_mind mind).mind_packets
 
 (* The [Var], [Const], [Ind] and [Construct] arms below and the empty-match
    arm are mirrored by [fold_refs_of_type], which a replay of a constant
@@ -878,9 +910,15 @@ and traverse_node access gen bound cooking (current:GlobRef.t) ctx accu t =
 and traverse_object access (curr, data, ax2ty) body obj =
   let curr = GlobRef.Set_env.add obj curr in
   if !shallow || GlobRef.Map_env.mem obj data then (curr, data, ax2ty)
-  else match replay obj data with
-  | Some data -> (curr, data, ax2ty)
-  | None -> (walk_object [@ocaml.tailcall]) access curr data ax2ty body obj
+  else match !walk_stop with
+  | None ->
+    begin match replay obj data with
+    | Some data -> (curr, data, ax2ty)
+    | None -> (walk_object [@ocaml.tailcall]) access curr data ax2ty body obj
+    end
+  | Some stop ->
+    if stop obj then (curr, GlobRef.Map_env.add obj (Some GlobRef.Set_env.empty) data, ax2ty)
+    else (walk_object [@ocaml.tailcall]) access curr data ax2ty body obj
 
 and walk_object access curr data ax2ty body obj =
   let mark = !unreplayable_steps in
@@ -984,9 +1022,15 @@ and traverse_inductive access (curr, data, ax2ty) mind obj =
     (* recursive call: *) recursive ||
     (* already in: *) GlobRef.Map_env.mem firstind_ref data
   then (curr, data, ax2ty)
-  else match replay obj data with
-  | Some data -> (curr, data, ax2ty)
-  | None -> (walk_inductive [@ocaml.tailcall]) access curr data ax2ty mind obj
+  else match !walk_stop with
+  | None ->
+    begin match replay obj data with
+    | Some data -> (curr, data, ax2ty)
+    | None -> (walk_inductive [@ocaml.tailcall]) access curr data ax2ty mind obj
+    end
+  | Some stop ->
+    if stop obj then (curr, stopped_block mind data, ax2ty)
+    else (walk_inductive [@ocaml.tailcall]) access curr data ax2ty mind obj
 
 and walk_inductive access curr data ax2ty mind obj =
   let firstind_ref = (GlobRef.IndRef (mind, 0)) in
@@ -1429,7 +1473,7 @@ let traverse access grs =
   let () = inductive_marks := [] in
   let () = type_stack := [] in
   let () = shallow := false in
-  let () = sync_memo access in
+  let () = if Option.is_empty !walk_stop then sync_memo access in
   let () = cache_init () in
   let env = Global.env () in
   match
@@ -1458,21 +1502,39 @@ let uses_uip mib =
       && List.length (fst mip.mind_nf_lc.(0)) = List.length mib.mind_params_ctxt)
     mib.mind_packets
 
-let assumptions ?(add_opaque=false) ?(add_transparent=false) access st grs =
+(* The four theory flags of {!assumptions}, set by the objects a query
+   reaches. *)
+type theory_flags = {
+  mutable th_impredicative_set : bool;
+  mutable th_rewrite_rules : bool;
+  mutable th_type_in_type : bool;
+  mutable th_unchecked_eliminations : bool;
+}
+
+let fresh_theory_flags () = {
+  th_impredicative_set = false; th_rewrite_rules = false;
+  th_type_in_type = false; th_unchecked_eliminations = false;
+}
+
+let theory_of_flags f = {
+  Printer.has_impredicative_set = f.th_impredicative_set;
+  has_rewrite_rules = f.th_rewrite_rules;
+  has_type_in_type = f.th_type_in_type;
+  has_unchecked_eliminations = f.th_unchecked_eliminations;
+}
+
+(* What [obj], whose value in a query's graph is [contents], adds to [accu]
+   and to [flags]: the one place {!assumptions} and {!object_assumptions}
+   classify an object. *)
+let add_object_assumptions ~add_opaque ~add_transparent st ax2ty flags obj contents accu =
   let open Printer in
-  (* Only keep the transitive dependencies *)
-  let (_, graph, ax2ty) = traverse access grs in
   let open GlobRef in
-  let has_impredicative_set = ref false in
-  let has_rewrite_rules = ref false in
-  let has_type_in_type = ref false in
-  let has_unchecked_eliminations = ref false in
   let collect_theory_flags (tf : Declarations.typing_flags) =
-    if tf.impredicative_set then has_impredicative_set := true;
-    if not tf.check_universes then has_type_in_type := true;
-    if not tf.check_eliminations then has_unchecked_eliminations := true
+    if tf.impredicative_set then flags.th_impredicative_set <- true;
+    if not tf.check_universes then flags.th_type_in_type <- true;
+    if not tf.check_eliminations then flags.th_unchecked_eliminations <- true
   in
-  let fold obj contents accu = match obj with
+  match obj with
   | VarRef id ->
     let decl = Global.lookup_named id in
     if Context.Named.Declaration.is_local_assum decl then
@@ -1483,7 +1545,7 @@ let assumptions ?(add_opaque=false) ?(add_transparent=false) access st grs =
       let cb = lookup_constant kn in
       collect_theory_flags cb.const_typing_flags;
       begin match cb.const_body with
-        | Symbol _ -> has_rewrite_rules := true
+        | Symbol _ -> flags.th_rewrite_rules <- true
         | _ -> ()
       end;
       let accu =
@@ -1562,12 +1624,31 @@ let assumptions ?(add_opaque=false) ?(add_transparent=false) access st grs =
           ContextObjectMap.add (Axiom (IndicesNotMattering m, l)) Constr.mkProp accu
       in
       accu
-  in
-  let map = GlobRef.Map_env.fold fold graph ContextObjectMap.empty in
-  let theory = {
-    has_impredicative_set = !has_impredicative_set;
-    has_rewrite_rules = !has_rewrite_rules;
-    has_type_in_type = !has_type_in_type;
-    has_unchecked_eliminations = !has_unchecked_eliminations;
-  } in
-  (theory, map)
+
+let assumptions ?(add_opaque=false) ?(add_transparent=false) access st grs =
+  (* Only keep the transitive dependencies *)
+  let (_, graph, ax2ty) = traverse access grs in
+  let flags = fresh_theory_flags () in
+  let map =
+    GlobRef.Map_env.fold (add_object_assumptions ~add_opaque ~add_transparent st ax2ty flags)
+      graph Printer.ContextObjectMap.empty in
+  (theory_of_flags flags, map)
+
+let object_assumptions obj contents =
+  let flags = fresh_theory_flags () in
+  let map =
+    add_object_assumptions ~add_opaque:false ~add_transparent:false TransparentState.full
+      GlobRef.Map_env.empty flags obj contents Printer.ContextObjectMap.empty in
+  (theory_of_flags flags, map)
+
+let type_references kn =
+  fold_refs_of_type GlobRef.Set_env.add GlobRef.Set_env.empty (lookup_constant kn).const_type
+
+let reach ~stop access grs =
+  walk_stop := Some stop;
+  match traverse access grs with
+  | (_, graph, ax2ty) -> walk_stop := None; (graph, not (GlobRef.Map_env.is_empty ax2ty))
+  | exception e ->
+    let e = Exninfo.capture e in
+    walk_stop := None;
+    Exninfo.iraise e

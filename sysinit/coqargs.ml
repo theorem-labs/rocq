@@ -60,6 +60,7 @@ type coqargs_config = {
   rcfile      : string option;
   coqlib      : string option;
   enable_VM   : bool;
+  location_free_label : bool;
   native_compiler : native_compiler;
   native_output_dir : CUnix.physical_path;
   native_include_dirs : CUnix.physical_path list;
@@ -124,6 +125,7 @@ let default_config = {
   rcfile       = None;
   coqlib       = None;
   enable_VM    = true;
+  location_free_label = false;
   native_compiler = default_native;
   native_output_dir = ".coq-native";
   native_include_dirs = [];
@@ -354,6 +356,9 @@ let parse_args ~init arglist : t * string list =
 
     |"-bytecode-compiler" ->
       { oval with config = { oval.config with enable_VM = get_bool ~opt (next ()) }}
+
+    |"-location-free-label" ->
+      { oval with config = { oval.config with location_free_label = true }}
 
     |"-native-compiler" ->
       let native_compiler, warn = get_native_compiler (next ()) in

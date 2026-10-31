@@ -70,6 +70,11 @@ val subst_red_expr : Mod_subst.substitution -> red_expr -> red_expr
 
 val wit_red_expr : (raw_red_expr, glob_red_expr, red_expr) Genarg.genarg_type
 
+val strip_glob_red_expr : glob_red_expr -> glob_red_expr
+(** Typed stripper of the source locations of a globalized reduction
+    expression (see [LocStrip]). Raises [LocStrip.Unknown] on a user
+    reduction. *)
+
 module Intern : sig
   open Libnames
   open Constrexpr

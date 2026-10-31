@@ -1032,6 +1032,33 @@ let subst_syntax_extension (subst, (local, (ntn, synext))) =
 let classify_syntax_definition (local, _) =
   if local then Dispose else Substitute
 
+(* The only source locations of a printing rule are the boxes of its
+   unparsing rule ([Ppextend.UnpBox] holds [unparsing Loc.located list]). *)
+let rec strip_unparsing = function
+  | UnpMetaVar _ | UnpBinderMetaVar _ | UnpTerminal _ | UnpCut _ as u -> u
+  | UnpListMetaVar (sub, l) -> UnpListMetaVar (sub, List.map strip_unparsing l)
+  | UnpBinderListMetaVar (b, q, l) ->
+    UnpBinderListMetaVar (b, q, List.map strip_unparsing l)
+  | UnpBox (b, l) -> UnpBox (b, List.map (LocStrip.located strip_unparsing) l)
+
+let strip_notation_printing_rules r =
+  { r with notation_printing_unparsing =
+             List.map strip_unparsing r.notation_printing_unparsing }
+
+let strip_generic_notation_printing_rules r =
+  { r with notation_printing_rules =
+             strip_notation_printing_rules r.notation_printing_rules }
+
+(* A syntax extension holds a notation level, entry keys and grammar
+   production items (strings, identifiers and entry keys): no source
+   location outside its printing rules. *)
+let strip_syntax_extension (local, (ntn, synext)) =
+  (local,
+   (ntn,
+    { synext with
+      synext_notprint =
+        Option.map strip_generic_notation_printing_rules synext.synext_notprint }))
+
 let inSyntaxExtension : syntax_extension_obj -> obj =
   declare_object
     {(default_object "SYNTAX-EXTENSION") with
@@ -1039,7 +1066,8 @@ let inSyntaxExtension : syntax_extension_obj -> obj =
      open_function = simple_open ~cat:notation_cat cache_syntax_extension;
      cache_function = cache_syntax_extension;
      subst_function = subst_syntax_extension;
-     classify_function = classify_syntax_definition}
+     classify_function = classify_syntax_definition;
+     interface_key = Key_stripped strip_syntax_extension}
 
 (** ******************************************************************** **)
 (** Precedences                                                          **)
@@ -1699,13 +1727,25 @@ let subst_notation (subst, nobj) =
 let classify_notation nobj =
   if nobj.notobj_local then Dispose else Substitute
 
+(* The interpretation of a notation holds the locations slice 0 found in
+   this kind ([notobj_interp], a [Notation_term.interpretation] over
+   [glob_constr]); the specific printing rules hold the locations of
+   their boxes. The remaining fields are flags, scope names, notation
+   keys, dirpaths and user warnings. *)
+let strip_notation nobj =
+  { nobj with
+    notobj_interp = ConstrStrip.interpretation nobj.notobj_interp;
+    notobj_specific_pp_rules =
+      Option.map strip_notation_printing_rules nobj.notobj_specific_pp_rules }
+
 let inNotation : notation_obj -> obj =
   declare_object {(default_object "NOTATION") with
        open_function = simple_open ~cat:notation_cat open_notation;
        cache_function = cache_notation;
        subst_function = subst_notation;
        load_function = load_notation;
-       classify_function = classify_notation}
+       classify_function = classify_notation;
+       interface_key = Key_stripped strip_notation}
 
 (**********************************************************************)
 (* Registration of interpretation scopes opening/closing              *)
@@ -1727,7 +1767,9 @@ let inScope : bool * bool * scope_name -> obj =
       open_function = simple_open ~cat:notation_cat cache_scope;
       subst_function = subst_scope;
       discharge_function = discharge_scope;
-      classify_function = classify_scope }
+      classify_function = classify_scope;
+      (* Two flags and a scope name: no source location. *)
+      interface_key = Key_as_is }
 
 let open_close_scope local ~to_open sc =
   Lib.add_leaf (inScope (local,to_open,normalize_scope sc))
@@ -2071,7 +2113,10 @@ let inScopeCommand : locality_flag * scope_name * scope_command -> obj =
       open_function = simple_open ~cat:notation_cat open_scope_command;
       load_function = load_scope_command;
       subst_function = subst_scope_command;
-      classify_function = classify_scope_command}
+      classify_function = classify_scope_command;
+      (* A flag, a scope name, delimiter keys and coercion classes: no
+         source location. *)
+      interface_key = Key_as_is}
 
 let declare_scope local scope =
   Lib.add_leaf (inScopeCommand(local,scope,ScopeDeclare))
@@ -2145,7 +2190,20 @@ let inNotationActivation : locality_flag * (bool * bool * notation_query_pattern
       cache_function = cache_notation_toggle;
       open_function = simple_open cache_notation_toggle;
       subst_function = subst_notation_toggle;
-      classify_function = classify_notation_toggle}
+      classify_function = classify_notation_toggle;
+      interface_key = Key_stripped (fun (local,(on,all,pat)) ->
+          (* The query pattern holds a qualid and an interpretation. *)
+          let pat =
+            { pat with
+              interp_rule_key_pattern =
+                Option.map (function
+                    | Util.Inl _ as k -> k
+                    | Util.Inr q -> Util.Inr (ConstrStrip.qualid q))
+                  pat.interp_rule_key_pattern;
+              interpretation_pattern =
+                Option.map ConstrStrip.interpretation pat.interpretation_pattern }
+          in
+          (local,(on,all,pat)))}
 
 let declare_notation_toggle local ~on ~all s =
   Lib.add_leaf (inNotationActivation (local,(on,all,s)))
@@ -2179,7 +2237,10 @@ let inCustomEntry : Id.t -> locality_flag -> obj =
       load_function = load_custom_entry;
       open_function = filtered_open import_custom_entry;
       subst_function = subst_custom_entry;
-      classify_function = classify_custom_entry}
+      classify_function = classify_custom_entry;
+      (* A locality flag (the entry name is the object's own name): no
+         source location. *)
+      interface_key = Key_as_is}
 
 let declare_custom_entry local s =
   let () = if List.mem (Id.to_string s) ["constr";"pattern";"ident";"global";"binder";"bigint"] then

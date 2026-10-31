@@ -285,6 +285,29 @@ let interp_ml_object t =
   with Not_found ->
     CErrors.anomaly Pp.(str "Unknown object type " ++ str (Tac2dyn.Arg.repr t))
 
+(** Location strippers of ML objects, for the interface key of a library
+    (see [Libobject.interface_key]). Kept apart from [ml_object] so that an
+    ML object defined without one still works: stripping it raises
+    [LocStrip.Unknown]. *)
+
+module MLStripObj =
+struct
+  type ('a, 'b) t = 'b -> 'b
+end
+
+module MLStrip = Tac2dyn.ArgMap(MLStripObj)
+
+let ml_strip_table = ref MLStrip.empty
+
+let define_ml_strip t f =
+  ml_strip_table := MLStrip.add t (MLStrip.Pack f) !ml_strip_table
+
+let strip_ml_object : type a b. (a, b) Tac2dyn.Arg.tag -> b -> b = fun t v ->
+  match MLStrip.find t !ml_strip_table with
+  | MLStrip.Pack f -> f v
+  | exception Not_found ->
+    LocStrip.unknown ("Ltac2 ML object " ^ Tac2dyn.Arg.repr t)
+
 (** Absolute paths *)
 
 let rocq_prefix =

@@ -331,6 +331,7 @@ let interp_ipat_option ist env sigma o = Option.map (interp_ipat ist env sigma) 
 ARGUMENT EXTEND ssreqid TYPED AS ssripatrep option PRINTED BY { pr_ssreqid }
   INTERPRETED BY { interp_ipat_option }
   GLOBALIZED BY { intern_ipat_option }
+  STRIPPED BY { Option.map strip_ipat }
 
 END
 
@@ -638,6 +639,8 @@ let pr_rwkind = function
   | RWeq -> mt ()
 
 let wit_ssrrwkind = add_genarg "ssrrwkind" (fun env sigma -> pr_rwkind)
+(* Interface key: no location, ssrrwkind holds only ssrsimpl ints. *)
+let () = Genstrip.register_strip0 wit_ssrrwkind (fun x -> x)
 
 let pr_rule = function
   | RWred s, _ -> pr_simpl s

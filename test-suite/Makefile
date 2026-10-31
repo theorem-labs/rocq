@@ -354,6 +354,8 @@ UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2
 unit-tests/micromega/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.plugins.micromega
 # The sysinit unit tests call Coqinit and Unix.putenv.
 unit-tests/sysinit/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.sysinit,unix
+# Unit tests of a plugin link it too.
+unit-tests/plugins/ltac/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.plugins.ltac
 unit-tests/%.ml.log: unit-tests/%.ml unit-tests/src/$(UNIT_LINK)
 	$(SHOW) 'TEST      $<'
 	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package $(UNIT_PKGS) \

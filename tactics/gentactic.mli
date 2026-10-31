@@ -32,6 +32,11 @@ val print_glob : Environ.env -> Evd.evar_map -> ?level:Constrexpr.entry_relative
 
 val subst : Mod_subst.substitution -> glob_generic_tactic -> glob_generic_tactic
 
+val strip : glob_generic_tactic -> glob_generic_tactic
+(** Typed stripper of the source locations of a tactic (see [LocStrip]),
+    through the stripper registered for its generic argument. Raises
+    [LocStrip.Unknown] when none is registered. *)
+
 val intern : ?strict:bool -> Environ.env -> ?ltacvars:Id.Set.t -> raw_generic_tactic -> glob_generic_tactic
 (** [strict] is default true *)
 

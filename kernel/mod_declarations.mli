@@ -123,6 +123,16 @@ val hcons_generic_module_body : 'a generic_module_body -> 'a generic_module_body
 val hcons_module_body : module_body -> module_body
 val hcons_module_type : module_type_body -> module_type_body
 
+(** {6 Mapping the constants of a module } *)
+
+val map_constants : (constant_body -> constant_body) -> module_body -> module_body
+(** [map_constants f mb] is [mb] with [f] applied to every constant body of
+    its expanded type, of its interactive structure and of the module types
+    of its functor parameters, in place, every other field kept as it is.
+    It is a pure rewriting of the declarations, used to compute a view of a
+    compiled library (the location-free label, [LibkeyObjects]); the kernel
+    itself never applies it. *)
+
 (** {6 Cleaning a module expression from bounded parts }
 
      For instance:

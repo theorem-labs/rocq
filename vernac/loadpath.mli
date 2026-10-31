@@ -26,6 +26,11 @@ val logical : t -> DirPath.t
 val physical : t -> CUnix.physical_path
 (** Get the physical path of a loadpath *)
 
+val recursive : t -> bool
+(** Whether a recursive scan ([-R], [-Q], the installed libraries) added the
+    binding, so that a new subdirectory of its physical path becomes a
+    binding at the next start. The current directory's is not recursive. *)
+
 val pp : t -> Pp.t
 (** Print a load path *)
 
@@ -74,6 +79,14 @@ val locate_qualified_library
 
 *)
 val locate_absolute_library : DirPath.t -> (CUnix.physical_path, Error.t) Result.t
+
+(** The candidate files, as (directory, file name), that
+    [locate_qualified_library] (with its Stdlib fallback),
+    [locate_absolute_library] and [locate_file] may probe, in order. A
+    superset of one lookup's probes: for [Attempts]' records. *)
+val qualified_library_probes : ?root:DirPath.t -> Libnames.qualid -> (string * string) list
+val absolute_library_probes : DirPath.t -> (string * string) list
+val file_probes : string -> (string * string) list
 
 (** {6 Extending the Load Path } *)
 

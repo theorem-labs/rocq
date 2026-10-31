@@ -50,6 +50,8 @@ let template_default_univs_obj =
     load_function = (fun _ us -> cache_template_default_univs us);
     discharge_function = (fun x -> Some x);
     classify_function = (fun _ -> Escape);
+    (* A set of universe levels: no source location. *)
+    interface_key = Libobject.Key_as_is;
   }
 
 let add_template_default_univs env kn =

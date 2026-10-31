@@ -679,9 +679,11 @@ let lang_ref = Summary.ref Ocaml ~name:"ExtrLang"
 let lang () = !lang_ref
 
 let extr_lang : lang -> obj =
-  declare_object @@ superglobal_object_nodischarge "Extraction Lang"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "Extraction Lang"
     ~cache:(fun l -> lang_ref := l)
-    ~subst:None
+    ~subst:None) with interface_key = Key_as_is }
 
 let extraction_language x = Lib.add_leaf (extr_lang x)
 
@@ -733,22 +735,28 @@ let add_callback_entry alias_opt qualid_ref =
 let subst_global s g = { glob = fst (subst_global s g.glob); inst = g.inst }
 
 let inline_extraction : bool * global list -> obj =
-  declare_object @@ superglobal_object "Extraction Inline"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object "Extraction Inline"
     ~cache:(fun (b,l) -> add_inline_entries b l)
     ~subst:(Some (fun (s,(b,l)) -> (b,(List.map (fun x -> subst_global s x) l))))
-    ~discharge:(fun x -> Some x)
+    ~discharge:(fun x -> Some x)) with interface_key = Key_as_is }
 
 let foreign_extraction : global list -> obj =
-  declare_object @@ superglobal_object "Extraction Foreign"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object "Extraction Foreign"
     ~cache:(fun l -> add_foreign_entries l)
     ~subst:(Some (fun (s,l) -> (List.map (fun x -> subst_global s x) l)))
-    ~discharge:(fun x -> Some x)
+    ~discharge:(fun x -> Some x)) with interface_key = Key_as_is }
 
 let callback_extraction : string option * global -> obj =
-  declare_object @@ superglobal_object "Extraction Callback"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object "Extraction Callback"
     ~cache:(fun (alias, x) -> add_callback_entry alias x)
     ~subst:(Some (fun (s,(alias, x)) -> (alias, subst_global s x)))
-    ~discharge:(fun x -> Some x)
+    ~discharge:(fun x -> Some x)) with interface_key = Key_as_is }
 
 
 
@@ -784,19 +792,25 @@ let print_extraction_inline () =
 (* Reset part *)
 
 let reset_inline : unit -> obj =
-  declare_object @@ superglobal_object_nodischarge "Reset Extraction Inline"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "Reset Extraction Inline"
     ~cache:(fun () -> inline_table := empty_inline_table)
-    ~subst:None
+    ~subst:None) with interface_key = Key_as_is }
 
 let reset_foreign : unit -> obj =
-  declare_object @@ superglobal_object_nodischarge "Reset Extraction Foreign"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "Reset Extraction Foreign"
     ~cache:(fun () -> foreign_set := empty_foreign_set)
-    ~subst:None
+    ~subst:None) with interface_key = Key_as_is }
 
 let reset_callback : unit -> obj =
-  declare_object @@ superglobal_object_nodischarge "Reset Extraction Callback"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "Reset Extraction Callback"
     ~cache:(fun () -> callback_map := empty_callback_map)
-    ~subst:None
+    ~subst:None) with interface_key = Key_as_is }
 
 let reset_extraction_inline () = Lib.add_leaf (reset_inline ())
 
@@ -843,9 +857,11 @@ let add_implicits r l =
 (* Registration of operations for rollback. *)
 
 let implicit_extraction : global * int_or_id list -> obj =
-  declare_object @@ superglobal_object_nodischarge "Extraction Implicit"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "Extraction Implicit"
     ~cache:(fun (r,l) -> add_implicits r l)
-    ~subst:(Some (fun (s,(r,l)) -> (subst_global s r, l)))
+    ~subst:(Some (fun (s,(r,l)) -> (subst_global s r, l)))) with interface_key = Key_as_is }
 
 (* Grammar entries. *)
 
@@ -880,9 +896,11 @@ let add_blacklist_entries l =
 (* Registration of operations for rollback. *)
 
 let blacklist_extraction : string list -> obj =
-  declare_object @@ superglobal_object_nodischarge "Extraction Blacklist"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "Extraction Blacklist"
     ~cache:add_blacklist_entries
-    ~subst:None
+    ~subst:None) with interface_key = Key_as_is }
 
 (* Grammar entries. *)
 
@@ -898,9 +916,11 @@ let print_extraction_blacklist () =
 (* Reset part *)
 
 let reset_blacklist : unit -> obj =
-  declare_object @@ superglobal_object_nodischarge "Reset Extraction Blacklist"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "Reset Extraction Blacklist"
     ~cache:(fun ()-> blacklist_table := Id.Set.empty)
-    ~subst:None
+    ~subst:None) with interface_key = Key_as_is }
 
 let reset_extraction_blacklist () = Lib.add_leaf (reset_blacklist ())
 
@@ -968,14 +988,18 @@ let print_extraction_callback () =
 (* Registration of operations for rollback. *)
 
 let in_customs : global * string list * string -> obj =
-  declare_object @@ superglobal_object_nodischarge "ML extractions"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "ML extractions"
     ~cache:(fun (r,ids,s) -> add_custom r ids s)
-    ~subst:(Some (fun (s,(r,ids,str)) -> (subst_global s r, ids, str)))
+    ~subst:(Some (fun (s,(r,ids,str)) -> (subst_global s r, ids, str)))) with interface_key = Key_as_is }
 
 let in_custom_matchs : global * string -> obj =
-  declare_object @@ superglobal_object_nodischarge "ML extractions custom matches"
+  (* Interface key: payload is kernel references, informativity instances,
+     ints, idents, strings and bools; no source location. *)
+  declare_object { (superglobal_object_nodischarge "ML extractions custom matches"
     ~cache:(fun (r,s) -> add_custom_match r s)
-    ~subst:(Some (fun (subs,(r,s)) -> (subst_global subs r, s)))
+    ~subst:(Some (fun (subs,(r,s)) -> (subst_global subs r, s)))) with interface_key = Key_as_is }
 
 (* Grammar entries. *)
 

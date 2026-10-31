@@ -70,6 +70,9 @@ open Mod_subst
      It is called in the state after the end of the section with any previous objects already present.
      Notably the global environment contains the discharged globals.
 
+   * an interface-key view, that says how the location-free interface key
+     of a library (see [interface_object]) reads an object of this kind.
+
   Any type defined as a persistent object must be pure (e.g. no references) and
   marshallable by the OCaml Marshal module (e.g. no closures).
 
@@ -85,6 +88,26 @@ type object_name = Libnames.full_path * KerName.t
 
 type open_filter
 
+(** How the location-free interface key of a library reads an object of a
+    given kind. The key is the label [coqc] stores as the digest of a
+    library's [library] segment ([LibkeyObjects]): a digest of the library
+    in which source locations do not count (design D18). *)
+type 'a interface_key =
+  | Not_in_key
+  (** The default. The key does not know this kind: a library that holds
+      an object of this kind has no label and gets stock's digest, the MD5
+      of its segment's bytes. *)
+  | Key_as_is
+  (** The payload type holds no source location: the payload enters the
+      key unchanged. *)
+  | Key_stripped of ('a -> 'a)
+  (** The payload enters the key through this function, which erases from
+      it what the key must not read and changes nothing else: every source
+      location, set to a fixed value as a typed stripper of [LocStrip]
+      does, and whatever else the kind documents as outside the key. It may
+      raise [LocStrip.Unknown]. What a stripper erases is part of the key's
+      layout, so a change to it bumps [LibkeyObjects.version]. *)
+
 type ('a,'b,'discharged) object_declaration = {
   object_name : string;
   object_stage : Summary.Stage.t;
@@ -95,6 +118,7 @@ type ('a,'b,'discharged) object_declaration = {
   subst_function :  substitution * 'a -> 'a;
   discharge_function : 'a -> 'discharged option;
   rebuild_function : 'discharged -> 'a;
+  interface_key : 'a interface_key;
 }
 
 val unfiltered : open_filter
@@ -240,6 +264,12 @@ val subst_object : substitution * obj -> obj
 val classify_object : obj -> substitutivity
 val object_name : obj -> string
 val object_stage : obj -> Summary.Stage.t
+
+val interface_object : obj -> (obj, string) result
+(** The object as the interface key reads it: the object itself
+    ([Key_as_is]) or its stripped copy ([Key_stripped]). [Error what] when
+    the kind is [Not_in_key] or unregistered, or when its stripper raised
+    [LocStrip.Unknown]; [what] names the reason. *)
 
 type discharged_obj
 

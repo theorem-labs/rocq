@@ -680,11 +680,13 @@ module MakeTable (E : Elt) : S = struct
       register_constr env evd c
     in
     let subst_constr (subst, c) = Mod_subst.subst_mps subst c in
+    (* Interface key: payload is a locality and a kernel term, no location. *)
     Libobject.declare_object
-    @@ Libobject.object_with_locality
-         ("register-zify-" ^ E.name)
-         ~cache:cache_constr ~subst:(Some subst_constr)
-         ~discharge:(fun _ -> assert false)
+      { (Libobject.object_with_locality
+           ("register-zify-" ^ E.name)
+           ~cache:cache_constr ~subst:(Some subst_constr)
+           ~discharge:(fun _ -> assert false))
+        with Libobject.interface_key = Libobject.Key_as_is }
 
   (** [register c] is called from the VERNACULAR ADD [name] reference(t).
        The term [c] is interpreted and

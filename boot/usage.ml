@@ -88,6 +88,8 @@ let print_usage_common co command =
 \n  -indices-matter        levels of indices (and nonuniform parameters) contribute to the level of inductives\
 \n  -type-in-type          disable universe consistency checking\
 \n  -skip-qed-typecheck    do not typecheck opaque proofs at Qed (rocqchk still checks them)\
+\n  -location-free-label   store a digest of the library without its source locations\
+\n                         as its digest, and the Require/Load/Declare ML Module attempts it made\
 \n  -mangle-names x        mangle auto-generated names using prefix x\
 \n  -set \"Foo Bar\"         enable Foo Bar (as Set Foo Bar. in a file)\
 \n  -set \"Foo Bar=value\"   set Foo Bar to value (value is interpreted according to Foo Bar's type)\

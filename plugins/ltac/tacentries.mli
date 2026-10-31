@@ -153,6 +153,14 @@ type 'b argument_subst =
 | ArgSubstFun : 'b Gensubst.subst_fun -> 'b argument_subst
 | ArgSubstWit : ('a, 'b, 'c) Genarg.genarg_type -> 'b argument_subst
 
+(** How the location-free interface key (design D18) reads a stored,
+    globalized value of an argument: through a location stripper (see
+    [Genstrip]), or through the stripper of another argument. The optional
+    [?strip] of [argument_extend]. *)
+type 'b argument_strip =
+| ArgStripFun : 'b Genstrip.strip_fun -> 'b argument_strip
+| ArgStripWit : ('a, 'b, 'c) Genarg.genarg_type -> 'b argument_strip
+
 type ('b, 'c) argument_interp =
 | ArgInterpRet : ('c, 'c) argument_interp
 | ArgInterpFun : ('b, Geninterp.Val.t) Geninterp.interp_fun -> ('b, 'c) argument_interp
@@ -170,5 +178,11 @@ type ('a, 'b, 'c) tactic_argument = {
 }
 
 val argument_extend : plugin:string -> name:string -> ignore_kw:bool ->
+  ?strip:'b argument_strip ->
   ('a, 'b, 'c) tactic_argument ->
   ('a, 'b, 'c) Genarg.genarg_type * 'a Procq.Entry.t
+(** [strip]: how the interface key reads a stored value of this argument.
+    Without it, the value is read as it is, source locations included: a
+    library that stores such a value gets another interface key whenever
+    one of those locations moves, so its dependents are rebuilt, never kept
+    on a wrong key. *)
