@@ -181,6 +181,8 @@ open Tac2externals
 
 let define ?plugin s = define (pname ?plugin s)
 
+let define_direct ?fast ?plugin s = define_direct ?fast (pname ?plugin s)
+
 (** Printing *)
 
 let () = define "print" (pp @-> ret unit) Feedback.msg_notice
@@ -360,9 +362,22 @@ let () =
   define "array_set" (block @-> int @-> valexpr @-> tac unit) @@ fun (_, v) n x ->
   try Array.set v n x; return () with Invalid_argument _ -> throw Tac2ffi.err_outofbounds
 
+(* The direct implementation: the same conversions, then the same read, whose value is the
+   primitive's ([return] of it) when it is in bounds (Tac2val.DirectCheck), and its [Check2] entry,
+   which is the same function of the two arguments. *)
 let () =
-  define "array_get" (block @-> int @-> tac valexpr) @@ fun (_, v) n ->
-  try return (Array.get v n) with Invalid_argument _ -> throw Tac2ffi.err_outofbounds
+  let check2 b n =
+    let (_, v) = repr_to block b in
+    let n = repr_to int n in
+    (match Array.get v n with x -> Some x | exception Invalid_argument _ -> None)
+  in
+  let check = function
+  | [b; n] -> check2 b n
+  | _ -> assert false
+  in
+  define_direct ~fast:(Check2 check2) "array_get" (block @-> int @-> tac valexpr) (fun (_, v) n ->
+  try return (Array.get v n) with Invalid_argument _ -> throw Tac2ffi.err_outofbounds)
+    (DirectCheck (2, check))
 
 let () =
   define "array_blit"
@@ -481,9 +496,25 @@ let () =
   pf_apply ~catch_exceptions:true get_type
 
 (** constr -> constr *)
+(* The direct implementation (Tac2val.DirectEnv): the same conversions, then the same comparison
+   in the evar map, whose result is the primitive's; reading the environment first has no effect.
+   Its [Env2] entry does the same steps on the two arguments. *)
 let () =
-  define "constr_equal" (constr @-> constr @-> tac bool) @@ fun c1 c2 ->
-  Proofview.tclEVARMAP >>= fun sigma -> return (EConstr.eq_constr sigma c1 c2)
+  let direct = function
+  | [c1; c2] ->
+    let c1 = repr_to constr c1 in
+    let c2 = repr_to constr c2 in
+    fun _ sigma -> repr_of bool (EConstr.eq_constr sigma c1 c2)
+  | _ -> assert false
+  in
+  let direct2 c1 c2 _ sigma =
+    let c1 = repr_to constr c1 in
+    let c2 = repr_to constr c2 in
+    repr_of bool (EConstr.eq_constr sigma c1 c2)
+  in
+  define_direct ~fast:(Env2 direct2) "constr_equal" (constr @-> constr @-> tac bool) (fun c1 c2 ->
+  Proofview.tclEVARMAP >>= fun sigma -> return (EConstr.eq_constr sigma c1 c2))
+    (DirectEnv (2, direct))
 
 let () =
   define "constr_kind" (constr @-> eret valexpr) @@ fun c env sigma ->
