@@ -38,6 +38,15 @@ module type PHashtable = sig
   (** [memo cache cond f] only use the cache if [cond k] holds for the key [k].
           It records the read of {!memo} at each call, whether [cond k] holds or not. *)
   val memo_cond : string -> (key -> bool) -> (key -> 'a) -> key -> 'a
+
+  (** [lazy_table cache] is the table that {!memo} uses for the file [cache], opened when it
+      is forced, and registered for the replay of [micromega_cache] reads. A memo function
+      of its own over it records each lookup with {!record_lookup}. *)
+  val lazy_table : string -> 'a t option Lazy.t
 end
+
+(** [record_lookup cache]: the [micromega_cache] read of a lookup in the table of the file
+    [cache], as {!PHashtable.memo} records it. *)
+val record_lookup : string -> unit
 
 module PHashtable (Key : HashedType) : PHashtable with type key = Key.t

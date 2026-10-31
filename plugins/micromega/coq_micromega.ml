@@ -2663,11 +2663,13 @@ end = struct
     let memof = memo cache_file f in
     fun x -> if use_cache () then memof x else f x
 
+  (* BET-84: the table is the one Persistent_cache.memo would open, registered
+     for the replay of micromega_cache reads, and each lookup records that read,
+     as memo does (census row 23). *)
   let memo_opt_cached use_cache cache_file f =
-    let tbl =
-      lazy (try Some (open_in cache_file) with e when CErrors.noncritical e -> None)
-    in
+    let tbl = lazy_table cache_file in
     let memof x =
+      Persistent_cache.record_lookup cache_file;
       match Lazy.force tbl with
       | None -> f x
       | Some tbl -> (
@@ -2678,10 +2680,12 @@ end = struct
     in
     let find_opt x =
       if not (use_cache ()) then None
-      else
+      else begin
+        Persistent_cache.record_lookup cache_file;
         match Lazy.force tbl with
         | None -> None
         | Some tbl -> ( try Some (find tbl x) with Not_found -> None )
+      end
     in
     let record x v =
       if use_cache () then
