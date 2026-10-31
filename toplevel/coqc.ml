@@ -33,7 +33,8 @@ rocq compile specific options:\
 \n                         dependencies, and produce an empty .vok file on success\
 \n  -record-timeouts       write f.timeouts.json beside the output file, saying how\
 \n                         many timeouts this compilation armed and how many\
-\n                         fired, tactic workers included; refuses -async-proofs and -vos\
+\n                         fired, tactic workers included, and the sha256 of the\
+\n                         output file; refuses -async-proofs and -vos\
 \n"
 }
 
