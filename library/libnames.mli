@@ -119,3 +119,31 @@ val default_root_prefix : DirPath.t
 
 (** For uninitialized data, cf [DirPath.dummy] *)
 val dummy_full_path : full_path
+
+(** {6 Recorded keys (BET-84 P3)} *)
+
+val kername_key : KerName.t -> string
+(** The kernel name as a recorded key that names it alone: each part with
+    its length, a bound module with its number. *)
+
+val kername_of_key : string -> KerName.t option
+(** The kernel name {!kername_key} wrote, or [None] for a string it did not
+    write and for the name of a bound module, which cannot be rebuilt. *)
+
+val constant_key : Constant.t -> string
+(** The constant as a recorded key that names it alone: its user and
+    canonical kernel names, each as {!kername_key} writes it. *)
+
+val constant_of_key : string -> Constant.t option
+(** The constant {!constant_key} wrote, or [None] for a string it did not
+    write. *)
+
+val globref_key : GlobRef.t -> string
+(** The global reference as a recorded key that names it alone: a constant
+    as {!constant_key} writes it, an inductive or a constructor by the user
+    and canonical kernel names of its mutual inductive and its indices, a
+    variable by its name. The nametab is not needed to read it back. *)
+
+val globref_of_key : string -> GlobRef.t option
+(** The reference {!globref_key} wrote, or [None] for a string it did not
+    write. *)

@@ -24,6 +24,7 @@ allowed on sami-rocqperf: run this on speed-r1, under
 fixtures/<name>/original/*.v   the tree that gets registered
 fixtures/<name>/edited/*.v     the tree that gets graded
 fixtures/<name>/expect.json    what must happen
+fixtures/<name>/*              files that `tree_files` copies into a tree
 ```
 
 The runner, per fixture:
@@ -63,9 +64,11 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `register_flags` | flags for the registration only |
 | `grade_flags` | flags for both grade compiles (for example `-skip-qed-typecheck`) |
 | `replay_extra_flags` | flags for the replay compile only |
+| `replay_file` | a record file under the records directory: the replay compile reads it with `-proof-replay FILE -proof-replay-digest` (the file's SHA-256, or 64 zeros when it does not exist) in place of `-proof-replay-dir` |
 | `ratio` | the `-proof-replay-ratio` value (default `1`) |
 | `stack_kb` | the stack limit every compile of this fixture runs under (default 8192, the limit a grade runs under; lane R1 measured that this changes `.vo` bytes, so stock and replay must share it). `prlimit` is required |
 | `record_layout` | `dotted`, `slashed` or `both`: which name the record is published under |
+| `unpublished` | files the registration records but whose record the runner does not publish, so `-proof-replay-dir` holds no record for them |
 | `records` | per file, per proof: `ineligible` reasons it must carry, `eligible`, `writes_nonempty`, `stores_no_term` |
 | `summaries` | per file: `proofs`, `hits`, `misses`, `refused`, `killed`, `fence`, `outcomes` |
 | `compile_fails` | files whose compile must fail in both runs; no later file is compiled |
@@ -81,6 +84,8 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `record_trailers` | per file: `vo_opaques` true or false, whether the record refers to its `.vo` |
 | `inline_convert` | publish what `rocq proof-record-inline` makes of each registration record and its `.vo` (the record must refer to its `.vo`); check that the converted record keeps every field but the stored terms and a null `vo_opaques`; check that the converter exits 1 and writes nothing for a changed or an absent `.vo` and for a record whose header names another binary, and leaves a record that names no `.vo` unchanged; then replay from the records as they were, each with its `.vo`, in `d/`, and require the same exit codes, hits and `.vo` bytes |
 | `inline_terms` | with `inline_convert`: the proofs whose stored term the conversion must change, in record order |
+| `tree_dirs` | `original` or `edited` -> paths: an empty directory at each path of every tree made from that side, before any compile (the way the grading engine blocks micromega's certificate caches) |
+| `tree_files` | `original` or `edited` -> path -> a file of the fixture's directory, copied to that path of every tree made from that side, before any compile (a file no compile of the tree writes, such as a `.lia.cache`) |
 
 `outcomes` is a list of `[name, outcome]`, or `[name, outcome, channel]` for a
 `read` miss.  It is checked only when the summary carries the field.
@@ -363,6 +368,86 @@ converted record, published without the `.vo`, replays all five proofs to the
 The converter refuses a changed or an absent `.vo`.  `late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
+
+**Gate review of 079bc4cb71, finding CF1.**  The tables that `Add` and
+`Remove` change (`Goptions` `MakeTable`, for example Keep Equalities) had
+no read: the start-of-proof `options` read holds the options only.
+`option_table_keep_equalities`: the edited tree removes `Add Keep
+Equalities bar.` before an unchanged proof whose `injection` needs it, and
+stock fails.  Replay must fail too.  `eval_option_tables`: the contents of
+every table are now one start-of-proof read, `option_tables`.  The edited
+tree removes an `Add Keep Equalities` between two proofs that call
+`injection`.  The later proof's term holds the injected equality only with
+the entry, and it must miss on that read.  The earlier proof reads the
+unchanged table and replays.
+
+**Gate review of 079bc4cb71, finding CF3.**  A proof's sentences hold the
+name of a `Declare Reduction`, not its expression.
+`declare_reduction_changed` (trigger T3): a proof reduces a beta redex with
+`eval rr` and checks with `is_var` that the result is a variable.  The edited
+tree declares `rr` as `cbv iota` in place of `cbv beta`, so stock fails
+`is_var`, and replay must fail too.  On `481ab9697f` replay installed the
+stored term.  `eval_red_expr`: each lookup of a name is a read on channel
+`red_expr`, keyed by the name.  `changed` uses a name whose expression the
+edited tree changes.  `nested` uses a name whose expression is another name,
+and only that inner name changes.  `absent` tries a name that the original
+tree does not declare and the edited tree declares.  Each of the three must
+miss on that read.  `same` uses a name that does not change, and must replay.
+
+**Gate review of 079bc4cb71, finding CF2.**  The global nametab's reverse
+lookups, from a reference to its absolute name or its shortest name, had no
+read.  `nametab_reverse_path` (trigger T2): a proof inside `Section S` asks
+Ltac2 for the absolute name of `c` (`Env.path`) and asserts that it has 3
+parts; the edited tree moves `Definition c` from just before `Section S` to
+just inside it.  `c` keeps its kernel name `PR.A.c`, so the forward lookup
+and the kernel reads do not change, but its absolute name becomes
+`PR.A.S.c`.  Stock fails the assertion, so replay must fail too.
+`eval_xreftab_to_path`: the same move under two proofs that read a name and
+assert nothing; the proof that reads `c` misses on `xreftab/to_path`, and the
+proof that reads `d`, whose name does not change, replays.
+`eval_xreftab_shortest_qualid`: two proofs print a constant named by its
+absolute name, and the printer asks for its shortest name; the edited tree
+imports a module that defines another `c` before the proofs, so the
+shortest name of `PR.A.c` becomes `A.c`, and the proof that prints it misses
+on `xreftab/shortest_qualid`.  The proof that prints `d` replays.
+
+**Gate review of 079bc4cb71, deep review.**  `replay_file_missing` (DR-1):
+`-proof-replay` names a record file that does not exist (`replay_file`).  On
+`481ab9697fc` the compile stopped before the file ran, with `System error:
+"...absent.proof-record.jsonl: No such file or directory"`.  Now the record
+is refused as `bad_record`, every proof runs its tactics, no proof is
+counted, and the `.vo` is the same as stock's.  `replay_dir_no_record`:
+`-proof-replay-dir` holds the record of `A.v` but none for `B.v`
+(`unpublished`), as for a file the author added.  `B.v` is refused as
+`no_record`, a reason of its own, and compiles as stock does.  `A.v` still
+replays.  On `481ab9697fc` the refusal of `B.v` was `bad_record`, the
+reason for a record that cannot be read.  The flags-off path of DR-2 (no
+hook work with neither option) has no fixture of its own: the stock compile
+in `b/` of every fixture runs it, and must give the same exit code and
+`.vo` as the replay compile.
+
+**Gate review of 079bc4cb71, finding CF4.**  `lia`, `nia`, `nra` and `psatz`
+look their problem up in a certificate cache (`.lia.cache`, `.nia.cache`,
+`.nra.cache`, `.csdp.cache`, in the compile's working directory) before they
+run their prover, and no read recorded the cache.  The grading engine blocks
+these paths with directories, but the fixture runner and other users of this
+tree do not.  `micromega_cache_unknown`: the edited tree holds a `.lia.cache`
+(`tree_files`) whose one entry is the registration's own entry for the
+proof's problem, with the result changed to `Certificate.Unknown`.
+`make_cache.ml`, beside the fixture, wrote it with the micromega plugin of
+the same build.  Stock reads `Unknown` and `lia` fails, so replay must fail
+too.  Before the fix, replay installed the stored term and compiled the file.
+`eval_micromega_cache`: both trees block `.nia.cache` (`tree_dirs`), as the
+grading engine does, so the `nia` proof `same` reads no entry in both runs
+and replays.  The registration blocks `.lia.cache` too, and the edited tree
+holds the `.lia.cache` that a compile of this tree with no block writes
+(`lia-cache.bin`: `rocq compile -q -Q . PR A.v` in a copy of `original/`).
+So the `lia` proof `changed` misses on `micromega_cache`.  Its entry is
+genuine, so stock and replay compile.  The replay `.vo` differs from stock's
+only in the sharing of the string "BinInt", as `vm_lia_hit`'s does
+(`EXEMPTIBLE_FIXTURES` in `runner.py`).  A cache file that differs from the
+registration's makes a proof miss also when its entries are genuine: the
+value is the file's digest, not each lookup's answer.
 
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 

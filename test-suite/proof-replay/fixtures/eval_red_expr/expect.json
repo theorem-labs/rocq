@@ -1,0 +1,28 @@
+{
+  "doc": "a named reduction (Declare Reduction) a proof uses changes, directly, through a name inside another named reduction, or from absent to declared: each such proof misses on the red_expr read, and the proof whose named reduction does not change replays",
+  "files": ["A.v"],
+  "records": {
+    "A.v": {
+      "PR.A.same": {"eligible": true},
+      "PR.A.changed": {"eligible": true},
+      "PR.A.nested": {"eligible": true},
+      "PR.A.absent": {"eligible": true}
+    }
+  },
+  "summaries": {
+    "A.v": {
+      "proofs": 4,
+      "hits": 1,
+      "misses": {"key": 0, "read": 3, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [
+        ["PR.A.same", "hit"],
+        ["PR.A.changed", "read", "red_expr", "changed"],
+        ["PR.A.nested", "read", "red_expr", "changed"],
+        ["PR.A.absent", "read", "red_expr", "changed"]
+      ]
+    }
+  }
+}

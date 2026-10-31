@@ -15,7 +15,8 @@ For one fixture the runner does, in order:
     registration must have stored: the ineligibility reasons it must carry,
     and whether it may hold a stored term (`replay`).
 3.  **The grade.**  Compile `edited/` in the tree `a/` with
-    `-proof-replay-dir <records> -proof-replay-ratio <r>`, read each
+    `-proof-replay-dir <records> -proof-replay-ratio <r>` (`-proof-replay
+    <records>/<replay_file>` when the fixture names one), read each
     `<base>.proof-replay.json` and check it against `summaries`.
 4.  **Stock.**  Compile `edited/` again in the tree `b/` with no replay option.
     The two runs must agree: the same exit code per file, and for a file that
@@ -72,6 +73,9 @@ DEFAULTS = {
     "register_flags": [],
     "grade_flags": [],
     "replay_extra_flags": [],
+    # One record file under the records directory, given to `-proof-replay`
+    # in place of `-proof-replay-dir` (`Fixture.replay_flags`).
+    "replay_file": None,
     "ratio": "1",
     # Lane R1 measured that the stack limit changes the bytes of a `.vo`, so a
     # fixture's compiles must all run under the limit a grade runs under, and
@@ -79,6 +83,9 @@ DEFAULTS = {
     # limit the grading engine sets (BET-84 spec, "Resource limits").
     "stack_kb": 8192,
     "record_layout": "both",
+    # Files the registration records but whose record is not published: the
+    # grade finds no record for them under `-proof-replay-dir`.
+    "unpublished": [],
     "compile_fails": [],
     "summaries": {},
     "records": {},
@@ -94,6 +101,8 @@ DEFAULTS = {
     "mixed": None,
     "trigger_optional": None,
     "inline_convert": False,
+    "tree_files": {},
+    "tree_dirs": {},
 }
 
 
@@ -171,6 +180,21 @@ def copy_tree(src, dst):
     shutil.copytree(src, dst)
 
 
+def stage_tree(spec, side, dst):
+    """The fixture's `side` tree (`original` or `edited`) at `dst`, with what
+    `tree_dirs` and `tree_files` add to that side: an empty directory at each
+    path (the way the grading engine blocks micromega's certificate caches),
+    and a file of the fixture's directory copied to each path (a cache file
+    no compile of the tree writes)."""
+    copy_tree(FIXTURES / spec["name"] / side, dst)
+    for rel in spec["tree_dirs"].get(side, []):
+        (dst / rel).mkdir(parents=True)
+    for rel, name in spec["tree_files"].get(side, {}).items():
+        target = dst / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(FIXTURES / spec["name"] / name, target)
+
+
 def lib_name(spec, src):
     return spec["root"] + "." + src[:-2].replace("/", ".")
 
@@ -215,6 +239,8 @@ def publish_records(spec, reg, records, convert=None, mutation=None):
         rec = record_src(reg, src)
         if not rec.is_file():
             return None, "registration wrote no record for %s" % src
+        if src in spec["unpublished"]:
+            continue
         name = lib_name(spec, src)
         targets = []
         if spec["record_layout"] in ("dotted", "both"):
@@ -398,13 +424,16 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: library segment reaches the string "BinInt" through a shared pointer
 #: where the replay's does not (vodiff, 2026-10-30: 0 value differences,
 #: 2 sharing differences; the same on a switch built before the vm_global
-#: read). oracle_checker_memo, oracle_zchecker_memo and oracle_fresh_keyword
+#: read). eval_micromega_cache replays one nia proof over Z, with the same
+#: two "BinInt" sharing differences (vodiff, 2026-10-31: 0 value
+#: differences, 2 sharing differences, the opaques segment equal).
+#: oracle_checker_memo, oracle_zchecker_memo and oracle_fresh_keyword
 #: replay one of two lia proofs and show the same two "BinInt" sharing
 #: differences (vodiff on the speed-8 replay switch, 2026-10-31: values equal,
 #: 0 value differences, 2 sharing differences each).
 EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite",
-                       "vm_lia_hit", "oracle_checker_memo", "oracle_zchecker_memo",
-                       "oracle_fresh_keyword")
+                       "vm_lia_hit", "eval_micromega_cache", "oracle_checker_memo",
+                       "oracle_zchecker_memo", "oracle_fresh_keyword")
 
 
 def exemption_allowed(fixture, differing_segments, library_values_equal):
@@ -454,7 +483,7 @@ class Fixture:
         spec = self.spec
         flags = spec["register_flags"] if flags is None else flags
         reg = self.out / reg_name
-        copy_tree(FIXTURES / spec["name"] / "original", reg)
+        stage_tree(spec, "original", reg)
         for src in spec["files"]:
             res = self.rocq.compile(spec, reg, flags + ["-proof-record"], src)
             self.log("%s-%s" % (reg_name, src), res)
@@ -621,7 +650,7 @@ class Fixture:
         """
         spec = self.spec
         tree = self.out / tree_name
-        copy_tree(FIXTURES / spec["name"] / "edited", tree)
+        stage_tree(spec, "edited", tree)
         results = []
         for src in (spec["files"] if files is None else files):
             res = self.rocq.compile(spec, tree, flags, src, timeout_s=timeout_s)
@@ -630,6 +659,22 @@ class Fixture:
             if res["rc"] != 0:
                 break
         return tree, results
+
+    def replay_flags(self, records):
+        """The replay compile's options: the fixture's own, where the record
+        is, and the ratio.  With `replay_file`, the record is that file under
+        `records`, given to `-proof-replay` with its SHA-256 (64 zeros when
+        the file does not exist) as `-proof-replay-digest`.  Without it, the
+        directory, to `-proof-replay-dir`."""
+        spec = self.spec
+        if spec["replay_file"] is None:
+            source = ["-proof-replay-dir", str(records)]
+        else:
+            path = records / spec["replay_file"]
+            digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "0" * 64
+            source = ["-proof-replay", str(path), "-proof-replay-digest", digest]
+        return (spec["grade_flags"] + spec["replay_extra_flags"] + source
+                + ["-proof-replay-ratio", spec["ratio"]])
 
     def check_exit_codes(self, replay, stock):
         spec = self.spec
@@ -825,8 +870,7 @@ class Fixture:
             # before a replay Rocq exists.
             replay_flags = spec["grade_flags"]
         else:
-            replay_flags = (spec["grade_flags"] + spec["replay_extra_flags"]
-                            + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
+            replay_flags = self.replay_flags(records)
         a, replay = self.grade("a", replay_flags)
         b, stock = self.grade("b", spec["grade_flags"])
         self.check_exit_codes(replay, stock)
@@ -871,8 +915,7 @@ class Fixture:
 
     def compare_replays(self, a, replay, records, tree_name, what):
         spec = self.spec
-        flags = (spec["grade_flags"] + spec["replay_extra_flags"]
-                 + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
+        flags = self.replay_flags(records)
         c, other = self.grade(tree_name, flags)
         ra = [(s, r["rc"]) for s, r in replay]
         rc = [(s, r["rc"]) for s, r in other]
@@ -898,7 +941,7 @@ class Fixture:
         if not record.is_file():
             record = records / (lib_name(spec, src).replace(".", "/") + ".proof-record.jsonl")
         tree = self.out / "u"
-        copy_tree(FIXTURES / spec["name"] / "edited", tree)
+        stage_tree(spec, "edited", tree)
         res = self.rocq.compile(spec, tree, ["-proof-replay", str(record)], src)
         self.log("usage-" + src, res)
         want_rc = spec["usage"].get("exit", 1)
@@ -916,9 +959,7 @@ class Fixture:
         spec = self.spec
         budget = spec["budget"]
         src = spec["files"][0]
-        replay_flags = (spec["grade_flags"] + spec["replay_extra_flags"]
-                        + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"],
-                           "-proof-replay-budget", str(budget)])
+        replay_flags = self.replay_flags(records) + ["-proof-replay-budget", str(budget)]
         a, replay = self.grade("a", replay_flags, timeout_s=budget + 120)
         b, stock = self.grade("b", spec["grade_flags"], timeout_s=budget)
         ra, rb = replay[0][1], stock[0][1]
@@ -976,8 +1017,7 @@ class Fixture:
                     self.fail("the stock control of %s did not print %r, so the mixed tree proves nothing"
                               % (src, needle))
                     return
-        replay_flags = (spec["grade_flags"] + spec["replay_extra_flags"]
-                        + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
+        replay_flags = self.replay_flags(records)
         a, replay = self.grade("a", replay_flags, files=[replay_file])
         if replay[0][1]["rc"] != 0:
             self.fail("the replay compile of %s exited %d: %s"
@@ -985,7 +1025,7 @@ class Fixture:
             return
         self.check_summaries(a, replay)
         m = self.out / "m"
-        copy_tree(FIXTURES / spec["name"] / "edited", m)
+        stage_tree(spec, "edited", m)
         shutil.copyfile(vo_src(a, replay_file), vo_src(m, replay_file))
         for src in carry:
             shutil.copyfile(vo_src(b, src), vo_src(m, src))

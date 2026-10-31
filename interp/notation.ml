@@ -579,13 +579,13 @@ let find_prim_token check_allowed ?loc p sc =
   pat
 
 (* BET-84 census row 11: the key of a notation or number query. Every part
-   is written with its length and a custom entry by [Lib.kername_key], so a
+   is written with its length and a custom entry by [Libnames.kername_key], so a
    key determines its query and [notation_query_of_key] reads it back. *)
 let notation_query_key (entry, text) scopes =
   let encode_string s = string_of_int (String.length s) ^ ":" ^ s in
   let encode_entry = function
     | InConstrEntry -> "C"
-    | InCustomEntry name -> "U" ^ encode_string (Lib.kername_key name)
+    | InCustomEntry name -> "U" ^ encode_string (Libnames.kername_key name)
   in
   let encode_notation (entry, text) =
     encode_entry entry ^ encode_string text
@@ -619,7 +619,7 @@ let notation_query_of_key key =
       | Some 'U' ->
         (match decode_string () with
          | None -> None
-         | Some s -> Option.map (fun kn -> InCustomEntry kn) (Lib.kername_of_key s))
+         | Some s -> Option.map (fun kn -> InCustomEntry kn) (Libnames.kername_of_key s))
       | Some _ | None -> None
     in
     match entry with

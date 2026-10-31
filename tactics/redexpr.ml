@@ -279,6 +279,36 @@ let decl_red_expr s e =
     red_expr_tab := String.Map.add s e !red_expr_tab
   end
 
+(* BET-84 census row 15: the expression a [Declare Reduction] name stands
+   for. A proof's sentences hold the name, not the expression, so each
+   lookup a tactic makes is a read on channel [red_expr], keyed by the name
+   (the table's own key, so the key reads back exactly), with the digest of
+   the expression found, or absent. A name inside a found expression is
+   looked up again through [find_red_expr], so it is a read of its own
+   (cross-family review of 079bc4cb71, finding CF3, fixtures
+   declare_reduction_changed and eval_red_expr). The other readers of the
+   table ([declare_reduction], [check_custom], [decl_red_expr]) run when a
+   plugin loads or a command runs. A command inside a proof makes the proof
+   ineligible (row 21). When the name is absent here,
+   [reduction_of_red_expr_val] looks for it in [reduction_tab]. Only
+   [declare_reduction] adds to that table, and in this tree only when the
+   ring plugin loads, so the loaded plugins in the toolchain key fix it
+   (row 16). ONE value function, called by the record site and by the
+   replay evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_red_expr s =
+  Option.map (fun e -> Proof_recorder.digest ~what:"red_expr" e)
+    (String.Map.find_opt s !red_expr_tab)
+
+let () =
+  Proof_replay.register_evaluator "red_expr" (fun s ->
+      Proof_replay.Value (recorded_red_expr s))
+
+let find_red_expr s =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"red_expr" ~key:(fun () -> s)
+      ~value:(fun () -> recorded_red_expr s);
+  String.Map.find_opt s !red_expr_tab
+
 let out_arg = function
   | Locus.ArgVar _ -> anomaly (Pp.str "Unevaluated or_var variable.")
   | Locus.ArgArg x -> x
@@ -326,9 +356,9 @@ let rec eval_red_expr env = function
 | Cbn f -> Cbn (make_flag env f)
 | Lazy f -> Lazy (make_flag env f)
 | ExtraRedExpr s ->
-  begin match String.Map.find s !red_expr_tab with
-  | e -> eval_red_expr env e
-  | exception Not_found -> ExtraRedExpr s (* delay to runtime interpretation *)
+  begin match find_red_expr s with
+  | Some e -> eval_red_expr env e
+  | None -> ExtraRedExpr s (* delay to runtime interpretation *)
   end
 | (Red | Hnf | Unfold _ | Fold _ | Pattern _ | CbvVm _ | CbvNative _ | UserRed _) as e -> e
 

@@ -193,3 +193,162 @@ let idset_mem_qualid qid s =
 let rocq_init_string = "Corelib"
 let rocq_init_root = Id.of_string rocq_init_string
 let default_root_prefix = DirPath.empty
+
+(* BET-84 P3: a kernel name as a recorded key, and back.
+   [KerName.to_string] is not a key: it drops a bound module's number, and
+   ["A.B.c"] is both the label [c] of the file [A.B] and the label [c] of the
+   module [B] of the file [A]. So each part is written with its length
+   ([<length>:<bytes>]): the label, then the module path, which is
+   [F<n>:] and the [n] parts of a file's directory path, outermost first;
+   [D<label>] and the path of the module it is in; or [B] and a bound
+   module's number, name and file. No key is a prefix of another, so a key
+   names one kernel name. *)
+let key_part s = string_of_int (String.length s) ^ ":" ^ s
+
+let rec modpath_key = function
+  | ModPath.MPfile dp ->
+    let ids = List.rev (DirPath.repr dp) in
+    "F" ^ string_of_int (List.length ids) ^ ":"
+    ^ String.concat "" (List.map (fun id -> key_part (Id.to_string id)) ids)
+  | ModPath.MPbound mbid ->
+    let (n, id, dp) = MBId.repr mbid in
+    "B" ^ key_part (string_of_int n) ^ key_part (Id.to_string id) ^ modpath_key (ModPath.MPfile dp)
+  | ModPath.MPdot (mp, l) -> "D" ^ key_part (Id.to_string l) ^ modpath_key mp
+
+let kername_key kn = key_part (Id.to_string (KerName.label kn)) ^ modpath_key (KerName.modpath kn)
+
+(* The reader of [kername_key], from byte [start] of [key]: the kernel name
+   and the position after it. A bound module cannot be rebuilt from its
+   number, so its key reads back to nothing; so does a part that is not an
+   identifier [Id.of_string_soft] accepts. *)
+let kername_parse key start =
+  let n = String.length key in
+  let pos = ref start in
+  let number () =
+    match String.index_from_opt key !pos ':' with
+    | None -> None
+    | Some j ->
+      let v = int_of_string_opt (String.sub key !pos (j - !pos)) in
+      pos := j + 1;
+      (match v with Some v when v >= 0 -> Some v | Some _ | None -> None)
+  in
+  let part () =
+    match number () with
+    | Some len when !pos + len <= n ->
+      let s = String.sub key !pos len in
+      pos := !pos + len;
+      (match Id.of_string_soft s with
+       | id -> Some id
+       | exception CErrors.UserError _ -> None)
+    | Some _ | None -> None
+  in
+  let rec parts k acc =
+    if k = 0 then Some acc
+    else match part () with None -> None | Some id -> parts (k - 1) (id :: acc)
+  in
+  let rec modpath () =
+    if !pos >= n then None
+    else begin
+      let tag = key.[!pos] in
+      incr pos;
+      match tag with
+      | 'F' ->
+        (match number () with
+         | None -> None
+         | Some k -> Option.map (fun ids -> ModPath.MPfile (DirPath.make ids)) (parts k []))
+      | 'D' ->
+        (match part () with
+         | None -> None
+         | Some l -> Option.map (fun mp -> ModPath.MPdot (mp, l)) (modpath ()))
+      | _ -> None
+    end
+  in
+  match part () with
+  | None -> None
+  | Some l -> Option.map (fun mp -> (KerName.make mp l, !pos)) (modpath ())
+
+(* The whole key must be read, and the name read back must print back as
+   the key. *)
+let kername_of_key key =
+  match kername_parse key 0 with
+  | Some (kn, e) when e = String.length key && String.equal (kername_key kn) key -> Some kn
+  | Some _ | None -> None
+
+(* BET-84: a constant as a recorded key: its user and canonical kernel
+   names, each as [kername_key] writes it. Two constants with the same user
+   name and different canonical names (an alias of a module) get different
+   keys. *)
+let constant_key c =
+  kername_key (Constant.user c) ^ kername_key (Constant.canonical c)
+
+(* A constant or a mutual inductive (a kernel pair) from byte [start] of
+   [key]: its user kernel name, then its canonical one, and the position
+   after them. *)
+let kerpair_parse make key start =
+  match kername_parse key start with
+  | None -> None
+  | Some (user, e) ->
+    Option.map (fun (canonical, e') -> (make user canonical, e')) (kername_parse key e)
+
+let constant_of_key key =
+  match kerpair_parse Constant.make key 0 with
+  | Some (c, e) when e = String.length key && String.equal (constant_key c) key -> Some c
+  | Some _ | None -> None
+
+(* BET-84: a global reference as a recorded key, read back without the
+   nametab: [V] and a variable's name; [C] and the constant's key; [I], the
+   user and canonical kernel names of the mutual inductive, and the index of
+   the inductive; [K], the same, and the index of the constructor. Every
+   part is written with its length, so a key names one reference. *)
+let mutind_key m = kername_key (MutInd.user m) ^ kername_key (MutInd.canonical m)
+
+let globref_key = function
+  | GlobRef.VarRef id -> "V" ^ key_part (Id.to_string id)
+  | GlobRef.ConstRef c -> "C" ^ constant_key c
+  | GlobRef.IndRef (m, i) -> "I" ^ mutind_key m ^ key_part (string_of_int i)
+  | GlobRef.ConstructRef ((m, i), j) ->
+    "K" ^ mutind_key m ^ key_part (string_of_int i) ^ key_part (string_of_int j)
+
+(* One [<length>:<bytes>] part from byte [start] of [key]: its bytes and the
+   position after it. *)
+let part_parse key start =
+  let n = String.length key in
+  if start >= n then None
+  else match String.index_from_opt key start ':' with
+    | None -> None
+    | Some j ->
+      match int_of_string_opt (String.sub key start (j - start)) with
+      | Some len when len >= 0 && j + 1 + len <= n -> Some (String.sub key (j + 1) len, j + 1 + len)
+      | Some _ | None -> None
+
+let index_parse key start =
+  Option.bind (part_parse key start) (fun (s, e) ->
+      Option.map (fun i -> (i, e)) (int_of_string_opt s))
+
+(* The whole key must be read, and the reference read back must give the
+   key again. *)
+let globref_of_key key =
+  let n = String.length key in
+  let whole = function Some (r, e) when e = n -> Some r | Some _ | None -> None in
+  let parsed =
+    if n = 0 then None
+    else match key.[0] with
+      | 'V' ->
+        whole (Option.bind (part_parse key 1) (fun (s, e) ->
+            match Id.of_string_soft s with
+            | id -> Some (GlobRef.VarRef id, e)
+            | exception CErrors.UserError _ -> None))
+      | 'C' ->
+        whole (Option.map (fun (c, e) -> (GlobRef.ConstRef c, e)) (kerpair_parse Constant.make key 1))
+      | 'I' ->
+        whole (Option.bind (kerpair_parse MutInd.make key 1) (fun (m, e) ->
+            Option.map (fun (i, e) -> (GlobRef.IndRef (m, i), e)) (index_parse key e)))
+      | 'K' ->
+        whole (Option.bind (kerpair_parse MutInd.make key 1) (fun (m, e) ->
+            Option.bind (index_parse key e) (fun (i, e) ->
+                Option.map (fun (j, e) -> (GlobRef.ConstructRef ((m, i), j), e)) (index_parse key e))))
+      | _ -> None
+  in
+  match parsed with
+  | Some r when String.equal (globref_key r) key -> Some r
+  | Some _ | None -> None
