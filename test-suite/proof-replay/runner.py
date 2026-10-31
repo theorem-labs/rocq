@@ -15,7 +15,8 @@ For one fixture the runner does, in order:
     registration must have stored: the ineligibility reasons it must carry,
     and whether it may hold a stored term (`replay`).
 3.  **The grade.**  Compile `edited/` in the tree `a/` with
-    `-proof-replay-dir <records> -proof-replay-ratio <r>`, read each
+    `-proof-replay-dir <records> -proof-replay-ratio <r>` (`-proof-replay
+    <records>/<replay_file>` when the fixture names one), read each
     `<base>.proof-replay.json` and check it against `summaries`.
 4.  **Stock.**  Compile `edited/` again in the tree `b/` with no replay option.
     The two runs must agree: the same exit code per file, and for a file that
@@ -72,6 +73,9 @@ DEFAULTS = {
     "register_flags": [],
     "grade_flags": [],
     "replay_extra_flags": [],
+    # One record file under the records directory, given to `-proof-replay`
+    # in place of `-proof-replay-dir` (`Fixture.replay_flags`).
+    "replay_file": None,
     "ratio": "1",
     # Lane R1 measured that the stack limit changes the bytes of a `.vo`, so a
     # fixture's compiles must all run under the limit a grade runs under, and
@@ -79,6 +83,9 @@ DEFAULTS = {
     # limit the grading engine sets (BET-84 spec, "Resource limits").
     "stack_kb": 8192,
     "record_layout": "both",
+    # Files the registration records but whose record is not published: the
+    # grade finds no record for them under `-proof-replay-dir`.
+    "unpublished": [],
     "compile_fails": [],
     "summaries": {},
     "records": {},
@@ -206,6 +213,8 @@ def publish_records(spec, reg, records):
         rec = record_src(reg, src)
         if not rec.is_file():
             return None, "registration wrote no record for %s" % src
+        if src in spec["unpublished"]:
+            continue
         name = lib_name(spec, src)
         targets = []
         if spec["record_layout"] in ("dotted", "both"):
@@ -531,6 +540,22 @@ class Fixture:
                 break
         return tree, results
 
+    def replay_flags(self, records):
+        """The replay compile's options: the fixture's own, where the record
+        is, and the ratio.  With `replay_file`, the record is that file under
+        `records`, given to `-proof-replay` with its SHA-256 (64 zeros when
+        the file does not exist) as `-proof-replay-digest`.  Without it, the
+        directory, to `-proof-replay-dir`."""
+        spec = self.spec
+        if spec["replay_file"] is None:
+            source = ["-proof-replay-dir", str(records)]
+        else:
+            path = records / spec["replay_file"]
+            digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "0" * 64
+            source = ["-proof-replay", str(path), "-proof-replay-digest", digest]
+        return (spec["grade_flags"] + spec["replay_extra_flags"] + source
+                + ["-proof-replay-ratio", spec["ratio"]])
+
     def check_exit_codes(self, replay, stock):
         spec = self.spec
         for src, res in replay:
@@ -725,8 +750,7 @@ class Fixture:
             # before a replay Rocq exists.
             replay_flags = spec["grade_flags"]
         else:
-            replay_flags = (spec["grade_flags"] + spec["replay_extra_flags"]
-                            + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
+            replay_flags = self.replay_flags(records)
         a, replay = self.grade("a", replay_flags)
         b, stock = self.grade("b", spec["grade_flags"])
         self.check_exit_codes(replay, stock)
@@ -748,8 +772,7 @@ class Fixture:
         records = self.register(flags=spec["alt_register_flags"], reg_name="rgb", records_name="recordz")
         if records is None:
             return
-        flags = (spec["grade_flags"] + spec["replay_extra_flags"]
-                 + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
+        flags = self.replay_flags(records)
         c, other = self.grade("c", flags)
         ra = [(s, r["rc"]) for s, r in replay]
         rc = [(s, r["rc"]) for s, r in other]
@@ -794,9 +817,7 @@ class Fixture:
         spec = self.spec
         budget = spec["budget"]
         src = spec["files"][0]
-        replay_flags = (spec["grade_flags"] + spec["replay_extra_flags"]
-                        + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"],
-                           "-proof-replay-budget", str(budget)])
+        replay_flags = self.replay_flags(records) + ["-proof-replay-budget", str(budget)]
         a, replay = self.grade("a", replay_flags, timeout_s=budget + 120)
         b, stock = self.grade("b", spec["grade_flags"], timeout_s=budget)
         ra, rb = replay[0][1], stock[0][1]
@@ -854,8 +875,7 @@ class Fixture:
                     self.fail("the stock control of %s did not print %r, so the mixed tree proves nothing"
                               % (src, needle))
                     return
-        replay_flags = (spec["grade_flags"] + spec["replay_extra_flags"]
-                        + ["-proof-replay-dir", str(records), "-proof-replay-ratio", spec["ratio"]])
+        replay_flags = self.replay_flags(records)
         a, replay = self.grade("a", replay_flags, files=[replay_file])
         if replay[0][1]["rc"] != 0:
             self.fail("the replay compile of %s exited %d: %s"

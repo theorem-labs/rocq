@@ -136,7 +136,9 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
             ~vo_opaques:(fun () -> Library.opaques_segment_sha256 long_f_dot_out)
             (Proof_record.path_of_vo long_f_dot_out)
       in
-      let () = Proof_replay.write_summary (Proof_replay.summary_path_of_vo long_f_dot_out) in
+      let () = if Proof_replay.configured () then
+          Proof_replay.write_summary (Proof_replay.summary_path_of_vo long_f_dot_out)
+      in
       let () = Aux_file.record_in_aux_at "vo_compile_time"
           (Printf.sprintf "%.3f" (wall_clock2 -. wall_clock1))
       in

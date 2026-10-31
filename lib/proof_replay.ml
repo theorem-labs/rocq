@@ -213,6 +213,7 @@ let channel_miss : (string, int) Hashtbl.t = Hashtbl.create 16
 let miss_detail : (string, string * string option * string option) Hashtbl.t = Hashtbl.create 64
 
 let configure ~source ~ratio ~budget ~peak_limit_kb ~digest =
+  Proof_recorder.set_in_use ();
   options :=
     Some { o_source = source; o_ratio = ratio; o_budget = budget; o_peak_limit_kb = peak_limit_kb;
            o_digest = digest }
@@ -309,7 +310,7 @@ let expected_digest path =
       (match read_file side with
        | s when String.length s >= 64 -> Some (String.sub s 0 64)
        | _ -> None
-       | exception Sys_error _ -> None)
+       | exception (Sys_error _ | End_of_file) -> None)
   | Some { o_source = Record_file _; o_digest = None; _ } | None -> None
 
 let binding_refusal ~library ~path ~bytes (h : R.header) =
@@ -985,11 +986,21 @@ let start ~library ~source ~toolchain =
     pending_counters := [];
     let index = Hashtbl.create 256 in
     let registered_object = ref None in
+    (* A [-proof-replay-dir] with no record for this library is refused as
+       ["no_record"]: a file the registration never saw, such as one the
+       author added. A record that is named or found but cannot be read (a
+       [-proof-replay FILE] that does not exist or that this user cannot
+       open, a record of [-proof-replay-dir] removed or cut between
+       [record_path] and this read) is refused as one that does not parse,
+       ["bad_record"] (deep review of 079bc4cb71, DR-1). Either way the file
+       runs its tactics. Only the read's own failures are caught. *)
     let refusal =
       match record_path ~library opts.o_source with
-      | None -> Some "bad_record"
+      | None -> Some "no_record"
       | Some path ->
-        let bytes = read_file path in
+        match read_file path with
+        | exception (Sys_error _ | End_of_file) -> Some "bad_record"
+        | bytes ->
         (match R.parse_string bytes with
          | exception _ -> Some "bad_record"
          | file ->

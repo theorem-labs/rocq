@@ -34,14 +34,18 @@
 type source =
   | Record_file of string  (** one record file, for this compile only *)
   | Record_dir of string
-      (** a directory of records: the file's record is
-          [DIR/<dotted logical name>.proof-record.jsonl], or
-          [DIR/<the same with dots turned into slashes>.proof-record.jsonl]. *)
+      (** a directory of records: the file's record is the first that
+          exists of [DIR/<dotted logical name>.proof-record.jsonl],
+          [DIR/<the same with dots turned into slashes>.proof-record.jsonl]
+          and [DIR/<V>.proof-record.jsonl], where V is the path of the
+          object this compile writes, without its extension, when that path
+          is relative and has no parent-directory part. *)
 
 val configure :
   source:source -> ratio:float -> budget:float option -> peak_limit_kb:int option ->
   digest:string option -> unit
-(** The command line's options. Call before the compile.
+(** The command line's options. Call before the compile. It also makes
+    {!Proof_recorder.in_use} true.
 
     {b The record is a trusted input, at the same tier as the binary.} Its
     stored terms are read back with [Marshal.from_string], which is not
@@ -65,17 +69,21 @@ exception Budget_exhausted
 val start :
   library:string -> source:string option -> toolchain:(unit -> Proof_record.toolchain) -> unit
 (** Loads the record for this library and starts the clock. A no-op when no
-    source is configured. After it, {!refused} says whether the whole file
-    runs without replay, and why. [toolchain] is this compile's: a record
-    whose header names another binary, plugin set, load order,
-    safe-dependency set or stack limit is refused for the whole file, before
-    any of its proofs is declared (reason ["toolchain"]). In a file with a
-    command after its first [Qed] or [Save] that can rebind a Rocqlib name or
-    load code, every proof that opens before the last such command runs its
-    tactics (outcome [ineligible], channel ["rebind"]), and [refused_detail]
-    names the first command and its line; a [Require] counts only while a
-    library it names is not loaded at the proof's opening. An unreadable
-    source is refused whole (reason ["rebind"]). *)
+    source is configured. A [Record_dir] that holds no record for this
+    library is refused whole (reason ["no_record"]): the file is one the
+    registration did not record. A record that is named or found but cannot
+    be read, or does not parse, is refused whole (reason ["bad_record"]).
+    After it, {!refused} says whether the whole file runs without replay,
+    and why. [toolchain] is this compile's: a record whose header names
+    another binary, plugin set, load order, safe-dependency set or stack
+    limit is refused for the whole file, before any of its proofs is
+    declared (reason ["toolchain"]). In a file with a command after its
+    first [Qed] or [Save] that can rebind a Rocqlib name or load code, every
+    proof that opens before the last such command runs its tactics (outcome
+    [ineligible], channel ["rebind"]), and [refused_detail] names the first
+    command and its line; a [Require] counts only while a library it names
+    is not loaded at the proof's opening. An unreadable source is refused
+    whole (reason ["rebind"]). *)
 
 val scan_late_rebind : string -> (string * int) option
 (** The first command in this source text, after its first [Qed] or [Save],
@@ -178,10 +186,13 @@ val enabled : unit -> bool
 (** A record is loaded and the file is not refused. *)
 
 val refused : unit -> string option
-(** The reason the whole file runs without replay: ["memory"] (the recorded
-    peak is above the limit), ["rlimit"], ["overcommit"], ["bad_record"], or
-    ["rebind"] for a source the late-command scan cannot read. A late
-    command keeps only the proofs before it from replaying. *)
+(** The reason the whole file runs without replay: ["no_record"] (no record
+    for this library in the directory), ["bad_record"] (a record that cannot
+    be read or does not parse), ["digest"], ["writable"], ["library"],
+    ["format"] (see {!configure}), ["toolchain"], ["memory"] (the recorded
+    peak is above the limit), ["rlimit"], ["overcommit"], or ["rebind"] for a
+    source the late-command scan cannot read. A late command keeps only the
+    proofs before it from replaying. *)
 val check_budget : unit -> unit
 (** Raises {!Budget_exhausted} when the elapsed time plus the charge has
     reached the budget. Call it at each sentence. *)
