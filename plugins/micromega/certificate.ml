@@ -1129,6 +1129,16 @@ let hits = ref 0
 let memo_hits () = !hits
 let memo_size () = Memo.length memo
 
+(* BET-84, proof replay: a replayed proof runs no tactic, so it does not fill
+   this memo, and a later proof that runs asks the prover where stock finds
+   the answer here. The answer is the same; only its time grows. So a compile
+   that replays is only slower than stock at that search, and a catchable
+   timeout around it fires no less often than in stock. A fire is counted by
+   -record-timeouts (fired >= 1), and the build driver's carry rule then
+   rebuilds the object; a timeout that did not fire in the replaying compile
+   did not fire in stock either, so both took the same branch. That mark is
+   the only thing that covers this case (test-suite/misc/record_timeouts.sh,
+   case 15). *)
 let memoised tag prover prfdepth sys =
   match dump_file () with
   | Some _ -> prover prfdepth sys

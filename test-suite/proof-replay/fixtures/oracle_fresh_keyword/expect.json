@@ -1,0 +1,54 @@
+{
+  "doc": "the lia oracle names its hypotheses __wit, __varmap and __ff as Ltac's fresh does; the keyword test is a read on channel keyword (row 17), so a changed answer for __wit makes the proof miss",
+  "files": [
+    "A.v"
+  ],
+  "records": {
+    "A.v": {
+      "PR.A.first": {
+        "eligible": true
+      },
+      "PR.A.second": {
+        "eligible": true
+      }
+    }
+  },
+  "record_patch": [
+    {
+      "proof": "PR.A.first",
+      "channel": "keyword",
+      "key": "__wit",
+      "value": "true"
+    }
+  ],
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {
+        "key": 0,
+        "read": 1,
+        "ineligible": 0,
+        "missing_record": 0
+      },
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [
+        [
+          "PR.A.first",
+          "read",
+          "keyword",
+          "changed"
+        ],
+        [
+          "PR.A.second",
+          "hit"
+        ]
+      ]
+    }
+  },
+  "vo_exempt": {
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of the identifier string \"BinInt\" in the library segment (vodiff on the speed-8 replay switch, 2026-10-31: 0 value differences and 2 sharing differences, as vm_lia_hit). GRADE retired byte identity as a correctness gate on 2026-10-26; the contract is value equality."
+  }
+}

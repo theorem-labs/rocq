@@ -149,5 +149,10 @@ val interp_ident : interp_sign -> Environ.env -> Evd.evar_map -> Id.t -> Id.t
 val interp_intro_pattern : interp_sign -> Environ.env -> Evd.evar_map ->
   glob_constr_and_expr intro_pattern_expr CAst.t -> intro_pattern
 
+val fresh_keyword : string -> bool
+(** Whether [fresh] takes this string for a keyword (it then appends "0").
+    The answer is recorded on the replay recorder's keyword channel (BET-84
+    census row 17) while a proof is recorded. *)
+
 val default_ist : unit -> Geninterp.interp_sign
 (** Empty ist with debug set on the current value. *)

@@ -8,8 +8,9 @@
 # refusal of -async-proofs and -vos, whose delegated proofs do not report, a
 # timeout that fires, a file with no timeout, a failing compilation, one killed
 # by SIGKILL, that without the option nothing is removed or written and the
-# .vo is unchanged, and that proof replay's budget is not counted and a
-# compilation it ends leaves no record.
+# .vo is unchanged, that proof replay's budget is not counted and a
+# compilation it ends leaves no record, and that a timeout that fires after a
+# replayed proof is counted.
 
 set -u
 
@@ -211,6 +212,37 @@ st=$?
 if [ -f "$D/budget_killed.timeouts.json" ]; then
   fail "budget_killed: a record is there: $(cat "$D/budget_killed.timeouts.json")"
 fi
+
+# 15. A replayed proof fills no process cache (Certificate.memo, for one), so a
+#     later proof can run slower than in stock, and a catchable timeout around
+#     it can fire where stock's does not. That fire must be counted, so that
+#     the build driver rebuilds the object. Here [warm] replays, and the
+#     timeout in [timed] fires: the do loop stands for a lia that its cold
+#     cache makes slower than the timeout. The replay compile's record must
+#     say fired >= 1.
+mkdir -p "$D/reg" "$D/grade" "$D/recs"
+cat > "$D/reg/memo.v" <<'EOF'
+Lemma warm : True.
+Proof. exact I. Qed.
+Lemma timed : True \/ True.
+Proof. first [ left; timeout 1 (do 1000000000 idtac) | right; exact I ]. Qed.
+EOF
+cp "$D/reg/memo.v" "$D/grade/memo.v"
+(cd "$D/reg" && rocq c -q -R . RecordTimeouts -proof-record memo.v) > "$D/memo-reg.out" 2>&1 \
+  || fail "memo: registration failed: $(tail -n 3 "$D/memo-reg.out")"
+rec="$D/recs/RecordTimeouts.memo.proof-record.jsonl"
+cp "$D/reg/memo.proof-record.jsonl" "$rec" 2> /dev/null || fail "memo: the registration wrote no record"
+sha256sum "$rec" | cut -d' ' -f1 > "$rec.sha256"
+chmod 0444 "$rec" "$rec.sha256"
+(cd "$D/grade" && rocq c -q -R . RecordTimeouts -record-timeouts -proof-replay-dir ../recs \
+   -proof-replay-ratio 1 memo.v) > "$D/memo.out" 2>&1 \
+  || fail "memo: replay compilation failed: $(tail -n 3 "$D/memo.out")"
+grep -q '"hits": *1' "$D/grade/memo.proof-replay.json" 2> /dev/null \
+  || fail "memo: warm did not replay: $(cat "$D/grade/memo.proof-replay.json" 2>&1)"
+n=$(sed -n 's/^{"format":1,"armed":\([0-9]*\),"fired":\([0-9]*\)}$/\1 \2/p' "$D/grade/memo.timeouts.json" 2> /dev/null)
+printf 'memo: %s\n' "$(cat "$D/grade/memo.timeouts.json" 2>&1)"
+[ -n "$n" ] && [ "${n#* }" -ge 1 ] && [ "${n% *}" -ge 1 ] \
+  || fail "memo: the replay compile did not count the fired timeout"
 
 if [ $rc = 0 ]; then rm -rf "$D"; fi
 exit $rc

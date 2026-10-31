@@ -385,9 +385,13 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: library segment reaches the string "BinInt" through a shared pointer
 #: where the replay's does not (vodiff, 2026-10-30: 0 value differences,
 #: 2 sharing differences; the same on a switch built before the vm_global
-#: read).
+#: read). oracle_checker_memo, oracle_zchecker_memo and oracle_fresh_keyword
+#: replay one of two lia proofs and show the same two "BinInt" sharing
+#: differences (vodiff on the speed-8 replay switch, 2026-10-31: values equal,
+#: 0 value differences, 2 sharing differences each).
 EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite",
-                       "vm_lia_hit")
+                       "vm_lia_hit", "oracle_checker_memo", "oracle_zchecker_memo",
+                       "oracle_fresh_keyword")
 
 
 def exemption_allowed(fixture, differing_segments, library_values_equal):

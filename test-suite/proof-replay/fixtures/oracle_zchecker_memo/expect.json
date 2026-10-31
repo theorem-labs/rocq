@@ -1,0 +1,54 @@
+{
+  "doc": "two lia proofs; the oracle reads the parts of Ltac's zchecker once and keeps them (Zcheck_oracle.zchecker_memo); the second proof's record must still hold the tactic_alias read of its exact, so a changed one makes it miss",
+  "files": [
+    "A.v"
+  ],
+  "records": {
+    "A.v": {
+      "PR.A.first": {
+        "eligible": true
+      },
+      "PR.A.second": {
+        "eligible": true
+      }
+    }
+  },
+  "record_patch": [
+    {
+      "proof": "PR.A.second",
+      "channel": "tactic_alias",
+      "key": "16:exact_#_7823CC8CF3:7:Corelib4:Init4:Ltac",
+      "value": "patched"
+    }
+  ],
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {
+        "key": 0,
+        "read": 1,
+        "ineligible": 0,
+        "missing_record": 0
+      },
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [
+        [
+          "PR.A.first",
+          "hit"
+        ],
+        [
+          "PR.A.second",
+          "read",
+          "tactic_alias",
+          "changed"
+        ]
+      ]
+    }
+  },
+  "vo_exempt": {
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of the identifier string \"BinInt\" in the library segment (vodiff on the speed-8 replay switch, 2026-10-31: 0 value differences and 2 sharing differences, as vm_lia_hit). GRADE retired byte identity as a correctness gate on 2026-10-26; the contract is value equality."
+  }
+}
