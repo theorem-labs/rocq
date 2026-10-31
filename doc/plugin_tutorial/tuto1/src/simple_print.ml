@@ -11,10 +11,12 @@ let simple_body_access ~opaque_access gref =
   | ConstructRef _ ->
     failwith "constructors are not covered in this example"
   | ConstRef cst ->
-    let cb = Environ.lookup_constant cst (Global.env()) in
-    (* most commands should not use body_of_constant_body and opaque accessors,
-       but for printing it's ok *)
-    match Global.body_of_constant_body opaque_access cb with
+    (* most commands should not use body_of_constant and opaque accessors,
+       but for printing it's ok. [Global.body_of_constant], not
+       [body_of_constant_body], because its answer tells an axiom from an
+       opaque proof and [MyPrint] fails on the first, so a [Fail MyPrint c]
+       observes it; [body_of_constant] logs that for the keep rule (D18). *)
+    match Global.body_of_constant opaque_access cst with
     | Some(e, _, _) -> EConstr.of_constr e
     | None -> failwith "This term has no value"
 

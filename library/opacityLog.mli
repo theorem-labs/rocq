@@ -11,9 +11,11 @@
 open Names
 
 (** Whether a constant was an axiom or an opaque proof when a command whose
-    outcome depends on that distinction (a non-opaque [Strategy]/[Transparent]
-    command, an extraction) ran while a library was compiled, and which opaque
-    table an extraction read a proof body from (design D18,
+    outcome depends on that distinction ran while a library was compiled (a
+    non-opaque [Strategy]/[Transparent] command, an extraction, a
+    [Functional Scheme], a plugin's [Global.body_of_constant]), and which
+    opaque table a proof body was read from (an extraction,
+    [Global.body_of_constant], the keepfacts closure walk) (design D18,
     dispatch://INFRA-361). See [opacityLog.ml] for why. *)
 
 val set_enabled : bool -> unit
@@ -31,9 +33,10 @@ val record : Constant.t -> Declarations.constant_body -> unit
     and nothing for any other body. Ignored unless logging is enabled. *)
 
 val record_body_read : Constant.t -> Opaqueproof.opaque -> unit
-(** [record_body_read c o]: an extraction, or the walk that computes the
-    library's assumption closures ([KeepFacts]), read the body of [c], the
-    opaque proof [o]. Logs [(c, true, Some dp)], [dp] the library whose opaque
+(** [record_body_read c o]: an extraction, a caller of
+    [Global.body_of_constant], or the walk that computes the library's
+    assumption closures ([KeepFacts]), read the body of [c], the opaque proof
+    [o]. Logs [(c, true, Some dp)], [dp] the library whose opaque
     table holds that body ([Opaqueproof.repr o]), also when [dp] is the
     library holding [c]. Ignored unless logging is enabled. *)
 

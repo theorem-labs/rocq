@@ -70,6 +70,13 @@ else
   bad "A's label differs across f_equation Admitted -> Qed (expected equal)"
 fi
 
+aba=$(field $D/adm/A.vo axiom_blind); abq=$(field $D/qed/A.vo axiom_blind)
+if [ "$aba" = "[{\"constant\":\"$alib.f_equation\",\"status\":\"axiom\"}]" ] \
+   && [ "$abq" = "[{\"constant\":\"$alib.f_equation\",\"status\":\"proof\"}]" ]; then
+  pass "A's axiom_blind lists $alib.f_equation as an axiom, then as a proof: the name B's query uses"
+else
+  bad "A's axiom_blind: '$aba' (Admitted), '$abq' (Qed)"
+fi
 q_adm="[{\"constant\":\"$alib.f_equation\",\"library\":\"$alib\",\"opaque\":false,\"table\":null}]"
 q_qed="[{\"constant\":\"$alib.f_equation\",\"library\":\"$alib\",\"opaque\":true,\"table\":null}]"
 

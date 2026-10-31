@@ -14,15 +14,25 @@ open Names
    command whose outcome depends on that distinction ran while a library was
    compiled (design D18, dispatch://INFRA-361, Astra review 2 blocker 1).
 
-   [Tactics.Redexpr.check_not_fully_opaque] rejects a non-opaque strategy
-   command (`Transparent c.`, `Strategy expand [c].`) on a constant [c] whose
-   body is an opaque proof ([OpaqueDef]), but accepts it on an axiom
-   ([Undef]); extraction warns about an axiom to realize, or about an opaque
-   proof it accessed, and either warning can be an error
-   ([Extraction.extract_constant]). The library label ([Vernac.LibkeyObjects])
-   deliberately gives an axiom and an opaque proof of the library's own
-   signature the same label, so an edit that completes an admitted dependency
-   constant with a [Qed] proof keeps the dependency's label, yet a real
+   The observers, each of which logs here before it decides:
+   - [Tactics.Redexpr.check_not_fully_opaque] rejects a non-opaque strategy
+     command (`Transparent c.`, `Strategy expand [c].`) on a constant [c]
+     whose body is an opaque proof ([OpaqueDef]), but accepts it on an axiom
+     ([Undef]);
+   - extraction warns about an axiom to realize, or about an opaque proof it
+     accessed, and either warning can be an error
+     ([Extraction.extract_constant]);
+   - [Functional Scheme] makes the principle it generates an opaque proof
+     when the function's equation lemma is one, and a transparent definition
+     otherwise ([Gen_principle.make_scheme]);
+   - [Global.body_of_constant], the plugin API for a constant's body, answers
+     [None] for an axiom and the forced body for an opaque proof.
+   (The sweep of every other reader in the tree and in the plugins the BET
+   image installs is design D18's observer sweep.) The library label
+   ([Vernac.LibkeyObjects]) deliberately gives an axiom and an opaque proof
+   of the library's own signature the same label, so an edit that completes
+   an admitted dependency constant with a [Qed] proof keeps the dependency's
+   label, yet a real
    recompile of a dependent that ran such a command on that constant could
    now fail, or stop failing. A [local] strategy command (the default of
    [Opacity]) writes no persistent object, so a dependent's [.vo] does not
@@ -39,9 +49,10 @@ open Names
 
    An extraction with AccessOpaque (the default) also reads an opaque proof's
    BODY, and what it extracts depends on that body, which no label covers; so
-   does the walk that computes a library's assumption closures
-   ([KeepFacts]), whose result is stored. Such a read is logged with the
-   library whose opaque table it read ([record_body_read]): for a copy that a
+   does [Global.body_of_constant]'s caller, and the walk that computes a
+   library's assumption closures ([KeepFacts]), whose result is stored. Such a
+   read is logged with the library whose opaque table it read
+   ([record_body_read]): for a copy that a
    module operation did not strengthen (a functor application, an [Include]
    of one, at any depth, a sealed module whose implementation is such an
    expression) that table's library can differ from the one holding the

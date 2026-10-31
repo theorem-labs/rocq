@@ -26,10 +26,12 @@ type query = {
   (** for a status check, whether it was an opaque proof when the command ran;
       for a body read, always [true]: an opaque proof whose body was read *)
   table : string option;
-  (** for a body read -- by an extraction, or by the walk that computes the
-      closures, of a constant of this library -- the library whose opaque
-      table holds that body; [None] for a status check (a strategy command,
-      an extraction's axiom-or-opaque check) *)
+  (** for a body read -- by an extraction, a caller of
+      [Global.body_of_constant], or the walk that computes the closures, of a
+      constant of this library -- the library whose opaque table holds that
+      body; [None] for a status check (a strategy command, an extraction's
+      axiom-or-opaque check, a [Functional Scheme], [Global.body_of_constant]
+      on an axiom) *)
 }
 
 type t = {
@@ -50,9 +52,11 @@ type t = {
   opacity_queries : query list;
   (** Each foreign constant (its user name) that a command of this library
       told apart as an axiom or an opaque proof -- a non-opaque
-      [Strategy]/[Transparent] command, an extraction ([OpacityLog]) -- while
-      its body was [Undef None] ([opaque = false]) or an opaque proof
-      ([opaque = true]), or whose opaque proof body an extraction read
+      [Strategy]/[Transparent] command, an extraction, a [Functional Scheme]
+      (its equation lemma), a plugin's [Global.body_of_constant]
+      ([OpacityLog]) -- while its body was [Undef None] ([opaque = false]) or
+      an opaque proof ([opaque = true]), or whose opaque proof body an
+      extraction or [Global.body_of_constant] read
       ([opaque = true], with [table] the library whose opaque table it read);
       a constant of any other body form is not recorded. A constant of this
       library is recorded too when an extraction, or the walk that computes

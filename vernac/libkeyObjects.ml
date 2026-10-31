@@ -137,29 +137,34 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    Exactness. A dependent of this library never observes the difference the
    blinding erases, except through what the keep rule reads beside the label
    for exactly the constants [axiom_report] lists. The kernel's conversion
-   gets no body for either form ([Environ.constant_value_in] raises
-   [NotEvaluableConst] for both [OpaqueDef] and [Undef], and
-   [evaluable_constant] is [false] for both: kernel/environ.ml:654-677); the
+   gets no body for either form ([Environ.constant_value_in] raises the
+   identical [NotEvaluableConst NoBody] for both [OpaqueDef] and [Undef], so
+   not even an escaping exception's text tells them apart, and
+   [evaluable_constant] is [false] for both: kernel/environ.ml:663-685); the
    VM and the native compiler both lower a use of either form to a plain
    constant reference (kernel/vmbytegen.ml:988-990,
    kernel/genlambda.ml:797-798). So neither conversion, nor the VM, nor native
    code unfolds an opaque constant any more than it unfolds an axiom, and a
    dependent compiled against one form type-checks, reduces and compiles
-   identically against the other, but for three observables the label does
-   not carry: a non-opaque strategy command on the constant, which errors on
-   an opaque proof only, and an extraction of it, which warns (or, made an
-   error, fails) on an axiom to realize or an opaque proof accessed (the keep
-   rule compares the opacity the dependent's [keepfacts] recorded,
-   [OpacityLog], with the status [axiom_report] gives now); an extraction
-   with AccessOpaque (the default), which reads an opaque proof's BODY and
-   extracts what it finds there, which no label covers (the hook logs each
-   such read as an [opaque = true] query that records two libraries: the one
-   holding the constant read, and the one whose opaque table holds the body
-   read, which for a copy a module operation did not strengthen -- a functor
-   application, an [Include] of one, a sealed [Module X : T := L.F A] that the
-   extraction rebuilds from its expression -- can be another library, however
-   many copies away; the keep rule keeps the dependent only when both
-   libraries' objects are byte-identical); and the library's assumption set,
+   identically against the other, but for these observables the label does
+   not carry. Status observers, each of which logs the status it saw
+   ([OpacityLog]; the keep rule compares it with the status [axiom_report]
+   gives now): a non-opaque strategy command on the constant, which errors on
+   an opaque proof only; an extraction of it, which warns (or, made an error,
+   fails) on an axiom to realize or an opaque proof accessed; a [Functional
+   Scheme], whose principle is an opaque proof exactly when the function's
+   equation lemma is one; and a plugin's [Global.body_of_constant], which
+   answers [None] for an axiom. Body readers: an extraction with AccessOpaque
+   (the default), which reads an opaque proof's BODY and extracts what it
+   finds there, and a plugin's [Global.body_of_constant], neither of which any
+   label covers (each logs the read as an [opaque = true] query that records
+   two libraries: the one holding the constant read, and the one whose opaque
+   table holds the body read, which for a copy a module operation did not
+   strengthen -- a functor application, an [Include] of one, a sealed [Module
+   X : T := L.F A] that the extraction rebuilds from its expression -- can be
+   another library, however many copies away; the keep rule keeps the
+   dependent only when both libraries' objects are byte-identical). And the
+   library's assumption set,
    which [Print Assumptions] reads (the keep rule compares the closures the
    library's [keepfacts] stored with those of the current objects: its
    monotone axiom condition; the walk that computes them reads a copy's body

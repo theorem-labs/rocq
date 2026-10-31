@@ -96,14 +96,17 @@ open Names
     which conversion unfolds, is {e not} blinded, and neither is an
     inlinable parameter ([Undef (Some _)]), whose inline level a functor
     application observes. The blinding is sound because a dependent never
-    observes the erased difference (kernel/environ.ml:654-677,
+    observes the erased difference (kernel/environ.ml:663-685, where both
+    forms raise the identical [NotEvaluableConst NoBody];
     vmbytegen.ml:988-990, genlambda.ml:797-798) except through what the keep
-    rule reads beside the label: the opacity a dependent's non-opaque
-    strategy command or extraction saw ([KeepFacts], compared with the status
-    [axiom_report] gives now); the opaque proof BODIES an extraction with
-    AccessOpaque (the default) read, which it logs as [opaque = true] queries
-    naming the library that holds the constant read and the library whose
-    opaque table holds the body read; the library's assumption set (its
+    rule reads beside the label: the status a dependent's non-opaque
+    strategy command, extraction, [Functional Scheme] (its equation lemma) or
+    plugin call of [Global.body_of_constant] saw ([KeepFacts], compared with
+    the status [axiom_report] gives now); the opaque proof BODIES an
+    extraction with AccessOpaque (the default) or [Global.body_of_constant]
+    read, which they log as [opaque = true] queries naming the library that
+    holds the constant read and the library whose opaque table holds the
+    body read; the library's assumption set (its
     monotone axiom condition, over the closures [keepfacts] stores, whose
     walk logs each body of the library's own copy it reads from another
     library's table as the same kind of query); and which opaque proof a

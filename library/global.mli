@@ -160,18 +160,26 @@ type indirect_accessor = {
 }
 
 val force_proof : indirect_accessor -> Opaqueproof.opaque -> Opaqueproof.opaque_proofterm
+(** Logs nothing (it has no constant name): a caller that lets a dependent
+    observe the body it forces logs it itself ([OpacityLog.record_body_read]). *)
 
 val body_of_constant : indirect_accessor -> Constant.t ->
   (Constr.constr * unit Opaqueproof.delayed_universes * UVars.AbstractContext.t) option
 (** Returns the body of the constant if it has any, and the polymorphic context
     it lives in. For monomorphic constant, the latter is empty, and for
     polymorphic constants, the term contains De Bruijn universe variables that
-    need to be instantiated. *)
+    need to be instantiated. Under [-location-free-label] it also logs, for
+    the keep rule ([OpacityLog], design D18), whether the constant was an
+    axiom or an opaque proof, and for an opaque proof the table its body is
+    read from: the answer tells the two apart, and neither is in the label of
+    the library holding the constant. *)
 
 val body_of_constant_body : indirect_accessor ->
   constant_body ->
     (Constr.constr * unit Opaqueproof.delayed_universes * UVars.AbstractContext.t) option
-(** Same as {!body_of_constant} but on {!constant_body}. *)
+(** Same as {!body_of_constant} but on {!constant_body}, and logs nothing (it
+    has no constant name): a plugin that lets a dependent observe its answer
+    for a foreign constant should call {!body_of_constant}. *)
 
 (** {6 Compiled libraries } *)
 

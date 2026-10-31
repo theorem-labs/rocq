@@ -210,7 +210,27 @@ let body_of_constant_body access cb =
     let c, u = force_proof access o in
     Some (c, u, Declareops.constant_polymorphic_context cb)
 
-let body_of_constant access cst = body_of_constant_body access (lookup_constant cst)
+(* The plugin API for a constant's body: what it returns tells an axiom
+   ([None]) from an opaque proof (its forced body), and gives that body. The
+   library label gives an axiom and an opaque proof of a library's own
+   signature the same label and does not cover an opaque body, so both are
+   logged for the keep rule (design D18, dispatch://INFRA-361; [OpacityLog]):
+   the status seen, and for an opaque proof the table its body is read from.
+   [cst] is the name the caller gives, as [LibkeyObjects.axiom_report] lists
+   it for a constant of the holder's signature; a copy whose user and
+   canonical names differ (a module alias, an [Include] of a plain module) is
+   a transparent definition (kernel/modops.ml, [strengthen_const]), which
+   logs nothing. [body_of_constant_body] and [force_proof] take no constant
+   name and log nothing: their tree callers print ([Prettyp]) or log
+   themselves (extraction, the keepfacts closure walk). *)
+let body_of_constant access cst =
+  let cb = lookup_constant cst in
+  OpacityLog.record cst cb;
+  (match cb.Declarations.const_body with
+   | Declarations.OpaqueDef o -> OpacityLog.record_body_read cst o
+   | Declarations.Undef _ | Declarations.Def _
+   | Declarations.Primitive _ | Declarations.Symbol _ -> ());
+  body_of_constant_body access cb
 
 (** Operations on kernel names *)
 
