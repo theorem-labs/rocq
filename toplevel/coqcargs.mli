@@ -37,6 +37,9 @@ type t =
   ; glob_out    : glob_output option
 
   ; output_context : bool
+
+  (* -record-timeouts: write the timeout record beside the output file *)
+  ; record_timeouts : bool
   }
 
 val default : t
