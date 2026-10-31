@@ -957,8 +957,15 @@ let vernac_end_proof ~lemma ~pm = let open Vernacexpr in function
     let pm, _ = Declare.Proof.save ~pm ~proof:lemma ~opaque ~idopt
     in pm
 
+(* BET-84: the record and the replay end the aborted proof's entry. With
+   neither -proof-record nor -proof-replay there is none, and Abort is
+   stock's (deep review of 26528c8a34, R2-1). *)
 let vernac_abort ~lemma:_ ~pm =
-  Proof_recorder.drop_proof ();
+  if Proof_recorder.in_use () then begin
+    if Proof_recorder.writing () then Proof_record_env.drop_universe_frame ();
+    Proof_recorder.drop_proof ();
+    Proof_replay.close_proof ()
+  end;
   pm
 
 let deprecated_exact_proof = CWarnings.create ~name:"deprecated-exact-proof" ~category:Deprecation.Version.v9_2

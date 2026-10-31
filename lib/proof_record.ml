@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-let format_version = 1
+let format_version = 5
 
 type toolchain = {
   binary : string;
@@ -54,8 +54,56 @@ type writes = {
   constraints : string list;
   schemes : string list;
   constraint_sources : string list;
-  warnings_raised : (string * string) list;
 }
+
+(* Base64, for the Marshal blobs a record carries (a stored proof term, a
+   universe footprint): the record is JSON, which carries no arbitrary
+   bytes. *)
+let b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+let encode_blob s =
+  let n = String.length s in
+  let b = Buffer.create (4 * ((n + 2) / 3)) in
+  let byte i = if i < n then Char.code s.[i] else 0 in
+  let rec loop i =
+    if i < n then begin
+      let x = (byte i lsl 16) lor (byte (i + 1) lsl 8) lor byte (i + 2) in
+      Buffer.add_char b b64_alphabet.[(x lsr 18) land 63];
+      Buffer.add_char b b64_alphabet.[(x lsr 12) land 63];
+      Buffer.add_char b (if i + 1 < n then b64_alphabet.[(x lsr 6) land 63] else '=');
+      Buffer.add_char b (if i + 2 < n then b64_alphabet.[x land 63] else '=');
+      loop (i + 3)
+    end
+  in
+  loop 0;
+  Buffer.contents b
+
+let b64_value =
+  lazy
+    (let t = Array.make 256 (-1) in
+     String.iteri (fun i c -> t.(Char.code c) <- i) b64_alphabet;
+     t)
+
+let decode_blob s =
+  let t = Lazy.force b64_value in
+  let b = Buffer.create (3 * (String.length s / 4)) in
+  let acc = ref 0 and bits = ref 0 in
+  try
+    String.iter
+      (fun c ->
+         if c <> '=' then begin
+           let v = t.(Char.code c) in
+           if v < 0 then raise Exit;
+           acc := (!acc lsl 6) lor v;
+           bits := !bits + 6;
+           if !bits >= 8 then begin
+             bits := !bits - 8;
+             Buffer.add_char b (Char.chr ((!acc lsr !bits) land 0xff))
+           end
+         end)
+      s;
+    Some (Buffer.contents b)
+  with Exit -> None
 
 type proof = {
   name : string;
@@ -71,9 +119,17 @@ type proof = {
   kernel_check : bool;
   wall_s : float;
   cpu_s : float;
+  span : (int * int) option;
+  replay : string option;
 }
 
-type trailer = { file_wall_s : float; file_cpu_s : float; peak_rss_kb : int; proof_count : int }
+type trailer = {
+  file_wall_s : float;
+  file_cpu_s : float;
+  peak_rss_kb : int;
+  proof_count : int;
+  vo_opaques : string option;
+}
 
 type file = { header : header; proofs : proof list; trailer : trailer }
 
@@ -182,7 +238,6 @@ let add_writes b w =
     field "constraints" (add_list add_string) w.constraints;
     field "schemes" (add_list add_string) w.schemes;
     field "constraint_sources" (add_list add_string) w.constraint_sources;
-    field "warnings_raised" add_string_pairs w.warnings_raised;
   ]
 
 let kind k = field "kind" add_string k
@@ -220,6 +275,8 @@ let output_proof b p =
     field "kernel_check" add_bool p.kernel_check;
     field "wall_s" add_float p.wall_s;
     field "cpu_s" add_float p.cpu_s;
+    field "span" (add_option (add_pair add_int add_int)) p.span;
+    field "replay" (add_option add_string) p.replay;
   ];
   Buffer.add_char b '\n'
 
@@ -230,6 +287,7 @@ let output_trailer b t =
     field "file_cpu_s" add_float t.file_cpu_s;
     field "peak_rss_kb" add_int t.peak_rss_kb;
     field "proof_count" add_int t.proof_count;
+    field "vo_opaques" (add_option add_string) t.vo_opaques;
   ];
   Buffer.add_char b '\n'
 
@@ -238,11 +296,21 @@ let digest_json add v =
   add b v;
   Digest.to_hex (Digest.string (Buffer.contents b))
 
-(* The key of one toolchain record, kept for as long as the caller hands back
-   the same record. Every proof asks for it, and the three digests walk three
-   lists, so a compile of many proofs would otherwise pay that walk for each
-   of them. The caller ({!Proof_record_env.toolchain}) returns one physical
-   record while no library, no plugin and no warning flag has moved. *)
+(* Key item 2 is the load ORDER of the required libraries (BET-84 spec, key
+   item 2): their logical names, not their contents. A library's contents
+   reach a proof only through reads, which the record holds one by one, so
+   a changed library makes a proof miss only when the proof read what
+   changed. With each library's digest in the key, every proof of a file
+   that requires an edited file would miss, which is the largest part of
+   what replay is for. The header's [toolchain.load_order] keeps the
+   digests, as data.
+
+   The key of one toolchain record is kept for as long as the caller hands
+   back the same record. Every proof asks for it, and the three digests walk
+   three lists, so a compile of many proofs would otherwise pay that walk for
+   each of them. The caller ({!Proof_record_env.toolchain}) returns one
+   physical record while no library, no plugin and no warning flag has
+   moved. *)
 let toolchain_key_memo : (toolchain * toolchain_key) option ref = ref None
 
 let toolchain_key (t : toolchain) : toolchain_key =
@@ -252,7 +320,7 @@ let toolchain_key (t : toolchain) : toolchain_key =
     let k = {
       binary = t.binary;
       plugins = digest_json add_string_pairs t.plugins;
-      load_order = digest_json add_string_pairs t.load_order;
+      load_order = digest_json (add_list add_string) (List.map fst t.load_order);
       warnings = t.warnings;
       safe_deps = digest_json (add_list add_string) t.safe_deps;
       stack_limit = t.stack_limit;
@@ -463,13 +531,13 @@ let to_read v =
 
 let to_writes v =
   match fields "writes"
-          [ "universe_levels"; "counters"; "constraints"; "schemes"; "constraint_sources"; "warnings_raised" ] v with
-  | [ ul; c; cs; sc; src; w ] ->
+          [ "universe_levels"; "counters"; "constraints"; "schemes"; "constraint_sources" ] v with
+  | [ ul; c; cs; sc; src ] ->
     let strs what = to_list what (to_str what) in
     { universe_levels = strs "universe_levels" ul;
       counters = to_list "counters" (to_pair "counters" (to_str "counters") (to_int "counters")) c;
       constraints = strs "constraints" cs; schemes = strs "schemes" sc;
-      constraint_sources = strs "constraint_sources" src; warnings_raised = to_string_pairs "warnings_raised" w }
+      constraint_sources = strs "constraint_sources" src }
   | _ -> assert false
 
 let kind_of = function
@@ -498,20 +566,23 @@ let to_header v =
 let to_proof v =
   match fields "proof"
           [ "kind"; "name"; "statement"; "sentences"; "closer"; "toolchain_key"; "position"; "ineligible"; "reads";
-            "start_tables"; "writes"; "kernel_check"; "wall_s"; "cpu_s" ] v with
-  | [ _; nm; st; se; cl; tk; po; ie; rd; sts; wr; kc; ws; cs ] ->
+            "start_tables"; "writes"; "kernel_check"; "wall_s"; "cpu_s"; "span"; "replay" ] v with
+  | [ _; nm; st; se; cl; tk; po; ie; rd; sts; wr; kc; ws; cs; sp; rp ] ->
     { name = to_str "name" nm; statement = to_str "statement" st; sentences = to_str "sentences" se;
       closer = to_str "closer" cl; toolchain_key = to_toolchain_key tk; position = to_position po;
       ineligible = to_list "ineligible" to_ineligible ie; reads = to_list "reads" to_read rd;
       start_tables = to_list "start_tables" to_read sts; writes = to_writes wr;
-      kernel_check = to_bool "kernel_check" kc; wall_s = to_float "wall_s" ws; cpu_s = to_float "cpu_s" cs }
+      kernel_check = to_bool "kernel_check" kc; wall_s = to_float "wall_s" ws; cpu_s = to_float "cpu_s" cs;
+      span = to_option (to_pair "span" (to_int "span") (to_int "span")) sp;
+      replay = to_option (to_str "replay") rp }
   | _ -> assert false
 
 let to_trailer v =
-  match fields "trailer" [ "kind"; "file_wall_s"; "file_cpu_s"; "peak_rss_kb"; "proof_count" ] v with
-  | [ _; w; c; r; n ] ->
+  match fields "trailer" [ "kind"; "file_wall_s"; "file_cpu_s"; "peak_rss_kb"; "proof_count"; "vo_opaques" ] v with
+  | [ _; w; c; r; n; vo ] ->
     { file_wall_s = to_float "file_wall_s" w; file_cpu_s = to_float "file_cpu_s" c;
-      peak_rss_kb = to_int "peak_rss_kb" r; proof_count = to_int "proof_count" n }
+      peak_rss_kb = to_int "peak_rss_kb" r; proof_count = to_int "proof_count" n;
+      vo_opaques = to_option (to_str "vo_opaques") vo }
   | _ -> assert false
 
 let parse_string text =

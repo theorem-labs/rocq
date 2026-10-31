@@ -92,17 +92,33 @@ let class_tab =
 let coercion_tab =
   Summary.ref ~name:"coercion_tab" (CoeTypMap.empty : coe_info_typ CoeTypMap.t)
 
+let recorded_class_tab () =
+  Some (Proof_recorder.digest_cached ~what:"class_tab" !class_tab)
+
+let () =
+  Proof_replay.register_evaluator "class_tab" (fun _key ->
+      match recorded_class_tab () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let record_class_tab () =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"class_tab" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest_cached ~what:"class_tab" !class_tab))
+      ~value:recorded_class_tab
+
+let recorded_coercion_tab () =
+  Some (Proof_recorder.digest_cached ~what:"coercion_tab" !coercion_tab)
+
+let () =
+  Proof_replay.register_evaluator "coercion_tab" (fun _key ->
+      match recorded_coercion_tab () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
 
 let record_coercion_tab () =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"coercion_tab" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest_cached ~what:"coercion_tab" !coercion_tab))
+      ~value:recorded_coercion_tab
 
 let reachable_from cl =
   record_class_tab ();
@@ -143,11 +159,19 @@ end
 let inheritance_graph =
   Summary.ref ~name:"inheritance_graph" ClGraph.empty
 
+let recorded_coercion_graph () =
+  Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph)
+
+let () =
+  Proof_replay.register_evaluator "coercion_graph" (fun _key ->
+      match recorded_coercion_graph () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let record_inheritance_graph () =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"coercion_graph" ~key:(fun () -> "")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph))
+      ~value:recorded_coercion_graph
 
 (* ajout de nouveaux "objets" *)
 
@@ -505,13 +529,20 @@ let declare_coercion env sigma ?update c =
   let () = add_coercion c.coe_value c in
   add_coercion_in_graph env sigma ?update c
 
-(* For printing purpose *)
+(* The whole tables, for printing and for firstorder, which keeps every
+   coercion folded ([Ground.get_flags]): a coercion declared or removed before
+   a proof changes how firstorder reduces with no other read changing (gate
+   review, breadth audit gap BA3; fixtures verdict_firstorder_coercion and
+   eval_firstorder_coercion). So each is a read of its table (census row 14). *)
 let classes () =
+  record_class_tab ();
   List.rev (ClTypMap.fold (fun x _ acc -> x :: acc) !class_tab [])
 let coercions () =
+  record_coercion_tab ();
   List.rev (CoeTypMap.fold (fun _ y acc -> y::acc) !coercion_tab [])
 
 let inheritance_graph () =
+  record_inheritance_graph ();
   ClGraph.bindings !inheritance_graph
 
 let coercion_of_reference env r =

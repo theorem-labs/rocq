@@ -185,12 +185,24 @@ let scope_item_eq s1 s2 = match s1, s2 with
 
 let scope_stack = ref []
 
+(* BET-84 census row 11: the open scopes, as one value under a fixed key.
+   ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_scope_stack () =
+  Some (Proof_recorder.digest ~what:"scope_stack" !scope_stack)
+
+let () =
+  Proof_replay.register_evaluator "scope_stack" (fun _key ->
+      match recorded_scope_stack () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let current_scopes () =
   let scopes = !scope_stack in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"11" ~channel:"scope_stack"
       ~key:(fun () -> "scopes")
-      ~value:(fun () -> Some (Proof_recorder.digest ~what:"scope_stack" scopes));
+      ~value:recorded_scope_stack;
   scopes
 
 let scope_is_open_in_scopes sc l =
@@ -258,19 +270,25 @@ let remove_delimiters scope =
          (* XXX info *)
          CErrors.anomaly ~info (str "A delimiter for scope [scope] should exist")
 
+(* BET-84 census row 11: the scope a delimiting key names, read by its key.
+   ONE value function, called by the record site and by the replay evaluator
+   (dev/tools/census/replay_channels.py). The key is the delimiter itself. *)
+let recorded_delimiters_scope key =
+  Option.map (fun scope -> Proof_recorder.digest ~what:"delimiters_scope" scope)
+    (String.Map.find_opt key !delimiters_map)
+
+let () =
+  Proof_replay.register_evaluator "delimiters_scope" (fun key ->
+      Proof_replay.Value (recorded_delimiters_scope key))
+
 let find_delimiters_scope ?loc key =
-  try
-    let scope = String.Map.find key !delimiters_map in
-    if Proof_recorder.active () then
-      Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
-        ~key:(fun () -> key)
-        ~value:(fun () -> Some (Proof_recorder.digest ~what:"delimiters_scope" scope));
-    scope
-  with Not_found ->
-    if Proof_recorder.active () then
-      Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
-        ~key:(fun () -> key)
-        ~value:(fun () -> None);
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"delimiters_scope"
+      ~key:(fun () -> key)
+      ~value:(fun () -> recorded_delimiters_scope key);
+  match String.Map.find_opt key !delimiters_map with
+  | Some scope -> scope
+  | None ->
     user_err ?loc
       (str "Unknown scope delimiting key " ++ str key ++ str ".")
 
@@ -546,11 +564,14 @@ let find_prim_token check_allowed ?loc p sc =
   check_allowed pat;
   pat
 
+(* BET-84 census row 11: the key of a notation or number query. Every part
+   is written with its length and a custom entry by [Libnames.kername_key], so a
+   key determines its query and [notation_query_of_key] reads it back. *)
 let notation_query_key (entry, text) scopes =
   let encode_string s = string_of_int (String.length s) ^ ":" ^ s in
   let encode_entry = function
     | InConstrEntry -> "C"
-    | InCustomEntry name -> "U" ^ encode_string (CustomName.to_string name)
+    | InCustomEntry name -> "U" ^ encode_string (Libnames.kername_key name)
   in
   let encode_notation (entry, text) =
     encode_entry entry ^ encode_string text
@@ -562,6 +583,90 @@ let notation_query_key (entry, text) scopes =
   "N" ^ encode_notation (entry, text)
   ^ String.concat "" (List.map encode_scope_item scopes)
 
+(* The query a [notation_query_key] key encodes, or [None] for a string that
+   function did not write: the query read back must give the key again. *)
+let notation_query_of_key key =
+  let n = String.length key in
+  let pos = ref 0 in
+  let tag () = if !pos < n then (let c = key.[!pos] in incr pos; Some c) else None in
+  let decode_string () =
+    match String.index_from_opt key !pos ':' with
+    | None -> None
+    | Some j ->
+      match int_of_string_opt (String.sub key !pos (j - !pos)) with
+      | Some len when len >= 0 && j + 1 + len <= n ->
+        pos := j + 1 + len;
+        Some (String.sub key (j + 1) len)
+      | Some _ | None -> None
+  in
+  let decode_notation () =
+    let entry = match tag () with
+      | Some 'C' -> Some InConstrEntry
+      | Some 'U' ->
+        (match decode_string () with
+         | None -> None
+         | Some s -> Option.map (fun kn -> InCustomEntry kn) (Libnames.kername_of_key s))
+      | Some _ | None -> None
+    in
+    match entry with
+    | None -> None
+    | Some entry -> Option.map (fun text -> (entry, text)) (decode_string ())
+  in
+  let rec decode_scopes acc =
+    if !pos >= n then Some (List.rev acc)
+    else match tag () with
+      | Some 'O' ->
+        (match decode_string () with
+         | Some scope -> decode_scopes (OpenScopeItem scope :: acc)
+         | None -> None)
+      | Some 'L' ->
+        (match decode_notation () with
+         | Some ntn -> decode_scopes (LonelyNotationItem ntn :: acc)
+         | None -> None)
+      | Some _ | None -> None
+  in
+  match tag () with
+  | Some 'N' ->
+    (match decode_notation () with
+     | None -> None
+     | Some ntn ->
+       match decode_scopes [] with
+       | Some scopes when String.equal (notation_query_key ntn scopes) key -> Some (ntn, scopes)
+       | Some _ | None -> None)
+  | Some _ | None -> None
+
+(* BET-84 census row 11: each number or string notation the proof reads,
+   with the scopes it was read in and the query's mode.
+
+   ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py): the term and the scope
+   the query finds, with the primitive interpreter that scope holds (its
+   functions, and its warning policy: a number notation's [warning after]
+   threshold decides whether the same term comes with a warning, fixture
+   prim_token_warning_threshold), or absent. Every node of the term carries
+   the token's location, which is not in the key, so the locations of the
+   compiled file are left out of the digest: a number written on another
+   line is the same read. *)
+let prim_token_interpreter_view (required, info) =
+  (* [ty_name] is a qualid with the location of the declaring command, used
+     only to name the type in messages: its printed name is the value. *)
+  let obj o = PrimNotations.(o.to_kind, o.to_ty, o.to_post, o.of_kind, o.of_ty,
+                             Libnames.string_of_qualid o.ty_name, o.warning) in
+  (required, match info with
+    | Uid uid -> `Uid uid
+    | NumberNotation o -> `Number (obj o)
+    | StringNotation o -> `String (obj o))
+
+let recorded_prim_token = function
+  | None -> None
+  | Some (pat, sc) ->
+    let interpreter =
+      Option.map prim_token_interpreter_view
+        (String.Map.find_opt (Option.default default_scope sc) !prim_token_interp_infos)
+    in
+    Some (Proof_recorder.digest ?locs:(Proof_recorder.compiled_source ()) ~what:"prim_token"
+            (pat, sc, interpreter))
+
 (* [mode] names the query. A term query accepts every interpretation; a
    pattern query rejects one that is not a constructor and goes on to an older
    scope. With the same token and scopes they can find different answers, so
@@ -569,20 +674,18 @@ let notation_query_key (entry, text) scopes =
 let interp_prim_token_gen ~mode ?loc g p local_scopes =
   let scopes = make_current_scopes local_scopes in
   let p_as_ntn = try notation_of_prim_token p with Not_found -> InConstrEntry,"" in
-  (* BET-84 census row 11: each number or string notation the proof reads,
-     with the scopes it was read in and the query's mode. *)
   try
     let pat, sc = find_interpretation p_as_ntn (find_prim_token ?loc g p) scopes in
     if Proof_recorder.active () then
       Proof_recorder.read ~row:"11" ~channel:"prim_token"
         ~key:(fun () -> mode ^ notation_query_key p_as_ntn scopes)
-        ~value:(fun () -> Some (Proof_recorder.digest ~what:"prim_token" (pat, sc)));
+        ~value:(fun () -> recorded_prim_token (Some (pat, sc)));
     pat, sc
   with Not_found as exn ->
     if Proof_recorder.active () then
       Proof_recorder.read ~row:"11" ~channel:"prim_token"
         ~key:(fun () -> mode ^ notation_query_key p_as_ntn scopes)
-        ~value:(fun () -> None);
+        ~value:(fun () -> recorded_prim_token None);
     let _, info = Exninfo.capture exn in
     user_err ?loc ~info
     ((match p with
@@ -595,6 +698,58 @@ let interp_prim_token ?loc =
 
 let interp_prim_token_cases_pattern_expr ?loc check_allowed p =
   interp_prim_token_gen ~mode:"P" ?loc check_allowed p
+
+(* The token [notation_of_prim_token] wrote as [text]: a string is quoted, a
+   negative number starts with ["- "], and a number is written as it was
+   lexed, which [NumTok.Unsigned.parse_string] reads back. *)
+let prim_token_of_notation_text text =
+  let n = String.length text in
+  let token =
+    if n > 0 && text.[0] = '"' then
+      Option.map (fun s -> Constrexpr.String s) (String.unquote_coq_string text)
+    else if n > 2 && text.[0] = '-' && text.[1] = ' ' then
+      Option.map (fun u -> Constrexpr.Number (SMinus, u))
+        (NumTok.Unsigned.parse_string (String.sub text 2 (n - 2)))
+    else Option.map (fun u -> Constrexpr.Number (SPlus, u)) (NumTok.Unsigned.parse_string text)
+  in
+  match token with
+  | Some p when notation_eq (notation_of_prim_token p) (InConstrEntry, text) -> Some p
+  | Some _ | None -> None
+
+(* A term query asked again by the replay evaluator, exactly as
+   [interp_prim_token] asks it, at a location of the compiled file, which
+   the value leaves out. It runs the token's interpreter, so what that
+   leaves behind is undone: the universe levels it makes are not the
+   proof's, so the level and sort counters are put back, and its reads are
+   not the open proof's. A warning that is an error still raises, so the
+   query fails where stock's fails and the read is a miss; an enabled
+   warning is not printed (the record raises the proof's warnings again on
+   a hit, and on a miss the proof prints them itself). The warning policy
+   that decides whether a warning comes is in the value. *)
+let replay_prim_token_query p_as_ntn p scopes =
+  let loc = Option.map Loc.initial (Proof_recorder.compiled_source ()) in
+  let counters = UnivGen.counters () in
+  Fun.protect ~finally:(fun () -> UnivGen.set_counters counters) (fun () ->
+      Proof_recorder.without_recording (fun () ->
+          CWarnings.with_enabled_silenced (fun () ->
+              match find_interpretation p_as_ntn (find_prim_token ?loc (fun _ -> ()) p) scopes with
+              | found -> Some found
+              | exception Not_found -> None)))
+
+(* Only a term query is asked again. A pattern query's answer also depends
+   on its caller's check of the pattern, which the key does not hold, so its
+   read is a miss; so is a key that does not read back. *)
+let () =
+  Proof_replay.register_evaluator "prim_token" (fun key ->
+      let n = String.length key in
+      if n = 0 || key.[0] <> 'T' then Proof_replay.Unknown
+      else
+        match notation_query_of_key (String.sub key 1 (n - 1)) with
+        | Some ((InConstrEntry, text) as p_as_ntn, scopes) ->
+          (match prim_token_of_notation_text text with
+           | None -> Proof_replay.Unknown
+           | Some p -> Proof_replay.Value (recorded_prim_token (replay_prim_token_query p_as_ntn p scopes)))
+        | Some ((InCustomEntry _, _), _) | None -> Proof_replay.Unknown)
 
 let warn_notation =
   UserWarn.create_depr_and_user_warnings ~object_name:"Notation" ~warning_name_base:"notation"
@@ -652,26 +807,45 @@ let () = CErrors.register_handler @@ function
 
 (* BET-84 census row 11: each notation the proof reads, with the scopes it
    was read in, because the same notation means different things in
-   different scopes. *)
-let record_notation ntn scopes v =
-  Proof_recorder.read ~row:"11" ~channel:"notation"
-    ~key:(fun () -> notation_query_key ntn scopes)
-    ~value:(fun () -> match v with
-        | None -> None
-        | Some v -> Some (Proof_recorder.digest ~what:"notation" v))
+   different scopes. The key holds the whole query, so the interpretation is
+   a function of the key and of the scope table alone.
+
+   ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py): the interpretation the
+   query finds (with its deprecation, and the scope it was found in), or
+   absent when none is found. *)
+let find_notation_interpretation ntn scopes =
+  match find_interpretation ntn (find_notation ntn) scopes with
+  | found -> Some found
+  | exception Not_found -> None
+
+let recorded_notation = function
+  | None -> None
+  | Some (n, sc) -> Some (Proof_recorder.digest ~what:"notation" (n.not_interp, n.not_user_warns, sc))
+
+(* A key that does not read back is a miss. A scope of the key that is no
+   longer declared makes the query raise, as it would in the proof: the
+   matcher counts the raise as a miss. *)
+let () =
+  Proof_replay.register_evaluator "notation" (fun key ->
+      match notation_query_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some (ntn, scopes) ->
+        Proof_replay.Value (recorded_notation (find_notation_interpretation ntn scopes)))
 
 let interp_notation ?loc ntn local_scopes =
   let scopes = make_current_scopes local_scopes in
-  match find_interpretation ntn (find_notation ntn) scopes with
-  | (n, sc) ->
-    if Proof_recorder.active () then
-      record_notation ntn scopes (Some (n.not_interp, n.not_user_warns, sc));
+  let found = find_notation_interpretation ntn scopes in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"notation"
+      ~key:(fun () -> notation_query_key ntn scopes)
+      ~value:(fun () -> recorded_notation found);
+  match found with
+  | Some (n, sc) ->
     Option.iter (fun d -> warn_notation ?loc ntn d) n.not_user_warns;
     n.not_interp, (n.not_location, sc)
-  | exception (Not_found as exn) ->
-    if Proof_recorder.active () then record_notation ntn scopes None;
-    let _, info = Exninfo.capture exn in
-    let info = Option.cata (Loc.add_loc info) info loc in
+  | None ->
+    let info = Option.cata (Loc.add_loc Exninfo.null) Exninfo.null loc in
     Exninfo.iraise (UnknownInterp (ntn,scopes), info)
 
 let has_active_parsing_rule_in_scope ntn sc =
@@ -1045,14 +1219,108 @@ let compute_arguments_scope_full env sigma map t =
 let compute_arguments_scope env sigma t =
   fst (compute_arguments_scope_full env sigma !scope_class_map t)
 
+(* BET-84 census row 11: the scopes that Bind Scope attaches to a class, read
+   when a term is interpreted against a type (the class of the expected type,
+   of a cast's type, or Sortclass for a type). A notation or number query is
+   recorded with the scopes it was asked in, so a changed binding changes
+   which query stock asks while the recorded query still gets its answer
+   (gate review, breadth audit gap BA1; fixture verdict_type_scope).
+   The key names the class: S (Sortclass), F (Funclass), a section variable,
+   or the canonical kernel name of a constant, an inductive or a projection,
+   as [Libnames.kername_key] writes it, with the numbers that complete it. Every
+   part has its length, so a key names one class, and [scope_class_of_key]
+   reads it back. The map compares classes by their canonical names. ONE
+   value function, [digest_type_scope] of [type_scope], for the record site
+   and for the replay evaluator (dev/tools/census/replay_channels.py). *)
+let scope_class_key cl =
+  let part s = string_of_int (String.length s) ^ ":" ^ s in
+  let mind m = part (Libnames.kername_key (MutInd.canonical m)) in
+  match cl with
+  | CL_SORT -> "S"
+  | CL_FUN -> "F"
+  | CL_SECVAR id -> "V" ^ part (Id.to_string id)
+  | CL_CONST c -> "C" ^ part (Libnames.kername_key (Constant.canonical c))
+  | CL_IND (m, i) -> "I" ^ mind m ^ part (string_of_int i)
+  | CL_PROJ p ->
+    "P" ^ mind (Projection.Repr.mind p)
+    ^ part (string_of_int (snd (Projection.Repr.inductive p)))
+    ^ part (string_of_int (Projection.Repr.npars p))
+    ^ part (string_of_int (Projection.Repr.arg p))
+    ^ part (Id.to_string (Projection.Repr.label p))
+
+(* The class a [scope_class_key] key names, or [None] for a string that
+   function did not write: the class read back must give the key again. *)
+let scope_class_of_key key =
+  let ( let* ) = Option.bind in
+  let n = String.length key in
+  let pos = ref 1 in
+  let part () =
+    let* j = String.index_from_opt key !pos ':' in
+    match int_of_string_opt (String.sub key !pos (j - !pos)) with
+    | Some len when len >= 0 && j + 1 + len <= n ->
+      pos := j + 1 + len;
+      Some (String.sub key (j + 1) len)
+    | Some _ | None -> None
+  in
+  let int () = let* s = part () in int_of_string_opt s in
+  let id () =
+    let* s = part () in
+    match Id.of_string_soft s with
+    | id -> Some id
+    | exception CErrors.UserError _ -> None
+  in
+  let kn () = let* s = part () in Libnames.kername_of_key s in
+  let cl =
+    if Int.equal n 0 then None
+    else match key.[0] with
+      | 'S' -> Some CL_SORT
+      | 'F' -> Some CL_FUN
+      | 'V' -> let* id = id () in Some (CL_SECVAR id)
+      | 'C' -> let* kn = kn () in Some (CL_CONST (Constant.make1 kn))
+      | 'I' -> let* kn = kn () in let* i = int () in Some (CL_IND (MutInd.make1 kn, i))
+      | 'P' ->
+        let* kn = kn () in
+        let* i = int () in
+        let* proj_npars = int () in
+        let* proj_arg = int () in
+        let* l = id () in
+        Some (CL_PROJ (Projection.Repr.make (MutInd.make1 kn, i) ~proj_npars ~proj_arg l))
+      | _ -> None
+  in
+  match cl with
+  | Some cl when Int.equal !pos n && String.equal (scope_class_key cl) key -> Some cl
+  | Some _ | None -> None
+
+(* The scopes the readers below return for a class, and the value of its
+   read. *)
+let type_scope cl = find_scope_class_opt !scope_class_map (Some cl)
+
+let digest_type_scope scopes = Some (Proof_recorder.digest ~what:"scope_class" scopes)
+
+let () =
+  Proof_replay.register_evaluator "scope_class" (fun key ->
+      match scope_class_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some cl -> Proof_replay.Value (digest_type_scope (type_scope cl)))
+
+let find_type_scope = function
+  | None -> []
+  | Some cl ->
+    let scopes = type_scope cl in
+    if Proof_recorder.active () then
+      Proof_recorder.read_by ~row:"11" ~channel:"scope_class" ~id:cl
+        ~key:(fun () -> scope_class_key cl)
+        ~value:(fun () -> digest_type_scope scopes);
+    scopes
+
 let compute_type_scope env sigma t =
-  find_scope_class_opt !scope_class_map (try Some (compute_scope_class env sigma t) with Not_found -> None)
+  find_type_scope (try Some (compute_scope_class env sigma t) with Not_found -> None)
 
 let current_type_scope_names () =
-   find_scope_class_opt !scope_class_map (Some CL_SORT)
+  find_type_scope (Some CL_SORT)
 
 let compute_glob_type_scope t =
-  find_scope_class_opt !scope_class_map (try Some (find_class_glob_type t) with Not_found -> None)
+  find_type_scope (try Some (find_class_glob_type t) with Not_found -> None)
 
 let scope_class_of_class (x : cl_typ) : scope_class =
   x
@@ -1190,29 +1458,43 @@ let declare_arguments_scope local r scl =
      re-computations and keep these manually given scopes. *)
   declare_arguments_scope_gen req r (scl,[])
 
-let find_arguments_scope env r =
-  try
-    let (scl,cls,stamp) = GlobRefMap.find env r !arguments_scope in
+(* BET-84 census row 11: the argument scopes of each global the proof
+   reads. The value is computed once, for the recorder at the lookup and
+   for the replay evaluator that checks the record again
+   (dev/tools/census/replay_channels.py). The lookup re-computes a stale
+   entry, so the value function performs the lookup itself. *)
+let find_arguments_scope_raw env r =
+  match GlobRefMap.find env r !arguments_scope with
+  | (scl, cls, stamp) ->
     let cur_stamp = !scope_class_map in
-    let scopes =
-      if stamp == cur_stamp then scl
-      else
-        (* Recent changes in the Bind Scope base, we re-compute the scopes *)
-        let scl' = update_scopes cls scl in
-        arguments_scope := GlobRefMap.add env r (scl',cls,cur_stamp) !arguments_scope;
-        scl'
-    in
-    if Proof_recorder.active () then
-      Proof_recorder.read ~row:"11" ~channel:"arguments_scope"
-        ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
-        ~value:(fun () -> Some (Proof_recorder.digest ~what:"arguments_scope" scopes));
-    scopes
-  with Not_found ->
-    if Proof_recorder.active () then
-      Proof_recorder.read ~row:"11" ~channel:"arguments_scope"
-        ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
-        ~value:(fun () -> None);
-    []
+    if stamp == cur_stamp then Some scl
+    else begin
+      let scl' = update_scopes cls scl in
+      arguments_scope := GlobRefMap.add env r (scl', cls, cur_stamp) !arguments_scope;
+      Some scl'
+    end
+  | exception Not_found -> None
+
+let digest_arguments_scope = Option.map (fun scopes -> Proof_recorder.digest ~what:"arguments_scope" scopes)
+
+let recorded_arguments_scope env r = digest_arguments_scope (find_arguments_scope_raw env r)
+
+let () =
+  Proof_replay.register_evaluator "arguments_scope" (fun key ->
+      match Arguments_renaming.globref_of_string key with
+      | None -> Proof_replay.Unknown
+      | Some r ->
+        (match recorded_arguments_scope (Global.env ()) r with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown))
+
+let find_arguments_scope env r =
+  let res = find_arguments_scope_raw env r in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"arguments_scope"
+      ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print r))
+      ~value:(fun () -> digest_arguments_scope res);
+  Option.default [] res
 
 let declare_ref_arguments_scope ref =
   let env = Global.env () in (* FIXME? *)
@@ -1604,7 +1886,79 @@ let error_notation_not_reference ?loc ntn ntns =
   let env = Global.env () in let sigma = Evd.from_env env in
   Loc.raise ?loc (NotationAsReferenceError (NotationNotReference (env, sigma, ntn, ntns)))
 
+(* BET-84 census row 11: what a notation names when a tactic or a command
+   uses it as a reference ([unfold "+"], [Arguments "+"]). The search reads
+   every scope's notations, or the one scope a delimiter names, with no
+   [interp_notation] query, so a notation added for another constant made the
+   name ambiguous with no recorded read changing (gate review, breadth audit
+   gap BA2; fixture verdict_notation_reference). The value is what the answer
+   is computed from: the notations the search finds, with their
+   interpretations, and for each of them the scope [find_default] gives it
+   under the open scopes, which decides between several. That scope can lie
+   outside the delimited one, so it is read as such and not as the scope stack
+   alone (fixture verdict_notation_reference_delimited). The caller's test and
+   [head] come from the sentence. The key is the notation text and the
+   delimiter, each with its length, and [notation_reference_of_key] reads it
+   back. ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let notation_reference_key ntn sc =
+  let encode s = string_of_int (String.length s) ^ ":" ^ s in
+  "R" ^ encode ntn ^ (match sc with None -> "" | Some key -> "D" ^ encode key)
+
+let notation_reference_of_key key =
+  let n = String.length key in
+  let pos = ref 1 in
+  let decode () =
+    match String.index_from_opt key !pos ':' with
+    | None -> None
+    | Some j ->
+      match int_of_string_opt (String.sub key !pos (j - !pos)) with
+      | Some len when len >= 0 && j + 1 + len <= n ->
+        pos := j + 1 + len;
+        Some (String.sub key (j + 1) len)
+      | Some _ | None -> None
+  in
+  let query =
+    if n = 0 || key.[0] <> 'R' then None
+    else match decode () with
+      | None -> None
+      | Some ntn ->
+        if !pos = n then Some (ntn, None)
+        else if key.[!pos] = 'D' then (incr pos; Option.map (fun k -> (ntn, Some k)) (decode ()))
+        else None
+  in
+  match query with
+  | Some (ntn, sc) when !pos = n && String.equal (notation_reference_key ntn sc) key -> Some (ntn, sc)
+  | Some _ | None -> None
+
+let notation_reference_scopes sc = match sc with
+  | None -> Some !scope_map
+  | Some key ->
+    match String.Map.find_opt key !delimiters_map with
+    | None -> None
+    | Some scope -> Option.map (String.Map.singleton scope) (String.Map.find_opt scope !scope_map)
+
+let recorded_notation_reference ntn sc =
+  let found = Option.map (browse_notation true ntn) (notation_reference_scopes sc) in
+  let defaults = match found with
+    | None -> []
+    | Some l -> List.map (fun (ntn, _, _) -> find_default ntn !scope_stack) l in
+  Some (Proof_recorder.digest ~what:"notation_reference" (found, defaults))
+
+let () =
+  Proof_replay.register_evaluator "notation_reference" (fun key ->
+      match notation_reference_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some (ntn, sc) ->
+        (match recorded_notation_reference ntn sc with
+         | v -> Proof_replay.Value v
+         | exception e when CErrors.noncritical e -> Proof_replay.Unknown))
+
 let interp_notation_as_global_reference_expanded ?loc ~head test ntn sc =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"11" ~channel:"notation_reference"
+      ~key:(fun () -> notation_reference_key ntn sc)
+      ~value:(fun () -> recorded_notation_reference ntn sc);
   let scopes = match sc with
   | Some sc ->
     let scope = find_delimiters_scope sc in

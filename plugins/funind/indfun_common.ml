@@ -253,8 +253,51 @@ let find_or_none id =
       | _ -> CErrors.anomaly (Pp.str "Not a constant.") )
   with Not_found -> None
 
-let find_Function_infos f = Cmap_env.find_opt f !from_function
-let find_Function_of_graph ind = Indmap_env.find_opt ind !from_graph
+(* BET-84 census row 15: the function table, read by functional induction
+   and functional inversion to find a function's graph and principles. A
+   tree can keep every constant those read and lose the entry (a name that
+   Function declares after the principle is taken, so Function stops before
+   it fills the entry), which no other read sees (gate review of 079bc4cb71,
+   breadth audit; fixtures verdict_funind_table, eval_funind_info). Each
+   lookup is a read, by the constant or by the graph inductive, absent
+   included, keyed by [Libnames.globref_key] of that reference. Both tables
+   order their keys by the user name and a module alias keeps the canonical
+   one, and that key holds both names.
+   ONE value function, called by the record sites and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let funind_query_of_key key =
+  match Libnames.globref_of_key key with
+  | Some (GlobRef.ConstRef f) -> Some (`Function f)
+  | Some (GlobRef.IndRef ind) -> Some (`Graph ind)
+  | Some (GlobRef.VarRef _ | GlobRef.ConstructRef _) | None -> None
+
+let recorded_funind_info = function
+  | `Function f ->
+    Option.map (fun info -> Proof_recorder.digest ~what:"funind_info" info)
+      (Cmap_env.find_opt f !from_function)
+  | `Graph ind ->
+    Option.map (fun info -> Proof_recorder.digest ~what:"funind_info" info)
+      (Indmap_env.find_opt ind !from_graph)
+
+let () =
+  Proof_replay.register_evaluator "funind_info" (fun key ->
+      match funind_query_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some q -> Proof_replay.Value (recorded_funind_info q))
+
+let record_funind r q =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel:"funind_info"
+      ~key:(fun () -> Libnames.globref_key r)
+      ~value:(fun () -> recorded_funind_info q)
+
+let find_Function_infos f =
+  record_funind (GlobRef.ConstRef f) (`Function f);
+  Cmap_env.find_opt f !from_function
+
+let find_Function_of_graph ind =
+  record_funind (GlobRef.IndRef ind) (`Graph ind);
+  Indmap_env.find_opt ind !from_graph
 
 let update_Function finfo =
   (* Pp.msgnl (pr_info finfo); *)

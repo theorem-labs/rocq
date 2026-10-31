@@ -49,14 +49,20 @@ let proof : R.proof = R.{
     constraints = [ "Top.File.12 < Top.File.13" ];
     schemes = [ "Top.File.t_rect" ];
     constraint_sources = [ "Top.File.lemma" ];
-    warnings_raised = [ ("deprecated-reference", "Reference foo is deprecated.") ];
   };
   kernel_check = false;
   wall_s = 1.5;
   cpu_s = 0.1;
+  span = Some (120, 480);
+  replay = Some "AQIDBA==";
 }
 
-let trailer : R.trailer = R.{ file_wall_s = 12.25; file_cpu_s = 11.; peak_rss_kb = 123456; proof_count = 1 }
+(* The same proof with neither of the two v2 fields: an ineligible proof
+   stores no term, and a proof the STM closed late has no source span. *)
+let proof_without_v2 : R.proof = { proof with span = None; replay = None }
+
+let trailer : R.trailer =
+  R.{ file_wall_s = 12.25; file_cpu_s = 11.; peak_rss_kb = 123456; proof_count = 1; vo_opaques = None }
 
 let file : R.file = R.{ header; proofs = [ proof ]; trailer }
 
@@ -91,7 +97,8 @@ let bad_input =
   let header_line = List.hd (String.split_on_char '\n' good) in
   let trailer_line n =
     Printf.sprintf
-      "{\"kind\":\"trailer\",\"file_wall_s\":1,\"file_cpu_s\":1,\"peak_rss_kb\":1,\"proof_count\":%d}\n" n in
+      "{\"kind\":\"trailer\",\"file_wall_s\":1,\"file_cpu_s\":1,\"peak_rss_kb\":1,\"proof_count\":%d,\
+       \"vo_opaques\":null}\n" n in
   mk_bool_test "proof-record-refused"
     "another format version, a missing header or trailer, an extra field, a wrong proof count and a line after the \
      trailer are refused"
@@ -115,7 +122,14 @@ let toolchain_key_fields =
      && k.warnings = toolchain.warnings
      && k.warnings <> k'.warnings
      && k.plugins = k'.plugins && k.load_order = k'.load_order && k.safe_deps = k'.safe_deps
-     && k.plugins <> k''.plugins && k.load_order = k''.load_order)
+     && k.plugins <> k''.plugins && k.load_order = k''.load_order
+     (* The load order keys the libraries' names, not their digests: an edited
+        library leaves it unchanged; another library, or another order, moves it. *)
+     && (let two = [ ("A.B", "11111111111111111111111111111111"); ("A.C", "22222222222222222222222222222222") ] in
+         let key lo = (R.toolchain_key { toolchain with load_order = lo }).load_order in
+         key two = key [ ("A.B", "33333333333333333333333333333333"); ("A.C", "22222222222222222222222222222222") ]
+         && key two <> key [ ("A.B", "11111111111111111111111111111111"); ("A.D", "22222222222222222222222222222222") ]
+         && key two <> key (List.rev two)))
 
 (* Structural digest *)
 
@@ -175,6 +189,47 @@ let vo_path =
     "the record sits beside the .vo"
     (R.path_of_vo "dir/Foo.vo" = "dir/Foo.proof-record.jsonl"
      && R.path_of_vo "Foo.vo" = "Foo.proof-record.jsonl")
+
+(* Format v3 rejects v2 records: v3 replaces the whole [universe_graph] start
+   read with per-query universe records, so an older record must run stock.
+   Format v4 drops the writes' [warnings_raised]: a proof that raises a
+   warning is ineligible, so no warning is raised again. Format v5 adds the
+   trailer's [vo_opaques]: a stored term can refer to the registered [.vo],
+   and a v4 reader would not bind it. *)
+let written_with p =
+  let buf = Buffer.create 1024 in
+  R.output_header buf header;
+  R.output_proof buf p;
+  R.output_trailer buf trailer;
+  Buffer.contents buf
+
+let without_suffix suffix text =
+  let n = String.length text and k = String.length suffix in
+  let i = ref 0 and found = ref (-1) in
+  while !i + k <= n do
+    if String.sub text !i k = suffix then found := !i;
+    incr i
+  done;
+  if !found < 0 then failwith ("suffix not written: " ^ suffix);
+  String.sub text 0 !found ^ String.sub text (!found + k) (n - !found - k)
+
+let v3_fields =
+  let with_values = written_with proof and with_nulls = written_with proof_without_v2 in
+  let vo = { trailer with vo_opaques = Some (String.make 64 'a') } in
+  let with_vo =
+    let buf = Buffer.create 1024 in
+    R.output_header buf header; R.output_proof buf proof; R.output_trailer buf vo; Buffer.contents buf
+  in
+  mk_bool_test "proof-record-v3-fields"
+    "span, replay and vo_opaques round-trip, a v2 proof line and a v4 trailer are refused, and the format \
+     is version 5"
+    (R.parse_string with_values = R.{ header; proofs = [ proof ]; trailer }
+     && R.parse_string with_nulls = R.{ header; proofs = [ proof_without_v2 ]; trailer }
+     && R.parse_string with_vo = R.{ header; proofs = [ proof ]; trailer = vo }
+     && refused (without_suffix ",\"span\":null,\"replay\":null" with_nulls)
+     && refused (without_suffix ",\"replay\":null" with_nulls)
+     && refused (without_suffix ",\"vo_opaques\":null" with_nulls)
+     && R.format_version = 5)
 
 (* The memo of blocks lives from one call to the next, so a persistent value
    digested again after a change costs its delta. It must not change a digest:
@@ -242,7 +297,7 @@ let memo_reused_address =
      !ok && R.digest_value (block 0) <> R.digest_value (block 1))
 
 let tests =
-  [ roundtrip; bad_input; toolchain_key_fields; sharing; kinds; deep; locations; unhashable; memo;
-    memo_moves; memo_reused_address; vo_path ]
+  [ roundtrip; bad_input; toolchain_key_fields; v3_fields; sharing; kinds; deep; locations; unhashable;
+    memo; memo_moves; memo_reused_address; vo_path ]
 
 let _ = run_tests __FILE__ log_out_ch tests

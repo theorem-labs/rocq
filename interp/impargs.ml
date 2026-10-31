@@ -85,6 +85,18 @@ let with_implicit_protection f x =
   let open Memprof_coq.Resource_bind in
   let& () = Util.protect_ref implicit_args in
   f x
+(* BET-84 P3: a declaration puts the current flags record itself into the
+   lib object it adds ([declare_constant_implicits] and its neighbours
+   read [!implicit_args]), so two declarations that read one record share
+   it in the written [.vo]. A full compile of two proofs writes two equal
+   copies there, so something on its path replaces the record between the
+   two; a replayed proof does not run that path. Replay calls this before
+   its declaration to leave the same structure behind.
+
+   Measured: with it, a file of two replayed proofs writes a [.vo]
+   byte-identical to stock's; without it, the two differ in exactly those
+   two sharing points (2026-10-25). *)
+let refresh_flags () = implicit_args := { !implicit_args with auto = (!implicit_args).auto }
 
 type on_trailing_implicit = Error | Info | Silent
 
@@ -549,13 +561,26 @@ let implicits_of_global_raw ref =
   with Not_found -> [DefaultImpArgs,[]]
 
 (* BET-84 census row 12: the implicit arguments of each global the proof
-   reads, with the renaming already applied. *)
+   reads, with the renaming already applied. The value is computed here
+   once, for the recorder at the lookup and for the replay evaluator that
+   checks the record again (dev/tools/census/replay_channels.py). *)
+let recorded_implicits ref = Some (Proof_recorder.digest ~what:"implicits" (implicits_of_global_raw ref))
+
+let () =
+  Proof_replay.register_evaluator "implicits" (fun key ->
+      match Arguments_renaming.globref_of_string key with
+      | None -> Proof_replay.Unknown
+      | Some r ->
+        (match recorded_implicits r with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown))
+
 let implicits_of_global ref =
   let res = implicits_of_global_raw ref in
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"12" ~channel:"implicits" ~id:ref
       ~key:(fun () -> Pp.string_of_ppcmds (GlobRef.print ref))
-      ~value:(fun () -> Some (Proof_recorder.digest ~what:"implicits" res));
+      ~value:(fun () -> recorded_implicits ref);
   res
 
 let cache_implicits_decl (ref, imps) =

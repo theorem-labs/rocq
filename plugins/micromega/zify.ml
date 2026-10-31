@@ -396,10 +396,55 @@ let table_cache = ref ConstrMap.empty
 let saturate_cache = ref ConstrMap.empty
 let specs_cache = ref ConstrMap.empty
 
-let record_cache name table =
+(* BET-84 census row 15: the three registration tables, each read whole
+   under its Summary name before [init_cache] copies it, and the copy of the
+   spec table that [spec_of_hyps] reads without filling it (key
+   ["zify_specs_cache"]). ONE value function, called by the record site and
+   by the replay evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_zify_table name =
+  let tbl = match name with
+    | "zify_table" -> Some !table
+    | "zify_saturate" -> Some !saturate
+    | "zify_specs" -> Some !specs
+    | "zify_specs_cache" -> Some !specs_cache
+    | _ -> None
+  in
+  Option.map (fun t -> Proof_recorder.digest_cached ~what:"zify_table" t) tbl
+
+
+let () =
+  Proof_replay.register_evaluator "zify_table" (fun key ->
+      match recorded_zify_table key with
+      | Some _ as v -> Proof_replay.Value v
+      | None -> Proof_replay.Unknown)
+
+let record_cache name =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"15" ~channel:"zify_table" ~key:(fun () -> name)
-      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:"zify_table" table))
+      ~value:(fun () -> recorded_zify_table name)
+
+(* The copies are process-wide: a proof that runs [init_cache] leaves them
+   for every later proof, and [spec_of_hyps] (zify_iter_specs) reads the
+   spec copy without filling it. A replayed proof runs no tactic, so a later
+   proof would find the copies of an earlier time (breadth audit gap BA4;
+   fixture verdict_zify_cache_write). A replayed proof whose registration
+   ran [init_cache] (it read the three tables) makes the same copies here:
+   the tables are Summary state that no tactic changes, so they hold now
+   what they held when its tactics copied them. *)
+let copy_tables () =
+  table_cache := !table;
+  saturate_cache := !saturate;
+  specs_cache := !specs
+
+let () =
+  Proof_replay.register_hit_hook (fun reads ->
+      if List.exists (fun (r : Proof_record.read) ->
+          String.equal r.channel "zify_table" && String.equal r.key "zify_specs") reads
+      then copy_tables ())
+
+(* The proof in which [init_cache] last ran ([Proof_recorder.generation]):
+   in that proof the spec copy is the spec table, which [init_cache] read. *)
+let init_generation = ref (-1)
 
 (** Each type-class gives rise to a different table.
     They only differ on how projections are extracted.  *)
@@ -771,15 +816,11 @@ module UnOpSpec = MakeTable (EUnopSpec)
 module BinOpSpec = MakeTable (EBinOpSpec)
 
 let init_cache () =
-  let table = !table in
-  let saturate = !saturate in
-  let specs = !specs in
-  record_cache "zify_table" table;
-  record_cache "zify_saturate" saturate;
-  record_cache "zify_specs" specs;
-  table_cache := table;
-  saturate_cache := saturate;
-  specs_cache := specs
+  record_cache "zify_table";
+  record_cache "zify_saturate";
+  record_cache "zify_specs";
+  init_generation := Proof_recorder.generation ();
+  copy_tables ()
 
 open EInjT
 
@@ -1548,6 +1589,11 @@ let rec interp_pscripts l =
 
 let spec_of_hyps =
   Proofview.Goal.enter (fun gl ->
+      (* The spec copy is what [init_cache] last copied: the spec table read
+         in this proof when it ran here, else a table of an earlier time,
+         which is a read of its own (fixture verdict_zify_cache_history). *)
+      if not (Int.equal !init_generation (Proof_recorder.generation ())) then
+        record_cache "zify_specs_cache";
       let env = Proofview.Goal.env gl in
       let concl = Proofview.Goal.concl gl in
       let evd = Proofview.Goal.sigma gl in

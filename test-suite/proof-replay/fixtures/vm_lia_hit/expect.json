@@ -1,0 +1,19 @@
+{
+  "doc": "two lia proofs, whose certificate checks run the bytecode machine over Stdlib's checker on a cold and on a warm cache, replay when nothing they read changes",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.first": {"eligible": true}, "PR.A.second": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 2,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.first", "hit"], ["PR.A.second", "hit"]]
+    }
+  },
+  "vo_exempt": {
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of the identifier string \"BinInt\" in the library segment (vodiff on 2026-10-30: 0 value differences and 2 sharing differences; the same on a switch built before the vm_global read). GRADE retired byte identity as a correctness gate on 2026-10-26; the contract is value equality."
+  }
+}

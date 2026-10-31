@@ -75,3 +75,44 @@ jobs:
 
       - name: 🐛 Test Rocq
         run: opam exec -- make -j 4 -C test-suite TIMED=1 DISABLED_SUBSYSTEMS='${{ matrix.test_disabled }}'
+
+  proof-replay:
+    # Per-proof replay fixtures (test-suite/proof-replay/README.md): every fixture, the slow ones
+    # too. `make -C test-suite proof-replay` fails when a fixture fails or does not run.
+    # ineligible_native_compute needs native_compute, so Rocq is configured with
+    # -native-compiler ondemand; the build jobs above keep the default (no native code).
+    # eval_zify_table, ineligible_external_prover and vm_lia_hit load Stdlib, so the job
+    # builds the Stdlib that dev/ci/ci-basic-overlay.sh pins, the way dev/ci does.
+    name: Proof replay fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: APT update
+        run: sudo apt-get update
+
+      - name: 🔭 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🧪 Fixture runner tests
+        run: python3 -m unittest discover -s test-suite/proof-replay -p 'test_*.py' -v
+
+      - name: 🐫 Setup OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ocaml-variants.4.14.2+options,ocaml-option-flambda
+          dune-cache: true
+
+      - name: 🐫🐪🐫 Get Rocq dependencies
+        run: opam install --deps-only ./coqide-server.opam ./rocq*.opam
+
+      - name: ⚙️ Configure Rocq with native_compute on demand
+        run: opam exec -- ./configure -relocatable -native-compiler ondemand
+
+      - name: 🧱 Build Rocq
+        run: opam exec -- make world
+
+      - name: 📚 Build Stdlib
+        run: opam exec -- make -f Makefile.ci ci-stdlib
+
+      - name: 🔁 Proof replay fixtures
+        run: opam exec -- make -j 4 -C test-suite TIMED=1 proof-replay

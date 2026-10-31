@@ -33,11 +33,11 @@ type proof_state = {
   p_constraints : string Queue.t;
   p_schemes : string Queue.t;
   p_sources : string Queue.t;
-  p_warnings : (string * string) Queue.t;
   p_counters : (string, int) Hashtbl.t;
   p_counter_order : string Queue.t;
   p_wall0 : float;
   p_cpu0 : float;
+  mutable p_span_start : int option;  (** first byte of the statement's sentence *)
   mutable p_depth : int;  (** 0 for the outermost proof; >0 inside a nested one *)
 }
 
@@ -50,7 +50,10 @@ type file_state = {
   mutable f_count : int;
   mutable f_proof : proof_state option;
   mutable f_suspended : int;  (** >0 inside [without_recording] *)
-  mutable f_pending : (unit -> string) option;  (** the sentence being run *)
+  mutable f_pending : ((unit -> string) * (int * int) option) option;  (** the sentence being run *)
+  mutable f_nested_closed : bool;
+      (** a nested proof closed during the sentence being run, and the proof
+          around it is still open *)
 }
 
 (* The one bit every choke point tests. It is false unless a proof is open
@@ -66,6 +69,20 @@ let gen = ref 0
 let generation () = !gen
 
 let active () = !recording
+
+(* Whether this process records or replays at all. [start] sets it, and so
+   does the replay's configuration; nothing clears it, as one process
+   compiles one file. The toplevel, [Declare] and [Vernacentries] test it
+   before they build what a hook takes (a sentence's span and digest
+   closure, a proof's path, position and universe snapshot, a closer's
+   declaration closure and result pair), so a compile with neither option
+   takes the stock path (deep review of 079bc4cb71, DR-2, and of
+   26528c8a34, R2-1). *)
+let in_use_flag = ref false
+
+let in_use () = !in_use_flag
+
+let set_in_use () = in_use_flag := true
 
 (* Set by a compile that replays and does not record: a process-wide cache
    fence must run there too, or a clean registration history would match a
@@ -111,6 +128,21 @@ let current_name () =
   | Some { f_proof = Some p; _ } -> Some p.p_name
   | Some { f_proof = None; _ } | None -> None
 
+(* The [Load]s that run now. A loaded file's sentences run inside the one
+   sentence that loads it, so the toplevel keeps none of them as a proof's
+   sentences (key item 1) and decides no proof among them (INFRA-361 gap 2). *)
+let load_depth = ref 0
+
+let in_load () = !load_depth > 0
+
+let loading f =
+  incr load_depth;
+  match f () with
+  | v -> decr load_depth; v
+  | exception e ->
+    let bt = Printexc.get_raw_backtrace () in
+    decr load_depth; Printexc.raise_with_backtrace e bt
+
 let set_recording st =
   recording := st.f_suspended = 0 && st.f_proof <> None
 
@@ -118,7 +150,23 @@ let cpu_time () = let t = Unix.times () in t.Unix.tms_utime +. t.Unix.tms_stime
 
 let peak_rss_kb () = Proof_limits.peak_rss_kb ()
 
+(* BET-84: how a proof's stored term is kept. Off, the blob is the whole
+   closed proof, the global universe graph included. [no_graph] leaves the
+   graph out (replay rebuilds it); [vo_ref] keeps the proof term as its
+   index in the opaque table of the [.vo] this compile writes. *)
+let opt_no_graph = ref false
+let opt_vo_ref = ref false
+
+let vo_referred = ref false
+
+let set_stored_format ~no_graph ~vo_ref = opt_no_graph := no_graph; opt_vo_ref := vo_ref
+let stored_without_graph () = !opt_no_graph
+let stored_by_vo_ref () = !opt_vo_ref
+let note_vo_ref () = vo_referred := true
+
 let start ~library ~source ~source_digest ~toolchain ~skip_qed_typecheck ~tables_at_start =
+  in_use_flag := true;
+  vo_referred := false;
   let header = R.{
       version = R.format_version;
       library; source; source_digest;
@@ -143,6 +191,7 @@ let start ~library ~source ~source_digest ~toolchain ~skip_qed_typecheck ~tables
       f_proof = None;
       f_suspended = 0;
       f_pending = None;
+      f_nested_closed = false;
     };
   recording := false
 
@@ -152,6 +201,11 @@ let start ~library ~source ~source_digest ~toolchain ~skip_qed_typecheck ~tables
 let tables : (unit -> R.read list) Queue.t = Queue.create ()
 
 let register_tables f = Queue.add f tables
+
+(* The same digests as values. The replay side evaluates them at the proof
+   it is about to replay, so the recorded value and the value now are made
+   the same way. *)
+let table_reads () = List.rev (Queue.fold (fun acc f -> List.rev_append (f ()) acc) [] tables)
 
 module Addr = Hashtbl.Make (struct
     type t = Obj.t
@@ -177,9 +231,16 @@ let slot () = let s = ref None in slots := s :: !slots; s
 
 let stop () =
   state := None; recording := false; Addr.reset digest_cache; R.reset_memo ();
+  vo_referred := false;
   List.iter (fun s -> s := None) !slots
 
-let write path =
+(* The digest memo and the address cache hold a strong reference to every
+   value they digested. A replay-only compile never calls [stop], so it
+   empties them after each proof's decision, which bounds them by one
+   proof's reads (review P3Deep F7). *)
+let reset_caches () = Addr.reset digest_cache; R.reset_memo ()
+
+let write ?(vo_opaques = fun () -> None) path =
   match !state with
   | None -> ()
   | Some st ->
@@ -188,6 +249,7 @@ let write path =
         file_cpu_s = cpu_time () -. st.f_cpu0;
         peak_rss_kb = peak_rss_kb ();
         proof_count = st.f_count;
+        vo_opaques = (if !vo_referred then vo_opaques () else None);
       };
     let oc = open_out_bin path in
     Buffer.output_buffer oc st.f_buf;
@@ -216,6 +278,7 @@ let open_proof ~name ~statement ~position =
         Queue.add R.{ reason = "nested_proof"; detail = name } p.p_ineligible
       end
     | None ->
+      let span_start = match st.f_pending with Some (_, Some (bp, _)) -> Some bp | _ -> None in
       (* The proof is opened first, so that a table this cannot digest marks
          this proof ineligible and not the one before it. *)
       incr gen;
@@ -234,11 +297,11 @@ let open_proof ~name ~statement ~position =
           p_constraints = Queue.create ();
           p_schemes = Queue.create ();
           p_sources = Queue.create ();
-          p_warnings = Queue.create ();
           p_counters = Hashtbl.create 8;
           p_counter_order = Queue.create ();
           p_wall0 = Unix.gettimeofday ();
           p_cpu0 = cpu_time ();
+          p_span_start = span_start;
           p_depth = 0;
         };
       set_recording st;
@@ -256,14 +319,17 @@ let open_proof ~name ~statement ~position =
 let take_pending st p =
   match st.f_pending with
   | None -> ()
-  | Some d -> st.f_pending <- None; Queue.add (d ()) p.p_sentences
+  | Some (d, _) -> st.f_pending <- None; Queue.add (d ()) p.p_sentences
 
-let sentence digest run =
+let pending_span st = match st.f_pending with Some (_, span) -> span | None -> None
+
+let sentence ?span digest run =
   match !state with
   | None -> run ()
   | Some st ->
     let outer = st.f_pending in
-    st.f_pending <- Some digest;
+    st.f_pending <- Some (digest, span);
+    st.f_nested_closed <- false;
     let finish () =
       (match st.f_proof with Some p when p.p_depth = 0 -> take_pending st p | Some _ | None -> ());
       st.f_pending <- outer
@@ -273,14 +339,23 @@ let sentence digest run =
      | exception e -> let bt = Printexc.get_raw_backtrace () in
        finish (); Printexc.raise_with_backtrace e bt)
 
-let close_proof ~closer ~kernel_check =
+let nested_closed () =
+  match !state with
+  | Some { f_nested_closed; _ } -> f_nested_closed
+  | None -> false
+
+let close_proof ~closer ~kernel_check ~replay =
   match !state with
   | None -> ()
   | Some st ->
     match st.f_proof with
     | None -> ()
-    | Some p when p.p_depth > 0 -> p.p_depth <- p.p_depth - 1
+    | Some p when p.p_depth > 0 -> p.p_depth <- p.p_depth - 1; st.f_nested_closed <- true
     | Some p ->
+      let span = match p.p_span_start, pending_span st with
+        | Some bp, Some (_, ep) when ep > bp -> Some (bp, ep)
+        | _ -> None
+      in
       take_pending st p;
       (* A fence can trip while the proof runs (a plugin closure installed by
          a tactic, a lazy rebound by its declaration), and the next check
@@ -307,11 +382,16 @@ let close_proof ~closer ~kernel_check =
             constraints = list p.p_constraints;
             schemes = list p.p_schemes;
             constraint_sources = list p.p_sources;
-            warnings_raised = list p.p_warnings;
           };
           kernel_check;
           wall_s = Unix.gettimeofday () -. p.p_wall0;
           cpu_s = cpu_time () -. p.p_cpu0;
+          span;
+          (* An ineligible proof stores no term (BET-84 spec, gate step 2:
+             "each ineligible class: the registration stores no term").
+             The ineligibility is final only here: a reason can be added
+             after the closer computed the term, by the declaration. *)
+          replay = (if Queue.is_empty p.p_ineligible then replay else None);
         }
       in
       R.output_proof st.f_buf proof;
@@ -359,8 +439,12 @@ let write_universes ~levels ~constraints =
       List.iter (fun c -> Queue.add c p.p_constraints) constraints)
 
 let write_scheme s = with_proof (fun p -> Queue.add s p.p_schemes)
+
+let created_in p name =
+  (not (Queue.is_empty p.p_schemes))
+  && (let n = name () in Queue.fold (fun found s -> found || String.equal s n) false p.p_schemes)
+
 let write_constraint_source s = with_proof (fun p -> Queue.add s p.p_sources)
-let write_warning ~name ~message = with_proof (fun p -> Queue.add (name, message) p.p_warnings)
 
 let write_counters l =
   with_proof (fun p ->
@@ -383,8 +467,12 @@ let read ~row ~channel ~key ~value =
          the value again: the global state a tactic reads moves inside a
          proof only through the proof's own writes (a scheme it creates) or
          through a command or sub-proof that already makes it ineligible, so
-         the first value is the one replay sees. *)
-      if not (ReadTbl.mem p.p_seen k) then begin
+         the first value is the one replay sees. A read keyed by a constant
+         the proof created itself is not kept at all: it is not an input of
+         the proof, replay declares the constant again with the stored term,
+         and the state at the proof's start, where replay reads, does not
+         hold it (fixture write_scheme_rewrite). *)
+      if not (ReadTbl.mem p.p_seen k) && not (created_in p (fun () -> key)) then begin
         let v = value () in
         ReadTbl.add p.p_seen k ();
         Queue.add R.{ row; channel; key; value = v } p.p_reads
@@ -449,6 +537,24 @@ let digest_cached ~what v =
   | Some d -> if d = "unhashable" then ineligible ~reason:"unhashable" ~detail:what; d
   | None ->
     let d = digest ~what v in
+    Addr.add digest_cache o d;
+    d
+
+(* The file this compile reads, so that a digest can leave out the
+   locations of that file: a value that differs only by where in the file it
+   was written (a hint written two lines lower) digests the same. *)
+let locs_source : Loc.source option ref = ref None
+
+let set_locs_source src = locs_source := Some src
+
+let compiled_source () = !locs_source
+
+let digest_cached_by ~what ~key view =
+  let o = Obj.repr key in
+  match Addr.find_opt digest_cache o with
+  | Some d -> if d = "unhashable" then ineligible ~reason:"unhashable" ~detail:what; d
+  | None ->
+    let d = digest ?locs:!locs_source ~what (view ()) in
     Addr.add digest_cache o d;
     d
 

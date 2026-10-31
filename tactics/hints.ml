@@ -205,6 +205,11 @@ let () =
       [Proof_record.{ row = "18"; channel = "counter_start"; key = "HINT-COUNTER";
                       value = Some (string_of_int !hint_counter) }])
 
+(* BET-84 P3: a Summary counter, which the STM rolls back when a proof
+   closes; replay leaves it alone ([Proof_replay.register_summary_counter]).
+   Without this a proof whose tactics made a hint key is refused. *)
+let () = Proof_replay.register_summary_counter "hint_counter"
+
 let fresh_key () =
   let cur = incr hint_counter; !hint_counter in
   if Proof_recorder.writing () then
@@ -957,24 +962,43 @@ let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
 
 (* BET-84 census row 7: each database the proof searches, by name, with a
    digest of its immutable semantic summary. The summary excludes the mutable
-   discrimination net cache and is kept with the persistent database value. *)
-let record_db name db =
+   discrimination net cache and is kept with the persistent database value.
+
+   ONE value function for the channel: the two record sites below and the
+   replay evaluator all call [recorded_hint_db], so the value is never
+   computed two ways (dev/tools/census/replay_channels.py). Under the key
+   ["*domain"] the value is the set of database names, so that a proof which
+   searched every database (`auto with *`) sees a database added or removed. *)
+let domain_key = "*domain"
+
+let recorded_hint_db key =
+  if String.equal key domain_key then
+    Some (Proof_recorder.digest ~what:"hint_db_domain"
+            (String.Set.elements (Hintdbmap.domain !searchtable)))
+  else
+    match Hintdbmap.find_opt key !searchtable with
+    | None -> None
+    | Some db -> Some (Hint_db.digest db)
+
+let () =
+  Proof_replay.register_evaluator "hint_db" (fun key ->
+      match recorded_hint_db key with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let record_db name =
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"7" ~channel:"hint_db" ~id:name ~key:(fun () -> name)
-      ~value:(fun () -> match db with
-          | None -> None
-          | Some db -> Some (Hint_db.digest db))
+      ~value:(fun () -> recorded_hint_db name)
 
 let record_db_domain () =
   if Proof_recorder.active () then
-    Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> "*domain")
-      ~value:(fun () ->
-          Some (Proof_recorder.digest ~what:"hint_db_domain"
-                  (String.Set.elements (Hintdbmap.domain !searchtable))))
+    Proof_recorder.read ~row:"7" ~channel:"hint_db" ~key:(fun () -> domain_key)
+      ~value:(fun () -> recorded_hint_db domain_key)
 
 let searchtable_map name =
   let db = Hintdbmap.find_opt name !searchtable in
-  record_db name db;
+  record_db name;
   (match db with Some db -> db | None -> raise Not_found)
 let searchtable_add (name, db) =
   (* XXX see #21114 *)
@@ -989,7 +1013,7 @@ let current_db_names () =
 let current_db () =
   record_db_domain ();
   let all = Hintdbmap.bindings !searchtable in
-  List.iter (fun (name, db) -> record_db name (Some db)) all;
+  List.iter (fun (name, _) -> record_db name) all;
   all
 
 let current_pure_db () = List.map snd (current_db ())

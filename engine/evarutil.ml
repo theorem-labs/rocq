@@ -153,6 +153,8 @@ let () = Proof_recorder.register_tables (fun () ->
     [ Proof_record.{ row = "18"; channel = "counter_start"; key = meta_counter_summary_name;
                      value = Some (string_of_int !meta_ctr) } ])
 
+let () = Proof_replay.register_summary_counter "meta"
+
 let new_meta () =
   incr meta_ctr;
   if Proof_recorder.writing () then

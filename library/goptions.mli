@@ -233,6 +233,17 @@ type option_state = {
 }
 
 val get_tables : unit -> option_state OptionMap.t
+
+type table_contents
+(** What every table ([MakeStringTable], [MakeRefTable]) holds: each
+    table's kind and name, with its elements in the order of its set. *)
+
+val get_table_contents : unit -> table_contents
+(** The contents of every table, sorted by kind and name, a value to digest:
+    the same elements give an equal value, whatever the order of the [Add]
+    and [Remove] commands that made them. [get_tables] holds the options
+    only. *)
+
 val print_tables : unit -> Pp.t
 
 type iter_table_aux = { aux : 'a. 'a table_of_A -> Environ.env -> 'a -> unit }

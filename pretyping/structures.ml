@@ -86,35 +86,79 @@ let rebuild env s =
   let nparams = mib.Declarations.mind_nparams in
   { s with nparams }
 
-(* BET-84 census row 14: the record structures a proof reads. *)
-let record_structure ind v =
+(* BET-84 census row 14: the record structures a proof reads. ONE value
+   function per channel, called by the record sites here and by the replay
+   evaluators registered beside them
+   (dev/tools/census/replay_channels.py). *)
+let recorded_structure env ind =
+  match Environ.QInd.Map.find_opt env ind !structure_table with
+  | None -> None
+  | Some s -> Some (Proof_recorder.digest_cached ~what:"structure" s)
+
+let recorded_structure_projection env cst =
+  match Environ.QConstant.Map.find_opt env cst !projection_table with
+  | None -> None
+  | Some s -> Some (Proof_recorder.digest_cached ~what:"structure_projection" s)
+
+(* The record holds the inductive as ["<path>,<index>"] and the projection
+   as the constant's path. A key that does not read back to the same name is
+   not taken for another: the proof misses. *)
+let mind_of_string s =
+  match Lib.global_of_kernel_string s with
+  | Names.GlobRef.IndRef (m, _) | Names.GlobRef.ConstructRef ((m, _), _)
+    when String.equal (Names.MutInd.to_string m) s -> Some m
+  | _ -> None
+  | exception _ -> None
+
+let ind_of_key key =
+  match String.rindex_opt key ',' with
+  | None -> None
+  | Some i ->
+    (match mind_of_string (String.sub key 0 i),
+           int_of_string_opt (String.sub key (i + 1) (String.length key - i - 1)) with
+     | Some m, Some n -> Some (m, n)
+     | _ -> None)
+
+let () =
+  Proof_replay.register_evaluator "structure" (fun key ->
+      match ind_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some ind ->
+        (match recorded_structure (Global.env ()) ind with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown));
+  Proof_replay.register_evaluator "structure_projection" (fun key ->
+      match Lib.global_of_kernel_string key with
+      | Names.GlobRef.ConstRef c when String.equal (Names.Constant.to_string c) key ->
+        (match recorded_structure_projection (Global.env ()) c with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown)
+      | _ -> Proof_replay.Unknown
+      | exception _ -> Proof_replay.Unknown)
+
+let record_structure ind =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"structure"
       ~key:(fun () -> Names.MutInd.to_string (fst ind) ^ "," ^ string_of_int (snd ind))
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some s -> Some (Proof_recorder.digest_cached ~what:"structure" s))
+      ~value:(fun () -> recorded_structure (Global.env ()) ind)
 
-let record_projection cst v =
+let record_projection cst =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"structure_projection"
       ~key:(fun () -> Names.Constant.to_string cst)
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some s ->
-            Some (Proof_recorder.digest_cached ~what:"structure_projection" s))
+      ~value:(fun () -> recorded_structure_projection (Global.env ()) cst)
 
 let mem env ind =
   if Proof_recorder.active () then begin
     let res = Environ.QInd.Map.find_opt env ind !structure_table in
-    record_structure ind res;
+    record_structure ind;
     match res with None -> false | Some _ -> true
   end else Environ.QInd.Map.mem env ind !structure_table
 
 let find env indsp =
   if Proof_recorder.active () then begin
     let res = Environ.QInd.Map.find_opt env indsp !structure_table in
-    record_structure indsp res;
+    record_structure indsp;
     (match res with Some s -> s | None -> raise Not_found)
   end else Environ.QInd.Map.find env indsp !structure_table
 
@@ -125,7 +169,7 @@ let find_projections env indsp =
 let find_from_projection env cst =
   if Proof_recorder.active () then begin
     let res = Environ.QConstant.Map.find_opt env cst !projection_table in
-    record_projection cst res;
+    record_projection cst;
     match res with Some s -> s | None -> raise Not_found
   end else Environ.QConstant.Map.find env cst !projection_table
 
@@ -136,7 +180,7 @@ let is_projection cst =
   let env = Global.env () in
   if Proof_recorder.active () then begin
     let res = Environ.QConstant.Map.find_opt env cst !projection_table in
-    record_projection cst res;
+    record_projection cst;
     match res with None -> false | Some _ -> true
   end else Environ.QConstant.Map.mem env cst !projection_table
 
@@ -244,6 +288,40 @@ module GlobRefMap = Environ.QGlobRef.Map
 let object_table =
   Summary.ref (GlobRefMap.empty : (constr * obj_typ) PatMap.t GlobRefMap.t)
     ~name:"record-canonical-structs"
+
+(* BET-84 census row 14: the canonical solutions of a projection, read by
+   the projection. ONE value function, called by the record sites and by
+   the replay evaluator (dev/tools/census/replay_channels.py): the digest
+   of the projection's whole table of solutions, or absent. *)
+let recorded_canonical_structure env proj =
+  match GlobRefMap.find_opt env proj !object_table with
+  | None -> None
+  | Some m -> Some (Proof_recorder.digest_cached ~what:"canonical_structure" m)
+
+(* The key names the projection, which is always a constant, by
+   [Libnames.constant_key] ([GlobRef.print] does not name one constant). Any
+   other reference gets a key that no evaluator reads back. *)
+let canonical_structure_key = function
+  | GlobRef.ConstRef c -> "C" ^ Libnames.constant_key c
+  | GlobRef.VarRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _ as r ->
+    "?" ^ Pp.string_of_ppcmds (GlobRef.print r)
+
+let record_canonical_structure env proj =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"canonical_structure"
+      ~key:(fun () -> canonical_structure_key proj)
+      ~value:(fun () -> recorded_canonical_structure env proj)
+
+(* The table is read through the global environment, which the projection's
+   canonical name is resolved in; a key that does not read back is a miss. *)
+let () =
+  Proof_replay.register_evaluator "canonical_structure" (fun key ->
+      let n = String.length key in
+      if n = 0 || key.[0] <> 'C' then Proof_replay.Unknown
+      else match Libnames.constant_of_key (String.sub key 1 (n - 1)) with
+        | None -> Proof_replay.Unknown
+        | Some c ->
+          Proof_replay.Value (recorded_canonical_structure (Global.env ()) (GlobRef.ConstRef c)))
 
 let keep_true_projections projs =
   let filter { Structure.proj_true ; proj_canonical; proj_body } = if proj_true then Some (proj_body, proj_canonical) else None in
@@ -403,12 +481,7 @@ type t = {
 
 (* BET-84 census row 14: the canonical-structure table a proof reads. *)
 let find env sigma (proj,pat) =
-  if Proof_recorder.active () then
-    Proof_recorder.read ~row:"14" ~channel:"canonical_structure"
-      ~key:(fun () -> Pp.string_of_ppcmds (Names.GlobRef.print proj))
-      ~value:(fun () -> match GlobRefMap.find_opt env proj !object_table with
-          | None -> None
-          | Some m -> Some (Proof_recorder.digest_cached ~what:"canonical_structure" m));
+  record_canonical_structure env proj;
   let t', { o_DEF = c; o_CTX = ctx; o_INJ=n; o_TABS = bs;
         o_TPARAMS = params; o_NPARAMS = nparams; o_TCOMPS = us } = PatMap.find env pat (GlobRefMap.find env proj !object_table) in
   let us = List.map EConstr.of_constr us in
@@ -448,10 +521,15 @@ let rec decompose_projection ?metas env sigma c args =
   | Const (c, u) ->
      let n = Structure.projection_nparams env c in
      (* Check if there is some canonical projection attached to this structure *)
+     record_canonical_structure env (GlobRef.ConstRef c);
      let _ = GlobRefMap.find env (GlobRef.ConstRef c) !object_table in
      get_nth n args
   | Proj (p, _, c) ->
-     let _ = GlobRefMap.find env (GlobRef.ConstRef (Names.Projection.constant p)) !object_table in
+     (* BET-84: this test of the table decides how unification goes, so it
+        is a read too (census row 14). *)
+     let proj = GlobRef.ConstRef (Names.Projection.constant p) in
+     record_canonical_structure env proj;
+     let _ = GlobRefMap.find env proj !object_table in
      c
   | _ -> raise Not_found
 
@@ -513,18 +591,32 @@ let prim_table =
 let register p c =
   prim_table := Cmap_env.add c p !prim_table
 
-let record_primitive_projection c v =
+(* BET-84 census row 14: whether a constant is a primitive projection.
+   The value is computed once, for the recorder at the lookup and for the
+   replay evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_primitive_projection v =
+  match v with
+  | None -> None
+  | Some p -> Some (Proof_recorder.digest_cached ~what:"primitive_projection" p)
+
+let lookup c = Cmap_env.find_opt c !prim_table
+
+let () =
+  Proof_replay.register_evaluator "primitive_projection" (fun key ->
+      match Lib.global_of_kernel_string key with
+      | Names.GlobRef.ConstRef c when String.equal (Names.Constant.to_string c) key ->
+        (match recorded_primitive_projection (lookup c) with
+         | v -> Proof_replay.Value v
+         | exception _ -> Proof_replay.Unknown)
+      | _ -> Proof_replay.Unknown
+      | exception _ -> Proof_replay.Unknown)
+
+let find_opt c =
+  let res = lookup c in
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"primitive_projection"
       ~key:(fun () -> Names.Constant.to_string c)
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some p ->
-            Some (Proof_recorder.digest_cached ~what:"primitive_projection" p))
-
-let find_opt c =
-  let res = try Some (Cmap_env.find c !prim_table) with Not_found -> None in
-  record_primitive_projection c res;
+      ~value:(fun () -> recorded_primitive_projection res);
   res
 
 let mem c = Option.has_some (find_opt c)

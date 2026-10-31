@@ -41,18 +41,29 @@ let add kn fpa =
 let fold f acc =
   KerName.Map.fold f !abbrev_table acc
 
-(* BET-84 row M1: each abbreviation the proof reads. *)
-let record k v =
+(* BET-84 row M1: each abbreviation the proof reads, keyed by its kernel name
+   as [Libnames.kername_key] writes it ([KerName.to_string] is not injective).
+   ONE value function, called by the record site and by the replay
+   evaluator (dev/tools/census/replay_channels.py). *)
+let recorded_abbreviation k =
+  Option.map (fun v -> Proof_recorder.digest ~what:"abbreviation" v)
+    (KerName.Map.find_opt k !abbrev_table)
+
+let record k =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"M1" ~channel:"abbreviation"
-      ~key:(fun () -> KerName.to_string k)
-      ~value:(fun () -> match v with
-          | None -> None
-          | Some v -> Some (Proof_recorder.digest ~what:"abbreviation" v))
+      ~key:(fun () -> Libnames.kername_key k)
+      ~value:(fun () -> recorded_abbreviation k)
+
+let () =
+  Proof_replay.register_evaluator "abbreviation" (fun key ->
+      match Libnames.kername_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some k -> Proof_replay.Value (recorded_abbreviation k))
 
 let find_opt k =
   let res = KerName.Map.find_opt k !abbrev_table in
-  record k res;
+  record k;
   res
 
 let toggle_aux ~on ~use k (sp, data) =
@@ -146,6 +157,6 @@ let declare ~local user_warns id ~onlyparsing pat =
 (* Remark: do not check for activation (if not activated, it is already not supposed to be located) *)
 let find_interp kn =
   let res = KerName.Map.find_opt kn !abbrev_table in
-  record kn res;
+  record kn;
   let _, abbrev = match res with Some v -> v | None -> raise Not_found in
   abbrev.abbrev_pattern

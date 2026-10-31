@@ -1,0 +1,17 @@
+{
+  "doc": "with the registered .vo missing, a proof that refers to it misses on vo_term and installs nothing; the polymorphic lemma and the section Let kept their terms inline and replay; the section lemmas refer to the .vo, whose table holds their terms before discharge",
+  "files": ["A.v"],
+  "register_flags": ["-proof-record-vo-ref"],
+  "vo_mutation": "remove",
+  "record_trailers": {"A.v": {"vo_opaques": true}},
+  "summaries": {
+    "A.v": {"proofs": 5, "hits": 2,
+              "misses": {"key": 0, "read": 3, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.plus_zero", "read", "vo_term", "missing"],
+                           ["PR.A.id_type", "hit"],
+                           ["PR.A.S.k_plus_zero", "read", "vo_term", "missing"],
+                           ["PR.A.S.l", "hit"],
+                           ["PR.A.S.l_eq", "read", "vo_term", "missing"]]}
+  }
+}

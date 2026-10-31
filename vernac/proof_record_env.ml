@@ -131,29 +131,330 @@ let position () =
     position_cache := Some (path, p);
     p
 
-(* A value of the global state that no proof changes in place, digested again
-   only when it is a different value: the universe graph is one value from
-   one declaration to the next, so most proofs reuse the last digest. *)
-let universes_slot = Proof_recorder.slot ()
 let qualities_slot = Proof_recorder.slot ()
 let named_slot = Proof_recorder.slot ()
 let flags_slot = Proof_recorder.slot ()
 let generalizable_slot = Proof_recorder.slot ()
 let template_slot = Proof_recorder.slot ()
+let universe_slot = Proof_recorder.slot ()
+let warnings_registry_slot = Proof_recorder.slot ()
+let retroknowledge_slot = Proof_recorder.slot ()
 
 let cached slot what v = Proof_recorder.digest_slot slot ~what v
 
+(* Row 2, the global universe graph. A proof reads it through every query on
+   a graph built from it: the global graph itself, and the proof's private
+   graph G ∪ L, where L holds the constraints the statement and the tactics
+   added. One edited file earlier adds levels and constraints, so a digest of
+   the whole graph made every later proof miss.
+
+   The proof's footprint T is every level that any graph operation names
+   while the proof is recorded: each check, and each enforce or add, which
+   makes the endpoints of every local edge part of T. A path in G ∪ L
+   between two levels of a query alternates between global segments and
+   edges of L, and every segment has its two ends in T. So every answer is a
+   function of L and of the order G induces on T. The recorded value is that
+   order: for each ordered pair of global levels of T, whether G proves a
+   strict, a non-strict or no constraint. By induction over the proof's steps,
+   equal answers give the same L and the same term. The statement's own
+   universe state, the base case, is in the statement key ([Declare]).
+
+   Levels of T that are not global at the proof's start are left out when
+   this proof made them: their names carry this library and a counter past
+   the counter at the start, which the row 18 read pins, so no global level
+   of a replaying compile can have that name. Any other undeclared level stays
+   in the key, and replay requires it still undeclared. A query that reads
+   the whole global graph, or a footprint too large to compare pairwise,
+   records the digest of the whole graph instead. *)
+type universe_frame = {
+  start_graph : UGraph.t;
+  start_counter : int;
+  library : Names.DirPath.t;
+  mutable touched : Univ.Level.Set.t;
+  mutable whole : bool;
+}
+
+type universe_footprint = {
+  whole_graph : bool;
+  declared : Univ.Level.t list;
+  undeclared : Univ.Level.t list;
+}
+
+(* Pairwise comparison is quadratic; past this size the whole graph is read. *)
+let universe_pairs_limit = 64
+
+let universe_frames : universe_frame list ref = ref []
+
+let touch levels =
+  List.iter (fun f ->
+      if not (Univ.Level.Set.subset levels f.touched) then
+        f.touched <- Univ.Level.Set.union levels f.touched)
+    !universe_frames
+
+let note_universe_query graph query =
+  if Proof_recorder.active () then
+    match query with
+    | UGraph.Constraints levels | UGraph.Declared levels -> touch levels
+    | UGraph.Type_in_type -> ()
+    | UGraph.Domain | UGraph.All_constraints | UGraph.Graph | UGraph.Opaque _ ->
+      let global = Environ.universes (Global.env ()) in
+      if graph == global || List.exists (fun f -> graph == f.start_graph) !universe_frames then
+        List.iter (fun f -> f.whole <- true) !universe_frames
+      else
+        (* A private graph: every level in it may be read. When it was built
+           from the global graph this is every global level, and the
+           footprint passes the pairwise limit. *)
+        touch (UGraph.without_query_hook (fun () -> UGraph.domain graph))
+
+let made_by_this_proof f l =
+  match Univ.Level.name l with
+  | None -> false
+  | Some g ->
+    let library, worker, n = Univ.UGlobal.repr g in
+    String.equal worker "" && n > f.start_counter && Names.DirPath.equal library f.library
+
+let footprint_of f =
+  let undeclared =
+    match UGraph.check_declared_universes f.start_graph f.touched with
+    | Ok () -> Univ.Level.Set.empty
+    | Error missing -> missing
+  in
+  let declared = Univ.Level.Set.diff f.touched undeclared in
+  let undeclared = Univ.Level.Set.filter (fun l -> not (made_by_this_proof f l)) undeclared in
+  let whole_graph = f.whole || Univ.Level.Set.cardinal declared > universe_pairs_limit in
+  if whole_graph then { whole_graph; declared = []; undeclared = [] }
+  else { whole_graph;
+         declared = Univ.Level.Set.elements declared;
+         undeclared = Univ.Level.Set.elements undeclared }
+
+(* The key in text, short enough not to grow the record: ["w"] for the whole
+   graph, else ["f"], then the declared and the undeclared levels on two
+   lines. A line lists [S] (Set), [V<n>] (a bound variable) and, per
+   library and process, [G<dirpath>|<process>|<n>,<n>...], separated by
+   [;]. A key that does not read back is not taken for another: the proof
+   misses. *)
+let encode_levels levels =
+  let groups = Hashtbl.create 8 and order = ref [] and others = ref [] in
+  List.iter (fun l ->
+      match Univ.Level.name l, Univ.Level.var_index l with
+      | Some g, _ ->
+        let dp, s, n = Univ.UGlobal.repr g in
+        let k = (Names.DirPath.to_string dp, s) in
+        (match Hashtbl.find_opt groups k with
+         | Some ns -> Hashtbl.replace groups k (n :: ns)
+         | None -> Hashtbl.add groups k [ n ]; order := k :: !order)
+      | None, Some i -> others := ("V" ^ string_of_int i) :: !others
+      | None, None -> others := "S" :: !others)
+    levels;
+  let group (dp, s) =
+    let ns = List.rev (Hashtbl.find groups (dp, s)) in
+    Printf.sprintf "G%s|%s|%s" dp s (String.concat "," (List.map string_of_int ns))
+  in
+  String.concat ";" (List.rev_append !others (List.rev_map group !order))
+
+let decode_levels line =
+  let dirpath s = Names.DirPath.make (List.rev_map Names.Id.of_string (String.split_on_char '.' s)) in
+  let item it =
+    if String.equal it "S" then [ Univ.Level.set ]
+    else if String.length it > 1 && it.[0] = 'V' then
+      [ Univ.Level.var (int_of_string (String.sub it 1 (String.length it - 1))) ]
+    else if String.length it > 1 && it.[0] = 'G' then
+      match String.split_on_char '|' (String.sub it 1 (String.length it - 1)) with
+      | [ dp; s; ns ] ->
+        let dp = dirpath dp in
+        List.map (fun n -> Univ.Level.make (Univ.UGlobal.make dp s (int_of_string n)))
+          (String.split_on_char ',' ns)
+      | _ -> failwith "universe footprint group"
+    else failwith "universe footprint item"
+  in
+  if String.equal line "" then [] else List.concat_map item (String.split_on_char ';' line)
+
+let universe_footprint_key fp =
+  if fp.whole_graph then "w"
+  else "f\n" ^ encode_levels fp.declared ^ "\n" ^ encode_levels fp.undeclared
+
+let universe_footprint_of_key key =
+  match String.split_on_char '\n' key with
+  | [ "w" ] -> Some { whole_graph = true; declared = []; undeclared = [] }
+  | [ "f"; d; u ] ->
+    (match decode_levels d, decode_levels u with
+     | declared, undeclared -> Some { whole_graph = false; declared; undeclared }
+     | exception (Failure _ | Invalid_argument _ | CErrors.UserError _) -> None)
+  | _ -> None
+
+(* The order is computed with universe checking ON, whatever the graph's
+   own mode: a graph that does not check ([Unset Universe Checking]) proves
+   every constraint, while the proof can check its own constraints against
+   it ([#[bypass_check(universes=no)]]), so the order the proof's checks see
+   is the checked one. The graph's mode is kept in the value beside it
+   (fixture universe_checked_proof_unchecked_graph). *)
+let universe_footprint_value graph fp =
+  UGraph.without_query_hook (fun () ->
+      if fp.whole_graph then cached universe_slot "universe_graph" graph
+      else
+        let declared_now =
+          let declared = List.fold_left (fun s l -> Univ.Level.Set.add l s) Univ.Level.Set.empty fp.declared in
+          Result.is_ok (UGraph.check_declared_universes graph declared)
+        in
+        let undeclared_now =
+          List.for_all (fun l ->
+              Result.is_error (UGraph.check_declared_universes graph (Univ.Level.Set.singleton l)))
+            fp.undeclared
+        in
+        if not (declared_now && undeclared_now) then "universe_domain_changed"
+        else
+          let checked = UGraph.set_type_in_type false graph in
+          let levels = Array.of_list (List.sort Univ.Level.compare fp.declared) in
+          let n = Array.length levels in
+          let order = Bytes.make (n * n) '.' in
+          for i = 0 to n - 1 do
+            for j = 0 to n - 1 do
+              if i <> j then
+                let a = levels.(i) and b = levels.(j) in
+                let c =
+                  if UGraph.check_constraint checked (a, Univ.UnivConstraint.Lt, b) then 'l'
+                  else if UGraph.check_constraint checked (a, Univ.UnivConstraint.Le, b) then 'e'
+                  else '-'
+                in
+                Bytes.set order (i * n + j) c
+            done
+          done;
+          Proof_recorder.digest ~what:"universe_order"
+            (UGraph.type_in_type graph, UGraph.above_prop_qvars graph, Bytes.to_string order))
+
+let record_universe_footprint () =
+  if Proof_recorder.active () then
+    match !universe_frames with
+    | f :: _ ->
+      let fp = footprint_of f in
+      let key = universe_footprint_key fp in
+      let value = Some (universe_footprint_value f.start_graph fp) in
+      Proof_recorder.read ~row:"2" ~channel:"universe_constraint" ~key:(fun () -> key)
+        ~value:(fun () -> value)
+    | [] ->
+      (* The stack follows the recorder's open proofs, so this is not
+         expected; without a footprint the proof must run. *)
+      Proof_recorder.ineligible ~reason:"universe_footprint_missing"
+        ~detail:"no universe footprint for the open proof"
+
+(* A collector of the universe queries a declaration makes ([with_declaration_queries]),
+   beside the footprint's own hook. *)
+let collector : (UGraph.t -> UGraph.query -> unit) option ref = ref None
+
+let install_query_hook () =
+  UGraph.set_query_hook
+    (match !collector, !universe_frames with
+     | None, [] -> None
+     | None, _ :: _ -> Some note_universe_query
+     | Some c, [] -> Some c
+     | Some c, _ :: _ -> Some (fun g q -> c g q; note_universe_query g q))
+
+let set_universe_frames frames =
+  universe_frames := frames;
+  install_query_hook ()
+
+let drop_universe_frame () =
+  match !universe_frames with
+  | _ :: rest -> set_universe_frames rest
+  | [] -> ()
+
+let drop_universe_frames () =
+  match !universe_frames with
+  | [] -> ()
+  | _ :: _ -> set_universe_frames []
+
+(* BET-84: what a proof's declaration asks of the universe graphs, outside
+   the kernel. The kernel checks against the global graph, which a replay
+   has of its own; everything else asks the proof's universe state, whose
+   graphs a record can leave out and a replay rebuilds. A query that reads a
+   whole graph is kept as such: no level set answers for it. *)
+type declaration_queries = { dq_levels : Univ.Level.Set.t; dq_whole : bool }
+
+let with_declaration_queries f =
+  let levels = ref Univ.Level.Set.empty and whole = ref false in
+  let outer = !collector in
+  let collect g q =
+    if not (Global.in_kernel ()) then begin
+      match q with
+      | UGraph.Constraints ls | UGraph.Declared ls ->
+        if not (Univ.Level.Set.subset ls !levels) then levels := Univ.Level.Set.union ls !levels
+      | UGraph.Type_in_type -> ()
+      | UGraph.Domain | UGraph.All_constraints | UGraph.Graph | UGraph.Opaque _ -> whole := true
+    end;
+    Option.iter (fun c -> c g q) outer
+  in
+  collector := Some collect;
+  install_query_hook ();
+  let finish () = collector := outer; install_query_hook () in
+  match f () with
+  | v -> finish (); (v, { dq_levels = !levels; dq_whole = !whole })
+  | exception e ->
+    let bt = Printexc.get_raw_backtrace () in
+    finish ();
+    Printexc.raise_with_backtrace e bt
+
+(* What a universe state's two graphs answer about a list of levels: for
+   each graph, whether it checks universes, the quality variables above
+   [Prop], which levels it declares, and, between each ordered pair of the
+   declared ones, whether it proves a strict, a non-strict or no constraint
+   (with checking on, as the footprint's order). Two states with the same
+   value answer every query on those levels alike. *)
+let universe_state_view ~levels uctx =
+  UGraph.without_query_hook (fun () ->
+      let levels = Array.of_list levels in
+      let n = Array.length levels in
+      let one graph =
+        let declared =
+          Array.map (fun l -> Result.is_ok (UGraph.check_declared_universes graph (Univ.Level.Set.singleton l)))
+            levels
+        in
+        let checked = UGraph.set_type_in_type false graph in
+        let order = Bytes.make (n * n) '.' in
+        for i = 0 to n - 1 do
+          for j = 0 to n - 1 do
+            if i <> j && declared.(i) && declared.(j) then
+              let a = levels.(i) and b = levels.(j) in
+              let c =
+                if UGraph.check_constraint checked (a, Univ.UnivConstraint.Lt, b) then 'l'
+                else if UGraph.check_constraint checked (a, Univ.UnivConstraint.Le, b) then 'e'
+                else '-'
+              in
+              Bytes.set order (i * n + j) c
+          done
+        done;
+        (UGraph.type_in_type graph, Sorts.QVar.Set.elements (UGraph.above_prop_qvars graph),
+         Array.to_list declared, Bytes.to_string order)
+      in
+      Proof_record.digest_value (one (UState.ugraph uctx), one (UState.initial_ugraph uctx)))
+
+let universe_graph_value graph =
+  UGraph.without_query_hook (fun () -> cached universe_slot "universe_graph" graph)
+
 (* Reads taken once, at each proof's start, for the channels that have no
-   single read point (BET-84, census rows 2, 3, 4, 13, M3, M7). They are
-   recorded as ordinary reads, so the matcher treats them like the rest. *)
-let read_at_start () =
-  if Proof_recorder.active () then begin
-    let env = Global.env () in
-    let one row channel value =
-      Proof_recorder.read ~row ~channel ~key:(fun () -> "") ~value:(fun () -> Some (value ()))
-    in
-    let named = Environ.named_context env in
-    one "2" "universe_graph" (fun () -> cached universes_slot "universes" (Environ.universes env));
+   single read point (BET-84, census rows 1, 2, 3, 4, 13, M3, M7). They are
+   recorded as ordinary reads, so the matcher treats them like the rest.
+   Replay evaluates the same list at the proof it is about to replay
+   (`Proof_replay_env`), so the two sides can never drift apart. *)
+let start_reads () =
+  let env = Global.env () in
+  let one row channel value = Proof_record.{ row; channel; key = ""; value = Some (value ()) } in
+  let named = Environ.named_context env in
+  [
+    (* Row 1, the kernel's registry of primitive types and of the
+       inductives primitives return (retroknowledge). The kernel reads it
+       with no lookup: an int63 literal's type is the registered constant
+       ([Typeops.type_of_int]), and with none registered the literal does
+       not type. Reduction, the machines and the primitives' types read it
+       too, absence included, at points too many to instrument. A
+       [Primitive] declaration or a [Register ... as kernel.ind_*] of the
+       file being compiled changes it ([Safe_typing.add_retroknowledge]),
+       which neither the loaded libraries in the key nor any constant read
+       sees (cross-model soundness review of 777213df6e, finding 2;
+       fixtures retroknowledge_primitive_changed, eval_retroknowledge). The
+       registry is a small record that only those two commands replace, so
+       the slot digests it again only after one. *)
+    one "1" "retroknowledge" (fun () ->
+        cached retroknowledge_slot "retroknowledge" (Environ.retroknowledge env));
     one "2" "quality_graph" (fun () -> cached qualities_slot "qualities" (Environ.qualities env));
     one "3" "named_context" (fun () -> cached named_slot "named_context" named);
     one "3" "variable_opacity" (fun () ->
@@ -162,9 +463,61 @@ let read_at_start () =
              named));
     one "4" "typing_flags" (fun () -> cached flags_slot "typing_flags" (Environ.typing_flags env));
     one "13" "options" (fun () -> Proof_recorder.digest ~what:"options" (Goptions.get_tables ()));
+    (* The tables that Add and Remove change, which [get_tables] leaves out:
+       injection reads Keep Equalities, the printers read the Printing
+       tables, each at the table's own accessor. With an Add removed before
+       an unchanged proof, stock injection fails and a replay with no read
+       of the table installed the stored term (cross-family review of
+       079bc4cb71, finding CF1; fixtures option_table_keep_equalities,
+       eval_option_tables). One view of every table, beside the options,
+       because the accessors are many and hot (detyping asks the Printing
+       tables at each match it detypes), and a table changes only through
+       Add, Remove, or a Require or Import that carries one of them: in a
+       tree whose table commands the edit leaves alone, no proof misses on
+       it. *)
+    one "13" "option_tables" (fun () ->
+        Proof_recorder.digest ~what:"option_tables" (Goptions.get_table_contents ()));
     one "13" "warnings" (fun () -> Proof_recorder.digest ~what:"warnings" (CWarnings.get_flags ()));
+    (* The warnings and categories that exist: a warning created the first
+       time it is needed (a deprecated reference's version warning) exists
+       or not depending on what ran before, and a later warnings flag can
+       name it (fixture warning_registry_history). *)
+    one "13" "warnings_registry" (fun () ->
+        cached warnings_registry_slot "warnings_registry" (CWarnings.registry_view ()));
     one "M3" "generalizable" (fun () ->
         cached generalizable_slot "generalizable" (Implicit_quantifiers.generalizable_idents ()));
     one "M7" "template_default_univs" (fun () ->
-        cached template_slot "template_default_univs" (UState.template_default_univs ()))
+        cached template_slot "template_default_univs" (UState.template_default_univs ()));
+  ]
+
+(* Row 17: whether a name is a label of the module being built, which the
+   kernel records at [Safe_typing.exists_objlabel]. The key is the name, read
+   back here; the position fixes the module, and the evaluator asks the
+   global environment, as every caller does. *)
+let () =
+  Proof_replay.register_evaluator "objlabel" (fun key ->
+      match Id.of_string_soft key with
+      | id when String.equal (Id.to_string id) key ->
+        Proof_replay.Value (Safe_typing.recorded_objlabel id (Global.safe_env ()))
+      | _ -> Proof_replay.Unknown
+      | exception CErrors.UserError _ -> Proof_replay.Unknown)
+
+(* One footprint per proof the recorder holds open, recorded or not, so the
+   stack and the recorder's open proofs stay aligned through nesting. *)
+let read_at_start () =
+  if Proof_recorder.writing () then begin
+    let frame = {
+      start_graph = Environ.universes (Global.env ());
+      start_counter = fst (UnivGen.counters ());
+      library = Global.current_dirpath ();
+      touched = Univ.Level.Set.empty;
+      whole = false;
+    } in
+    set_universe_frames (frame :: !universe_frames)
+  end;
+  if Proof_recorder.active () then begin
+    List.iter
+      (fun Proof_record.{ row; channel; key; value } ->
+         Proof_recorder.read ~row ~channel ~key:(fun () -> key) ~value:(fun () -> value))
+      (start_reads ())
   end

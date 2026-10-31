@@ -26,7 +26,7 @@ let open_proof ?(name = "Top.File.lemma") () =
     ~position:R.{ module_path = "Top.File"; section_path = "" }
 
 let close_proof ?(closer = "Qed") ?(kernel_check = true) () =
-  Rec.close_proof ~closer ~kernel_check
+  Rec.close_proof ~closer ~kernel_check ~replay:None
 
 let the_file () =
   let path = Filename.temp_file "proof-record" ".jsonl" in
@@ -281,7 +281,6 @@ let writes =
   Rec.without_recording (fun () ->
       Rec.write_scheme "Top.t_rect";
       Rec.write_constraint_source "Top.lemma";
-      Rec.write_warning ~name:"deprecated-reference" ~message:"gone";
       Rec.write_counters [ ("evar", 3) ]);
   close_proof ();
   let w = (List.hd (the_file ()).R.proofs).R.writes in
@@ -289,7 +288,6 @@ let writes =
     "writes are collected while a proof is open, counters are summed, and a zero advance is dropped"
     (w.R.universe_levels = [ "Top.1" ] && w.R.constraints = [ "Top.1 < Top.2" ]
      && w.R.schemes = [ "Top.t_rect" ] && w.R.constraint_sources = [ "Top.lemma" ]
-     && w.R.warnings_raised = [ ("deprecated-reference", "gone") ]
      && w.R.counters = [ ("evar", 5) ])
 
 (* A slot digests a value once and gives the same digest back while the

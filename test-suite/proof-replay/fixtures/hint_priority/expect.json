@@ -1,0 +1,11 @@
+{
+  "doc": "a hint's priority changes in the same file: the proof that searched the database must miss",
+  "note": "review P3Bugs P0, second form. A priority edit changes which hint a search tries first, so stock's proof term changes (here: hb' instead of hb); a replay that kept the old term wrote a .vo that differs from stock's.",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {"proofs": 1, "hits": 0,
+            "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+            "refused": null, "killed": false,
+            "outcomes": [["PR.A.l", "read", "hint_db"]]}
+  }
+}

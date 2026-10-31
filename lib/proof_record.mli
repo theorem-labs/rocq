@@ -120,7 +120,6 @@ type writes = {
   constraints : string list;  (** New universe constraints, printed. *)
   schemes : string list;  (** Schemes the proof created. *)
   constraint_sources : string list;  (** Constraint-source entries written. *)
-  warnings_raised : (string * string) list;  (** Warning name, message. *)
 }
 
 type proof = {
@@ -143,6 +142,31 @@ type proof = {
       check records no reads: they are suspended while it runs. *)
   wall_s : float;  (** Wall seconds from the statement to the closer. *)
   cpu_s : float;  (** Process CPU seconds over the same span. *)
+  span : (int * int) option;
+  (** The byte offsets in the compiled [.v] of the statement sentence's
+      first byte and of the closer's last byte + 1, or [None] when the
+      proof has no single source span (a closer the STM delayed, a
+      statement with no location). A consumer that cuts a proof out of a
+      shipped record keeps an entry only when these bytes still appear in
+      the source it ships (BET-84 P4). *)
+  replay : string option;
+  (** The stored proof term and what replay needs to declare it, base64 of
+      a Marshal blob that only this Rocq reads (see {!Proof_replay}), or
+      [None] when the proof stores none: it is ineligible, its closer is
+      not [Qed] or [Save], or the term could not be marshalled. A reader
+      other than Rocq treats it as an opaque string. Recorded with
+      [-proof-record-no-graph], the blob leaves out the global universe
+      graph, which replay rebuilds from its own; with
+      [-proof-record-vo-ref], it holds the term's index in the opaque
+      proofs of the registered [.vo] beside the record, and the term's
+      digest, instead of the term (see {!trailer.vo_opaques}). Such a
+      reference replays only beside that [.vo]. A file whose registered
+      [.vo] cannot ship (a file the task cut edits, whose [.vo] holds the
+      proofs the cut removes) therefore never replays from it. For such a
+      file, the converter [rocq proof-record-inline RECORD VO OUT] writes
+      each reference back as the inline term before the record ships. A
+      file whose [.vo] ships keeps its reference record, with the [.vo]
+      beside it. *)
 }
 
 (** {6 Trailer} *)
@@ -152,6 +176,11 @@ type trailer = {
   file_cpu_s : float;  (** CPU seconds of the whole compile. *)
   peak_rss_kb : int;  (** Peak resident set, kB ([VmHWM]). *)
   proof_count : int;  (** The number of proof lines. *)
+  vo_opaques : string option;
+  (** The SHA-256, as 64 hex digits, of the opaque-proof segment of the
+      [.vo] this compile wrote, the record's path with
+      [.proof-record.jsonl] replaced by [.vo]; [None] (JSON [null]) when
+      no proof of the record refers to it. *)
 }
 
 type file = { header : header; proofs : proof list; trailer : trailer }
@@ -179,6 +208,13 @@ val parse_string : string -> file
     line after the trailer. *)
 
 (** {6 Digests} *)
+
+val encode_blob : string -> string
+(** Base64 of a [Marshal] blob ({!proof.replay}, a universe footprint): the
+    record is JSON, which carries no arbitrary bytes. *)
+
+val decode_blob : string -> string option
+(** The inverse, [None] on a string that is not base64. *)
 
 exception Unhashable of string
 
