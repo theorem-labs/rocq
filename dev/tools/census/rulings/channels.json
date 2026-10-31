@@ -73,6 +73,8 @@
     "read:library/nametab.ml:locate_all/\"6\"/ch_locate_all": {"row": "6"},
     "read:library/nametab.ml:of_path/\"6\"/ch_of_path": {"row": "6"},
     "read:library/nametab.ml:exists/\"6\"/ch_exists": {"row": "6"},
+    "read:library/nametab.ml:to_path/\"6\"/ch_to_path": {"row": "6"},
+    "read:library/nametab.ml:shortest_qualid_gen/\"6\"/ch_shortest_qualid": {"row": "6"},
     "read:library/nametab.ml:<top>/\"6\"/W.summary_name": {"row": "6"},
     "read:library/rocqlib.ml:15/rocqlib_table": {"row": "15"},
     "read:library/rocqlib.ml:15/lib_ref_domain": {"row": "15"},
