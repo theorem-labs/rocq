@@ -1,0 +1,23 @@
+{
+  "doc": "a replayed proof that ran zify must leave zify's spec-table copy as its tactics would: a later proof that reads only the copy then gives the stock result",
+  "files": [
+    "A.v"
+  ],
+  "records": {
+    "A.v": {
+      "PR.A.warm": {
+        "eligible": true
+      },
+      "PR.A.later": {
+        "eligible": true
+      }
+    }
+  },
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "outcomes": [["PR.A.warm", "hit"], ["PR.A.later", "key"]]
+    }
+  }
+}

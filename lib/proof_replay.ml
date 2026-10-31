@@ -1089,12 +1089,15 @@ let miss_read name channel why =
   outcome name "read" (Some (channel, why));
   Hashtbl.replace channel_miss channel (1 + Option.default 0 (Hashtbl.find_opt channel_miss channel))
 
-(* Run on each hit with the replayed proof's reads: the owner of a
-   process-wide cache can treat what the proof read as looked up (Rocqlib
-   marks its [lib_ref] keys observed, so a later rebinding of one trips its
-   fence and no later proof is replayed). It stops later replays only; the
-   late-command rule above (no proof replays before the file's last late
-   command) is what keeps later tactics seeing what stock sees. *)
+(* Run on each hit with the replayed proof's reads, before the closer runs:
+   the owner of a process-wide cache can treat what the proof read as
+   looked up (Rocqlib marks its [lib_ref] keys observed, so a later
+   rebinding of one trips its fence and no later proof is replayed). That
+   stops later replays only; the late-command rule above (no proof replays
+   before the file's last late command) is what keeps later tactics seeing
+   what stock sees. The owner can also make the write to the cache that the
+   skipped tactics made, when later tactics read it (zify copies its tables
+   in [init_cache]; breadth audit gap BA4). *)
 let hit_hooks : (R.read list -> unit) Queue.t = Queue.create ()
 
 let register_hit_hook f = Queue.add f hit_hooks
