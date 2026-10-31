@@ -50,6 +50,7 @@ stock-against-stock noise.
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -61,6 +62,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures"
 MISS_KINDS = ("key", "read", "ineligible", "missing_record")
+
+#: Budget mode: how far into the last proof's recorded wall time the budget
+#: ends.  The stock compile must still outlast the budget, and it runs every
+#: proof at about the recorded speed less the recorder's overhead: 0.3 leaves
+#: about a quarter of a proof between them.
+BUDGET_LAST_SHARE = 0.3
 
 DEFAULTS = {
     "doc": "",
@@ -95,8 +102,6 @@ DEFAULTS = {
     "stderr_contains": {},
     "vo_exempt": {},
     "coqchk": True,
-    "budget": None,
-    "replay_wall_max": None,
     "usage": None,
     "mixed": None,
     "trigger_optional": None,
@@ -414,8 +419,23 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: read). eval_micromega_cache replays one nia proof over Z, with the same
 #: two "BinInt" sharing differences (vodiff, 2026-10-31: 0 value
 #: differences, 2 sharing differences, the opaques segment equal).
+#: eval_abbreviation, eval_notation and eval_prim_token share the
+#: string "Datatypes" where stock does, and eval_ltac2_global,
+#: eval_ltac2_notation, ltac_alias_moved and ltac_redef_moved share
+#: "Logic" (vodiff, 2026-10-31, a build of 481ab9697f with
+#: 9.2/library-is-loaded: 0 value differences, 1 or 2 sharing differences,
+#: opaques and vmlibrary equal). Their sharing depends on the Corelib .vo
+#: files and the load path: the same rocq writes equal bytes with the
+#: Corelib of the lane switch (466ade62 base), and not with a Corelib built
+#: from this tree; there the four "Logic" fixtures write equal bytes only
+#: when Stdlib is installed beside Corelib, as in the CI job.
+#: eval_option_tables shares "Datatypes" the same way (vodiff, 2026-10-31,
+#: a build of 6ef3d08b1a: 0 value differences, 2 sharing differences,
+#: opaques and vmlibrary equal).
 EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite",
-                       "vm_lia_hit", "eval_micromega_cache")
+                       "vm_lia_hit", "eval_micromega_cache", "eval_abbreviation", "eval_notation",
+                       "eval_prim_token", "eval_ltac2_global", "eval_ltac2_notation", "ltac_alias_moved",
+                       "ltac_redef_moved", "eval_option_tables")
 
 
 def exemption_allowed(fixture, differing_segments, library_values_equal):
@@ -833,9 +853,30 @@ class Fixture:
             self.fail("the refused compile still wrote %s" % vo_src(tree, src).name)
 
     def run_budget_mode(self, records):
+        """The charged clock kills the replay compile inside the last proof.
+
+        The budget comes from this machine's registration, so the fixture
+        holds on a slow box as on a fast one: the recorded wall times of the
+        proofs before the last are the charge of the hits, and the budget ends
+        BUDGET_LAST_SHARE of the way into the last proof's recorded time.  The
+        stock compile, which runs every proof, must outlast that budget.  A
+        kill that lands only after the last proof's tactic finishes takes at
+        least the whole proof, so the replay wall must stay under twice the
+        share.
+        """
         spec = self.spec
-        budget = spec["budget"]
         src = spec["files"][0]
+        try:
+            _, proofs, _ = parse_record(record_src(self.out / "reg", src))
+        except ValueError as exc:
+            self.fail("cannot read the registration's record of %s: %s" % (src, exc))
+            return
+        walls = [p["wall_s"] for p in proofs]
+        if len(walls) < 2:
+            self.fail("the budget needs at least two recorded proofs, %s has %d" % (src, len(walls)))
+            return
+        charge = sum(walls[:-1])
+        budget = int(math.ceil(charge + BUDGET_LAST_SHARE * walls[-1]))
         replay_flags = self.replay_flags(records) + ["-proof-replay-budget", str(budget)]
         a, replay = self.grade("a", replay_flags, timeout_s=budget + 120)
         b, stock = self.grade("b", spec["grade_flags"], timeout_s=budget)
@@ -846,11 +887,12 @@ class Fixture:
         if rb["rc"] != 124:
             self.fail("the stock compile exited %d, wanted 124 (its own timeout): %s"
                       % (rb["rc"], last_line(rb)))
-        limit = spec["replay_wall_max"] or (budget - 20)
+        limit = 2 * (budget - charge)
         if ra["rc"] == 124 and ra["wall"] >= limit:
-            self.fail("the replay compile ran %.1fs, so the wrapper killed it, not the charged clock"
-                      % ra["wall"])
-        self.notes.append("replay wall %.1fs, stock wall %.1fs, budget %ds" % (ra["wall"], rb["wall"], budget))
+            self.fail("the replay compile ran %.1fs (limit %.1fs), so the kill did not land inside the last "
+                      "proof's tactic" % (ra["wall"], limit))
+        self.notes.append("recorded proofs %s s, charge %.1fs, budget %ds, replay wall %.1fs, stock wall %.1fs"
+                          % ("/".join("%.1f" % w for w in walls), charge, budget, ra["wall"], rb["wall"]))
         for tree, label in ((a, "replay"), (b, "stock")):
             if vo_src(tree, src).exists():
                 self.fail("the killed %s compile still wrote %s" % (label, vo_src(tree, src).name))
@@ -970,8 +1012,10 @@ def probe(rocq, spec, out, what):
         work.mkdir(parents=True, exist_ok=True)
         src = "NativeProbe.v"
         (work / src).write_text("Lemma probe : 2 + 2 = 4.\nProof. native_compute. reflexivity. Qed.\n")
+        # A Rocq configured without native code only warns and falls back to
+        # vm_compute, so the probe makes that warning an error.
         res = rocq.run([str(rocq.bin / "rocq"), "compile", "-q", "-native-compiler", "ondemand",
-                        "-Q", ".", "Probe", src], work)
+                        "-w", "+native-compiler-disabled", "-Q", ".", "Probe", src], work)
         if res["rc"] != 0:
             return "native_compute does not run here: " + last_line(res)
         return None
