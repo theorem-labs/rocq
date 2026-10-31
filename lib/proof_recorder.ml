@@ -128,7 +128,6 @@ let peak_rss_kb () = Proof_limits.peak_rss_kb ()
 let opt_no_graph = ref false
 let opt_vo_ref = ref false
 
-(* Whether a proof of this file stored a reference into its [.vo]. *)
 let vo_referred = ref false
 
 let set_stored_format ~no_graph ~vo_ref = opt_no_graph := no_graph; opt_vo_ref := vo_ref
@@ -292,7 +291,6 @@ let take_pending st p =
   | None -> ()
   | Some (d, _) -> st.f_pending <- None; Queue.add (d ()) p.p_sentences
 
-(* The span of the sentence being run, for the closer's end byte. *)
 let pending_span st = match st.f_pending with Some (_, span) -> span | None -> None
 
 let sentence ?span digest run =

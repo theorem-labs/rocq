@@ -136,13 +136,13 @@ let () =
       | _ -> Proof_replay.Unknown
       | exception _ -> Proof_replay.Unknown)
 
-let record_structure ind (_v : 'a option) =
+let record_structure ind =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"structure"
       ~key:(fun () -> Names.MutInd.to_string (fst ind) ^ "," ^ string_of_int (snd ind))
       ~value:(fun () -> recorded_structure (Global.env ()) ind)
 
-let record_projection cst (_v : 'a option) =
+let record_projection cst =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"structure_projection"
       ~key:(fun () -> Names.Constant.to_string cst)
@@ -151,14 +151,14 @@ let record_projection cst (_v : 'a option) =
 let mem env ind =
   if Proof_recorder.active () then begin
     let res = Environ.QInd.Map.find_opt env ind !structure_table in
-    record_structure ind res;
+    record_structure ind;
     match res with None -> false | Some _ -> true
   end else Environ.QInd.Map.mem env ind !structure_table
 
 let find env indsp =
   if Proof_recorder.active () then begin
     let res = Environ.QInd.Map.find_opt env indsp !structure_table in
-    record_structure indsp res;
+    record_structure indsp;
     (match res with Some s -> s | None -> raise Not_found)
   end else Environ.QInd.Map.find env indsp !structure_table
 
@@ -169,7 +169,7 @@ let find_projections env indsp =
 let find_from_projection env cst =
   if Proof_recorder.active () then begin
     let res = Environ.QConstant.Map.find_opt env cst !projection_table in
-    record_projection cst res;
+    record_projection cst;
     match res with Some s -> s | None -> raise Not_found
   end else Environ.QConstant.Map.find env cst !projection_table
 
@@ -180,7 +180,7 @@ let is_projection cst =
   let env = Global.env () in
   if Proof_recorder.active () then begin
     let res = Environ.QConstant.Map.find_opt env cst !projection_table in
-    record_projection cst res;
+    record_projection cst;
     match res with None -> false | Some _ -> true
   end else Environ.QConstant.Map.mem env cst !projection_table
 
@@ -599,7 +599,7 @@ let recorded_primitive_projection v =
   | None -> None
   | Some p -> Some (Proof_recorder.digest_cached ~what:"primitive_projection" p)
 
-let lookup c = try Some (Cmap_env.find c !prim_table) with Not_found -> None
+let lookup c = Cmap_env.find_opt c !prim_table
 
 let () =
   Proof_replay.register_evaluator "primitive_projection" (fun key ->

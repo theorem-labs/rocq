@@ -25,12 +25,9 @@ type t =
   ; glob_out    : glob_output option
 
   ; proof_record : bool
-  (* BET-84: how a proof's stored term is kept in the record. *)
   ; proof_record_no_graph : bool
   ; proof_record_vo_ref : bool
 
-  (* BET-84 P3: replay a proof's stored term. A source with no ratio is a
-     usage error: the charged clock has no default. *)
   ; proof_replay : Proof_replay.source option
   ; proof_replay_ratio : float option
   ; proof_replay_budget : float option

@@ -289,8 +289,6 @@ let load_vernac_core ~echo ~check ~state ?source file =
        | None ->
          if proof_step ast then gather state ids ((tstart, ast) :: kept) (digest :: sentences)
          else begin
-           (* A command inside the proof: no replay, and it runs where
-              stock runs it. *)
            Proof_replay.abandon ();
            let state, ids = run_kept state ids kept in
            let state = interp_one ~tstart state ast in
@@ -310,7 +308,6 @@ let load_vernac_core ~echo ~check ~state ?source file =
       let ids = state.sid :: ids in
       if not (Proof_replay.candidate_open ()) then (loop [@ocaml.tailcall]) state ids
       else
-        (* The statement's own sentence is the first of its proof's. *)
         let sentences = [ sentence_digest ast ] in
         let state, ids, eof = gather state ids [] sentences in
         if eof then begin
