@@ -59,14 +59,19 @@ type t = {
 
 val compute :
   access:Global.indirect_accessor ->
-  stored:(DirPath.t -> (string * string list) list option) -> self:DirPath.t -> t
+  stored:(DirPath.t -> (string * string list) list option) -> self:DirPath.t -> t option
 (** The facts for the library [self], computed from the current environment
     (its constants and inductives, and the opaque bodies [access] reaches).
     The walk that computes the closures reads bodies through a wrapper of
     [access] that logs each body of a constant of [self] it reads from
     another library's table as a body-read query, so a closure stored for a
     copy is kept only while that table's library is byte-identical; the
-    closures are computed before the queries are collected.
+    closures are computed before the queries are collected. The queries are
+    those of every process that compiled [self] ([OpacityLog.get]: its
+    [par:] and [-async-proofs] workers and the children a plugin forked
+    append to a log file); [None] when that log could not be read back
+    whole, so that the library is saved with no keepfacts, which the keep
+    rule rebuilds, rather than with an incomplete list.
     Call it while the library being saved is still loaded. [stored dp] is the
     [assumptions] field of the keepfacts segment of the loaded library [dp]
     (read with its other segments), or [None]: the closure of a constant of

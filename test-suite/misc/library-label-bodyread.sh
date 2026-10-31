@@ -24,7 +24,13 @@
 #   rebuild it;
 # - B_shape1 (fails unless body_shape A.c = 1) compiles against qed1 and fails against
 #   qed2: a body-only edit of a foreign proof, which the record's table (A) makes the
-#   keep rule check.
+#   keep rule check;
+# - outside the compiling process (review gate 15): B_par runs B_axiom's check under
+#   `par:` over two goals, which coqc runs in rocqworker processes, and B_parany reads
+#   A.c there; B_fork reads A.c in a child the plugin forks (kfpeek's
+#   fork_body_shape, as coq-hammer's best forks its candidates). Their records reach
+#   B's keepfacts through the opacity log file (library/opacityLog.ml): the same
+#   records as in-process. No log these compiles made is left in TMPDIR.
 
 set -e
 export PATH=$BIN:$PATH
@@ -39,6 +45,7 @@ cd misc
 rm -rf _bodyread
 mkdir -p _bodyread/{pkg/kfpeek,adm,qed1,qed2,client}
 D=_bodyread
+touch $D/start
 
 fail=0
 pass() { echo "PASS $*"; }
@@ -69,6 +76,22 @@ let () =
        match EConstr.kind sigma c with
        | Constr.Const (cst, _) -> shape cst
        | _ -> -1)
+
+(* The same read, in a forked child that exits at once: the parent learns
+   nothing from it (as with a losing candidate of coq-hammer's best). *)
+let fork_shape c =
+  match Unix.fork () with
+  | 0 -> (try ignore (shape c) with _ -> ()); Unix._exit 0
+  | pid -> ignore (Unix.waitpid [] pid); 0
+
+let () =
+  Tac2externals.define
+    { Tac2expr.mltac_plugin = "kfpeek"; mltac_tactic = "fork_body_shape" }
+    Tac2externals.(Tac2ffi.constr @-> eret Tac2ffi.int)
+    (fun c _env sigma ->
+       match EConstr.kind sigma c with
+       | Constr.Const (cst, _) -> fork_shape cst
+       | _ -> -1)
 EOF
 ( cd $D/pkg/kfpeek && ocamlfind ocamlopt -thread -shared -package rocq-runtime.plugins.ltac2 -o p.cmxs p.ml > build.log 2>&1 ) ||
   { echo "FAIL cannot build the test plugin kfpeek"; cat $D/pkg/kfpeek/build.log; exit 1; }
@@ -88,7 +111,8 @@ fi
 head='Require Import Ltac2.Ltac2.
 Declare ML Module "kfpeek".
 Require A.
-Ltac2 @ external body_shape : constr -> int := "kfpeek" "body_shape".'
+Ltac2 @ external body_shape : constr -> int := "kfpeek" "body_shape".
+Ltac2 @ external fork_body_shape : constr -> int := "kfpeek" "fork_body_shape".'
 # b NAME BODY: the B file NAME, whose goal True is closed after BODY.
 b() {
   mkdir -p $D/$1
@@ -106,6 +130,20 @@ b axiom 'if Int.equal (body_shape constr:(A.c)) 0 then () else Control.throw (Ta
 b shape1 'if Int.equal (body_shape constr:(A.c)) 1 then () else Control.throw (Tactic_failure (Some (Message.of_string "A.c is not a constructor"))).'
 for v in adm qed1 qed2; do build print $v; done
 build axiom adm; build axiom qed1; build shape1 qed1; build shape1 qed2
+
+# The same reads outside the compiling process. B_par runs B_axiom's check in `par:`
+# over two goals: coqc runs each in a rocqworker process (Stm: 2 tactic workers by
+# default, Partac), which returns only the proof term. B_parany reads A.c there
+# without failing. B_fork reads A.c in a child the plugin forks.
+parb() {
+  mkdir -p $D/$1
+  printf '%s\nLtac2 check () := %s\nSet Default Proof Mode "Classic".\nGoal True /\\ True.\n  split.\n  par: (ltac2:(check ()); exact I).\nQed.\n' \
+    "$head" "$2" > $D/$1/B.v
+}
+parb par 'if Int.equal (body_shape constr:(A.c)) 0 then () else Control.throw (Tactic_failure (Some (Message.of_string "A.c has a body"))).'
+parb parany 'let _ := body_shape constr:(A.c) in ().'
+b fork 'let _ := fork_body_shape constr:(A.c) in ().'
+build par adm; build par qed1; build parany qed1; build fork adm; build fork qed1
 
 s0=$(sed -n 's/^SHAPE //p' $D/print-adm/out); s1=$(sed -n 's/^SHAPE //p' $D/print-qed1/out); s2=$(sed -n 's/^SHAPE //p' $D/print-qed2/out)
 if [ "$s0/$s1/$s2" = "0/1/2" ]; then
@@ -146,6 +184,33 @@ if [ "$(cat $D/shape1-qed1/rc)" = ok ] && [ "$(cat $D/shape1-qed2/rc)" = failed 
   pass "B_shape1 compiles against the exact I proof and fails against the match proof: a body-only edit, which the record's table makes the keep rule check"
 else
   bad "B_shape1: against exact I $(cat $D/shape1-qed1/rc), against match $(cat $D/shape1-qed2/rc): $(tr '\n' ' ' < $D/shape1-qed2/out | cut -c1-400)"
+fi
+
+# Outside the compiling process: the same records as in it.
+if [ "$(cat $D/par-adm/rc)" = ok ] && [ "$(cat $D/par-qed1/rc)" = failed ] \
+   && grep -q 'A.c has a body' $D/par-qed1/out; then
+  pass "B_par (the B_axiom check under par:) compiles against the Admitted A and fails against the proved A"
+else
+  bad "B_par: against the Admitted A $(cat $D/par-adm/rc), against the proved A $(cat $D/par-qed1/rc): $(tr '\n' ' ' < $D/par-qed1/out | cut -c1-400)"
+fi
+qp=$(field $D/par-adm/B.vo opacity_queries); qpa=$(field $D/parany-qed1/B.vo opacity_queries)
+if [ "$qp" = "$q_adm" ] && [ "$qpa" = "$q_qed" ]; then
+  pass "par: workers' records reach the library: $qp against the Admitted A, $qpa against the proved A"
+else
+  bad "B_par's opacity_queries under par: '$qp' (Admitted A), B_parany's '$qpa' (proved A)"
+fi
+qf=$(field $D/fork-adm/B.vo opacity_queries); qfq=$(field $D/fork-qed1/B.vo opacity_queries)
+if [ "$(cat $D/fork-adm/rc)" = ok ] && [ "$qf" = "$q_adm" ] && [ "$qfq" = "$q_qed" ]; then
+  pass "a forked child's records reach the library: $qf against the Admitted A, $qfq against the proved A"
+else
+  bad "B_fork ($(cat $D/fork-adm/rc)) opacity_queries from a forked child: '$qf' (Admitted A), '$qfq' (proved A): $(tr '\n' ' ' < $D/fork-adm/out | cut -c1-300)"
+fi
+# Each compile's log is private and removed at exit.
+left=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'rocq-opacitylog*.log' -newer $D/start 2>/dev/null | head -3 | tr '\n' ' ')
+if [ -z "$left" ]; then
+  pass "no opacity log this test's compiles made is left in ${TMPDIR:-/tmp}"
+else
+  bad "opacity logs left in ${TMPDIR:-/tmp}: $left"
 fi
 
 exit $fail

@@ -211,6 +211,20 @@ let opaque_tables =
 let add_opaque_table dp st =
   opaque_tables := DirPath.Map.add dp st !opaque_tables
 
+(* Where each interned library's opaque proofs are on disk. [opaque_tables]
+   is per-process: a worker process ([par:] runs its tactic in a rocqworker
+   under coqc, and an [-async-proofs] proof runs in one) gets the state but
+   interns no library, so a foreign opaque body read there (a plugin's
+   [Global.body_of_constant], coq-hammer's [sunfolding]) found no table and
+   raised [Not_found]. These handles are part of the state the worker gets,
+   so it registers the table on first use ([stored_opaque]); [fetch_delayed]
+   checks the stored digest, so a file changed since the library was loaded
+   is refused, never read. (Design D18, dispatch://INFRA-361: the keep rule's
+   records from a worker reach the library through the opacity log, and the
+   read they record must then succeed there as in the compiling process.) *)
+let opaque_disk_handles : Opaques.opaque_disk delayed DirPath.Map.t ref =
+  Summary.ref DirPath.Map.empty ~stage:Summary.Stage.Synterp ~name:"LIBRARY-OPAQUE-HANDLES"
+
 let access_table what tables dp i =
   let t = match DirPath.Map.find dp !tables with
     | Fetched t -> t
@@ -234,8 +248,13 @@ let stored_opaque o =
   let (_sub, _ci, dp, i) = Opaqueproof.repr o in
   if DirPath.equal dp (Global.current_dirpath ()) then
     Opaques.get_current_opaque i
-  else
+  else begin
+    (if not (DirPath.Map.mem dp !opaque_tables) then
+       match DirPath.Map.find_opt dp !opaque_disk_handles with
+       | Some f -> add_opaque_table dp (ToFetch f)
+       | None -> ());
     access_table "opaque proofs" opaque_tables dp i
+  end
 
 let access_opaque_table o =
   let (sub, ci, _, _) = Opaqueproof.repr o in
@@ -329,6 +348,7 @@ let mk_library sd md digests vm =
 
 let mk_intern_library sum lib digest_lib proofs vm =
   add_opaque_table sum.md_name (ToFetch proofs);
+  opaque_disk_handles := DirPath.Map.add sum.md_name proofs !opaque_disk_handles;
   let open Safe_typing in
   mk_library sum lib (Dvo_or_vi digest_lib) vm
 
@@ -881,7 +901,8 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   in
   let keepfacts = match todo_proofs with
     | ProofsTodoNone when !location_free_label ->
-      Some (KeepFacts.compute ~access:indirect_accessor ~stored ~self:dir)
+      (* [None] too when the opacity log could not be read back whole *)
+      KeepFacts.compute ~access:indirect_accessor ~stored ~self:dir
     | ProofsTodoNone | ProofsTodoSomeEmpty _ -> None
   in
   OpacityLog.reset ();

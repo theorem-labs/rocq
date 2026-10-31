@@ -59,13 +59,15 @@ type t = {
       extraction or [Global.body_of_constant] read
       ([opaque = true], with [table] the library whose opaque table it read);
       a constant of any other body form is not recorded. A constant of this
-      library is recorded too when an extraction, or the walk that computes
-      [assumptions] ([logging_access]), read its body from another library's
-      table (a copy made here of another library's proof: a functor
-      application, an [Include] of one, a sealed module whose implementation
-      is such an expression). A constant recorded several ways is
-      [opaque = true] if any record is, with the table of its body read
-      ([collect_opacity]).
+      library is recorded too when an extraction, a [Global.body_of_constant]
+      or the walk that computes [assumptions] ([logging_access]) read its
+      body from another library's table (a copy made here of another
+      library's proof: a functor application, an [Include] of one, a sealed
+      module whose implementation is such an expression). The records of
+      every process that compiled the library count: its [par:] and
+      [-async-proofs] workers, and the children a plugin forked
+      ([OpacityLog]). A constant recorded several ways is [opaque = true] if
+      any record is, with the table of its body read ([collect_opacity]).
       Sorted by name. The keep rule rebuilds a dependent when the recorded
       opacity no longer matches the dependency's current one -- the command
       could then error, or stop erroring, on a real recompile -- and keeps a
@@ -380,29 +382,37 @@ let compute_assumptions ~stored access self =
    strategy command or the extraction's first record, sees the signature's
    axiom. A body read is the stronger fact: the keep rule keeps the dependent
    only when the holder's object and the table's object are both
-   byte-identical. *)
+   byte-identical.
+
+   The records come from every process that compiled this library
+   ([OpacityLog.get]: the log file its [par:]/[-async-proofs] workers and
+   forked children append to, and this process's own). [None] when that log
+   could not be read back whole: no opacity queries can then be stored, and
+   the caller stores no keepfacts at all. *)
 let collect_opacity self =
-  let tbl = Hashtbl.create 16 in
-  List.iter
-    (fun (c, opaque, table) ->
-      let mp = Constant.modpath c in
-      let foreign_table = match table with
-        | Some dp -> not (DirPath.equal dp self)
-        | None -> false
-      in
-      if not (is_self self mp) || foreign_table then
-        let key = Constant.to_string c in
-        let opaque, table = match Hashtbl.find_opt tbl key with
-          | Some (_, seen, seen_table) ->
-            (seen || opaque), (match seen_table with Some _ -> seen_table | None -> table)
-          | None -> opaque, table
-        in
-        Hashtbl.replace tbl key (Option.map DirPath.to_string (mpfile_root mp), opaque, table))
-    (OpacityLog.get ());
-  Hashtbl.fold (fun k (lib, v, table) acc ->
-      { constant = k; library = lib; opaque = v; table = Option.map DirPath.to_string table } :: acc)
-    tbl []
-  |> List.sort (fun a b -> String.compare a.constant b.constant)
+  let self = DirPath.to_string self in
+  let is_self = function Some l -> String.equal l self | None -> false in
+  Option.map (fun records ->
+      let tbl = Hashtbl.create 16 in
+      List.iter
+        (fun (q : OpacityLog.query) ->
+          let foreign_table = match q.table with
+            | Some t -> not (String.equal t self)
+            | None -> false
+          in
+          if not (is_self q.library) || foreign_table then
+            let opaque, table = match Hashtbl.find_opt tbl q.constant with
+              | Some (_, seen, seen_table) ->
+                (seen || q.opaque), (match seen_table with Some _ -> seen_table | None -> q.table)
+              | None -> q.opaque, q.table
+            in
+            Hashtbl.replace tbl q.constant (q.library, opaque, table))
+        records;
+      Hashtbl.fold (fun k (lib, v, table) acc ->
+          { constant = k; library = lib; opaque = v; table } :: acc)
+        tbl []
+      |> List.sort (fun a b -> String.compare a.constant b.constant))
+    (OpacityLog.get ())
 
 (* The accessor the closures are computed with: [access], which also logs each
    opaque body the walk reads, for a constant of this library, from another
@@ -450,4 +460,10 @@ let compute ~access ~stored ~self =
   (* The closures first: their walk logs body reads [collect_opacity] reads
      (the order a record's fields are evaluated in is unspecified). *)
   let assumptions = compute_assumptions ~stored (logging_access self access) self in
-  { assumptions; opacity_queries = collect_opacity self }
+  match collect_opacity self with
+  | Some opacity_queries -> Some { assumptions; opacity_queries }
+  | None ->
+    if debug then
+      Printf.eprintf "[keepfacts] %s: the opacity log could not be read back; no keepfacts\n%!"
+        (DirPath.to_string self);
+    None
