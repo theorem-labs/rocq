@@ -1,0 +1,18 @@
+{
+  "doc": "the control of warning_registry_history: the earlier proof still creates the disabled warning, so the proofs after it start with the same warning registry and replay",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.warm": {"ineligible": ["warning_registry"], "stores_no_term": true},
+                       "PR.A.target": {"eligible": true},
+                       "PR.A.later": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 2,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.warm", "ineligible"], ["PR.A.target", "hit"], ["PR.A.later", "hit"]]
+    }
+  }
+}

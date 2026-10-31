@@ -33,9 +33,22 @@ module AdaptorDb = struct
   let term_view_adaptor_db =
     Summary.ref ~name:"view_adaptor_db" AdaptorMap.empty
 
+  let string_of_kind = function
+    | Forward -> "forward"
+    | Backward -> "backward"
+    | Equivalence -> "equivalence"
+
   let get k =
-    try AdaptorMap.find k !term_view_adaptor_db
-    with Not_found -> []
+    let adaptors =
+      try AdaptorMap.find k !term_view_adaptor_db
+      with Not_found -> []
+    in
+    if Proof_recorder.active () then
+      Proof_recorder.read ~row:"15" ~channel:"ssr_view_adaptor"
+        ~key:(fun () -> string_of_kind k)
+        ~value:(fun () ->
+            Some (Proof_recorder.digest_cached ~what:"ssr_view_adaptor" adaptors));
+    adaptors
 
   let cache_adaptor (k, t) =
     let lk = get k in

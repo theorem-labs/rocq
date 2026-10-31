@@ -1,0 +1,5 @@
+{
+  "doc": "Reset after a closer restores a Rocqlib registration but not a lazy value a proof before it forced: Reset is a late command, so that proof runs, and replay accepts the later proof as stock does",
+  "files": ["A.v"],
+  "coqchk": false
+}

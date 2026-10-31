@@ -1,0 +1,14 @@
+{
+  "doc": "a constant the proof unfolds changes its body, the statement stays: that proof misses",
+  "files": ["A.v"],
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.A.uses_k", "read"], ["PR.A.other", "hit"]]
+    }
+  }
+}

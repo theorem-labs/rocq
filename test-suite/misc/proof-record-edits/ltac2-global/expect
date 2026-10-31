@@ -1,0 +1,5 @@
+# Loading Ltac2 defines every Ltac2 primitive and quotation object once.
+# Tac2env fences a SECOND definition of either (Claude review of beb759fef3,
+# finding 1), so a proof in a file that loads Ltac2 must stay eligible, and
+# the edit of the Ltac2 definition t must show on its ltac2_global read.
+refuse-by-read l ltac2_global

@@ -632,13 +632,32 @@ let is_joined_environment e = HandleMap.is_empty e.future_cst
 (** {6 Various checks } *)
 
 let exists_modlabel l senv = Id.Set.mem l senv.modlabels
-let exists_objlabel l senv = Id.Set.mem l senv.objlabels
+
+(* BET-84 census row 17: whether a name is a label of the module being
+   built. [Namegen.next_global_ident_away] asks it to give a fresh name a
+   suffix, and the binders of a scheme a proof creates are named that way,
+   so the proof term the scheme is inlined into holds the answer: a
+   [Definition HC] before the proof makes stock write the binder [HC0]
+   where the stored term holds [HC] (fixture eval_objlabel). [Ind_tables]
+   asks it for a scheme's own name, after the nametab, which has no short
+   name for an internal scheme. So each question is a read on channel
+   [objlabel], keyed by the name; the position fixes the module. Every
+   caller asks it of the global environment, which a proof does not change.
+   A declaration's own check below reads the set directly: a declaration
+   a proof makes is one of its writes, not an input. *)
+let recorded_objlabel l senv = Some (string_of_bool (Id.Set.mem l senv.objlabels))
+
+let exists_objlabel l senv =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"17" ~channel:"objlabel" ~key:(fun () -> Id.to_string l)
+      ~value:(fun () -> recorded_objlabel l senv);
+  Id.Set.mem l senv.objlabels
 
 let check_modlabel l senv =
   if exists_modlabel l senv then Modops.error_existing_label l
 
 let check_objlabel l senv =
-  if exists_objlabel l senv then Modops.error_existing_label l
+  if Id.Set.mem l senv.objlabels then Modops.error_existing_label l
 
 let check_objlabels ls senv =
   Id.Set.iter (fun l -> check_objlabel l senv) ls

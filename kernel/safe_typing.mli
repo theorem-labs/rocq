@@ -285,6 +285,12 @@ val typing : safe_environment -> Constr.constr -> judgment
 (** {6 Queries } *)
 
 val exists_objlabel : Id.t -> safe_environment -> bool
+(** Whether a name is a label of the module being built. While a proof is
+    recorded, the question is a read on channel [objlabel] (BET-84). *)
+
+val recorded_objlabel : Id.t -> safe_environment -> string option
+(** The value of an [objlabel] read: the record site above and the replay
+    evaluator both compute it here. *)
 
 val delta_of_senv : safe_environment -> Mod_subst.delta_resolver
 

@@ -1212,18 +1212,49 @@ let activate_solver ~name =
   deactivate_solver ~name;
   active_solvers := name :: !active_solvers
 
+(* BET-84 census row 8: the ordered list of active typeclass solvers. A
+   solver and its condition are closures from a plugin, and what they do can
+   depend on state that neither the solver's name nor the plugin's files fix:
+   rocq-elpi's condition reads a mode table that [Elpi TC Solver Override]
+   changes, and its solver runs the accumulated elpi program (Claude gate at
+   0f8d815732, finding 4). Rocq registers no solver, so a stock proof reads
+   the empty list, and a proof whose resolution asks an active solver stores
+   no term. Recording the solver a call chose would not do: the choice is a
+   closure's answer (cross-model delta review D6). *)
+(* ONE value for the typeclass_solver channel, under the fixed key "active":
+   the digest of the active names. The record site below and the replay
+   evaluator call it (dev/tools/census/replay_channels.py). A registration
+   that read the empty list replays only while the list is still empty. *)
+let recorded_typeclass_solvers () =
+  Some (Proof_recorder.digest ~what:"typeclass_solver" !active_solvers)
+
+let () =
+  Proof_replay.register_evaluator "typeclass_solver" (fun key ->
+      if not (String.equal key "active") then Proof_replay.Unknown
+      else match recorded_typeclass_solvers () with
+        | v -> Proof_replay.Value v
+        | exception _ -> Proof_replay.Unknown)
+
 let find_solver env evd (s : Intpart.set) =
+  let active = !active_solvers in
+  if Proof_recorder.active () then begin
+    Proof_recorder.read ~row:"8" ~channel:"typeclass_solver"
+      ~key:(fun () -> "active")
+      ~value:recorded_typeclass_solvers;
+    if not (List.is_empty active) then
+      Proof_recorder.ineligible ~reason:"plugin_hook"
+        ~detail:("typeclass_solver: " ^ String.concat ", " active)
+  end;
   let rec find_solver = function
     | [] -> Search.typeclasses_resolve
     | hd :: tl ->
       try
         let (solver,cond) = CString.Map.find hd !class_solvers in
         if cond env evd s then solver else find_solver tl
-      with Not_found ->  find_solver tl in
-  find_solver !active_solvers
+      with Not_found -> find_solver tl
+  in
+  find_solver active
 
-(** If [do_split] is [true], we try to separate the problem in
-    several components and then solve them separately *)
 let resolve_all_evars depth unique env p oevd fail =
   let () =
     ppdebug 0 (fun () ->

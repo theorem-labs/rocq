@@ -685,3 +685,133 @@ let init () =
   Interp.init ();
   Summary.Synterp.init_summaries ();
   Summary.Interp.init_summaries ()
+
+(* BET-84 P3: the reference a kernel name printed by [Names.*.to_string]
+   names now, for the replay evaluators that read a recorded key back. Its
+   absolute path is the printed name, except while sections are open: the
+   nametab binds an object declared in an open section under a path that
+   holds the section, and its kernel name does not. So when the printed name
+   finds nothing and its prefix is the current module, the label is looked
+   up under each open section's path, innermost first (no module can be
+   opened inside a section, so every open section belongs to the current
+   module). Raises [Not_found] when nothing binds it. Callers still require
+   the result to print back as the key. *)
+let global_of_kernel_string s =
+  match Nametab.global_of_path (Libnames.path_of_string s) with
+  | g -> g
+  | exception Not_found when sections_are_opened () ->
+    let mp = Names.ModPath.to_string (current_mp ()) in
+    (match String.rindex_opt s '.' with
+     | Some i when String.equal (String.sub s 0 i) mp ->
+       let label = Names.Id.of_string (String.sub s (i + 1) (String.length s - i - 1)) in
+       let depth dir = List.length (Names.DirPath.repr dir) in
+       let stop = depth (Libnames.dirpath_of_path (cwd_except_section ())) in
+       let rec go dir =
+         if depth dir <= stop then raise Not_found
+         else
+           match Nametab.global_of_path (Libnames.make_path dir label) with
+           | g -> g
+           | exception Not_found ->
+             (match Names.DirPath.repr dir with
+              | _ :: outer -> go (Names.DirPath.make outer)
+              | [] -> raise Not_found)
+       in
+       go (Libnames.dirpath_of_path (cwd ()))
+     | _ -> raise Not_found)
+
+(* BET-84 P3: a kernel name as a recorded key, and back.
+   [KerName.to_string] is not a key: it drops a bound module's number, and
+   ["A.B.c"] is both the label [c] of the file [A.B] and the label [c] of the
+   module [B] of the file [A]. So each part is written with its length
+   ([<length>:<bytes>]): the label, then the module path, which is
+   [F<n>:] and the [n] parts of a file's directory path, outermost first;
+   [D<label>] and the path of the module it is in; or [B] and a bound
+   module's number, name and file. No key is a prefix of another, so a key
+   names one kernel name. *)
+let key_part s = string_of_int (String.length s) ^ ":" ^ s
+
+let rec modpath_key = function
+  | ModPath.MPfile dp ->
+    let ids = List.rev (DirPath.repr dp) in
+    "F" ^ string_of_int (List.length ids) ^ ":"
+    ^ String.concat "" (List.map (fun id -> key_part (Id.to_string id)) ids)
+  | ModPath.MPbound mbid ->
+    let (n, id, dp) = MBId.repr mbid in
+    "B" ^ key_part (string_of_int n) ^ key_part (Id.to_string id) ^ modpath_key (ModPath.MPfile dp)
+  | ModPath.MPdot (mp, l) -> "D" ^ key_part (Label.to_string l) ^ modpath_key mp
+
+let kername_key kn = key_part (Label.to_string (KerName.label kn)) ^ modpath_key (KerName.modpath kn)
+
+(* The reader of [kername_key], from byte [start] of [key]: the kernel name
+   and the position after it. A bound module cannot be rebuilt from its
+   number, so its key reads back to nothing; so does a part that is not an
+   identifier [Id.of_string_soft] accepts. *)
+let kername_parse key start =
+  let n = String.length key in
+  let pos = ref start in
+  let number () =
+    match String.index_from_opt key !pos ':' with
+    | None -> None
+    | Some j ->
+      let v = int_of_string_opt (String.sub key !pos (j - !pos)) in
+      pos := j + 1;
+      (match v with Some v when v >= 0 -> Some v | Some _ | None -> None)
+  in
+  let part () =
+    match number () with
+    | Some len when !pos + len <= n ->
+      let s = String.sub key !pos len in
+      pos := !pos + len;
+      (match Id.of_string_soft s with
+       | id -> Some id
+       | exception CErrors.UserError _ -> None)
+    | Some _ | None -> None
+  in
+  let rec parts k acc =
+    if k = 0 then Some acc
+    else match part () with None -> None | Some id -> parts (k - 1) (id :: acc)
+  in
+  let rec modpath () =
+    if !pos >= n then None
+    else begin
+      let tag = key.[!pos] in
+      incr pos;
+      match tag with
+      | 'F' ->
+        (match number () with
+         | None -> None
+         | Some k -> Option.map (fun ids -> ModPath.MPfile (DirPath.make ids)) (parts k []))
+      | 'D' ->
+        (match part () with
+         | None -> None
+         | Some l -> Option.map (fun mp -> ModPath.MPdot (mp, Label.of_id l)) (modpath ()))
+      | _ -> None
+    end
+  in
+  match part () with
+  | None -> None
+  | Some l -> Option.map (fun mp -> (KerName.make mp l, !pos)) (modpath ())
+
+(* The whole key must be read, and the name read back must print back as
+   the key. *)
+let kername_of_key key =
+  match kername_parse key 0 with
+  | Some (kn, e) when e = String.length key && String.equal (kername_key kn) key -> Some kn
+  | Some _ | None -> None
+
+(* BET-84: a constant as a recorded key: its user and canonical kernel
+   names, each as [kername_key] writes it. Two constants with the same user
+   name and different canonical names (an alias of a module) get different
+   keys. *)
+let constant_key c =
+  kername_key (Constant.user c) ^ kername_key (Constant.canonical c)
+
+let constant_of_key key =
+  match kername_parse key 0 with
+  | None -> None
+  | Some (user, e) ->
+    match kername_parse key e with
+    | Some (canonical, e') when e' = String.length key ->
+      let c = Constant.make user canonical in
+      if String.equal (constant_key c) key then Some c else None
+    | Some _ | None -> None

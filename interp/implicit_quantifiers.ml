@@ -64,6 +64,8 @@ let declare_generalizable ~local gen =
 
 let find_generalizable_ident id = Id.Pred.mem (root_of_id id) !generalizable_table
 
+let generalizable_idents () = !generalizable_table
+
 let is_global id =
   try ignore (Nametab.locate_extended (qualid_of_ident id)); true
   with Not_found -> false

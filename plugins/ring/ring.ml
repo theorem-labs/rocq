@@ -332,6 +332,11 @@ let _ = add_map "ring"
 
 module Cmap = Map.Make(Constr)
 
+let record_carrier_table channel key table =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"15" ~channel ~key:(fun () -> key)
+      ~value:(fun () -> Some (Proof_recorder.digest_cached ~what:channel table))
+
 let from_carrier = Summary.ref Cmap.empty ~name:"ring-tac-carrier-table"
 
 let print_rings () =
@@ -346,7 +351,10 @@ let print_rings () =
             str"and equivalence relation "++ pr_constr_env env sigma ring.ring_req))
     ) !from_carrier
 
-let ring_for_carrier r = Cmap.find r !from_carrier
+let ring_for_carrier r =
+  let table = !from_carrier in
+  record_carrier_table "ring_carrier_table" "ring-tac-carrier-table" table;
+  Cmap.find r table
 
 let find_ring_structure env sigma l =
   match l with
@@ -788,7 +796,10 @@ let print_fields () =
             str"and equivalence relation "++ pr_constr_env env sigma fi.field_req))
     ) !field_from_carrier
 
-let field_for_carrier r = Cmap.find r !field_from_carrier
+let field_for_carrier r =
+  let table = !field_from_carrier in
+  record_carrier_table "field_carrier_table" "field-tac-carrier-table" table;
+  Cmap.find r table
 
 let find_field_structure env sigma l =
   check_required_library (cdir@["Field_tac"]);

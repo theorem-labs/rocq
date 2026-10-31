@@ -29,6 +29,7 @@ type global_data = {
 
 val define_global : ltac_constant -> global_data -> unit
 val interp_global : ltac_constant -> global_data
+val record_global : ltac_constant -> unit
 
 type compile_info = {
   source : string;

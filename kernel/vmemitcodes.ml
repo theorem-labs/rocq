@@ -638,6 +638,18 @@ let subst_patches subst p =
   let infos = CArray.Smart.map (fun r -> Reloc.subst subst r) p.reloc_infos in
   { reloc_infos = infos }
 
+(* BET-84: the constants a code calls at run time, through the global table
+   of the machine. *)
+let patch_globals p =
+  Array.fold_right (fun r acc ->
+      match r with
+      | Reloc.SReloc_getglobal c -> c :: acc
+      | Reloc.SReloc_Const_ind _ | Reloc.SReloc_indirect _ -> acc)
+    p.reloc_infos []
+
+(* BET-84: the free variables a code closes over when it is evaluated. *)
+let to_patch_fv tp = tp.tp_fv
+
 type 'a pbody_code =
   | BCdefined of bool array * 'a * patches
   | BCalias of Names.Constant.t

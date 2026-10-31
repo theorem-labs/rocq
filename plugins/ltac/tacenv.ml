@@ -51,11 +51,38 @@ let alias_map = Summary.ref ~name:"tactic-alias"
 let register_alias key tac =
   alias_map := KerName.Map.add key tac !alias_map
 
-let interp_alias key =
-  try KerName.Map.find key !alias_map
-  with Not_found -> CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
+(* BET-84 census row 9: each Ltac alias and definition the proof reads.
+   The value comes from the one function per channel below. *)
+let record_hook : (string -> KerName.t -> string option) ref = ref (fun _ _ -> None)
 
-let check_alias key = KerName.Map.mem key !alias_map
+(* The lookup passes what it found, so that it builds no option when the
+   recorder is off; the recorded value still comes from the shared value
+   function through [record_hook], never from that argument. *)
+let record channel k (_found : 'a option) =
+  if Proof_recorder.active () then
+    Proof_recorder.read_by ~row:"9" ~channel ~id:k ~key:(fun () -> Lib.kername_key k)
+      ~value:(fun () -> !record_hook channel k)
+
+(* The lookup itself must build no option when the recorder is off: these run
+   at every call of a tactic notation. [record] is reached with an already
+   allocated [Some] only under [active]. *)
+let interp_alias key =
+  match KerName.Map.find key !alias_map with
+  | v ->
+    if Proof_recorder.active () then record "tactic_alias" key (Some v);
+    v
+  | exception Not_found ->
+    record "tactic_alias" key None;
+    CErrors.anomaly (str "Unknown tactic alias: " ++ KerName.print key ++ str ".")
+
+let check_alias key =
+  match KerName.Map.find key !alias_map with
+  | v ->
+    if Proof_recorder.active () then record "tactic_alias" key (Some v);
+    true
+  | exception Not_found ->
+    record "tactic_alias" key None;
+    false
 
 (** ML tactic extensions (TacML) *)
 
@@ -78,11 +105,21 @@ let pr_tacname t =
 
 let tac_tab = ref MLTacMap.empty
 
+(* BET-84: [~overwrite:true] puts another closure under a name that is
+   already registered, possibly the name of one of this tree's plugins, which
+   [Tacinterp.fence_ml_tactic] trusts by name. Rocq never overwrites, so a
+   replacement makes every later proof of the process ineligible
+   (Proof_recorder.closure_setter; Claude review of 467292ce69, finding 2). *)
+let ml_tactic_overwritten =
+  Proof_recorder.closure_setter ~what:"Tacenv.register_ml_tactic ~overwrite" ~stock:0
+
 let register_ml_tactic ?(overwrite = false) s (t : ml_tactic array) =
   let () =
     if MLTacMap.mem s !tac_tab then
-      if overwrite then
+      if overwrite then begin
+        ml_tactic_overwritten ();
         tac_tab := MLTacMap.remove s !tac_tab
+      end
       else
         CErrors.anomaly (str "Cannot redeclare tactic " ++ pr_tacname s ++ str ".")
   in
@@ -117,9 +154,82 @@ let mactab =
 
 let ltac_entries () = !mactab
 
-let interp_ltac r = (KerName.Map.find r !mactab).tac_body
+let interp_ltac r =
+  match KerName.Map.find r !mactab with
+  | e ->
+    if Proof_recorder.active () then record "tactic_definition" r (Some e);
+    e.tac_body
+  | exception Not_found ->
+    record "tactic_definition" r None;
+    raise Not_found
 
-let is_ltac_for_ml_tactic r = (KerName.Map.find r !mactab).tac_for_ml
+let is_ltac_for_ml_tactic r =
+  match KerName.Map.find r !mactab with
+  | e ->
+    if Proof_recorder.active () then record "tactic_definition" r (Some e);
+    e.tac_for_ml
+  | exception Not_found ->
+    record "tactic_definition" r None;
+    raise Not_found
+
+(* BET-84: ONE value for each of the two Ltac channels. The record sites
+   above and the replay evaluators below call these, so a read's value is
+   never computed two ways (dev/tools/census/replay_channels.py).
+
+   The value is the entry as tactic evaluation sees it: the body with every
+   source location erased ([Tacerase]), which only places error messages,
+   so a definition moved to another line is the same read (fixtures
+   ltac_redef_moved, ltac_alias_moved). [tac_redef], the modules that
+   redefined the tactic, is left out: only [Print Ltac] shows it, and no
+   tactic reads it.
+
+   Erasing builds a new value, which the digest cannot recognize as one it
+   has seen, so each digest is kept with the entry it was computed from and
+   reused while the table holds that same entry (physical identity): an
+   entry is never changed in place, and [replace] makes a new one. An
+   unhashable entry is not kept, so that the digest marks each proof that
+   reads it. *)
+let digest_entry memo ~what k v view =
+  match KerName.Map.find_opt k !memo with
+  | Some (v', d) when v' == v -> d
+  | Some _ | None ->
+    let d = Proof_recorder.digest ~what (view v) in
+    if not (String.equal d "unhashable") then memo := KerName.Map.add k (v, d) !memo;
+    d
+
+let alias_digests : (alias_tactic * string) KerName.Map.t ref = ref KerName.Map.empty
+let definition_digests : (ltac_entry * string) KerName.Map.t ref = ref KerName.Map.empty
+
+let recorded_tactic_alias k =
+  Option.map (fun v ->
+      digest_entry alias_digests ~what:"tactic_alias" k v
+        (fun v -> { v with alias_body = Tacerase.erase_tactic v.alias_body }))
+    (KerName.Map.find_opt k !alias_map)
+
+let recorded_tactic_definition k =
+  Option.map (fun v ->
+      digest_entry definition_digests ~what:"tactic_definition" k v
+        (fun v -> (Tacerase.erase_tactic v.tac_body, v.tac_for_ml, v.tac_deprecation)))
+    (KerName.Map.find_opt k !mactab)
+
+let () =
+  record_hook :=
+    (fun channel k ->
+       if String.equal channel "tactic_alias" then recorded_tactic_alias k
+       else recorded_tactic_definition k)
+
+(* The record holds the kernel name as [Lib.kername_key] writes it, which
+   names one kernel name ([KerName.to_string] does not: a bound module loses
+   its number, and ["A.B.c"] is both a file's label and a module's). A key
+   that does not read back is a miss. *)
+let () =
+  let evaluator recorded key =
+    match Lib.kername_of_key key with
+    | None -> Proof_replay.Unknown
+    | Some k -> (match recorded k with v -> Proof_replay.Value v | exception _ -> Proof_replay.Unknown)
+  in
+  Proof_replay.register_evaluator "tactic_alias" (evaluator recorded_tactic_alias);
+  Proof_replay.register_evaluator "tactic_definition" (evaluator recorded_tactic_definition)
 
 let add ~depr kn b t =
   let entry = {

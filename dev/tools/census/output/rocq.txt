@@ -1,0 +1,270 @@
+clib/cList.ml:537	catchall:clib/cList.ml:fold_left2_set/e' when e' = e -> find (a2 :: seen) l2	ruling: @specific-exception
+engine/evarutil.ml:150	summary:engine/evarutil.ml:meta_ctr/meta_counter_summary_name	row: 18
+engine/evd.ml:709	summary:engine/evd.ml:evar_ctr/evar_counter_summary_name	row: 18
+engine/logic_monad.ml:95	catchall:engine/logic_monad.ml:read_line/e -> let (e, info) = Exninfo	ruling: @reraises
+engine/namegen.ml:527	catchall:engine/namegen.ml:compute_displayed_name_in_gen_poly/_ when ! Flags.in_debugger -> false	ruling: @debugger-only
+engine/profile_tactic.ml:75	summary:engine/profile_tactic.ml:"LtacProf-stack"	ruling: @profiling
+engine/proofview.ml:1183	catchall:engine/proofview.ml:enter/e when catchable_exception e -> let (e, info) = Exninfo	ruling: @narrow-guard
+engine/proofview.ml:1196	catchall:engine/proofview.ml:enter_one/e when catchable_exception e -> let (e, info) = Exninfo	ruling: @narrow-guard
+engine/proofview.ml:1269	catchall:engine/proofview.ml:wrap_exceptions/e when catchable_exception e -> let (e, info) = Exninfo	ruling: @narrow-guard
+engine/uState.ml:41	summary:engine/uState.ml:"template default univs"	row: M7
+engine/uState.ml:47	object:engine/uState.ml:"template default univs"	row: M7
+interp/abbreviation.ml:36	summary:interp/abbreviation.ml:"ABBREVIATIONS"	row: M1
+interp/abbreviation.ml:116	object:interp/abbreviation.ml:"ABBREVIATION"	row: M1
+interp/constrextern.ml:328	catchall:interp/constrextern.ml:extern_cases_pattern_in_scope/_ when ! Flags.in_debugger -> []	ruling: @debugger-only
+interp/decls.ml:70	summary:interp/decls.ml:"VARIABLE"	row: 3
+interp/dumpglob.ml:135	summary:interp/dumpglob.ml:"CONSTANT"	ruling: @command-only
+interp/impargs.ml:532	summary:interp/impargs.ml:"implicits"	row: 12
+interp/impargs.ml:568	summary:interp/impargs.ml:"section-implicits"	row: 12
+interp/impargs.ml:660	object:interp/impargs.ml:"IMPLICITS"	row: 12
+interp/implicit_quantifiers.ml:28	summary:interp/implicit_quantifiers.ml:"generalizable-ident"	row: M3
+interp/implicit_quantifiers.ml:54	object:interp/implicit_quantifiers.ml:"GENERALIZED-IDENT"	row: M3
+interp/notation.ml:268	summary:interp/notation.ml:"notation_level_map"	row: S2.1
+interp/notation.ml:320	object:interp/notation.ml:"PRIM-TOKEN-INTERP"	row: 11
+interp/notation.ml:1115	object:interp/notation.ml:"ARGUMENTS-SCOPE"	row: 11
+interp/notation.ml:1867	summary:interp/notation.ml:"symbols"	row: 11
+interp/notationextern.ml:241	summary:interp/notationextern.ml:"notation_uninterpretation"	row: N1
+interp/reserve.ml:77	summary:interp/reserve.ml:"reserved-type"	row: M2
+interp/reserve.ml:78	summary:interp/reserve.ml:"reserved-type-rev"	row: M2
+kernel/qGraph.ml:307	catchall:kernel/qGraph.ml:merge/_ -> acc	ruling: @printing-only
+lib/cErrors.ml:125	catchall:lib/cErrors.ml:print_gen/exn -> let exn, info = Exninfo.capture	ruling: @error-printing
+lib/quickfix.ml:33	catchall:lib/quickfix.ml:from_exception/exn -> let ei = Exninfo.capture exn in	ruling: @error-printing
+lib/system.ml:364	catchall:lib/system.ml:measure_duration/e -> let stop = get_time () in let	ruling: @reraised-by-caller
+lib/system.ml:401	catchall:lib/system.ml:count_instructions/e -> let exn = Exninfo.capture e in	ruling: @reraised-by-caller
+library/global.ml:29	summary:library/global.ml:global_env/global_env_summary_name	row: 1
+library/goptions.ml:98	summary:library/goptions.ml:t/nick	row: 13
+library/goptions.ml:109	object:library/goptions.ml:inGo/nick	row: 13
+library/goptions.ml:327	summary:library/goptions.ml:declare_option/(nickname key)	row: 13
+library/goptions.ml:336	object:library/goptions.ml:declare_option/(option_object (nickname key) stage write)	row: 13
+library/goptions.ml:354	summary:library/goptions.ml:declare_append_only_option/(nickname key)	row: 13
+library/goptions.ml:363	object:library/goptions.ml:declare_append_only_option/(option_object (nickname key) stage append)	row: 13
+library/nametab.ml:584	summary:library/nametab.ml:the_tab/SI.summary_name	row: 6
+library/nametab.ml:629	summary:library/nametab.ml:warntab/W.summary_name	row: 6
+library/nametab.ml:951	summary:library/nametab.ml:"constant-loc-table"	ruling: @command-only
+library/rocqlib.ml:26	summary:library/rocqlib.ml:"rocqlib_registered"	row: 15
+library/rocqlib.ml:60	object:library/rocqlib.ml:"COQLIBREF"	row: 15
+parsing/notgram_ops.ml:18	summary:parsing/notgram_ops.ml:"notation_grammar_map"	row: S2.1
+parsing/notgram_ops.ml:54	summary:parsing/notgram_ops.ml:"notation_prefixes_map"	row: S2.1
+parsing/notgram_ops.ml:62	summary:parsing/notgram_ops.ml:"notation_non_terminals_map"	row: S2.1
+parsing/procq.ml:511	summary:parsing/procq.ml:"GRAMMAR_LEXER"	row: 17
+plugins/extraction/table.ml:27	summary:plugins/extraction/table.ml:"ExtrBlacklist"	ruling: @extraction
+plugins/extraction/table.ml:642	nosummary-option:plugins/extraction/table.ml:"Extraction Optimize"	ruling: @extraction
+plugins/extraction/table.ml:677	summary:plugins/extraction/table.ml:"ExtrLang"	ruling: @extraction
+plugins/extraction/table.ml:682	object:plugins/extraction/table.ml:"Extraction Lang"	ruling: @extraction
+plugins/extraction/table.ml:692	summary:plugins/extraction/table.ml:"ExtrInline"	ruling: @extraction
+plugins/extraction/table.ml:700	summary:plugins/extraction/table.ml:"ExtrForeign"	ruling: @extraction
+plugins/extraction/table.ml:711	summary:plugins/extraction/table.ml:"ExtrCallback"	ruling: @extraction
+plugins/extraction/table.ml:736	object:plugins/extraction/table.ml:"Extraction Inline"	ruling: @extraction
+plugins/extraction/table.ml:742	object:plugins/extraction/table.ml:"Extraction Foreign"	ruling: @extraction
+plugins/extraction/table.ml:748	object:plugins/extraction/table.ml:"Extraction Callback"	ruling: @extraction
+plugins/extraction/table.ml:787	object:plugins/extraction/table.ml:"Reset Extraction Inline"	ruling: @extraction
+plugins/extraction/table.ml:792	object:plugins/extraction/table.ml:"Reset Extraction Foreign"	ruling: @extraction
+plugins/extraction/table.ml:797	object:plugins/extraction/table.ml:"Reset Extraction Callback"	ruling: @extraction
+plugins/extraction/table.ml:819	summary:plugins/extraction/table.ml:"ExtrImplicit"	ruling: @extraction
+plugins/extraction/table.ml:846	object:plugins/extraction/table.ml:"Extraction Implicit"	ruling: @extraction
+plugins/extraction/table.ml:883	object:plugins/extraction/table.ml:"Extraction Blacklist"	ruling: @extraction
+plugins/extraction/table.ml:901	object:plugins/extraction/table.ml:"Reset Extraction Blacklist"	ruling: @extraction
+plugins/extraction/table.ml:912	summary:plugins/extraction/table.ml:"ExtrCustom"	ruling: @extraction
+plugins/extraction/table.ml:928	summary:plugins/extraction/table.ml:"ExtrCustomMatchs"	ruling: @extraction
+plugins/extraction/table.ml:971	object:plugins/extraction/table.ml:"ML extractions"	ruling: @extraction
+plugins/extraction/table.ml:976	object:plugins/extraction/table.ml:"ML extractions custom matches"	ruling: @extraction
+plugins/funind/indfun_common.ml:135	summary:plugins/funind/indfun_common.ml:"functions_db_fn"	row: 15
+plugins/funind/indfun_common.ml:136	summary:plugins/funind/indfun_common.ml:"functions_db_gr"	row: 15
+plugins/funind/indfun_common.ml:244	object:plugins/funind/indfun_common.ml:"FUNCTIONS_DB"	row: 15
+plugins/ltac/extratactics.mlg:377	summary:plugins/ltac/extratactics.mlg:"transitivity-steps-r"	row: N2
+plugins/ltac/extratactics.mlg:378	summary:plugins/ltac/extratactics.mlg:"transitivity-steps-l"	row: N2
+plugins/ltac/extratactics.mlg:405	object:plugins/ltac/extratactics.mlg:"TRANSITIVITY-STEPS"	row: N2
+plugins/ltac/pptactic.ml:71	summary:plugins/ltac/pptactic.ml:"pptactic-notation"	row: N1
+plugins/ltac/tacentries.ml:231	summary:plugins/ltac/tacentries.ml:"TACTIC-NOTATION-COUNTER"	row: 9
+plugins/ltac/tacentries.ml:286	object:plugins/ltac/tacentries.ml:"TacticGrammar"	row: 9
+plugins/ltac/tacentries.ml:319	object:plugins/ltac/tacentries.ml:"TacticSyntax"	row: 9
+plugins/ltac/tacenv.ml:48	summary:plugins/ltac/tacenv.ml:"tactic-alias"	row: 9
+plugins/ltac/tacenv.ml:115	summary:plugins/ltac/tacenv.ml:"tactic-definition"	row: 9
+plugins/ltac/tacenv.ml:171	object:plugins/ltac/tacenv.ml:"TAC-DEFINITION"	row: 9
+plugins/ltac/tacenv.ml:213	object:plugins/ltac/tacenv.ml:"TAC-REDEFINITION"	row: 9
+plugins/ltac/tacinterp.ml:1896	catchall:plugins/ltac/tacinterp.ml:interp_atomic/e when to_catch e -> user_err (strbrk "Failed to get enough information from the left-hand side to type the right-hand side.")	ruling: @narrow-guard
+plugins/ltac2/tac2core.ml:151	catchall:plugins/ltac2/tac2core.ml:wrap_exceptions/e -> let e, info = Exninfo.capture	ruling: @reraises-unless-noncritical
+plugins/ltac2/tac2entries.ml:107	object:plugins/ltac2/tac2entries.ml:"TAC2-DEFINITION"	row: 10
+plugins/ltac2/tac2entries.ml:217	object:plugins/ltac2/tac2entries.ml:"TAC2-TYPE-DEFINITION"	row: 10
+plugins/ltac2/tac2entries.ml:289	object:plugins/ltac2/tac2entries.ml:"TAC2-TYPE-EXTENSION"	row: 10
+plugins/ltac2/tac2entries.ml:577	object:plugins/ltac2/tac2entries.ml:"TAC2-IMPORT-TYPE"	row: 10
+plugins/ltac2/tac2entries.ml:687	object:plugins/ltac2/tac2entries.ml:"Ltac2 custom entry"	row: 10
+plugins/ltac2/tac2entries.ml:968	object:plugins/ltac2/tac2entries.ml:"TAC2-NOTATION"	row: 10
+plugins/ltac2/tac2entries.ml:999	object:plugins/ltac2/tac2entries.ml:"TAC2-NOTATION-INTERP"	row: 10
+plugins/ltac2/tac2entries.ml:1029	object:plugins/ltac2/tac2entries.ml:"TAC2-ABBREVIATION"	row: 10
+plugins/ltac2/tac2entries.ml:1216	object:plugins/ltac2/tac2entries.ml:"TAC2-REDEFINITION"	row: 10
+plugins/ltac2/tac2env.ml:65	summary:plugins/ltac2/tac2env.ml:"ltac2-state"	row: 10
+plugins/ltac2/tac2env.ml:67	summary:plugins/ltac2/tac2env.ml:"ltac2-compiled-state"	ruling: @derived-cache
+plugins/ltac2/tac2env.ml:78	summary:plugins/ltac2/tac2env.ml:"ltac2-notations"	row: 10
+plugins/ltac2/tac2print.ml:959	catchall:plugins/ltac2/tac2print.ml:<top>/_ -> str "..."	ruling: @printing-only
+plugins/ltac2/tac2print.ml:966	catchall:plugins/ltac2/tac2print.ml:<top>/_ -> str "..."#2	ruling: @printing-only
+plugins/ltac2/tac2print.ml:972	catchall:plugins/ltac2/tac2print.ml:<top>/_ -> str "..."#3	ruling: @printing-only
+plugins/micromega/csdpcert.ml:143	catchall:plugins/micromega/csdpcert.ml:real_nonlinear_prover/any -> F (Printexc.to_string any)	ruling: @external-process
+plugins/micromega/csdpcert.ml:172	catchall:plugins/micromega/csdpcert.ml:pure_sos/any -> S None	ruling: @external-process
+plugins/micromega/csdpcert.ml:194	catchall:plugins/micromega/csdpcert.ml:main/any -> Printf.fprintf chan "error %s" (Printexc.	ruling: @external-process
+plugins/micromega/mutils.ml:50	catchall:plugins/micromega/mutils.ml:finally/any -> raise reraise	ruling: @reraises
+plugins/micromega/zify.ml:392	summary:plugins/micromega/zify.ml:"zify_table"	row: 15
+plugins/micromega/zify.ml:393	summary:plugins/micromega/zify.ml:"zify_saturate"	row: 15
+plugins/micromega/zify.ml:394	summary:plugins/micromega/zify.ml:"zify_specs"	row: 15
+plugins/micromega/zify.ml:680	object:plugins/micromega/zify.ml:register_obj/("register-zify-" ^ E.name)	row: 15
+plugins/ring/ring.ml:335	summary:plugins/ring/ring.ml:"ring-tac-carrier-table"	row: 15
+plugins/ring/ring.ml:414	object:plugins/ring/ring.ml:"tactic-new-ring-theory"	row: 15
+plugins/ring/ring.ml:768	summary:plugins/ring/ring.ml:"field-tac-carrier-table"	row: 15
+plugins/ring/ring.ml:844	object:plugins/ring/ring.ml:"tactic-new-field-theory"	row: 15
+plugins/ssr/ssrequality.ml:33	summary:plugins/ssr/ssrequality.ml:"SSR:oldreworder"	row: 13
+plugins/ssr/ssrfwd.ml:86	summary:plugins/ssr/ssrfwd.ml:"SSR:havenotcresolution"	row: 13
+plugins/ssr/ssripats.ml:376	summary:plugins/ssr/ssripats.ml:"SSR:abstractid"	row: 18
+plugins/ssr/ssrparser.mlg:85	object:plugins/ssr/ssrparser.mlg:"SsrGrammar"	row: S2.1
+plugins/ssr/ssrtacs.mlg:745	summary:plugins/ssr/ssrtacs.mlg:"SSR:rewrite"	row: 13
+plugins/ssr/ssrview.ml:34	summary:plugins/ssr/ssrview.ml:"view_adaptor_db"	row: 15
+plugins/ssr/ssrview.ml:51	object:plugins/ssr/ssrview.ml:"VIEW_ADAPTOR_DB"	row: 15
+pretyping/arguments_renaming.ml:25	summary:pretyping/arguments_renaming.ml:"rename-arguments"	row: 12
+pretyping/arguments_renaming.ml:55	object:pretyping/arguments_renaming.ml:"RENAME-ARGUMENTS"	row: 12
+pretyping/cases.ml:1611	catchall:pretyping/cases.ml:compile/e when precatchable_exception e -> f expanded expanded_typ	ruling: @narrow-guard
+pretyping/cases.ml:1618	catchall:pretyping/cases.ml:compile/e when precatchable_exception e -> if initial then f orig (Retyping.	ruling: @narrow-guard
+pretyping/cases.ml:2109	catchall:pretyping/cases.ml:prepare_predicate_from_arsign_tycon/e when precatchable_exception e -> None	ruling: @narrow-guard
+pretyping/coercion.ml:555	summary:pretyping/coercion.ml:"coercion_hooks"	row: 14
+pretyping/coercion.ml:793	catchall:pretyping/coercion.ml:inh_conv_coerce_to_gen/e when Option.has_some loc -> let _, info as iexn = Exninfo	ruling: @reraises
+pretyping/coercionops.ml:90	summary:pretyping/coercionops.ml:"class_tab"	row: 14
+pretyping/coercionops.ml:93	summary:pretyping/coercionops.ml:"coercion_tab"	row: 14
+pretyping/coercionops.ml:131	summary:pretyping/coercionops.ml:"inheritance_graph"	row: 14
+pretyping/detyping.ml:831	catchall:pretyping/detyping.ml:detype_r/e when ! Flags.in_debugger -> 1, 0	ruling: @debugger-only
+pretyping/evarconv.ml:260	summary:pretyping/evarconv.ml:"canonical_solution_hooks_hacked"	row: 14
+pretyping/evarconv.ml:282	catchall:pretyping/evarconv.ml:decompose_proj/exception _ -> raise Not_found	ineligible: @critical-caught
+pretyping/evarconv.ml:285	catchall:pretyping/evarconv.ml:decompose_proj/_ -> raise Not_found	ineligible: @critical-caught
+pretyping/evarconv.ml:1022	catchall:pretyping/evarconv.ml:evar_eqappr_x/_ -> Inr false	ineligible: @critical-caught
+pretyping/evarconv.ml:1812	catchall:pretyping/evarconv.ml:second_order_matching/e when Pretype_errors.precatchable_exception e -> raise (TypingFailed evd)	ruling: @narrow-guard
+pretyping/evarconv.ml:2044	catchall:pretyping/evarconv.ml:solve_unconstrained_evars_with_candidates/e when Pretype_errors.precatchable_exception e -> aux l	ruling: @narrow-guard
+pretyping/evarsolve.ml:1786	catchall:pretyping/evarsolve.ml:invert_definition/_ -> progress := p; imitate envk (whd_beta	ineligible: @critical-caught
+pretyping/keys.ml:72	summary:pretyping/keys.ml:"Keys_decl"	row: 15
+pretyping/keys.ml:116	object:pretyping/keys.ml:"KEYS"	row: 15
+pretyping/pretyping.ml:57	summary:pretyping/pretyping.ml:"bidirectionalityhints"	row: 12
+pretyping/reductionops.ml:38	summary:pretyping/reductionops.ml:"reduction-side-effect"	ruling: @reduction-effect
+pretyping/reductionops.ml:58	object:pretyping/reductionops.ml:"REDUCTION-EFFECT"	ruling: @reduction-effect
+pretyping/reductionops.ml:97	summary:pretyping/reductionops.ml:"reductionbehaviour"	row: 5
+pretyping/reductionops.ml:126	object:pretyping/reductionops.ml:"REDUCTIONBEHAVIOUR"	row: 5
+pretyping/reductionops.ml:1148	catchall:pretyping/reductionops.ml:clos_norm_flags/e when is_sync_anomaly e -> user_err Pp.(str "Tried to normalize ill-typed term")	ruling: @narrow-guard
+pretyping/reductionops.ml:1157	catchall:pretyping/reductionops.ml:clos_whd_flags/e when is_sync_anomaly e -> user_err Pp.(str "Tried to normalize ill-typed term")	ruling: @narrow-guard
+pretyping/reductionops.ml:1260	catchall:pretyping/reductionops.ml:is_fconv/e -> let e = Exninfo.capture e in	ruling: @reraises
+pretyping/reductionops.ml:1368	catchall:pretyping/reductionops.ml:infer_conv_gen/e -> let e = Exninfo.capture e in	ruling: @reraises
+pretyping/reductionops.ml:1399	catchall:pretyping/reductionops.ml:infer_conv_ustate/e -> let e = Exninfo.capture e in	ruling: @reraises
+pretyping/structures.ml:60	summary:pretyping/structures.ml:"record-structs"	row: 14
+pretyping/structures.ml:62	summary:pretyping/structures.ml:"record-projs"	row: 14
+pretyping/structures.ml:209	summary:pretyping/structures.ml:"record-canonical-structs"	row: 14
+pretyping/structures.ml:468	summary:pretyping/structures.ml:"record-prim-projs"	row: 14
+pretyping/typeclasses.ml:80	summary:pretyping/typeclasses.ml:"classes"	row: 8
+pretyping/typeclasses.ml:81	summary:pretyping/typeclasses.ml:"instances"	row: 8
+pretyping/unification.ml:1202	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> unify_not_same_head curenvnb pb opt substn ~nargs cM	ruling: @narrow-guard
+pretyping/unification.ml:1224	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> match EConstr.kind sigma cN with |	ruling: @narrow-guard
+pretyping/unification.ml:1240	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> match EConstr.kind sigma cM with |	ruling: @narrow-guard
+pretyping/unification.ml:1261	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> reduce curenvnb pb opt substn cM cN	ruling: @narrow-guard
+pretyping/unification.ml:1271	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> reduce curenvnb pb opt substn cM cN#2	ruling: @narrow-guard
+pretyping/unification.ml:1281	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> reduce curenvnb pb opt substn cM cN#3	ruling: @narrow-guard
+pretyping/unification.ml:1374	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> try reduce curenvnb pb { opt with with_types	ruling: @narrow-guard
+pretyping/unification.ml:1376	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> try canonical_projections curenvnb pb opt cM cN substn	ruling: @narrow-guard
+pretyping/unification.ml:1378	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> expand curenvnb pb { opt with with_types =	ruling: @narrow-guard
+pretyping/unification.ml:1398	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> match constr_cmp pb env sigma flags ~nargs	ruling: @narrow-guard
+pretyping/unification.ml:1403	catchall:pretyping/unification.ml:unify_0_with_initial_metas/ex when precatchable_exception ex -> let (f1, l1) = match	ruling: @narrow-guard
+pretyping/unification.ml:1527	catchall:pretyping/unification.ml:unify_0_with_initial_metas/e when precatchable_exception e -> if isApp_or_Proj sigma cN then if CanonicalSolution.	ruling: @narrow-guard
+pretyping/unification.ml:1774	catchall:pretyping/unification.ml:w_coerce_to_type/e when precatchable_exception e -> let cty = Tacred.hnf_constr env evd	ruling: @narrow-guard
+pretyping/unification.ml:2441	catchall:pretyping/unification.ml:w_unify_to_subterm/ex when precatchable_exception ex -> let () = if Pretype_errors.unsatisfiable_exception	ruling: @narrow-guard
+pretyping/unification.ml:2495	catchall:pretyping/unification.ml:w_unify_to_subterm_all/ex when precatchable_exception ex -> a	ruling: @narrow-guard
+pretyping/unification.ml:2498	catchall:pretyping/unification.ml:w_unify_to_subterm_all/ex when precatchable_exception ex -> a1	ruling: @narrow-guard
+pretyping/unification.ml:2679	catchall:pretyping/unification.ml:w_unify/ex when precatchable_exception ex -> try w_unify2 ~metas env evd flags false	ruling: @narrow-guard
+pretyping/unification.ml:2689	catchall:pretyping/unification.ml:w_unify/ex when precatchable_exception ex -> try w_typed_unify_array ~metas env evd flags hd1	ruling: @narrow-guard
+pretyping/unification.ml:2692	catchall:pretyping/unification.ml:w_unify/ex' when precatchable_exception ex' -> try w_unify2 ~metas env evd flags true	ruling: @narrow-guard
+pretyping/unification.ml:2697	catchall:pretyping/unification.ml:w_unify/ex' when precatchable_exception ex' -> raise ex	ruling: @narrow-guard
+printing/ppextend.ml:79	summary:printing/ppextend.ml:"generic-notation-printing-rules"	row: N1
+printing/ppextend.ml:82	summary:printing/ppextend.ml:"specific-notation-printing-rules"	row: N1
+proofs/clenv.ml:678	catchall:proofs/clenv.ml:clenv_unify_binding_type/e when precatchable_exception e -> Meta.TypeNotProcessed, metas, sigma,	ruling: @narrow-guard
+stm/asyncTaskQueue.ml:216	catchall:stm/asyncTaskQueue.ml:manager/e -> stm_pr_err Pp.(seq [str "Uncaught exception in worker manager: "	ruling: @driver
+stm/asyncTaskQueue.ml:316	catchall:stm/asyncTaskQueue.ml:main_loop/e -> stm_pr_err Pp.(seq [str "Slave: critical exception: "	ruling: @driver
+stm/spawned.ml:37	catchall:stm/spawned.ml:controller/e -> prerr_endline ("control channel broken: " ^ Printexc.to_string e	ruling: @driver
+stm/stm.ml:779	catchall:stm/stm.ml:run_command/e -> ()	ruling: @driver
+stm/stm.ml:972	catchall:stm/stm.ml:define/e -> let (e, info) = Exninfo	ruling: @reraises-annotated
+stm/stm.ml:1469	catchall:stm/stm.ml:perform_buildp/exn -> let iexn = Exninfo.capture exn in	ruling: @reraises-annotated
+stm/stm.ml:1496	catchall:stm/stm.ml:perform_buildp/exn -> let iexn = Exninfo.capture exn in#2	ruling: @reraises-annotated
+stm/stm.ml:2159	catchall:stm/stm.ml:known_state/exn -> let iexn = Exninfo.capture exn in	ruling: @reraises-annotated
+stm/stm.ml:2569	catchall:stm/stm.ml:process_transaction/e -> let e = Exninfo.capture e in	ruling: @reraises
+stm/stmargs.ml:182	catchall:stm/stmargs.ml:parse_args/any -> fatal_error any	ruling: @driver
+tactics/autorewrite.ml:329	summary:tactics/autorewrite.ml:"autorewrite"	row: 15
+tactics/autorewrite.ml:439	summary:tactics/autorewrite.ml:"REWHINT-COUNTER"	row: 15
+tactics/autorewrite.ml:491	object:tactics/autorewrite.ml:"AUTOREWRITE_DB"	row: 15
+tactics/autorewrite.ml:532	object:tactics/autorewrite.ml:"HINT_REWRITE_GLOBAL"	row: 15
+tactics/class_tactics.ml:480	summary:tactics/class_tactics.ml:"autogoal_cache"	row: 8
+tactics/class_tactics.ml:1205	summary:tactics/class_tactics.ml:"typeclass_solvers"	row: 8
+tactics/declareScheme.ml:13	summary:tactics/declareScheme.ml:"Schemes"	row: 15
+tactics/declareScheme.ml:33	object:tactics/declareScheme.ml:"SCHEME"	row: M4
+tactics/elimschemes.ml:25	summary:tactics/elimschemes.ml:"PROP-BUT-DEFAULT-DEPENDENT-ELIM"	row: N3
+tactics/elimschemes.ml:28	object:tactics/elimschemes.ml:"prop_but_default_dependent_elim"	row: N3
+tactics/equality.ml:466	catchall:tactics/equality.ml:lookup_eq_eliminator_opt/_ -> None	ineligible: @critical-caught
+tactics/hints.ml:202	summary:tactics/hints.ml:"HINT-COUNTER"	row: 7
+tactics/hints.ml:841	summary:tactics/hints.ml:"searchtable"	row: 7
+tactics/hints.ml:1123	object:tactics/hints.ml:"AUTOHINT_DB"	row: 7
+tactics/hints.ml:1340	object:tactics/hints.ml:"AUTOHINT"	row: 7
+tactics/redexpr.ml:105	object:tactics/redexpr.ml:"STRATEGY"	row: 4
+tactics/redexpr.ml:244	summary:tactics/redexpr.ml:"Declare Reduction"	row: 15
+tactics/redexpr.ml:447	object:tactics/redexpr.ml:"REDUCTION"	row: 15
+tactics/rewrite.ml:1886	catchall:tactics/rewrite.ml:unification_rewrite/ex when Pretype_errors.precatchable_exception ex -> Unification.w_unify_to_subterm ~flags: rewrite_conv_unif_flags env	ruling: @narrow-guard
+topbin/rocqnative.ml:387	catchall:topbin/rocqnative.ml:<top>/exn -> Format.eprintf "Error: @[%a@]@\n%!" Pp.pp_with (	ruling: @driver
+toplevel/coqc.ml:56	catchall:toplevel/coqc.ml:coqc_run/exn -> flush_all (); Topfmt.print_err_exn exn	ruling: @driver
+toplevel/coqcargs.ml:142	catchall:toplevel/coqcargs.ml:parse/any -> fatal_error any	ruling: @driver
+toplevel/coqloop.ml:320	catchall:toplevel/coqloop.ml:extract_default_loc/_ -> loc	ruling: @driver
+toplevel/coqloop.ml:413	catchall:toplevel/coqloop.ml:top_goal_print/exn -> let (e, info) = Exninfo	ruling: @driver
+toplevel/coqloop.ml:536	catchall:toplevel/coqloop.ml:read_and_execute/any -> let (e, info) = Exninfo	ruling: @driver
+toplevel/coqtop.ml:77	catchall:toplevel/coqtop.ml:start_coq/any -> flush_all (); fatal_error_exn any	ruling: @driver
+toplevel/coqtop.ml:176	catchall:toplevel/coqtop.ml:get_native_name/_ -> ""	ruling: @driver
+toplevel/vernac.ml:158	catchall:toplevel/vernac.ml:process_expr/reraise -> let reraise, info = Exninfo.capture	ruling: @toplevel-convert
+vernac/canonical.ml:31	object:vernac/canonical.ml:"CANONICAL-STRUCTURE"	row: 14
+vernac/classes.ml:122	object:vernac/classes.ml:"type classes instances state"	row: 8
+vernac/classes.ml:142	summary:vernac/classes.ml:"active typeclass observers"	ruling: @command-only
+vernac/classes.ml:249	object:vernac/classes.ml:"type classes state"	row: 8
+vernac/comArguments.ml:42	object:vernac/comArguments.ml:"BIDIRECTIONALITY-HINTS"	row: 12
+vernac/comCoercion.ml:253	object:vernac/comCoercion.ml:"COERCION"	row: 14
+vernac/comExtraDeps.ml:14	summary:vernac/comExtraDeps.ml:"extra_deps"	ruling: @command-only
+vernac/declare.ml:400	summary:vernac/declare.ml:"local-csts"	ruling: @command-only
+vernac/declare.ml:453	object:vernac/declare.ml:"CONSTANT"	row: 1
+vernac/declare.ml:728	object:vernac/declare.ml:"VARIABLE"	row: 3
+vernac/declareInd.ml:68	object:vernac/declareInd.ml:"INDUCTIVE"	row: 1
+vernac/declareInd.ml:89	object:vernac/declareInd.ml:"PRIMPROJS"	row: 14
+vernac/declareUniv.ml:76	object:vernac/declareUniv.ml:"Global universe name state"	row: 6
+vernac/declareUniv.ml:128	object:vernac/declareUniv.ml:"Global sort name state"	row: 6
+vernac/declareUniv.ml:267	summary:vernac/declareUniv.ml:"univ constraint sources"	row: M5
+vernac/declareUniv.ml:274	object:vernac/declareUniv.ml:"univ constraint sources"	row: M5
+vernac/declaremods.ml:328	summary:vernac/declaremods.ml:table/Actions.substobjs_table_name	ruling: @module-commands
+vernac/declaremods.ml:415	summary:vernac/declaremods.ml:table/Actions.modobjs_table_name	ruling: @module-commands
+vernac/declaremods.ml:438	summary:vernac/declaremods.ml:table/(Actions.modobjs_table_name ^ "-SAFE-LIBS")	ruling: @module-commands
+vernac/declaremods.ml:911	summary:vernac/declaremods.ml:"MODULE-SYNTAX-INFO"	ruling: @module-commands
+vernac/declaremods.ml:925	summary:vernac/declaremods.ml:"MODULE-INFO"	ruling: @module-commands
+vernac/declaremods.ml:1388	summary:vernac/declaremods.ml:"MODTYPE-INFO"	ruling: @module-commands
+vernac/future.ml:133	catchall:vernac/future.ml:compute/e -> let e = Exninfo.capture e in	ruling: @reraised-by-caller
+vernac/library.ml:117	summary:vernac/library.ml:"LIBRARY"	row: S2.1
+vernac/library.ml:124	summary:vernac/library.ml:"LIBRARY-LOAD"	row: S2.1
+vernac/library.ml:126	summary:vernac/library.ml:"NATIVE-LIBRARY-LOAD"	ruling: @native
+vernac/library.ml:628	object:vernac/library.ml:"REQUIRE"	row: S2.1
+vernac/library.ml:647	object:vernac/library.ml:"REQUIRE-SYNTAX"	row: S2.1
+vernac/loadpath.ml:25	summary:vernac/loadpath.ml:"LOADPATHS"	row: S2.1
+vernac/metasyntax.ml:39	summary:vernac/metasyntax.ml:"compat-custom-names"	row: S2.1
+vernac/metasyntax.ml:1036	object:vernac/metasyntax.ml:"SYNTAX-EXTENSION"	row: S2.1
+vernac/metasyntax.ml:1538	summary:vernac/metasyntax.ml:"LOCAL-CUSTOM-ENTRY"	row: 11
+vernac/metasyntax.ml:1703	object:vernac/metasyntax.ml:"NOTATION"	row: 11
+vernac/metasyntax.ml:1725	object:vernac/metasyntax.ml:"SCOPE"	row: 11
+vernac/metasyntax.ml:2069	object:vernac/metasyntax.ml:"DELIMITERS"	row: 11
+vernac/metasyntax.ml:2144	object:vernac/metasyntax.ml:"NOTATION-TOGGLE"	row: 11
+vernac/metasyntax.ml:2176	object:vernac/metasyntax.ml:"CUSTOM-ENTRIES"	row: S2.1
+vernac/mltop.ml:286	summary:vernac/mltop.ml:"inited-plugins"	row: 16
+vernac/mltop.ml:416	summary:vernac/mltop.ml:<top>/declare_ml_modules_summary	row: 16
+vernac/mltop.ml:457	object:vernac/mltop.ml:"ML-MODULE"	row: 16
+vernac/proof_using.ml:20	summary:vernac/proof_using.ml:"proofusing-nameset"	row: 19
+vernac/record.ml:691	object:vernac/record.ml:"STRUCTURE"	row: 14
+vernac/tactic_option.ml:53	summary:vernac/tactic_option.ml:declare_tactic_option/(name ^ "-default-tactic")	row: N4
+vernac/tactic_option.ml:77	object:vernac/tactic_option.ml:declare_tactic_option/name	row: N4
+vernac/topfmt.ml:460	catchall:vernac/topfmt.ml:pr_cmd_header/e -> str (Printexc.to_string e)	ruling: @printing-only
+vernac/vernacControl.ml:72	catchall:vernac/vernacControl.ml:measure_profile/e -> Error (Exninfo.capture e)	ruling: @reraised-by-caller
+vernac/vernacControl.ml:159	catchall:vernac/vernacControl.ml:with_fail/e -> let _, info as exn = Exninfo	ruling: @reraises-async
+vernac/vernacentries.ml:77	summary:vernac/vernacentries.ml:"Definition attribute"	ruling: @command-only
+vernac/vernacentries.ml:1507	object:vernac/vernacentries.ml:"EXPORTNAMES"	row: 6
+vernac/vernacentries.ml:1999	nosummary-option:vernac/vernacentries.ml:"Dump Bytecode"	ruling: @debug-output
+vernac/vernacentries.ml:2009	nosummary-option:vernac/vernacentries.ml:"Dump Lambda"	ruling: @debug-output
+vernac/vernacinterp.ml:154	catchall:vernac/vernacinterp.ml:interp_gen/exn -> let exn = Exninfo.capture exn in	ruling: @reraises-annotated
+census_check: 269 sites (catchall 84, nosummary-option 3, object 78, summary 104), 0 problems

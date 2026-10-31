@@ -37,7 +37,42 @@ let inPropButDefaultDepElim : inductive -> Libobject.obj =
 let declare_prop_but_default_dependent_elim i =
   Lib.add_leaf (inPropButDefaultDepElim i)
 
-let is_prop_but_default_dependent_elim i = Indset_env.mem i !prop_but_default_dependent_elim
+(* BET-84 row N3: inductives in Prop whose case analysis is dependent by
+   default. [destruct] and [case] read it. ONE value function, called by
+   the record site here and by the replay evaluator
+   (dev/tools/census/replay_channels.py). *)
+let recorded_prop_dependent_elim i =
+  Some (string_of_bool (Indset_env.mem i !prop_but_default_dependent_elim))
+
+let prop_dependent_elim_key i = Names.MutInd.to_string (fst i) ^ "," ^ string_of_int (snd i)
+
+(* The key is ["<inductive path>,<index>"]. A key that does not read back to
+   the same inductive is not taken for another: the proof misses. *)
+let ind_of_prop_dependent_elim_key key =
+  match String.rindex_opt key ',' with
+  | None -> None
+  | Some j ->
+    let path = String.sub key 0 j in
+    let index = String.sub key (j + 1) (String.length key - j - 1) in
+    (match Lib.global_of_kernel_string path, int_of_string_opt index with
+     | (Names.GlobRef.IndRef (m, _) | Names.GlobRef.ConstructRef ((m, _), _)), Some n
+       when String.equal (Names.MutInd.to_string m) path -> Some (m, n)
+     | _ -> None
+     | exception _ -> None)
+
+let () =
+  Proof_replay.register_evaluator "prop_dependent_elim" (fun key ->
+      match ind_of_prop_dependent_elim_key key with
+      | None -> Proof_replay.Unknown
+      | Some i -> Proof_replay.Value (recorded_prop_dependent_elim i))
+
+let is_prop_but_default_dependent_elim i =
+  let res = Indset_env.mem i !prop_but_default_dependent_elim in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"N3" ~channel:"prop_dependent_elim"
+      ~key:(fun () -> prop_dependent_elim_key i)
+      ~value:(fun () -> recorded_prop_dependent_elim i);
+  res
 
 let pseudo_sort_quality_for_elim ind mip =
   let s = mip.mind_sort in

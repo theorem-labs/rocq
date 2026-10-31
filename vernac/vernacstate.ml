@@ -228,7 +228,16 @@ module Declare_ = struct
         cc (fun pt -> Declare.Proof.close_proof ~opaque ~keep_body_ucst_separate pt))
       ()
 
-  let discard_all () = s_lemmas := None
+  (* The STM calls this after every closer, a nested proof's included, and
+     restores the proof around a nested one at its next command. So the
+     recorder, which is not part of this state, keeps its open proofs here:
+     dropping them dropped the proof around every nested one (fixture
+     ineligible_nested_proof). A proof the stack no longer holds ([Abort
+     All], a reset, a rewind) is dropped by the toplevel's check after each
+     sentence (toplevel/vernac.ml). *)
+  let discard_all () =
+    s_lemmas := None
+
   let update_sigma_univs ugraph = dd (Declare.Proof.update_sigma_univs ugraph)
 
   let get_current_context () = cc Declare.Proof.get_current_context

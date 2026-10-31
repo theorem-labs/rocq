@@ -1,0 +1,13 @@
+{
+  "doc": "a registered .vo whose opaque proofs changed: the proof that refers to it misses on vo_term and installs nothing; the inline one replays",
+  "files": ["A.v"],
+  "register_flags": ["-proof-record-vo-ref"],
+  "vo_mutation": "change",
+  "record_trailers": {"A.v": {"vo_opaques": true}},
+  "summaries": {
+    "A.v": {"proofs": 2, "hits": 1,
+              "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.plus_zero", "read", "vo_term", "changed"], ["PR.A.id_type", "hit"]]}
+  }
+}

@@ -105,7 +105,32 @@ let declare_reserved_type idl t =
   let env = Global.env () in
   List.iter (fun id -> declare_reserved_type_binding env id t) (List.rev idl)
 
-let find_reserved_type id = Id.Map.find (root_of_id id) !reserve_table
+(* BET-84 row M2: each reserved type ([Implicit Types]) the proof reads,
+   keyed by the root of the identifier, which is the table's own key. ONE
+   value function, called by the record site and by the replay evaluator
+   (dev/tools/census/replay_channels.py). *)
+let recorded_reserved_type root =
+  Option.map (fun t -> Proof_recorder.digest ~what:"reserved_type" t)
+    (Id.Map.find_opt root !reserve_table)
+
+(* The key is the root as a string; the table is keyed by [Id.t], which is a
+   string, so the key reads back exactly. A string no identifier can be is
+   a miss. *)
+let () =
+  Proof_replay.register_evaluator "reserved_type" (fun key ->
+      match Id.of_string_soft key with
+      | root -> Proof_replay.Value (recorded_reserved_type root)
+      | exception CErrors.UserError _ -> Proof_replay.Unknown)
+
+let find_reserved_type id =
+  let root = root_of_id id in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"M2" ~channel:"reserved_type"
+      ~key:(fun () -> Id.to_string root)
+      ~value:(fun () -> recorded_reserved_type root);
+  match Id.Map.find_opt root !reserve_table with
+  | Some t -> t
+  | None -> raise Not_found
 
 let constr_key env evd c =
   try mkRefKey env (fst @@ EConstr.destRef evd (fst (EConstr.decompose_app evd c)))

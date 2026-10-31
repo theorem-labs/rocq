@@ -1,0 +1,16 @@
+{
+  "doc": "core.eq.type is rebound after a congruence proof: every proof that opens before the rebinding runs, so stock's cached eq is the same in the grade; the rebinding trips the Rocqlib fence, so the proof after it runs too",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.untouched": {"eligible": true}, "PR.A.p": {"eligible": true}, "PR.A.q": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 3, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": "rocqlib_rebound: core.eq.type",
+      "outcomes": [["PR.A.untouched", "ineligible", "rebind", "before_late_command"], ["PR.A.p", "ineligible", "rebind", "before_late_command"], ["PR.A.q", "ineligible"]]
+    }
+  }
+}

@@ -531,7 +531,10 @@ type fixpoint_kind = IsFixpoint of lident option list | IsCoFixpoint
 (** Check obligations are properly solved before closing the
    [what_for] section / module *)
 val check_solved_obligations : pm:OblState.t -> what_for:Pp.t -> unit
-val default_tactic : unit Proofview.tactic ref
+val set_default_tactic : unit Proofview.tactic -> unit
+(** Installs the tactic every obligation runs first. vernac/g_obligations.mlg
+    installs Rocq's once, when it loads; a later call is a plugin's, and makes
+    every later proof of the process ineligible (BET-84). *)
 
 (** Prepare API, to be removed once we provide the corresponding 1-step API *)
 val prepare_obligations
