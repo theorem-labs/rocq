@@ -1,0 +1,40 @@
+{
+  "doc": "Abort All, Reset, Succeed and Fail Fail drop an open proof: the grade compile, which has no recorder, must count no proof as open after each, so the proof that follows each one replays; a nested proof's closer, after which the STM empties the stack, is not a drop",
+  "files": ["A.v", "B.v", "C.v"],
+  "records": {
+    "A.v": {"PR.A.after_abort_all": {"eligible": true},
+            "PR.A.after_succeed": {"eligible": true},
+            "PR.A.after_fail": {"eligible": true}},
+    "B.v": {"PR.B.after_reset": {"eligible": true}},
+    "C.v": {"PR.C.outer": {"ineligible": ["nested_proof"]},
+            "PR.C.after_nested": {"eligible": true}}
+  },
+  "summaries": {
+    "A.v": {
+      "proofs": 6,
+      "hits": 3,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 3},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.A.dropped_all", "missing_record"], ["PR.A.after_abort_all", "hit"],
+                   ["PR.A.dropped_succeed", "missing_record"], ["PR.A.after_succeed", "hit"],
+                   ["PR.A.dropped_fail", "missing_record"], ["PR.A.after_fail", "hit"]]
+    },
+    "B.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 1},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.B.dropped_reset", "missing_record"], ["PR.B.after_reset", "hit"]]
+    },
+    "C.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.C.outer", "ineligible"], ["PR.C.after_nested", "hit"]]
+    }
+  }
+}

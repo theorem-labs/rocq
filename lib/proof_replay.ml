@@ -912,6 +912,8 @@ let open_depth = ref 0
 
 let close_proof () = if !open_depth > 0 then decr open_depth
 
+let proof_open () = !open_depth > 0
+
 let start ~library ~source ~toolchain =
   match !options with
   | None -> ()
@@ -1074,6 +1076,14 @@ let abandon () =
   match !state with
   | Some ({ f_candidate = Some c; _ } as st) -> st.f_candidate <- None; miss_key c.c_proof.R.name
   | Some _ | None -> ()
+
+(* The proof stack is not part of this state. A sentence that drops proofs
+   ([Abort All], [Reset], a [Succeed] or [Fail Fail] around a statement)
+   closes none of them here, so without this every later proof of the file
+   would be taken for a nested one and never replay (gate review R5). *)
+let drop_all_proofs () =
+  open_depth := 0;
+  abandon ()
 
 (* A write the declaration of the stored term does not make by itself: a
    counter that is not a Summary counter ([register_summary_counter]). The

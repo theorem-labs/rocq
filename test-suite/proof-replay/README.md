@@ -383,7 +383,14 @@ remove`); the plain lemma and the two section lemmas refer to it and miss on
 it abstracted) and the section `Let` (a section variable, with no table
 entry) kept their terms inline and replay.  `voref_object_changed`: one byte of
 the registered `.vo`'s opaque proofs changed (`vo_mutation: change`), and the
-proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
+proof that refers to it misses on `vo_term`.  So a `-proof-record-vo-ref`
+record replays only beside its registered `.vo`.  A file whose registered
+`.vo` cannot ship (a file the task cut edits, whose `.vo` holds the proofs
+the cut removes) never replays from such a record.  For that file,
+`rocq proof-record-inline RECORD VO OUT` (theorem-labs/rocq#20) writes each
+reference back as the inline term before the record ships.  A file whose
+`.vo` ships keeps its reference record, with the `.vo` beside it.
+`late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
@@ -575,6 +582,28 @@ misses on `coercion_tab` and gives stock's `.vo`, and a proof that runs no
 firstorder replays.  Both proofs run `firstorder auto`: a plain `firstorder`
 reads its default solver, a `tactic_option` read with no evaluator, and never
 replays.
+
+**Gate review of 079bc4cb71, reviewer finding R3.**
+`parse_error_after_failing_tactic`: replay parses the sentences of a proof
+that has a candidate record ahead, up to the closer, before any of them runs.
+In the edited tree a tactic fails and the next sentence does not parse.
+Stock runs the tactic and reports its error.  Replay must run the sentences
+it kept, in order, before it raises the syntax error, so both compiles fail
+with the same stderr (`compare_stderr`).
+
+**Gate review of 079bc4cb71, reviewer finding R5.**  `dropped_proof_stack`:
+`Abort All`, `Reset`, `Succeed` around a statement and `Fail Fail` around a
+statement each drop an open proof.  A grade compile has no recorder, so
+replay must see the drop itself: after each one no proof is open, and the
+proof that follows it replays.  Before the fix, replay took every proof
+after the first drop for a nested proof, so none of them replayed.  This
+changes replay coverage only: a nested proof runs its tactics as stock does.
+`Back` is not tested: a compiled file cannot use it.  `C.v` is the control:
+replay takes a proof stack that a sentence leaves empty for a drop, so after
+each kind of nested closer (`Qed` in a focused block, `Admitted`, `Defined`,
+`Proof term`) the stack must hold the outer proof again, and the inner proofs
+after it must stay nested.  A nested `Abort` is not tested: stock refuses it
+("No proof-editing in progress").
 
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 

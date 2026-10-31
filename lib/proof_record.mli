@@ -159,7 +159,14 @@ type proof = {
       graph, which replay rebuilds from its own; with
       [-proof-record-vo-ref], it holds the term's index in the opaque
       proofs of the registered [.vo] beside the record, and the term's
-      digest, instead of the term (see {!trailer.vo_opaques}). *)
+      digest, instead of the term (see {!trailer.vo_opaques}). Such a
+      reference replays only beside that [.vo]. A file whose registered
+      [.vo] cannot ship (a file the task cut edits, whose [.vo] holds the
+      proofs the cut removes) therefore never replays from it. For such a
+      file, the converter [rocq proof-record-inline RECORD VO OUT] writes
+      each reference back as the inline term before the record ships. A
+      file whose [.vo] ships keeps its reference record, with the [.vo]
+      beside it. *)
 }
 
 (** {6 Trailer} *)
