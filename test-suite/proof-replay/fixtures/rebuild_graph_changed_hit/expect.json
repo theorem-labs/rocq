@@ -1,0 +1,11 @@
+{
+  "doc": "with -proof-record-no-graph, a global graph change the universe footprint allows still replays through the rebuilt graph",
+  "files": ["A.v"],
+  "register_flags": ["-proof-record-no-graph"],
+  "summaries": {
+    "A.v": {"proofs": 1, "hits": 1,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.universe_grain", "hit"]]}
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "doc": "a Hint Extern in the rewrite_instances database overflows the stack inside the handler at tactics/equality.ml:466, so the proof is catchall-ineligible and the rewrite still closes through its fallback",
+  "files": ["A.v"],
+  "stack_kb": 8192,
+  "records": {"A.v": {"PR.A.control": {"eligible": true},
+                       "PR.A.catchall_proof": {"ineligible": ["catchall"], "stores_no_term": true}}},
+  "summaries": {"A.v": {"proofs": 2, "hits": 1,
+    "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0}, "refused": null, "killed": false,
+    "outcomes": [["PR.A.control", "hit"], ["PR.A.catchall_proof", "ineligible"]]}}
+}

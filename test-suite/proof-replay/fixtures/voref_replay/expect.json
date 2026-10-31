@@ -1,0 +1,13 @@
+{
+  "doc": "with -proof-record-vo-ref the proof's term is a reference into the registered .vo, and the proof replays through it",
+  "files": ["A.v"],
+  "register_flags": ["-proof-record-vo-ref"],
+  "record_trailers": {"A.v": {"vo_opaques": true}},
+  "records": {"A.v": {"PR.A.plus_zero": {"eligible": true}}},
+  "summaries": {
+    "A.v": {"proofs": 1, "hits": 1,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.plus_zero", "hit"]]}
+  }
+}

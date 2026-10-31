@@ -1,0 +1,12 @@
+{
+  "doc": "with -proof-record-no-graph, a universe state checked against the whole global graph misses on universe_rebuild when that graph changes, and runs as stock",
+  "files": ["A.v"],
+  "register_flags": ["-proof-record-no-graph"],
+  "records": {"A.v": {"PR.A.wide": {"eligible": true}}},
+  "summaries": {
+    "A.v": {"proofs": 1, "hits": 0,
+              "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false,
+              "outcomes": [["PR.A.wide", "read", "universe_rebuild", "changed"]]}
+  }
+}

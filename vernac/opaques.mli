@@ -54,6 +54,10 @@ type opaque_disk
 val get_opaque_disk : Opaqueproof.opaque_handle -> opaque_disk -> (Opaqueproof.opaque_proofterm * bool) option
 val set_opaque_disk : Opaqueproof.opaque_handle -> Opaqueproof.opaque_proofterm -> opaque_disk -> unit
 
+val opaque_disk_entry : int -> opaque_disk -> (Opaqueproof.opaque_proofterm * bool) option
+(** The entry at an index of a table read from an object file, [None] out of
+    its range (BET-84: a proof record refers to its term by index). *)
+
 val get_current_opaque : Opaqueproof.opaque_handle -> (Opaqueproof.opaque_proofterm * bool) option
 val get_current_constraints : Opaqueproof.opaque_handle -> Univ.ContextSet.t option
 

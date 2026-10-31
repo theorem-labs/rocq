@@ -182,7 +182,27 @@ let with_succeed ~with_local_state st0 f =
   let transient_st, v = with_local_state.with_local_state st0 f in
   Some (ControlSucceed { st = transient_st }, v)
 
+(* A control makes a sentence's result depend on something the record does not
+   hold: the clock ([Time], [Instructions], [Profile]), the output channel
+   ([Redirect]), or a state that is restored behind the recorder's back
+   ([Fail], [Succeed] — the recorder is not part of [Vernacstate], so it keeps
+   what the restored state dropped). [Timeout] marks the proof in
+   {!Control.timeout} itself. *)
+let mark_control control =
+  if Proof_recorder.active () then
+    let name = match control with
+      | ControlTime _ -> "Time"
+      | ControlInstructions _ -> "Instructions"
+      | ControlProfile _ -> "Profile"
+      | ControlRedirect _ -> "Redirect"
+      | ControlTimeout _ -> "Timeout"
+      | ControlFail _ -> "Fail"
+      | ControlSucceed _ -> "Succeed"
+    in
+    Proof_recorder.ineligible ~reason:"control_flag" ~detail:name
+
 let under_one_control ~loc ~with_local_state control f =
+  mark_control control;
   match control with
   | ControlTime { duration } ->
     with_measure System.measure_duration System.duration_add System.fmt_transaction_result

@@ -76,7 +76,7 @@ let ssrautoprop =
   with Not_found -> Auto.gen_trivial [] None
   end
 
-let () = ssrautoprop_tac := ssrautoprop
+let () = set_ssrautoprop_tac ssrautoprop
 
 let tclBY tac = Tacticals.tclTHEN tac (donetac ~-1)
 

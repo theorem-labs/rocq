@@ -447,6 +447,15 @@ let abs_evars env sigma0 ?(rigid = []) (sigma, c0) =
  *)
 let ssrautoprop_tac = ref (Proofview.Goal.enter (fun gl -> assert false))
 
+(* BET-84: ssrtacs.mlg installs ssreflect's once, when it loads; a later one
+   is a plugin's, which the ml_tactic fence does not see because ssreflect is
+   an audited plugin (Proof_recorder.closure_setter; Claude review of
+   23b37e36fb, finding 2). The ref is not exported. *)
+let ssrautoprop_tac_set =
+  Proof_recorder.closure_setter ~what:"Ssrcommon.set_ssrautoprop_tac" ~stock:1
+
+let set_ssrautoprop_tac t = ssrautoprop_tac_set (); ssrautoprop_tac := t
+
 (* Thanks to Arnaud Spiwack for this snippet *)
 let call_on_evar env sigma tac e =
   try

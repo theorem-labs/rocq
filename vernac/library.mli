@@ -124,6 +124,19 @@ type file_label = {
 val read_file_label : CUnix.physical_path -> file_label
 (** Raises an exception when the file cannot be read as a [.vo] file. *)
 
+(** {6 The opaque proofs of a registered object (BET-84)} *)
+
+val opaques_segment_sha256 : string -> string option
+(** The SHA-256 of the opaque-proof segment's bytes in the object file
+    [f], as 64 hex digits; [None] when [f] cannot be read or is not an
+    object file of this version. *)
+
+val registered_opaques :
+  file:string -> sha256:string -> (Opaques.opaque_disk, string) result
+(** The opaque proofs of the object file [file], when the bytes of that
+    segment hash to [sha256]. The file is read once, so the bytes hashed
+    are the bytes read back. [Error "missing"] when the file cannot be read,
+    [Error "changed"] when it is not such an object or the segment differs. *)
 (** {6 Interrogate the status of libraries } *)
 
   (** - Tell if a library is loaded *)
@@ -131,6 +144,14 @@ val library_is_loaded : DirPath.t -> bool
 
 (** - Tell which libraries are loaded, in the order by which they were loaded. *)
 val loaded_libraries : unit -> DirPath.t list
+
+(** - The digest of a loaded library's [.vo], as 32 hex digits, and
+      ["unknown"] for a library that is not loaded. *)
+val library_digest : DirPath.t -> string
+
+(** - Those loaded libraries that were only safe-loaded ([Require (safe)],
+      or a safe dependency of a loaded library), in load order. *)
+val safe_loaded_libraries : unit -> DirPath.t list
 
 val library_compiled : DirPath.t -> Safe_typing.compiled_library
 

@@ -1,0 +1,19 @@
+{
+  "doc": "a required library's constant changes its type, body, universes or typing flags, or an inductive gains a constructor: each proof that reads one misses on it, and the proof that reads only the unchanged constant replays",
+  "files": ["A.v", "B.v"],
+  "summaries": {
+    "B.v": {
+      "proofs": 6,
+      "hits": 1,
+      "misses": {"key": 0, "read": 5, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.B.u0", "hit"],
+                   ["PR.B.u1", "read", "constant", "changed"],
+                   ["PR.B.u2", "read", "constant", "changed"],
+                   ["PR.B.u3", "read", "constant", "changed"],
+                   ["PR.B.u4", "read", "constant", "changed"],
+                   ["PR.B.u5", "read", "inductive", "changed"]]
+    }
+  }
+}

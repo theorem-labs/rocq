@@ -1,0 +1,10 @@
+{
+  "source": "theorem-labs/smpl (opam package rocq-smpl.dev)",
+  "commit": "1c3578c1f65a2b67073935c1a17692dba92fdd9a",
+  "scope": {"include": ["src"], "exclude": []},
+  "reasons": {},
+  "sites": {
+    "summary:src/smpl.mlg:\"smpl\"": {"row": "N5"},
+    "object:src/smpl.mlg:\"SMPL\"": {"row": "N5"}
+  }
+}

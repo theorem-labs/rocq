@@ -135,6 +135,8 @@ let set_opaque_disk i (c, priv) t =
   let _, c = Constr.hcons c in
   t.(i) <- Some ((c, priv), false)
 
+let opaque_disk_entry i t = if 0 <= i && i < Array.length t then t.(i) else None
+
 let current_opaques = Summary.state
 
 let unchecked_opaque ~poly i pf =

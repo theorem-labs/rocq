@@ -1,0 +1,19 @@
+{
+  "doc": "a plain module that holds a late command (Include) has a late End: the proofs before the End run, the proof after it replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}, "PR.A.M.q": {"eligible": true}, "PR.A.r": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 2, "missing_record": 0},
+      "refused": null,
+      "refused_detail": "Include at line 8; proofs before byte 246 run",
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.p", "ineligible", "rebind", "before_late_command"],
+                   ["PR.A.M.q", "ineligible", "rebind", "before_late_command"],
+                   ["PR.A.r", "hit"]]
+    }
+  }
+}

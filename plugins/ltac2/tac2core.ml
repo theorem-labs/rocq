@@ -191,7 +191,11 @@ let () = define "message_of_int" (int @-> ret pp) Pp.int
 
 let () = define "message_of_string" (string @-> ret pp) Pp.str
 
-let () = define "message_to_string" (pp @-> ret string) Pp.string_of_ppcmds
+(* BET-84 row N1: printed text becomes data here, and the printing state
+   is outside every recorded channel, so the proof is never replayed. *)
+let () = define "message_to_string" (pp @-> ret string) (fun p ->
+    Proof_recorder.ineligible ~reason:"message_to_string" ~detail:"Ltac2 Message.to_string";
+    Pp.string_of_ppcmds p)
 
 let () =
   define "message_of_constr" (constr @-> tac pp) @@ fun c ->
@@ -1494,15 +1498,156 @@ let open_module_is_functor m =
   | None -> false
   | Some nparams -> not (Int.equal nparams 0)
 
+let openmod_revstruct m senv =
+  let rec close senv modtype =
+    let curm = Safe_typing.current_modpath senv in
+    if ModPath.equal m curm then senv
+    else
+      let l = match curm with
+        | MPdot (_, l) -> l
+        | _ -> assert false
+      in
+      match modtype with
+      | [] -> assert false
+      | false :: modtype ->
+        (* None: type constraint of submodule doesn't matter since we
+           will anyway only return "Submodule M" and not look at its
+           contents *)
+        close (snd @@ Safe_typing.end_module l None senv) modtype
+      | true :: modtype -> close (snd @@ Safe_typing.end_modtype l senv) modtype
+  in
+  let modtype = Safe_typing.module_is_modtype senv in
+  let senv = close senv modtype in
+  Safe_typing.structure_body_of_safe_env senv
+
+let field_of_module m (lab, f) : ModField.t = match (f:_ Declarations.structure_field_body) with
+  | SFBconst _ ->
+    let kn = KerName.make m lab in
+    Ref (ConstRef (Global.constant_of_delta_kn kn))
+  | SFBmind _ ->
+    let kn = KerName.make m lab in
+    Ref (IndRef ((Global.mind_of_delta_kn kn, 0)))
+  | SFBrules _ -> Rewrule
+  | SFBmodule _ -> Submodule (MPdot (m, lab))
+  | SFBmodtype _ -> Submodule (MPdot (m, lab))
+
+(* Assuming [m] is currently open, its fields as [module_contents] gives them. *)
+let open_module_fields m =
+  (* XXX not sure what this does with side effects *)
+  List.map (field_of_module m) (List.rev (openmod_revstruct m (Global.safe_env ())))
+
+(* BET-84 census row 1: what a tactic learns about an OPEN module. A closed
+   module is read through [Environ.lookup_module] and [lookup_modtype],
+   which record their reads. An open module has no entry there yet, so
+   [module_contents], [module_is_modtype] and [module_is_functor] read the
+   module being built from the safe environment: its fields (the modules
+   inside it closed, each name resolved through the delta resolver),
+   whether it is a module type, and its parameters. The proof's key holds
+   the module's path (the position), and none of the rest: a definition
+   added before the proof, or a functor parameter, changes an answer and
+   nothing the key holds (cross-model soundness review of 777213df6e,
+   finding 1; fixtures open_module_contents_assert, eval_open_module). So
+   each answer is a read on channel [open_module], and its value is the
+   answer the tactic gets.
+
+   An open module is the current module or one of its ancestors, and the
+   position in the proof's key fixes the current module. So the key is the
+   query and the number of labels from the current module up to the module
+   asked about, which names one module for a given position. *)
+type open_module_query = Open_contents | Open_modtype | Open_functor
+
+type open_module_answer = Open_fields of ModField.t list | Open_flag of bool
+
+let open_module_answer query m = match query with
+  | Open_contents -> Open_fields (open_module_fields m)
+  | Open_modtype -> Open_flag (open_module_is_modtype m)
+  | Open_functor -> Open_flag (open_module_is_functor m)
+
+(* BET-84: ONE value per channel. The record sites below and the replay
+   evaluator both compute an [open_module] read's value here, from the
+   answer [open_module_answer]'s functions give. *)
+let recorded_open_module = function
+  | Open_fields fields -> Some (Proof_recorder.digest ~what:"open_module" fields)
+  | Open_flag b -> Some (string_of_bool b)
+
+let open_module_query_name = function
+  | Open_contents -> "contents"
+  | Open_modtype -> "modtype"
+  | Open_functor -> "functor"
+
+let open_module_key query depth = open_module_query_name query ^ "/" ^ string_of_int depth
+
+(* [Some depth] when [m] is open, as [is_openmod] decides: [m] is the
+   current module with [depth] labels taken off its end. [None] when [m] is
+   not open. *)
+let open_module_depth m =
+  let rec up depth cur =
+    if ModPath.equal m cur then Some depth
+    else match cur with
+      | MPdot (cur, _) -> up (depth + 1) cur
+      | MPfile _ | MPbound _ -> None
+  in
+  up 0 (Global.current_modpath ())
+
+(* The query and the open module that a key names now, or [None] for a key
+   that [open_module_key] did not write and for a depth past the file. *)
+let open_module_of_key key =
+  let query = function
+    | "contents" -> Some Open_contents
+    | "modtype" -> Some Open_modtype
+    | "functor" -> Some Open_functor
+    | _ -> None
+  in
+  let rec up depth cur =
+    if Int.equal depth 0 then Some cur
+    else match cur with
+      | MPdot (cur, _) -> up (depth - 1) cur
+      | MPfile _ | MPbound _ -> None
+  in
+  match String.split_on_char '/' key with
+  | [q; d] ->
+    (match query q, int_of_string_opt d with
+     | Some q, Some depth when depth >= 0 && String.equal (open_module_key q depth) key ->
+       Option.map (fun m -> (q, m)) (up depth (Global.current_modpath ()))
+     | _ -> None)
+  | _ -> None
+
+let record_open_module query depth answer =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"1" ~channel:"open_module"
+      ~key:(fun () -> open_module_key query depth)
+      ~value:(fun () -> recorded_open_module answer)
+
+(* The evaluator runs at the replayed proof's closer, before any tactic,
+   where the current module is the one the proof opened in. Closing the
+   inner modules again would record reads of its own: an evaluator records
+   nothing. *)
+let () =
+  Proof_replay.register_evaluator "open_module" (fun key ->
+      match open_module_of_key key with
+      | None -> Proof_replay.Unknown
+      | Some (query, m) ->
+        match Proof_recorder.without_recording (fun () -> open_module_answer query m) with
+        | answer -> Proof_replay.Value (recorded_open_module answer)
+        | exception e when CErrors.noncritical e -> Proof_replay.Unknown)
+
 let () = define "module_is_modtype" (modpath @-> eret bool) @@ fun m env _ ->
-  if is_openmod m then open_module_is_modtype m
-  else
+  match open_module_depth m with
+  | Some depth ->
+    let b = open_module_is_modtype m in
+    record_open_module Open_modtype depth (Open_flag b);
+    b
+  | None ->
     try ignore (Environ.lookup_modtype m env); true
     with Not_found -> false
 
 let () = define "module_is_functor" (modpath @-> eret bool) @@ fun m env _ ->
-  if is_openmod m then open_module_is_functor m
-  else
+  match open_module_depth m with
+  | Some depth ->
+    let b = open_module_is_functor m in
+    record_open_module Open_functor depth (Open_flag b);
+    b
+  | None ->
   let modbody_is_functor m = match Mod_declarations.mod_type m with
     | NoFunctor _ -> false
     | MoreFunctor _ -> true
@@ -1547,52 +1692,18 @@ let () = define "module_field_handle" (module_field @-> module_field_handler @->
   | Submodule x -> handle_submodule x
   | Rewrule -> handle_rewrule ()
 
-let openmod_revstruct m senv =
-  let rec close senv modtype =
-    let curm = Safe_typing.current_modpath senv in
-    if ModPath.equal m curm then senv
-    else
-      let l = match curm with
-        | MPdot (_, l) -> l
-        | _ -> assert false
-      in
-      match modtype with
-      | [] -> assert false
-      | false :: modtype ->
-        (* None: type constraint of submodule doesn't matter since we
-           will anyway only return "Submodule M" and not look at its
-           contents *)
-        close (snd @@ Safe_typing.end_module l None senv) modtype
-      | true :: modtype -> close (snd @@ Safe_typing.end_modtype l senv) modtype
-  in
-  let modtype = Safe_typing.module_is_modtype senv in
-  let senv = close senv modtype in
-  Safe_typing.structure_body_of_safe_env senv
-
 let () = define "module_contents" (modpath @-> ret (option (list module_field))) @@ fun m ->
-  let body =
-    if is_openmod m then
-      (* XXX not sure what this does with side effects *)
-      Some (List.rev (openmod_revstruct m (Global.safe_env())))
-    else
-      match Environ.lookup_module m (Global.env()) with
-      | exception Not_found -> (* modtype *) None
-      | body -> match Mod_declarations.mod_type body with
-        | MoreFunctor _ -> (* functor *) None
-        | NoFunctor body -> Some body
-  in
-  let to_field (lab, f) : ModField.t = match (f:_ Declarations.structure_field_body) with
-    | SFBconst _ ->
-      let kn = KerName.make m lab in
-      Ref (ConstRef (Global.constant_of_delta_kn kn))
-    | SFBmind _ ->
-      let kn = KerName.make m lab in
-      Ref (IndRef ((Global.mind_of_delta_kn kn, 0)))
-    | SFBrules _ -> Rewrule
-    | SFBmodule _ -> Submodule (MPdot (m, lab))
-    | SFBmodtype _ -> Submodule (MPdot (m, lab))
-  in
-  Option.map (List.map to_field) body
+  match open_module_depth m with
+  | Some depth ->
+    let fields = open_module_fields m in
+    record_open_module Open_contents depth (Open_fields fields);
+    Some fields
+  | None ->
+    match Environ.lookup_module m (Global.env()) with
+    | exception Not_found -> (* modtype *) None
+    | body -> match Mod_declarations.mod_type body with
+      | MoreFunctor _ -> (* functor *) None
+      | NoFunctor body -> Some (List.map (field_of_module m) body)
 
 module MapTagDyn = Dyn.Make()
 

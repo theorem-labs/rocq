@@ -1,0 +1,22 @@
+{
+  "doc": "a required library's opaque lemma keeps its statement and changes its proof: the lemma itself runs, and a proof that uses it replays",
+  "files": ["A.v", "B.v"],
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 0,
+      "misses": {"key": 1, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.A.o", "key"]]
+    },
+    "B.v": {
+      "proofs": 1,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "outcomes": [["PR.B.b", "hit"]]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "doc": "a proof that checks universes on a global graph that does not: a constraint it needs is reversed, stock rejects it, and replay must reject it too",
+  "files": ["A.v"],
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}

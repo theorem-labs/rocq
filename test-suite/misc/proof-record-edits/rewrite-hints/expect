@@ -1,0 +1,7 @@
+# P0-2 (a) of the Claude gate at 0f8d815732. A.v rewrites with fg from left
+# to right, B.v from right to left: same lemma, same hint count, so neither
+# the constant read nor REWHINT-COUNTER moves. rewrite_strat's hints strategy
+# reads the base through Autorewrite.find_matches; the record must hold it.
+refuse-by-read lstrat autorewrite
+# The control: autorewrite reads the base through find_rewrites.
+refuse-by-read lauto autorewrite

@@ -314,7 +314,128 @@ let compile_again env cb mask =
      | _ -> None)
   | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> None
 
+(* BET-84 census row 1, as the machine reads a global. What a constant
+   computes on the machine is its bytecode, not its stored body: a constant
+   marked [Register Inline] is compiled into the code of the constants that
+   use it, so an unchanged body can run changed code (fixtures
+   vm_inline_lib, vm_inline_same_file). And the machine keeps a constant's
+   value once computed, for the whole compile, so a proof that finds it in
+   that cache never looks up the constants its code calls (fixtures
+   vm_cache_lib, vm_cache_same_file).
+
+   So every use of a global's slot, from the cache or not, records the
+   constant's view on channel [vm_global]: its code, as the library stores
+   it but without the index that places it in the library's code table, and
+   the same read of every constant that code calls, recursively, which is
+   what the cold path reads. A read is kept once per proof, so each
+   constant is walked once per proof. ONE value function, called here and
+   by the replay evaluator (vernac/proof_replay_env.ml;
+   dev/tools/census/replay_channels.py). [on_call] receives each constant
+   the code calls; the record site records it, the evaluator passes none.
+   The lookups also record the constant's own [constant] and
+   [constant_exists] reads, as the cold path does.
+
+   A code also closes over the section variables it names ([tp_fv]): the
+   cold path evaluates the body of each one that has a body ([Let]), and
+   the value it caches holds that evaluation, which the code's relocations
+   do not name (fixture vm_named_fv). So [on_call] also receives every
+   constant the body of such a variable mentions, through the variables
+   that body names in turn: more than that body's code may call, never
+   less. A variable the environment does not hold has no body to follow.
+   A global's code is compiled with no local binder, so it closes over no
+   [FVrel]. *)
+let named_fv_globals env on_call fv =
+  let seen = ref Id.Set.empty in
+  let rec named id =
+    if not (Id.Set.mem id !seen) then begin
+      seen := Id.Set.add id !seen;
+      match Environ.lookup_named id env with
+      | decl -> Option.iter term (NamedDecl.get_value decl)
+      | exception Not_found -> ()
+    end
+  and term c =
+    match Constr.kind c with
+    | Constr.Const (kn, _) -> on_call kn
+    | Constr.Var id -> named id
+    | Constr.Proj (p, _, _) -> on_call (Projection.constant p); Constr.iter term c
+    | _ -> Constr.iter term c
+  in
+  Array.iter (function FVnamed id -> named id | FVrel _ -> ()) fv
+
+let recorded_vm_global ?on_call env kn =
+  ignore (Environ.mem_constant kn env);
+  match Environ.lookup_constant_opt kn env with
+  | None -> None
+  | Some cb ->
+    let view = match cb.const_body_code with
+      | None | Some BCconstant -> `Accumulator
+      | Some (BCalias kn') -> Option.iter (fun f -> f kn') on_call; `Alias kn'
+      | Some (BCdefined (mask, index, patches)) ->
+        let code = Environ.lookup_vm_code index env in
+        Option.iter (fun f ->
+            List.iter f (patch_globals patches);
+            named_fv_globals env f (to_patch_fv code))
+          on_call;
+        `Code (mask, code, patches)
+    in
+    Some (Proof_recorder.digest ~what:"vm_global" view)
+
+let rec record_vm_global env kn =
+  Proof_recorder.read_by ~row:"1" ~channel:"vm_global" ~id:kn ~key:(fun () -> Constant.to_string kn)
+    ~value:(fun () -> recorded_vm_global ~on_call:(record_vm_global env) env kn)
+
+(* BET-84: a value the machine computes for a global closes over the
+   section variables its code names, as they were in the environment that
+   filled its slot, and the machine keeps it for the compile. Two things
+   follow that no read can describe. The walk above reads the CURRENT
+   environment, which can differ from the one that filled the slot:
+   [clearbody] takes a [Let]'s body away from the goal and leaves the cached
+   value, which holds the evaluation of that body (fixture
+   vm_named_fv_clearbody). And a replayed proof fills no slot, so a later
+   proof that runs finds it empty where stock finds it filled, and computes
+   it in its own environment (fixture vm_section_closure_creator). So a
+   recorded proof that uses the slot of a constant whose code, or a code it
+   calls, closes over a section variable, whether it fills the slot or takes
+   it from the cache, is not replayed.
+
+   Whether a constant's code, or a code it calls, closes over a section
+   variable is a function of its declaration, so it is kept with the
+   declaration it was computed for, compared by identity: a name alone does
+   not identify one, since [Reset] and a second declaration give the name
+   another body and code (fixture vm_named_fv_reset), and a kept answer is
+   used only while the environment holds the same declaration under the
+   name. The declarations it calls are then the same too: an environment
+   holds a declaration only after the declarations its code names, and a
+   name cannot be declared again without taking every later declaration
+   away. *)
+let named_fv_memo : (constant_body * bool) Cmap_env.t ref = ref Cmap_env.empty
+
+let rec reaches_named_fv env kn =
+  match Environ.lookup_constant_opt kn env with
+  | None -> false
+  | Some cb ->
+    match Cmap_env.find_opt kn !named_fv_memo with
+    | Some (cb', b) when cb' == cb -> b
+    | Some _ | None ->
+      let b = match cb.const_body_code with
+        | None | Some BCconstant -> false
+        | Some (BCalias kn') -> reaches_named_fv env kn'
+        | Some (BCdefined (_, index, patches)) ->
+          Array.exists (function FVnamed _ -> true | FVrel _ -> false)
+            (to_patch_fv (Environ.lookup_vm_code index env))
+          || List.exists (reaches_named_fv env) (patch_globals patches)
+      in
+      named_fv_memo := Cmap_env.add kn (cb, b) !named_fv_memo;
+      b
+
+let fence_section_closure env kn =
+  if Proof_recorder.without_recording (fun () -> reaches_named_fv env kn) then
+    Proof_recorder.ineligible ~reason:"vm_section_closure" ~detail:(Constant.to_string kn)
 let rec slot_for_getglobal env sigma kn envcache table =
+  if Proof_recorder.active () then begin
+    record_vm_global env kn;
+    fence_section_closure env kn
+  end;
   let cb = CClosure.lookup_constant_handler env sigma.Genlambda.evars_val kn in
   let rk =
     if Environ.mem_constant kn env then

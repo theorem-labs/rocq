@@ -92,7 +92,44 @@ let class_tab =
 let coercion_tab =
   Summary.ref ~name:"coercion_tab" (CoeTypMap.empty : coe_info_typ CoeTypMap.t)
 
+(* BET-84: ONE value for the class_tab channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_class_tab () =
+  Some (Proof_recorder.digest_cached ~what:"class_tab" !class_tab)
+
+let () =
+  Proof_replay.register_evaluator "class_tab" (fun _key ->
+      match recorded_class_tab () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let record_class_tab () =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"class_tab" ~key:(fun () -> "")
+      ~value:recorded_class_tab
+
+(* BET-84: ONE value for the coercion_tab channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_coercion_tab () =
+  Some (Proof_recorder.digest_cached ~what:"coercion_tab" !coercion_tab)
+
+let () =
+  Proof_replay.register_evaluator "coercion_tab" (fun _key ->
+      match recorded_coercion_tab () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let record_coercion_tab () =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"coercion_tab" ~key:(fun () -> "")
+      ~value:recorded_coercion_tab
+
 let reachable_from cl =
+  record_class_tab ();
   try (ClTypMap.find cl !class_tab).cl_reachable_from
   with Not_found -> ClTypSet.empty
 
@@ -130,6 +167,24 @@ end
 let inheritance_graph =
   Summary.ref ~name:"inheritance_graph" ClGraph.empty
 
+(* BET-84: ONE value for the coercion_graph channel, read under the fixed key
+   "" as one digest of the whole table. The record site below and this
+   replay evaluator call the same function, so the value is never computed
+   two ways (dev/tools/census/replay_channels.py). *)
+let recorded_coercion_graph () =
+  Some (Proof_recorder.digest_cached ~what:"coercion_graph" !inheritance_graph)
+
+let () =
+  Proof_replay.register_evaluator "coercion_graph" (fun _key ->
+      match recorded_coercion_graph () with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
+let record_inheritance_graph () =
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"14" ~channel:"coercion_graph" ~key:(fun () -> "")
+      ~value:recorded_coercion_graph
+
 (* ajout de nouveaux "objets" *)
 
 let add_new_class cl s =
@@ -143,18 +198,26 @@ let add_path (x, y) p =
 
 (* class_info : cl_typ -> int * cl_info_typ *)
 
-let class_info cl = ClTypMap.find cl !class_tab
+let class_info cl =
+  record_class_tab ();
+  ClTypMap.find cl !class_tab
 
 let class_nparams cl = (class_info cl).cl_param
 
-let class_exists cl = ClTypMap.mem cl !class_tab
+let class_exists cl =
+  record_class_tab ();
+  ClTypMap.mem cl !class_tab
 
-let coercion_info coe = CoeTypMap.find coe !coercion_tab
+let coercion_info coe =
+  record_coercion_tab ();
+  CoeTypMap.find coe !coercion_tab
 
 let coercion_type env sigma (coe,u) =
   Retyping.get_type_of env sigma (EConstr.mkRef (coe.coe_value,u))
 
-let coercion_exists coe = CoeTypMap.mem coe !coercion_tab
+let coercion_exists coe =
+  record_coercion_tab ();
+  CoeTypMap.mem coe !coercion_tab
 
 (* find_class_type : evar_map -> constr -> cl_typ * universe_list * constr list *)
 
@@ -247,6 +310,7 @@ let pr_class x = str (string_of_class x)
 (* lookup paths *)
 
 let lookup_path_between_class (s,t) =
+  record_inheritance_graph ();
   ClGraph.find s t !inheritance_graph
 
 let lookup_path_to_fun_from_class s =
@@ -271,6 +335,7 @@ let apply_on_class_of env sigma t cont =
     if not (Int.equal (List.length args) n1) then raise Not_found;
     cont cl
 
+(* BET-84 census row 14: every coercion-path lookup reads the graph. *)
 let lookup_path_between env sigma ~src:s ~tgt:t =
   apply_on_class_of env sigma s (fun i ->
       apply_on_class_of env sigma t (fun j ->
@@ -293,6 +358,7 @@ let get_coercion_constructor env coe =
   | _ -> raise Not_found
 
 let lookup_pattern_path_between env (s,t) =
+  record_inheritance_graph ();
   List.map (get_coercion_constructor env)
     (ClGraph.find (CL_IND s) (CL_IND t) !inheritance_graph)
 
@@ -312,7 +378,12 @@ let path_comparator :
   (Environ.env -> Evd.evar_map -> cl_typ -> inheritance_path -> inheritance_path -> bool) ref =
   ref (fun _ _ _ _ _ -> false)
 
-let install_path_comparator f = path_comparator := f
+(* BET-84: pretyping/pretyping.ml installs Rocq's own once, when it loads; a
+   later one is a plugin's (Proof_recorder.closure_setter). *)
+let path_comparator_set =
+  Proof_recorder.closure_setter ~what:"Coercionops.install_path_comparator" ~stock:1
+
+let install_path_comparator f = path_comparator_set (); path_comparator := f
 
 let compare_path env sigma cl p q = !path_comparator env sigma cl p q
 

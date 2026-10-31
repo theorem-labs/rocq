@@ -52,6 +52,32 @@ val is_empty : t -> bool
 
 val union : t -> t -> t
 
+val hcons_univs : t -> t
+(** Interns this state's universe levels through the global hashcons
+    table, so that a state read back from a [Marshal] blob holds the same
+    physical levels as the ones this process made. A [.vo] marshals the
+    library with its sharing, so without it a replayed proof writes two
+    equal copies of a level where a full compile writes one, and a library
+    compiled against the one object refuses to load against the other
+    (BET-84 P3, measured 2026-10-25). *)
+
+val without_graphs : t -> t
+(** This state with both of its universe graphs replaced by the empty one.
+    The global graph is most of a proof's state by bytes, and a proof record
+    that keeps it holds one copy of it per proof (BET-84): a replay rebuilds
+    it with {!with_rebuilt_graphs}. *)
+
+val with_rebuilt_graphs : t -> base:UGraph.t -> levels:(Univ.Level.t * bool) list -> t
+(** [with_rebuilt_graphs u ~base ~levels]: [u] with its initial graph made of
+    [base] and each of [levels] (strict: above [Set]), and its current graph
+    made of that and the local constraints of [u]. Raises
+    {!UGraph.AlreadyDeclared} when a level is already in [base], and
+    {!UGraph.UniverseInconsistency} when a local constraint contradicts it. *)
+
+val initial_ugraph : t -> UGraph.t
+(** The graph at the creation of the state, with its local levels and
+    without its local constraints. *)
+
 (** {5 Projections and other destructors} *)
 
 val universe_context_set : t -> Univ.ContextSet.t
@@ -59,6 +85,13 @@ val universe_context_set : t -> Univ.ContextSet.t
 val sort_context_set : t -> UnivGen.sort_context_set
 (** The local context of the state, i.e. a set of bound variables together
     with their associated constraints. *)
+
+type replay_view
+
+val replay_view : t -> replay_view
+(** The local levels and constraints, the unification variables, the local
+    qualities and the minimization hints, without the universe graphs: what a
+    proof's statement key digests of its starting state (BET-84). *)
 
 type universe_opt_subst = UnivFlex.t
 (* Reexport because UnivSubst is private *)
@@ -313,3 +346,6 @@ val reboot : Environ.env -> t -> t
 end
 
 val add_template_default_univs : Environ.env -> MutInd.t -> unit
+
+(** The default levels of template-polymorphic inductives (BET-84, M7). *)
+val template_default_univs : unit -> Univ.Level.Set.t

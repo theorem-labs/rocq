@@ -1,0 +1,8 @@
+{
+  "doc": "Ltac2 Message.to_string turns printing into data and is ineligible",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.message_proof": {"ineligible": ["message_to_string"], "stores_no_term": true}}},
+  "summaries": {"A.v": {"proofs": 1, "hits": 0,
+    "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0}, "refused": null, "killed": false,
+    "outcomes": [["PR.A.message_proof", "ineligible"]]}}
+}
