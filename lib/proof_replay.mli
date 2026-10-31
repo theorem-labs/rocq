@@ -149,8 +149,10 @@ val register_plugin_audit : (string -> bool) -> unit
     ([rocq-read-file.plugin]). *)
 
 val register_hit_hook : (Proof_record.read list -> unit) -> unit
-(** [f reads] runs at each hit with the replayed proof's recorded reads, so
-    the owner of a process-wide cache can count them as looked up. *)
+(** [f reads] runs at each hit with the replayed proof's recorded reads,
+    before its closer runs, so the owner of a process-wide cache can count
+    them as looked up, or make the write to the cache that the skipped
+    tactics made (zify's copies of its tables). *)
 
 val set_vo_path : string -> unit
 (** The [.vo] this compile writes, as its command line gives it. With
