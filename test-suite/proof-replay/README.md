@@ -562,6 +562,20 @@ proof filled holds another spec in the edited tree, so the stock script of an
 unchanged later proof fails, and the replay compile must fail too (that later
 proof misses on key `zify_specs_cache`).
 
+**Gate review, breadth audit gap BA3.**  firstorder keeps every coercion
+folded, and it reads the whole coercion table (`Coercionops.coercions`) to
+know which.  That accessor now records the existing `coercion_tab` read, as
+`classes` and `inheritance_graph` record their tables.
+`verdict_firstorder_coercion`: the edited tree declares a definition a
+coercion, so firstorder no longer sees the disjunction inside it and leaves
+the goal open.  The stock script fails at `Qed`, and the replay compile must
+fail too.  `eval_firstorder_coercion`: the edited tree removes the coercion,
+so firstorder unfolds the definition and builds another term.  That proof
+misses on `coercion_tab` and gives stock's `.vo`, and a proof that runs no
+firstorder replays.  Both proofs run `firstorder auto`: a plain `firstorder`
+reads its default solver, a `tactic_option` read with no evaluator, and never
+replays.
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its

@@ -529,13 +529,20 @@ let declare_coercion env sigma ?update c =
   let () = add_coercion c.coe_value c in
   add_coercion_in_graph env sigma ?update c
 
-(* For printing purpose *)
+(* The whole tables, for printing and for firstorder, which keeps every
+   coercion folded ([Ground.get_flags]): a coercion declared or removed before
+   a proof changes how firstorder reduces with no other read changing (gate
+   review, breadth audit gap BA3; fixtures verdict_firstorder_coercion and
+   eval_firstorder_coercion). So each is a read of its table (census row 14). *)
 let classes () =
+  record_class_tab ();
   List.rev (ClTypMap.fold (fun x _ acc -> x :: acc) !class_tab [])
 let coercions () =
+  record_coercion_tab ();
   List.rev (CoeTypMap.fold (fun _ y acc -> y::acc) !coercion_tab [])
 
 let inheritance_graph () =
+  record_inheritance_graph ();
   ClGraph.bindings !inheritance_graph
 
 let coercion_of_reference env r =
