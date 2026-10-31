@@ -175,9 +175,6 @@ let registry_view =
 let iter_warnings f =
   !graph |> String.Map.iter (fun _ w -> Option.iter f w.warning)
 
-(* BET-84: runs [f] with every enabled warning disabled, then restores
-   them, also when [f] raises. A warning that is an error stays one, so [f]
-   still fails where it would fail; only what it would print is left out. *)
 let with_enabled_silenced f =
   let silenced = ref [] in
   iter_warnings (fun w ->

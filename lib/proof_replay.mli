@@ -253,23 +253,11 @@ val register_provider : (unit -> Proof_record.read list) -> unit
     from. A recorded read whose channel a provider covers, but which the
     provider does not list now, is a miss. *)
 
-val register_counter : string -> get:(unit -> int) -> set:(int -> unit) -> unit
-(** A process-wide counter whose advance a proof's record holds (census
-    row 18). A replayed proof's tactics never move it, so replay reads it
-    at the proof's start and {!apply_counters} puts it at start plus the
-    recorded advance. A counter nothing registers cannot be moved, so a
-    proof that moved it is never replayed. The universe and sort counters
-    are not registered: the stored term carries them. *)
-
 val register_summary_counter : string -> unit
 (** A counter kept in the Summary, which the STM rolls back when a proof
     closes: replay leaves it where it is, as stock's rollback does, and a
     proof that moved it can still be replayed. The next proof's
     [counter_start] read checks that the rollback came out the same. *)
-
-val apply_counters : unit -> unit
-(** Puts each counter of the proof just replayed where its tactics would
-    have left it. Call it after the declaration. A no-op with no hit. *)
 
 val provide : channel:string -> key:string -> value:string option -> unit
 (** The value of one read of the proof being opened, known only to the code

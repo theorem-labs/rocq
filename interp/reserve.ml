@@ -128,9 +128,7 @@ let find_reserved_type id =
     Proof_recorder.read ~row:"M2" ~channel:"reserved_type"
       ~key:(fun () -> Id.to_string root)
       ~value:(fun () -> recorded_reserved_type root);
-  match Id.Map.find_opt root !reserve_table with
-  | Some t -> t
-  | None -> raise Not_found
+  Id.Map.find root !reserve_table
 
 let constr_key env evd c =
   try mkRefKey env (fst @@ EConstr.destRef evd (fst (EConstr.decompose_app evd c)))

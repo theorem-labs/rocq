@@ -409,7 +409,6 @@ let recorded_zify_table name =
   in
   Option.map (fun t -> Proof_recorder.digest_cached ~what:"zify_table" t) tbl
 
-(* A key that names none of the three tables is a miss. *)
 let () =
   Proof_replay.register_evaluator "zify_table" (fun key ->
       match recorded_zify_table key with

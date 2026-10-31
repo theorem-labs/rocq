@@ -54,21 +54,6 @@ let proof_provided : (string * string, string option) Hashtbl.t = Hashtbl.create
 
 let provide ~channel ~key ~value = Hashtbl.replace proof_provided (channel, key) value
 
-(* A process-wide counter a proof's tactics move. A replayed proof's
-   tactics do not run, so the counter would stay where it was and the
-   proofs after it would make different fresh names (a hint's [_<n>], an
-   SSR abstract variable). So replay reads each counter where the proof
-   starts and, after the declaration, puts it at start plus the advance
-   the registration recorded. The declaration's own advance is overwritten
-   rather than added, which is what stock leaves behind.
-
-   The universe and sort counters are not registered here: the stored term
-   carries them ([rb_univ_end] in [Declare]). A counter nothing registers
-   is one replay cannot move, so a proof that moved it is refused. *)
-let counter_io : (string, (unit -> int) * (int -> unit)) Hashtbl.t = Hashtbl.create 8
-
-let register_counter name ~get ~set = Hashtbl.replace counter_io name (get, set)
-
 (* A counter kept in the Summary ([Summary.ref]): the evar and meta
    counters, the two hint counters, the SSR abstract counter. The STM
    rolls such a counter back with the rest of the Summary when the proof
@@ -85,30 +70,7 @@ let summary_counters : (string, unit) Hashtbl.t = Hashtbl.create 8
 
 let register_summary_counter name = Hashtbl.replace summary_counters name ()
 
-let can_advance name = Hashtbl.mem counter_io name || Hashtbl.mem summary_counters name
-
-(* The counters of the proof being replayed: where each stood when the
-   proof opened, and the advance its record holds. The start is taken at
-   the proof's start, as the registration counted its advance from there;
-   taken at the closer it would already hold what opening the proof
-   spent. *)
-let counter_starts () =
-  Hashtbl.fold (fun name (get, set) acc -> (name, get (), set) :: acc) counter_io []
-
-let pending_counters : (int * int * (int -> unit)) list ref = ref []
-
-let take_counters ~starts ~recorded =
-  pending_counters :=
-    List.filter_map
-      (fun (name, start, set) ->
-         match List.assoc_opt name recorded with
-         | Some n -> Some (start, n, set)
-         | None -> None)
-      starts
-
-let apply_counters () =
-  List.iter (fun (start, n, set) -> set (start + n)) !pending_counters;
-  pending_counters := []
+let can_advance name = Hashtbl.mem summary_counters name
 
 (* The layer that made a stored term says, at the closer, whether this
    compile can use it. It is never a reason to use one. *)
@@ -127,16 +89,13 @@ let register_install_check f = install_check := f
 
 let provided () =
   let tbl = Hashtbl.create 32 in
-  let channels = Hashtbl.create 16 in
   Queue.iter
     (fun f ->
        List.iter
-         (fun (r : R.read) ->
-            Hashtbl.replace tbl (r.R.channel, r.R.key) r.R.value;
-            Hashtbl.replace channels r.R.channel ())
+         (fun (r : R.read) -> Hashtbl.replace tbl (r.R.channel, r.R.key) r.R.value)
          (f ()))
     providers;
-  (tbl, channels)
+  tbl
 
 (* A [Require] the source text spells out in full: its [From] prefix and
    its library names, as written ({!scan_late_commands}). *)
@@ -155,13 +114,11 @@ type late_bound = { lb_last : int option; lb_requires : (int * require_text) lis
 let no_late = { lb_last = None; lb_requires = [] }
 
 type candidate = {
-  c_name : string;
   c_proof : R.proof;
   c_offset : int;  (** where the proof's opening sentence starts *)
-  c_provided : (string * string, string option) Hashtbl.t * (string, unit) Hashtbl.t;
+  c_provided : (string * string, string option) Hashtbl.t;
       (** the provided channels, read where the record read them: at the
           proof's start, not at its closer *)
-  c_counters : (string * int * (int -> unit)) list;  (** each counter at the proof's start *)
 }
 
 type counts = {
@@ -441,7 +398,7 @@ let require_sentence text k =
   let n = String.length text in
   let i = ref k in
   let blank c = c = ' ' || c = '\n' || c = '\t' || c = '\r' in
-  let at s = !i + String.length s <= n && String.equal (String.sub text !i (String.length s)) s in
+  let at s = !i + String.length s <= n && CString.is_sub s text !i in
   let skip_string () =
     incr i;
     let fin = ref false in
@@ -680,7 +637,7 @@ let scan_late_commands ?(imports_late = true) text =
     List.find_opt
       (fun k ->
          let lr = String.length run and lk = String.length k in
-         lr >= lk && String.equal (String.sub run (lr - lk) lk) k
+         lr >= lk && CString.is_suffix k run
          && (lr = lk || not (is_letter run.[lr - lk - 1])))
       late_words
   in
@@ -855,7 +812,6 @@ let unaudited_plugin () =
       (fun (name, _) -> not (!plugin_audit name || List.mem name audited_outside_tree))
       (tc ()).R.plugins
 
-(* The bound that the late commands of a scan (last first) give. *)
 let late_bound commands =
   let rec go requires = function
     | { lc_offset; lc_require = Some r } :: rest -> go ((lc_offset, r) :: requires) rest
@@ -897,7 +853,6 @@ let register_require_resolver f = require_resolver := f
    keeps the directory listings it read ([System.trust_file_cache]). *)
 let require_resolutions : (int, (unit -> bool) option) Hashtbl.t = Hashtbl.create 16
 
-(* Whether the late [Require] at [offset] names only libraries loaded now. *)
 let loads_nothing (offset, r) =
   let resolved =
     match Hashtbl.find_opt require_resolutions offset with
@@ -927,9 +882,6 @@ let sentence_offset () = match !sentence_loc with Some l -> l.Loc.bp | None -> -
 
 let at_sentence loc = sentence_loc := Some loc
 
-(* Measurement (BET-84, ReplayFine): each [Require] run while replay is on,
-   with its sentence's offset and whether every library it names was
-   already loaded before it ran. The summary lists them. *)
 let requires_seen : (int * bool) list ref = ref []
 
 (* Where the first proof this file replayed opens. A replay relies on no
@@ -983,7 +935,6 @@ let start ~library ~source ~toolchain =
     first_hit := None;
     Hashtbl.reset require_resolutions;
     Hashtbl.reset proof_provided;
-    pending_counters := [];
     let index = Hashtbl.create 256 in
     let registered_object = ref None in
     (* A [-proof-replay-dir] with no record for this library is refused as
@@ -1118,19 +1069,18 @@ let candidate_open () = match !state with Some { f_candidate = Some _; _ } -> tr
    the buffering). That is key item 1. *)
 let abandon () =
   match !state with
-  | Some ({ f_candidate = Some c; _ } as st) -> st.f_candidate <- None; miss_key c.c_name
+  | Some ({ f_candidate = Some c; _ } as st) -> st.f_candidate <- None; miss_key c.c_proof.R.name
   | Some _ | None -> ()
 
 (* A write the declaration of the stored term does not make by itself: a
-   counter that no [register_counter] can move. The declaration makes the
-   rest — the levels and constraints, the constraint sources, and the
-   schemes, which travel with the term's side effects. A proof that raises a
-   warning is ineligible ([CWarnings.warn]), so no warning is to be raised
-   again.
+   counter that is not a Summary counter ([register_summary_counter]). The
+   declaration makes the rest — the levels and constraints, the constraint
+   sources, and the schemes, which travel with the term's side effects. A
+   proof that raises a warning is ineligible ([CWarnings.warn]), so no
+   warning is to be raised again.
 
    The universe and sort counters are not here: the stored term carries
-   them, and the precheck compares them. Every other registered counter is
-   moved at the closer by [advance_counters]. *)
+   them, and the precheck compares them. *)
 let unreplayable_writes (p : R.proof) =
   List.exists
     (fun (name, n) ->
@@ -1175,8 +1125,7 @@ let open_proof ~name ~statement ~position ~toolchain_key =
             past it (opening the proof makes evars and levels of its own).
             So they are read here, where the record read them. *)
          st.f_candidate <-
-           Some { c_name = name; c_proof = p; c_offset = sentence_offset (); c_provided = provided ();
-                  c_counters = counter_starts () })
+           Some { c_proof = p; c_offset = sentence_offset (); c_provided = provided () })
 
 (* A counter's start (row 18) matters to a proof only through the fresh
    names it makes from it: a proof whose record shows no advance of a
@@ -1218,16 +1167,12 @@ let counter_unmoved (p : R.proof) (r : R.read) =
    The one-value-per-channel check (dev/tools/census/replay_channels.py)
    makes sure a provider row and an evaluator of one channel are not two
    implementations of one value. *)
-(* Why a read missed: its channel has no evaluator in this Rocq
-   (["no_evaluator"]), the evaluator could not answer (["unknown"]), or the
-   value now is another one (["changed"]). *)
 let first_read_mismatch (p : R.proof) ~at_start =
   let now (r : R.read) =
-    let table, _channels = at_start in
     match Hashtbl.find_opt proof_provided (r.R.channel, r.R.key) with
     | Some v -> Some (Value v)
     | None ->
-      match Hashtbl.find_opt table (r.R.channel, r.R.key) with
+      match Hashtbl.find_opt at_start (r.R.channel, r.R.key) with
       | Some v -> Some (Value v)
       | None ->
         match Hashtbl.find_opt evaluators r.R.channel with
@@ -1257,9 +1202,8 @@ let rec decide ~sentences ~closer =
 and decide_once ~sentences ~closer =
   match !state with
   | None | Some { f_candidate = None; _ } | Some { f_refused = Some _; _ } -> None
-  | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_offset; c_provided = at_start;
-                                 c_counters = starts };
-            _ } as st) ->
+  | Some ({ f_candidate = Some { c_proof = p; c_offset; c_provided = at_start }; _ } as st) ->
+    let name = p.R.name in
     st.f_candidate <- None;
     (* A process-wide fence this process tripped (a stale Rocqlib cache, a
        closure a plugin installed over Rocq's own) stays tripped: from then
@@ -1305,7 +1249,6 @@ and decide_once ~sentences ~closer =
             if !first_hit = None then first_hit := Some c_offset;
             outcome name "hit" None;
             Queue.iter (fun f -> f (p.R.start_tables @ p.R.reads)) hit_hooks;
-            take_counters ~starts ~recorded:p.R.writes.R.counters;
             counts.registered <- counts.registered +. p.R.wall_s;
             (match !options with
              | Some opts -> counts.charged <- counts.charged +. (opts.o_ratio *. p.R.wall_s)

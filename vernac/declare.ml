@@ -2533,7 +2533,6 @@ let encode_stored (s : pending_stored) ~regular ~refs ~queries =
   match Marshal.to_string blob [] with
   | str -> Some (Proof_record.encode_blob str)
   | exception e ->
-    (* The record says why, so a proof that never replays is visible. *)
     Proof_recorder.ineligible ~reason:"unmarshallable" ~detail:(Printexc.to_string e);
     None
 
@@ -2665,10 +2664,9 @@ let stored_for_record = ref None
 let replayed_univ_end = ref None
 
 let restore_replayed_counters () =
-  (match !replayed_univ_end with
-   | Some e -> UnivGen.set_counters e; replayed_univ_end := None
-   | None -> ());
-  Proof_replay.apply_counters ()
+  match !replayed_univ_end with
+  | Some e -> UnivGen.set_counters e; replayed_univ_end := None
+  | None -> ()
 
 let close_proof ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : Proof_object.t =
   NewProfile.profile "close_proof" (fun () ->
@@ -2794,9 +2792,9 @@ let record_close ~closer ~kernel_check declare =
   record_close_gen ~closer ~kernel_check (fun () -> (declare (), None))
 
 (* A proved proof: its stored term is put together once the declaration has
-   run ([encode_stored]), from the globals [refs res] the declaration made
+   run ([encode_stored]), from the globals [snd res] the declaration made
    and the universe queries it asked. *)
-let record_close_with_info ~stored ~closer ~kernel_check ~pinfo ~refs declare =
+let record_close_with_info ~stored ~closer ~kernel_check ~pinfo declare =
   (* [writing] is exactly the state in which [set_name] does something (a
      proof is open, suspended or not), so the path and the string are built
      at a [Qed] only with the recorder on. Only a proof that declares one
@@ -2819,7 +2817,7 @@ let record_close_with_info ~stored ~closer ~kernel_check ~pinfo ~refs declare =
           | Proof_ending.Regular -> true
           | Proof_ending.End_obligation _ | Proof_ending.End_equations _ -> false
         in
-        (res, encode_stored s ~regular ~refs:(refs res) ~queries))
+        (res, encode_stored s ~regular ~refs:(snd res) ~queries))
 
 let save_admitted ~pm ~proof =
   let iproof = get proof in
@@ -2908,8 +2906,6 @@ let process_idopt_for_save ~idopt info =
         err_save_forbidden_in_place_of_qed ()
     in { info with Proof_info.cinfo }
 
-(* The stored term [close_proof] made for this proof's record entry, taken
-   once. *)
 let take_stored () = let v = !stored_for_record in stored_for_record := None; v
 
 let save ~pm ~proof ~opaque ~idopt =
@@ -2926,7 +2922,7 @@ let save ~pm ~proof ~opaque ~idopt =
     | Vernacexpr.Transparent -> true
   in
   let res =
-    record_close_with_info ~stored:(take_stored ()) ~closer ~kernel_check ~pinfo:proof_info ~refs:snd
+    record_close_with_info ~stored:(take_stored ()) ~closer ~kernel_check ~pinfo:proof_info
       (fun () -> finish_proof ~pm proof_obj.proof_object proof_info)
   in
   restore_replayed_counters ();
@@ -2971,7 +2967,7 @@ let save_lemma_proved_delayed ~pm ~proof ~idopt =
     | _ -> closer
   in
   let pm, _ =
-    record_close_with_info ~stored:(take_stored ()) ~closer ~kernel_check ~pinfo ~refs:snd (fun () ->
+    record_close_with_info ~stored:(take_stored ()) ~closer ~kernel_check ~pinfo (fun () ->
         finish_proof ~pm proof.proof_object pinfo)
   in
   restore_replayed_counters ();

@@ -111,7 +111,6 @@ let find ~channel tbl kn =
 
 let interp_global kn = find ~channel:"ltac2_global" ltac_state.contents.ltac_tactics kn
 
-(* A key that does not read back to a kernel name is a miss. *)
 let () =
   Proof_replay.register_evaluator "ltac2_global" (fun key ->
       match Libnames.kername_of_key key with
@@ -202,7 +201,6 @@ let define_notation kn tac =
 
 let interp_notation kn = find ~channel:"ltac2_notation" !ltac_notations kn
 
-(* A key that does not read back to a kernel name is a miss. *)
 let () =
   Proof_replay.register_evaluator "ltac2_notation" (fun key ->
       match Libnames.kername_of_key key with
