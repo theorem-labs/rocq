@@ -358,6 +358,18 @@ proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
+**Gate review, breadth audit gap BA5.**  functional induction finds a
+function's principle through the function's entry in the table that
+`Function` fills, and the edited trees drop that entry and keep every
+constant: `Lib.v` takes the name of a principle that `Function` declares after
+`f_ind` (`f_rec`), so `Function` gives a warning and stops before it fills the
+entry.  The proofs are in `B.v`, which does not change, so the counters at
+their start are the same in the two trees.  `verdict_funind_table`: the stock
+script fails ("Cannot find induction information on f"), so the replay compile
+must fail too.  `eval_funind_info`: `h` loses its entry and `changed`, whose
+`first` takes its second branch in the stock compile, misses on
+`funind_info`; `g` keeps its entry and `same` replays.
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its

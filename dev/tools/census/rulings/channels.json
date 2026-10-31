@@ -94,6 +94,7 @@
     "read:plugins/ltac2/tac2env.ml:10/ltac2_notation": {"row": "10"},
     "ineligible:plugins/ltac2/tac2env.ml:ml_tactic": {"ineligible": "@ml_tactic"},
     "ineligible:plugins/micromega/coq_micromega.ml:external_prover": {"ineligible": "@external_prover"},
+    "read:plugins/funind/indfun_common.ml:15/funind_info": {"row": "15"},
     "read:plugins/micromega/zify.ml:15/zify_table": {"row": "15"},
     "read:plugins/ring/ring.ml:15/ring_carrier_table": {"row": "15"},
     "read:plugins/ring/ring.ml:15/field_carrier_table": {"row": "15"},
