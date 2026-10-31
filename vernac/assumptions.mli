@@ -55,10 +55,13 @@ val reach :
 (** What {!assumptions}, with neither [add_opaque] nor [add_transparent],
     adds for the object [obj] alone, given its value in the graph of a walk
     that reached it ({!reach}): {!assumptions} of [grs] is the union of this
-    over every object its walk reaches. The empty-match contexts an [Axiom]
-    carries for printing are left empty. *)
+    over every object its walk reaches. [access] is the accessor that walk
+    used; this reads no body through it, only whether the kernel typed an
+    opaque proof it already read ([-skip-qed-typecheck]). The empty-match
+    contexts an [Axiom] carries for printing are left empty. *)
 val object_assumptions :
-  GlobRef.t -> GlobRef.Set_env.t option -> theory_assumptions * types ContextObjectMap.t
+  Global.indirect_accessor -> GlobRef.t -> GlobRef.Set_env.t option ->
+  theory_assumptions * types ContextObjectMap.t
 
 (** The references a walk collects from the type of a constant without a
     body: the direct references of an object that {!reach}'s graph maps to
@@ -71,3 +74,19 @@ val type_references : Constant.t -> GlobRef.Set_env.t
     accessor call a walk makes is such a read, so an accessor that wraps the
     one the walk is given can name each table read ([KeepFacts]). *)
 val reading_constant : unit -> Constant.t option
+
+(** What a walk's reuse of earlier walks reads about the libraries loaded:
+    the generation of their opaque tables
+    ([Library.opaque_tables_generation]), which keys the entries a query
+    leaves for the next one, and their content digests
+    ([Library.content_digests]), which key what the processes of one build
+    share. [Library] registers it, rather than this module calling it: the
+    keep rule puts [Library] above this module ([Library] -> [KeepFacts] ->
+    here), so a call the other way is a module cycle. Unregistered, no query
+    reuses another's entries and no object is shared. *)
+type library_facts = {
+  opaque_tables_generation : unit -> int;
+  content_digests : unit -> (DirPath.t -> Digest.t option);
+}
+
+val set_library_facts : library_facts -> unit

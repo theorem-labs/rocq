@@ -627,9 +627,15 @@ let intern_from_file ~intern_mode ~validated (dir, f) =
       let md = marshal_in_segment ~validate ~value:Values.v_lib ~segment:seg_md f ch in
       (* The opaque proofs are not parsed here when another process will
          read them: their bytes are hashed, and the table is read, by
-         whichever process first needs it, from that same range. Nothing
-         the main process checks looks into an opaque body
-         ([Mod_checking], [Check_stat]); the worker of
+         whichever process first needs it, from that same range. The main
+         process reads a body in two cases, both through
+         [indirect_accessor], which serves them from that range: a sealed
+         module's constant, which it cooks ([Mod_checking], opacify), and
+         every statement a [-statement-report] run reports on, which
+         [Check_closure.print] reads after the workers are reaped
+         ([Coqchk_main.print_statement_report]), so with [-j N > 1] that run
+         makes the main process read each table it reports on. The checks
+         themselves read none ([Check_stat]), and the worker of
          [CheckWorkers.validate_tables] keeps the rejections of a table
          nothing reads.
          Without workers there is nothing to gain by waiting, and [-j 1]

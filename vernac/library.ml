@@ -233,6 +233,26 @@ let opaque_generation = ref 0
 let opaque_digests = ref (DirPath.Map.empty : Digest.t DirPath.Map.t)
 let opaque_replaced = ref DirPath.Set.empty
 
+(* Libraries whose recorded digest of their declarations is not the MD5 of
+   the bytes it covers. [coqc -location-free-label] stores the library's
+   LABEL in the library segment instead ([library_label],
+   [save_library_base]), and the label blinds what a walk of the library's
+   objects reads: a constant of its signature is one value whether it is an
+   axiom or an opaque proof, and the index of a proof in the opaque table is
+   erased. Two such files can carry one label and one opaque table and still
+   give Print Assumptions different answers, so neither gets a digest here
+   and nothing of them is shared, as for a replaced table above. Measured:
+   with both members in and no guard, a second process printed the first
+   library's answer.
+
+   The test is the one thing that decides it, the digest against the bytes,
+   so it holds for a .vo and a .vos alike and needs nothing of how the file
+   was written. [intern_from_file] runs it only while the shared directory
+   is usable, which is the only reader of [content_digests], and writes it
+   under the name the file holds, before [intern_library] checks that name,
+   as the opaque table above is written. *)
+let label_digested = ref DirPath.Set.empty
+
 let add_opaque_table dp digest st =
   incr opaque_generation;
   if DirPath.Map.mem dp !opaque_tables then
@@ -260,7 +280,9 @@ let content_digests () =
     | Some d -> d
     | None ->
       let d = match find_library dp, DirPath.Map.find_opt dp !opaque_digests with
-        | Some (_, lib), Some opaque when not (DirPath.Set.mem dp !opaque_replaced) ->
+        | Some (_, lib), Some opaque
+          when not (DirPath.Set.mem dp !opaque_replaced)
+            && not (DirPath.Set.mem dp !label_digested) ->
           let Safe_typing.Dvo_or_vi library = lib.library_digests in
           let deps = List.sort DirPath.compare (Array.to_list (Array.map fst lib.library_deps)) in
           (* a dependency with no digest leaves the library without one *)
@@ -279,6 +301,12 @@ let content_digests () =
       d
   in
   digest
+
+(* [Assumptions] reads both of the above, and cannot name this module: the
+   keep rule's walk puts this module above it ([KeepFacts] calls
+   [Assumptions.reach], and [save_library_to] calls [KeepFacts.compute]). *)
+let () = Assumptions.set_library_facts
+    { Assumptions.opaque_tables_generation; content_digests }
 
 let access_table what tables dp i =
   let t = match DirPath.Map.find dp !tables with
@@ -430,6 +458,14 @@ module Intern = struct
   type t = DirPath.t -> (library_t, Exninfo.iexn) Result.t * Provenance.t
 end
 
+(* The MD5 of [seg]'s bytes in [file]. The digest the file stores for a
+   segment need not be it: under [-location-free-label] the library segment
+   stores the library's label ([save_library_base]). *)
+let segment_bytes_md5 file (seg : _ ObjFile.segment) =
+  In_channel.with_open_bin file (fun ic ->
+      In_channel.seek ic seg.ObjFile.pos;
+      Digest.channel ic (Int64.to_int seg.ObjFile.len))
+
 (* The handle is closed on every exit: a file this reader refuses — a .vo whose
    vmlibrary segment it does not know, or one whose segments do not unmarshal —
    raises here, and a session that meets one at every Require would otherwise
@@ -462,6 +498,25 @@ let intern_from_file file =
           | Some a ->
             DirPath.Map.add lsd.md_name (Safe_typing.Dvo_or_vi digest_lmd, a) !stored_closures_table
           | None -> DirPath.Map.remove lsd.md_name !stored_closures_table
+    in
+    (* Is the digest just read the MD5 of the bytes it covers, or a label
+       ([label_digested])? Only a process that shares entries asks, since
+       only its queries read [content_digests], and the answer costs one
+       pass over the segment.
+
+       The mark is only ever added. This runs before the file is accepted --
+       before its OCaml version is checked and before [intern_library]
+       checks the name it holds -- so a read that then fails would otherwise
+       clear the mark of the loaded library of that name and give its
+       objects back to the sharing, which is the hazard the mark exists for.
+       So once any file this process read carries a label under a name,
+       that name stays unshared, as a library whose opaque table was
+       replaced does. *)
+    let () =
+      if !AssumptionsShared.usable then
+        let md5 = segment_bytes_md5 file (ObjFile.get_segment ch ~segment:library_seg) in
+        if not (String.equal md5 digest_lmd) then
+          label_digested := DirPath.Set.add lsd.md_name !label_digested
     in
     lsd, lmd, digest_lmd, del_opaque, digest_opaque, vmlib
   in
@@ -998,10 +1053,7 @@ let read_file_label f =
         with Not_found -> None in
       sd, md, stored, ObjFile.get_segment ch ~segment:library_seg, keep_facts_segment)
   in
-  let segment_md5 = lazy (In_channel.with_open_bin f (fun ic ->
-      In_channel.seek ic seg.ObjFile.pos;
-      Digest.channel ic (Int64.to_int seg.ObjFile.len)))
-  in
+  let segment_md5 = lazy (segment_bytes_md5 f seg) in
   { name = sd.md_name; stored; segment_md5; label = lazy (label_result sd md);
     attempts = Attempts.find md.md_objects;
     axiom_report = lazy (LibkeyObjects.axiom_report ~compiled:md.md_compiled);

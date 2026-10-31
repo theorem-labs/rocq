@@ -7,9 +7,10 @@
 #
 # The segment now starts with its own format version (kernel/vmlibrary.ml), read
 # before anything in it is unmarshalled. This test raises that version word to a
-# value no reader knows, with nothing else changed but that segment's MD5, and
-# requires the refusal: an error naming the library and both versions, with
-# an ordinary exit status, not a signal and not a silent load.
+# value no reader knows, with nothing else changed (the segment keeps the digest
+# the file stored for it), and requires the refusal: an error naming the library
+# and both versions, with an ordinary exit status, not a signal and not a silent
+# load.
 set -eu
 export PATH="$BIN:$PATH"
 
@@ -33,9 +34,10 @@ rocq c -noinit -R "$d" "" "$d/Use.v"
 rm "$d/Use.vo"
 
 # Raise the segment's format version by one. misc/vo_container.py rewrites the
-# container, and the segment keeps its length, so nothing differs but that word
-# and the segment's MD5, which the file holds after it and in the summary; the
-# script prints the version it found.
+# container, and the segment keeps its length, so nothing differs but that
+# word; the segment keeps its stored digest, which a reader only compares with
+# the copy the file holds after the data. The script prints the version it
+# found.
 found=$(python3 - "$(dirname "$0")" "$d" <<'PY'
 import struct, sys
 sys.path.insert(0, sys.argv[1])
@@ -44,13 +46,13 @@ import vo_container
 d = sys.argv[2]
 vo_version, segments = vo_container.read(d + "/Defs.vo")
 assert "vmlibrary" in segments, "no vmlibrary segment"
-data = segments["vmlibrary"]
+data, digest = segments["vmlibrary"]
 assert len(data) >= 4, "vmlibrary segment shorter than its version word"
 (version,) = struct.unpack_from(">i", data, 0)
 # A plain small integer, not a marshalled value: a segment that does not start
 # with its format version is the bug this test is about.
 assert 0 < version < 1000, "vmlibrary segment does not start with a format version: %d" % version
-segments["vmlibrary"] = struct.pack(">i", version + 1) + data[4:]
+segments["vmlibrary"] = (struct.pack(">i", version + 1) + data[4:], digest)
 vo_container.write(d + "/Defs.vo", vo_version, segments)
 print(version)
 PY

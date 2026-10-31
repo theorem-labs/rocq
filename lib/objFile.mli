@@ -40,8 +40,14 @@ val close_out : out_handle -> unit
 val marshal_out_segment : ?hash:Digest.t -> out_handle -> segment:'a id -> 'a -> unit
 (** [marshal_out_segment ~hash oh ~segment v] writes [v] as [segment] and
     stores [hash] as its digest, in the segment table and after the data.
-    Without [hash], the digest is the MD5 of the bytes written. Readers only
-    compare the two stored copies; none recomputes the digest. *)
+    Without [hash], the digest is the MD5 of the bytes written. The readers
+    in this module only compare the two stored copies and recompute no
+    digest. Readers above it hash a segment themselves, each for its own
+    question: rocq-library-label hashes the [keepfacts] segment and reads it
+    as absent unless the digest matches, and hashes the [library] segment to
+    say whether its digest is that MD5 or something else
+    (checker/library_label.ml); coqc hashes the [library] segment for the
+    same question ([Library.label_digested]). *)
 val marshal_out_binary : out_handle -> segment:'a id -> out_channel * (unit -> unit)
 (** [marshal_out_binary oh segment] is a low level, stateful, API returning
     [oc, stop]. Once called no other API can be used on the same [oh] and only

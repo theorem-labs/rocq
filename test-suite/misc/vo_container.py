@@ -1,33 +1,48 @@
 """Read and write the segments of a .vo file, for the tests that build one by hand.
 
 The container's layout is lib/objFile.ml's: a magic word, the .vo version, the
-position of the summary, the segments, each followed by its MD5, and the summary
-of their names, positions, lengths and MD5s. Reading a file and writing it back
-unchanged gives the same bytes, so a test that rewrites one changes only what it
-means to change.
+position of the summary, the segments, each followed by its digest, and the
+summary of their names, positions, lengths and digests. Reading a file and
+writing it back unchanged gives the same bytes, so a test that rewrites one
+changes only what it means to change.
 
 The tests that rewrite a .vo for the vmlibrary format version use this:
 misc/vmlibrary_format_version.sh and misc/rocqchk_vm_bytecode.sh. Other tests
 read or write that layout themselves and are left as they are, so a change of
 lib/objFile.ml has to look at them too: rocqchk_cook.sh, rocqchk_parallel.sh,
 rocqchk_release.sh, rocqchk_lazyopaque.sh (which also needs where each segment
-is), norec-validation-order/corrupt.ml, and the summary parsers of
-rocqchk_binnum_literal.sh and rocqchk_binnum_univ.sh. Moving them here is a
-refactor of tests this change does not touch.
+is), library-label-vmlibrary.sh, norec-validation-order/corrupt.ml, and the
+summary parsers of rocqchk_binnum_literal.sh and rocqchk_binnum_univ.sh. Moving
+them here is a refactor of tests this change does not touch.
 
 Only the test suite uses this; Rocq itself reads and writes the container in
 lib/objFile.ml.
 """
 
-import hashlib
 import struct
 
 MAGIC = 0x436F7121  # "Coq!"; every integer is big-endian
 
 
 def read(path):
-    """(vo version, {segment name: bytes}) in the order the file holds the
-    segments, with every segment's MD5 checked."""
+    """(vo version, {segment name: (bytes, stored digest)}) in the order the
+    file holds the segments, with the two stored copies of each segment's
+    digest checked against each other.
+
+    The digest a segment stores is not always the MD5 of its bytes: under
+    coqc -location-free-label the library segment stores the library's label
+    (vernac/library.ml, lib/objFile.mli). The container's own readers
+    compare the copy in the summary with the copy after the data and
+    recompute neither, so a rewrite carries every segment's digest over, and
+    a test that changes a segment's bytes keeps its stored digest. Two
+    readers above them hash a segment themselves, so a test that rewrites
+    one of those two must expect it: coqc hashes the library segment and
+    keeps that library's Print Assumptions entries out of the shared cache
+    unless its digest is that MD5 (vernac/library.ml, label_digested), and
+    rocq-library-label hashes the keepfacts segment and reads it as absent
+    on a mismatch (checker/library_label.ml, read_keep_facts). The two tests
+    that use this module rewrite the vmlibrary segment, which neither
+    hashes."""
     b = open(path, "rb").read()
     magic, vo_version = struct.unpack_from(">II", b, 0)
     assert magic == MAGIC, "%s: bad magic" % path
@@ -46,24 +61,24 @@ def read(path):
         digest = b[off:off + 16]
         off += 16
         data = b[pos:pos + length]
-        assert hashlib.md5(data).digest() == digest, "%s: %s has a bad MD5" % (path, name)
-        found.append((pos, name, data))
-    return vo_version, {name: data for _, name, data in sorted(found)}
+        assert b[pos + length:pos + length + 16] == digest, \
+            "%s: %s stores two different digests" % (path, name)
+        found.append((pos, name, (data, digest)))
+    return vo_version, {name: seg for _, name, seg in sorted(found)}
 
 
 def write(path, vo_version, segments):
     """Write the segments as a well-formed container: their data in the order
-    given, which for what [read] returns is the file's own, the summary by name,
-    as the CString.Map Rocq keeps them in iterates, and every MD5 and every
-    offset recomputed."""
+    given, which for what [read] returns is the file's own, each followed by
+    the digest it carries, the summary by name, as the CString.Map Rocq keeps
+    them in iterates, and every offset recomputed."""
     out = bytearray()
     out += struct.pack(">II", MAGIC, vo_version)
     out += struct.pack(">Q", 0)  # the summary's position, patched below
     summary = []
-    for name, data in segments.items():
+    for name, (data, digest) in segments.items():
         pos = len(out)
         out += data
-        digest = hashlib.md5(data).digest()
         out += digest
         summary.append((name, pos, len(data), digest))
     summary_pos = len(out)

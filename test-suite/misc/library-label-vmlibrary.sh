@@ -14,12 +14,16 @@
 # - it starts with the marshaller's magic, so the build writes no version word:
 #   the key must be 0, which no versioned format is.
 #
-# That is what makes the key and the segment agree: the release merge binds
-# the constant to [Vmlibrary.format_version], and this test fails a merge that
-# forgets, or a raise of that version that leaves the key behind. (The same
-# merge adds this test to the list of tests that keep their own copy of the
-# lib/objFile.ml layout, in the VM member's test-suite/misc/vo_container.py,
-# or reads the segment through that module instead.)
+# That is what makes the key and the segment agree: this build binds the
+# constant to [Vmlibrary.format_version] (the speed-8 integration member).
+# What this test checks is that the key this build reports and the word this
+# build's own compiler writes say the same thing; it does not check that the
+# key is still bound to that constant. So a key hardcoded to today's value
+# passes, and fails once the format moves, as a writer that stops starting
+# the segment with its version word fails now.
+#
+# This test keeps its own copy of the few lines of the lib/objFile.ml layout
+# it needs; test-suite/misc/vo_container.py's list of such tests names it.
 #
 # What this test does not do is compare labels across two formats: no one build
 # has both. test-suite/unit-tests/vernac/libkeyObjects_test.ml does that ("a
@@ -64,7 +68,7 @@ found = "no vmlibrary segment"
 for _ in range(n):
     (ln,) = struct.unpack_from(">I", b, off); off += 4
     name = bytes(b[off:off+ln]); off += ln
-    pos, _sz = struct.unpack_from(">QQ", b, off); off += 32  # pos, len, MD5
+    pos, _sz = struct.unpack_from(">QQ", b, off); off += 32  # pos, len, digest
     if name == b"vmlibrary":
         (found,) = struct.unpack_from(">i", b, pos)
 print(found)
@@ -81,7 +85,7 @@ case $word in
     ;;
   [1-9]*)
     check "the key names the vmlibrary format this build writes (word $word, key $key; \
-a build that has both defines vmlibrary_format_version as Vmlibrary.format_version, now $word)" \
+this build defines vmlibrary_format_version as Vmlibrary.format_version, now $word)" \
       test "$word" = "$key"
     ;;
   *)

@@ -241,22 +241,22 @@ open Names
     with, which counts from 1. The two formats that exist are therefore 0
     and 1, and they are two labels.
 
-    It is a number here rather than [Vmlibrary.format_version] itself
-    because the branch that writes the version word and the branch that
-    computes this key meet only in a release: neither is an ancestor of the
-    other, so this file cannot name a value the other defines, and a build
-    of this branch alone has none. The merge of the two therefore defines
-    this constant as [Vmlibrary.format_version], which is one edit and
-    leaves one number to raise afterwards. It is not left to a reader of
-    this comment:
-    test-suite/misc/library-label-vmlibrary.sh reads the first word of the
-    [vmlibrary] segment of a library the build under test wrote and fails
-    unless this constant names that format -- equal to the word when there
-    is one, 0 when the segment starts with the marshaller's magic. A merge
-    that forgets the edit fails that test, which names it, and so does a
-    build whose [Vmlibrary.format_version] was raised without the key. Once
-    the two branches share a base, the binding is the only definition and
-    that test's purpose is gone.
+    It is a number rather than [Vmlibrary.format_version] itself because
+    the number names a format the word cannot: 0, a segment that starts
+    straight with the marshalled table, which is what a build whose VM
+    writes no version word produces. The branch that writes the word and
+    the branch that computes this key met in this release, and the
+    integration member binds the constant to [Vmlibrary.format_version],
+    so the two move together and one number is left to raise.
+    test-suite/misc/library-label-vmlibrary.sh holds a build to that: it
+    reads the first word of the [vmlibrary] segment of a library the build
+    under test wrote and fails unless this constant names that format --
+    equal to the word when there is one, 0 when the segment starts with
+    the marshaller's magic. It compares one build with itself, so what it
+    catches is a key that stops naming the format that build writes: a
+    number put back in the binding's place once the format moves, or a
+    writer that stops starting the segment with its version word. A
+    binding replaced by today's value passes it.
 
     {b What the label does not cover.} The [opaques] segment (the proof
     terms of opaque constants: a changed proof keeps the label unless it
