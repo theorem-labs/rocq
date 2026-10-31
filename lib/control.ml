@@ -102,11 +102,25 @@ let timeout_fun = match Sys.os_type with
 let timeout_fun_ref = ref timeout_fun
 let set_timeout f = timeout_fun_ref := f
 
+type timeout_counts = { armed : int; fired : int }
+
+let timeouts_armed = ref 0
+let timeouts_fired = ref 0
+
+let timeout_counts () = { armed = !timeouts_armed; fired = !timeouts_fired }
+
+let add_timeout_counts { armed; fired } =
+  timeouts_armed := !timeouts_armed + armed;
+  timeouts_fired := !timeouts_fired + fired
+
 (* BET-84 census row 22: a proof whose result can depend on how long a
    tactic ran is never replayed. *)
-let timeout n f =
+let timeout n f x =
   Proof_recorder.ineligible ~reason:"timeout" ~detail:(string_of_float n);
-  !timeout_fun_ref.timeout n f
+  incr timeouts_armed;
+  let res = !timeout_fun_ref.timeout n f x in
+  if Result.is_error res then incr timeouts_fired;
+  res
 
 let protect_sigalrm f x =
   let timed_out = ref false in

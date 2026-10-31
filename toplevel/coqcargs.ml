@@ -38,6 +38,8 @@ type t =
   ; proof_replay_digest : string option
 
   ; output_context : bool
+
+  ; record_timeouts : bool
   }
 
 let default =
@@ -61,6 +63,8 @@ let default =
   ; proof_replay_digest = None
 
   ; output_context = false
+
+  ; record_timeouts = false
   }
 
 let depr opt =
@@ -150,6 +154,9 @@ let parse arglist : t =
         |"-dump-glob" ->
           let file = next () in
           { oval with glob_out = Some (GlobFile file) }
+
+        |"-record-timeouts" ->
+          { oval with record_timeouts = true }
 
         (* Per-proof record (BET-84 P2) and replay (P3) *)
         |"-proof-record" ->

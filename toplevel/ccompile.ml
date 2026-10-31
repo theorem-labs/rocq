@@ -21,6 +21,26 @@ let source ldir file = Loc.InFile {
     file = file;
   }
 
+(* -record-timeouts: count the timeouts this compilation arms and the ones
+   that fire, so that a build driver can tell an object a timeout could have
+   changed from one it could not. A record of an earlier compilation is
+   removed before this one starts, and the new one is written by an [at_exit]
+   handler, hence after the output file on success and after the error on
+   failure; a compilation killed by a signal Rocq does not catch leaves none.
+   A tactic worker of par: sends its counts back with each answer (Partac),
+   and -async-proofs and -vos, whose delegated proofs do not, are refused
+   (Coqc.check_countable_timeouts). *)
+let record_timeouts_at_exit ~target =
+  let file = safe_chop_extension target ^ ".timeouts.json" in
+  let () = try Sys.remove file with Sys_error _ -> () in
+  at_exit (fun () ->
+      let { Control.armed; fired } = Control.timeout_counts () in
+      try
+        let ch = open_out file in
+        Printf.fprintf ch "{\"format\":1,\"armed\":%d,\"fired\":%d}\n" armed fired;
+        close_out ch
+      with Sys_error msg -> prerr_endline ("Error: cannot write " ^ file ^ ": " ^ msg))
+
 (* Compile a vernac file *)
 let compile opts stm_options injections copts ~echo ~f_in ~f_out =
   let open Vernac.State in
@@ -36,6 +56,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
   in
   let long_f_dot_in, long_f_dot_out =
     ensure_exists_with_prefix ~src:f_in ~tgt:f_out ~src_ext:ext_in ~tgt_ext:ext_out in
+  let () = if copts.record_timeouts then record_timeouts_at_exit ~target:long_f_dot_out in
   match mode with
   | BuildVo | BuildVok ->
       let doc, sid = Topfmt.(in_phase ~phase:LoadingPrelude)
