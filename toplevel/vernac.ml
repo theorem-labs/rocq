@@ -105,6 +105,13 @@ let load_vernac_core ~echo ~check ~state ?source file =
       (Gramlib.Stream.of_channel in_chan) in
   let open State in
 
+  (* BET-84: with neither -proof-record nor -proof-replay, the hooks below
+     are skipped on this one test, so a sentence is run as stock runs it: no
+     span, no digest closure, no budget or candidate check (deep review of
+     079bc4cb71, DR-2). [Ccompile] sets both options before it loads the
+     file, so one test per file is enough. *)
+  let hooked = Proof_recorder.in_use () in
+
   (* One parsed sentence, run: everything the loop does once it has an
      AST. The replay path below runs buffered sentences through it too, so
      a proof that is not replayed is interpreted exactly as stock. *)
@@ -112,7 +119,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
     (* BET-84: replay compares where a proof opens with the file's last late
        command (Proof_replay.start), and raises a replayed proof's warnings
        again relative to its statement, so it is told where each sentence is. *)
-    Option.iter Proof_replay.at_sentence ast.CAst.loc;
+    if hooked then Option.iter Proof_replay.at_sentence ast.CAst.loc;
     (* BET-84 P3: the charge for the proofs replay did not run is part of
        the file's clock, so a sentence that would carry the clock past the
        budget is stopped inside it, as stock's own timeout stops it, not
@@ -129,6 +136,8 @@ let load_vernac_core ~echo ~check ~state ?source file =
                [("cmd", `String (Pp.string_of_ppcmds (Topfmt.pr_cmd_header ast)));
                 ("line", `String lnum)])
            (fun () ->
+             if not hooked then Flags.silently (interp_vernac ~check ~state) ast
+             else
              (* BET-84: key item 1 is the parsed sentences of a proof, with
                 the locations of this file removed. A sentence that is not
                 a proof step is a command inside the proof (census row 21),
@@ -192,6 +201,8 @@ let load_vernac_core ~echo ~check ~state ?source file =
          emit_time state ast tstart tend)
       ()
     in
+    if not hooked then interp_one ()
+    else
     match Proof_replay.remaining_budget () with
     | None -> interp_one ()
     | Some left ->
@@ -303,7 +314,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
 
   (* ids = For beautify, list of parsed sids *)
   let rec loop state ids =
-    Proof_replay.check_budget ();
+    if hooked then Proof_replay.check_budget ();
     match parse_next state with
     | None ->
       input_cleanup ();
@@ -311,7 +322,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
     | Some (tstart, ast) ->
       let state = interp_one ~tstart state ast in
       let ids = state.sid :: ids in
-      if not (Proof_replay.candidate_open ()) then (loop [@ocaml.tailcall]) state ids
+      if not (hooked && Proof_replay.candidate_open ()) then (loop [@ocaml.tailcall]) state ids
       else
         (* The statement's own sentence is the first of its proof's. *)
         let sentences = [ sentence_digest ast ] in

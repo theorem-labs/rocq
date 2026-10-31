@@ -1,0 +1,28 @@
+{
+  "doc": "-proof-replay-dir holds no record for B: B runs its tactics as stock does, refused no_record, and A still replays",
+  "files": ["A.v", "B.v"],
+  "unpublished": ["B.v"],
+  "records": {"A.v": {"PR.A.a": {"eligible": true}}, "B.v": {"PR.B.b": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "refused_detail": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.a", "hit"]]
+    },
+    "B.v": {
+      "proofs": 0,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": "no_record",
+      "refused_detail": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": []
+    }
+  }
+}

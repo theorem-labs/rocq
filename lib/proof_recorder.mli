@@ -30,6 +30,17 @@ val active : unit -> bool
 (** Whether a proof is open and its reads are being recorded. False when
     the recorder is off, between proofs, and inside {!without_recording}. *)
 
+val in_use : unit -> bool
+(** Whether this process records or replays: true from {!start} or from
+    [Proof_replay.configure] on, for the rest of the process. One load, no
+    allocation. A hook site in the toplevel or in [Declare] tests it first,
+    so that a compile with neither option builds no hook argument and runs
+    the stock path. *)
+
+val set_in_use : unit -> unit
+(** Makes {!in_use} true for the rest of the process. [Proof_replay.configure]
+    calls it; {!start} sets it itself. *)
+
 val tracking : unit -> bool
 (** True from {!start} until {!write} or {!stop}, between proofs too. A cache
     outside the Summary state (the Rocqlib lazy fence) keeps its history while

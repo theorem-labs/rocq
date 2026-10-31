@@ -277,6 +277,35 @@ let overcommit_unknown_refuses =
     (setup ~header:R.{ header with overcommit_memory = "unknown" } ();
      Replay.refused () = Some "overcommit" && decide () = None)
 
+(* A record that cannot be read is refused as one that does not parse, and
+   the file runs its tactics (deep review of 079bc4cb71, DR-1). Before, the
+   [Sys_error] of the read escaped [start] and stopped the compile. *)
+let unreadable_record_refuses =
+  mk_bool_test "proof-replay-unreadable-record"
+    "a -proof-replay FILE that does not exist is refused as bad_record, and start does not raise"
+    (let path = Filename.temp_file "proof-replay" ".absent" in
+     Sys.remove path;
+     Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
+       ~digest:(Some (String.make 64 '0'));
+     match Replay.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain) with
+     | () -> Replay.refused () = Some "bad_record" && decide () = None
+     | exception (Sys_error _ | End_of_file) -> false)
+
+(* A directory with no record for this library: a file the registration
+   did not record, such as one the author added. Its own reason, so that
+   the engine can tell it from a record it cannot read. *)
+let no_record_refuses =
+  mk_bool_test "proof-replay-no-record"
+    "a -proof-replay-dir with no record for this library is refused as no_record"
+    (let dir = Filename.temp_file "proof-replay" ".dir" in
+     Sys.remove dir;
+     Sys.mkdir dir 0o755;
+     Replay.configure ~source:(Replay.Record_dir dir) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
+       ~digest:None;
+     Replay.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain);
+     Sys.rmdir dir;
+     Replay.refused () = Some "no_record" && decide () = None)
+
 (* The SHA-256 the binding uses is the standard one: FIPS 180-4's own
    test vectors. *)
 let sha256_vectors =
@@ -643,7 +672,8 @@ let fence_refuses =
 let tests =
   [ unchanged_read_hits; changed_read_misses; unknown_read_misses; unevaluated_channel_misses;
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
-    binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
+    binding_refusals; overcommit_unknown_refuses; unreadable_record_refuses; no_record_refuses;
+    sha256_vectors; charged_clock; summary_counts;
     rebind_scan; late_events_scan; hit_hook_runs; miss_reason; install_check_misses; plugin_audit_refuses;
     plugin_allowlist;
     require_scan; require_rule; require_tripwire;
