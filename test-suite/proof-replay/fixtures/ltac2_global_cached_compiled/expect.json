@@ -1,0 +1,16 @@
+{
+  "doc": "a proof runs an Ltac2 global whose value and compiled body Ltac2 kept from a run outside the proof (Tac2interp.GlobalValue); the edited body of the global it calls must make the proof miss on the ltac2_global read",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.first": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 0,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.first", "read", "ltac2_global", "changed"]]
+    }
+  }
+}

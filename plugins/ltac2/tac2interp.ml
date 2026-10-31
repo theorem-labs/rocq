@@ -127,7 +127,8 @@ sig
       computed under. [compute] must read those tables only and have no other effect. [keep]
       tells [compute] whether the value it gives will be kept and reused ([Shared] below); it
       must not change the value [compute] gives, only how that value is made (a function that is
-      kept is worth compiling: [compiled_closure]). *)
+      kept is worth compiling: [compiled_closure]). While a proof is recorded (BET-84) it is
+      [compute false kn] at each use, because the reads [compute] makes are the proof's inputs. *)
 
   type cell
   (** A place in compiled code that reads one global ([compile_simple]). *)
@@ -282,9 +283,17 @@ let get_entry compute kn =
     end
     else v, false
 
+(* BET-84: a value taken from the entries skips the reads that computing it
+   makes ([Tac2env.interp_global] and [record_global] on row 10, and the
+   [ml_tactic] fence of [Tac2env.interp_primitive]), and the recorder must
+   see each of them in each proof that uses the global, not only in the
+   first one. So while a proof is recorded, each use computes the value
+   again, as before this cache; [compute false] gives the same value. *)
 let get compute kn =
-  let () = check_tables () in
-  fst (get_entry compute kn)
+  if Proof_recorder.active () then compute false kn
+  else
+    let () = check_tables () in
+    fst (get_entry compute kn)
 
 (** A cell keeps the value of a [Shared] entry and the [epoch] it was read in. While [epoch] has
     not changed, the tables are the ones the entry was computed under and the entry is still
@@ -294,12 +303,15 @@ type cell = { mutable c_epoch : int; mutable c_value : valexpr }
 let cell () = { c_epoch = -1; c_value = ValInt 0 }
 
 let get_cell c compute kn =
-  let () = check_tables () in
-  if Int.equal c.c_epoch !epoch then c.c_value
-  else
-    let v, shared = get_entry compute kn in
-    let () = if shared then begin c.c_epoch <- !epoch; c.c_value <- v end in
-    v
+  if Proof_recorder.active () then compute false kn
+  else begin
+    let () = check_tables () in
+    if Int.equal c.c_epoch !epoch then c.c_value
+    else
+      let v, shared = get_entry compute kn in
+      let () = if shared then begin c.c_epoch <- !epoch; c.c_value <- v end in
+      v
+  end
 
 end
 (** [simple_fuel fuel e]: [fuel] minus the number of nodes of [e] if [e] is an expression whose value
