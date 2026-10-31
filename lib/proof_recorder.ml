@@ -70,6 +70,18 @@ let generation () = !gen
 
 let active () = !recording
 
+(* Whether this process records or replays at all. [start] sets it, and so
+   does the replay's configuration; nothing clears it, as one process
+   compiles one file. The toplevel and [Declare] test it before they build
+   what a hook takes (a sentence's span and digest closure, a proof's path,
+   position and universe snapshot), so a compile with neither option takes
+   the stock path (deep review of 079bc4cb71, DR-2). *)
+let in_use_flag = ref false
+
+let in_use () = !in_use_flag
+
+let set_in_use () = in_use_flag := true
+
 (* Set by a compile that replays and does not record: a process-wide cache
    fence must run there too, or a clean registration history would match a
    dirty replay history. *)
@@ -137,6 +149,7 @@ let stored_by_vo_ref () = !opt_vo_ref
 let note_vo_ref () = vo_referred := true
 
 let start ~library ~source ~source_digest ~toolchain ~skip_qed_typecheck ~tables_at_start =
+  in_use_flag := true;
   vo_referred := false;
   let header = R.{
       version = R.format_version;

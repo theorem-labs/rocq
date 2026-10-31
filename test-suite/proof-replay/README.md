@@ -63,9 +63,11 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `register_flags` | flags for the registration only |
 | `grade_flags` | flags for both grade compiles (for example `-skip-qed-typecheck`) |
 | `replay_extra_flags` | flags for the replay compile only |
+| `replay_file` | a record file under the records directory: the replay compile reads it with `-proof-replay FILE -proof-replay-digest` (the file's SHA-256, or 64 zeros when it does not exist) in place of `-proof-replay-dir` |
 | `ratio` | the `-proof-replay-ratio` value (default `1`) |
 | `stack_kb` | the stack limit every compile of this fixture runs under (default 8192, the limit a grade runs under; lane R1 measured that this changes `.vo` bytes, so stock and replay must share it). `prlimit` is required |
 | `record_layout` | `dotted`, `slashed` or `both`: which name the record is published under |
+| `unpublished` | files the registration records but whose record the runner does not publish, so `-proof-replay-dir` holds no record for them |
 | `records` | per file, per proof: `ineligible` reasons it must carry, `eligible`, `writes_nonempty`, `stores_no_term` |
 | `summaries` | per file: `proofs`, `hits`, `misses`, `refused`, `killed`, `fence`, `outcomes` |
 | `compile_fails` | files whose compile must fail in both runs; no later file is compiled |
@@ -399,6 +401,21 @@ absolute name, and the printer asks for its shortest name; the edited tree
 imports a module that defines another `c` before the proofs, so the
 shortest name of `PR.A.c` becomes `A.c`, and the proof that prints it misses
 on `xreftab/shortest_qualid`.  The proof that prints `d` replays.
+
+**Gate review of 079bc4cb71, deep review.**  `replay_file_missing` (DR-1):
+`-proof-replay` names a record file that does not exist (`replay_file`).  On
+`481ab9697fc` the compile stopped before the file ran, with `System error:
+"...absent.proof-record.jsonl: No such file or directory"`.  Now the record
+is refused as `bad_record`, every proof runs its tactics, no proof is
+counted, and the `.vo` is the same as stock's.  `replay_dir_no_record`:
+`-proof-replay-dir` holds the record of `A.v` but none for `B.v`
+(`unpublished`), as for a file the author added.  `B.v` is refused as
+`no_record`, a reason of its own, and compiles as stock does.  `A.v` still
+replays.  On `481ab9697fc` the refusal of `B.v` was `bad_record`, the
+reason for a record that cannot be read.  The flags-off path of DR-2 (no
+hook work with neither option) has no fixture of its own: the stock compile
+in `b/` of every fixture runs it, and must give the same exit code and
+`.vo` as the replay compile.
 
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
