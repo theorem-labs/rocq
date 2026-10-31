@@ -423,24 +423,29 @@ let rec read_proof gl st c =
    a Stdlib rebuilt in between), so the new object is checked again. *)
 let state_memo = ref None
 
+(* BET-84: a hit skips the reads of [fingerprint] (the declarations the
+   checker reaches); while a proof is recorded the checker is checked again. *)
 let state_for env checker =
   match Environ.lookup_constant_opt checker env with
   | None -> None
   | Some cb -> (
+    let check () =
+      try Some (init env checker) with
+      | Reject ->
+        debug (fun () ->
+            Pp.str
+              "ZTautoChecker refused: its fingerprint or the registered constructors are not the extraction's");
+        None
+      | e when CErrors.noncritical e ->
+        debug (fun () -> Pp.(str "ZTautoChecker refused: " ++ CErrors.print e));
+        None
+    in
+    if Proof_recorder.active () then check ()
+    else
     match !state_memo with
     | Some (cb', st) when cb' == cb -> st
     | _ ->
-      let st =
-        try Some (init env checker) with
-        | Reject ->
-          debug (fun () ->
-              Pp.str
-                "ZTautoChecker refused: its fingerprint or the registered constructors are not the extraction's");
-          None
-        | e when CErrors.noncritical e ->
-          debug (fun () -> Pp.(str "ZTautoChecker refused: " ++ CErrors.print e));
-          None
-      in
+      let st = check () in
       state_memo := Some (cb, st);
       st )
 
@@ -584,24 +589,30 @@ let zchecker_parts v =
       match Tacenv.interp_ltac kn with
       | exception Not_found -> None
       | body -> (
+        let parts () =
+          try
+            if String.equal (zchecker_digest body) expected_zchecker then Some (parts_of_body body)
+            else None
+          with e when CErrors.noncritical e -> None
+        in
+        (* BET-84: a hit skips the tactic_alias reads of [parts_of_body]
+           ([is_exact]); while a proof is recorded the body is read again. *)
+        if Proof_recorder.active () then parts ()
+        else
         match !zchecker_memo with
         | Some (b, r) when b == body -> r
         | _ ->
-          let r =
-            try
-              if String.equal (zchecker_digest body) expected_zchecker then Some (parts_of_body body)
-              else None
-            with e when CErrors.noncritical e -> None
-          in
+          let r = parts () in
           zchecker_memo := Some (body, r);
           r ) )
     | _ -> None )
   | _ -> None
 
 (* Ltac's [fresh s] in [zchecker], where [avoid] holds the identifiers bound by
-   the [let]s before it (Tacinterp.interp_fresh_id with an empty closure). *)
+   the [let]s before it (Tacinterp.interp_fresh_id with an empty closure). The
+   keyword test is Tacinterp's, which records it (BET-84 census row 17). *)
 let fresh_name env avoid s =
-  let s = if CLexer.is_keyword (Procq.get_keyword_state ()) s then s ^ "0" else s in
+  let s = if Ltac_plugin.Tacinterp.fresh_keyword s then s ^ "0" else s in
   Tactics.fresh_id_in_env avoid (Id.of_string s) env
 
 exception Refused

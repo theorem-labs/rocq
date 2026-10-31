@@ -573,6 +573,15 @@ let () =
       | v -> Proof_replay.Value v
       | exception _ -> Proof_replay.Unknown)
 
+(* The keyword test of [fresh], recorded. The micromega oracle's own [fresh]
+   (Zcheck_oracle.fresh_name) calls it too. *)
+let fresh_keyword s =
+  let kw = fresh_is_keyword s in
+  if Proof_recorder.active () then
+    Proof_recorder.read ~row:"17" ~channel:"keyword" ~key:(fun () -> s)
+      ~value:(fun () -> recorded_keyword kw);
+  kw
+
 let interp_fresh_id ist env sigma l =
   let extract_ident ist env sigma id =
     try try_interp_ltac_var (coerce_to_ident_not_fresh sigma)
@@ -591,11 +600,7 @@ let interp_fresh_id ist env sigma l =
         String.concat "" (List.map (function
           | ArgArg s -> s
           | ArgVar {v=id} -> Id.to_string (extract_ident ist env sigma id)) l) in
-      let kw = fresh_is_keyword s in
-      if Proof_recorder.active () then
-        Proof_recorder.read ~row:"17" ~channel:"keyword" ~key:(fun () -> s)
-          ~value:(fun () -> recorded_keyword kw);
-      let s = if kw then s^"0" else s in
+      let s = if fresh_keyword s then s^"0" else s in
       Id.of_string s in
   Tactics.fresh_id_in_env avoid id env
 

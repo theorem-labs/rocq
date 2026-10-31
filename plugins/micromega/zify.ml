@@ -1001,9 +1001,14 @@ end = struct
       entries := 0;
       genv := Some e
 
+  (* BET-84: a hit skips the reads that reducing the term makes (the bodies
+     of the constants it unfolds), and the recorder must see them in each
+     proof that injects the term. While a proof is recorded the term is
+     reduced again, as without the memo. *)
   let compute evd t =
     let c = EConstr.Unsafe.to_constr t in
-    match check_cacheable c with
+    if Proof_recorder.active () then Tacred.compute (Global.env ()) evd t
+    else match check_cacheable c with
     | exception Uncacheable -> Tacred.compute (Global.env ()) evd t
     | () ->
       validate ();
@@ -1841,8 +1846,12 @@ end = struct
         | Effects.Checked_appvect (f, args) -> fst (Typing.checked_appvect env evd f args))
       evd l
 
+  (* BET-84: a hit skips the reads the translation makes (its conversions
+     and reductions), and replays only [Effects.Register] and
+     [Effects.Checked_appvect]. While a proof is recorded the type is
+     translated again, as without the memo. *)
   let memo env evd c f =
-    if not !usable then f ()
+    if not !usable || Proof_recorder.active () then f ()
     else
       let h = Constr.hash c in
       match find env evd h c with
