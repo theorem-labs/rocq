@@ -153,7 +153,6 @@ let () = Proof_recorder.register_tables (fun () ->
     [ Proof_record.{ row = "18"; channel = "counter_start"; key = meta_counter_summary_name;
                      value = Some (string_of_int !meta_ctr) } ])
 
-(* BET-84 P3: see the evar counter in [Evd]. *)
 let () = Proof_replay.register_summary_counter "meta"
 
 let new_meta () =

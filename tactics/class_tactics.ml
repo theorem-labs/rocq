@@ -1221,10 +1221,6 @@ let activate_solver ~name =
    the empty list, and a proof whose resolution asks an active solver stores
    no term. Recording the solver a call chose would not do: the choice is a
    closure's answer (cross-model delta review D6). *)
-(* ONE value for the typeclass_solver channel, under the fixed key "active":
-   the digest of the active names. The record site below and the replay
-   evaluator call it (dev/tools/census/replay_channels.py). A registration
-   that read the empty list replays only while the list is still empty. *)
 let recorded_typeclass_solvers () =
   Some (Proof_recorder.digest ~what:"typeclass_solver" !active_solvers)
 

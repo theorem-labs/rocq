@@ -1,0 +1,7 @@
+{
+  "doc": "the number notation of the open scope prints the do k! count with another printer: the stock script fails, so the replay compile must fail too",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"ineligible": ["printed_number"], "stores_no_term": true}}},
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}

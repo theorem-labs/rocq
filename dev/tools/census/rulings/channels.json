@@ -9,6 +9,7 @@
   },
   "reasons": {
     "unmarshallable": "Any row: the registration cannot marshal the proof's stored term (Marshal.to_string raised), so the proof stores no term and is never replayed (vernac/declare.ml stored_term).",
+    "declaration_counters": "Row 18: a replayed proof's declaration left the universe and sort counters elsewhere than the registration's declaration did, so it made another number of levels, from an input no read records (a declaration runs outside the recording: vernac/declare.ml record_close_gen). It started from the counters stock has at the closer, so its names and the counters it left are stock's, and they stay. The record no longer describes the file, so every later proof of the process is ineligible (vernac/declare.ml check_replayed_counters, lib/proof_recorder.ml trip_fence).",
     "warning": "Any row: the proof raised a warning whose status is not Disabled. Replay cannot raise it again as stock does: the status that decides is the one when the warning came, which a sentence's warnings attribute sets for that sentence only, and an error-level warning a tactic catches (try) lets the proof succeed. So the proof stores no term (lib/cWarnings.ml warn).",
     "warning_registry": "Any row: a warning or warning category was created while the proof was recorded (a deprecated reference's version warning is created the first time it is needed). The proofs after it can see that registration (a later warnings flag names it), and a replay would not make it, so the proof stores no term (lib/cWarnings.ml create_category, create_gen).",
     "vm_section_closure": "Row 1: the proof used the bytecode machine's slot (filled it or took it from the cache) of a constant whose code, or a code it calls, closes over a section variable. The value holds that variable as it was in the environment that filled the slot, which the current goal can differ from (clearbody), and a replayed proof fills no slot, so a later proof would find it empty where stock finds it filled. No read describes either, so the proof stores no term (kernel/vmsymtable.ml fence_section_closure).",
@@ -24,6 +25,8 @@
     "par": "Row 21: a par: goal selector, which rocq compile runs in tactic worker processes by default (stm/partac.ml, two workers whatever the async mode). The tactic's reads happen in a process with no recorder, and the main process only installs the term a worker returns (vernac/comTactic.ml solve_parallel).",
     "native_compute": "Row 23: native_compute compiles and loads OCaml code outside the process (kernel/nativelib.ml compile).",
     "nested_proof": "Row 21: a proof opened while another is open (an abstract sub-proof, a nested obligation) keeps its reads in the outer proof, which is not replayed (lib/proof_recorder.ml open_proof).",
+    "load": "Row 21: a proof that a Load-ed file opens. The file's sentences run inside the one Load sentence (vernac/vernacinterp.ml vernac_load), so the toplevel keeps none of them as the proof's sentences (key item 1) and never decides the proof. It stores no term (vernac/declare.ml record_open_proof), and replay takes no candidate there (lib/proof_replay.ml open_proof).",
+    "printed_number": "Row N1: ssreflect reads an index (the count of do k!, the goal index of tac; first k or tac; last k) that is a term by printing the term back as a number, so printing state (the number notations attached to its head, the open scopes) becomes data (plugins/ssr/ssrparser.mlg interp_index).",
     "recorder_desync": "Row 21: the recorder holds a proof that the live proof stack does not (toplevel/vernac.ml).",
     "plugin_hook": "Rows 8, 10, 14 and 16: a closure a plugin installs, whose behaviour can depend on plugin state that neither its name nor the plugin's files fix (rocq-elpi's hooks and TC solver run elpi programs that commands change; unicoq's Set Use Unicoq installs its unifier, and Unset does not remove it). A proof that asks an active typeclass solver, coercion hook or canonical-solution hook is ineligible (tactics/class_tactics.ml find_solver, pretyping/coercion.ml apply_hooks, pretyping/evarconv.ml apply_hooks). Once a process-wide closure setter has been called more times than Rocq's own modules call it (Evarconv.set_evar_conv, Evarconv.set_solve_evars, Typeclasses.set_solve_all_instances, Typeclasses.set_solve_one_instance, Namegen.set_reserved_typed_name, CClosure.set_conv, Coercionops.install_path_comparator, Tactics.declare_intro_decomp_eq, Equality.set_eq_dec_scheme_kind, Ind_tables.set_declare_definition_scheme, Ind_tables.set_register_definition_scheme, Declare.Obls.set_default_tactic, Ssrcommon.set_ssrautoprop_tac, Proof_bullet.register_behavior, Tac2env.set_compiled_global, Tacenv.register_ml_tactic ~overwrite on a registered name, Tac2env.define_primitive or define_ml_object on a defined name), every later proof of the process is ineligible, and so is the proof open during the call: the fence is checked when a proof opens and when it closes (lib/proof_recorder.ml closure_setter, open_proof, close_proof). Rocq does none of these, so a stock compile never meets one.",
     "async_proofs": "Row 21: the compile runs its proofs in worker processes (-async-proofs on), and the recorder's counters, caches and fences count per process, so a record made in the main process describes it alone. Every proof of such a file is ineligible (toplevel/ccompile.ml).",
@@ -35,6 +38,7 @@
   },
   "sites": {
     "ineligible:vernac/declare.ml:unmarshallable": {"ineligible": "@unmarshallable"},
+    "ineligible:vernac/declare.ml:declaration_counters": {"ineligible": "@declaration_counters"},
     "read:vernac/proof_record_env.ml:read_at_start/row/channel": {"ruling": "BET-84 P3: read_at_start records the list start_reads builds, one Proof_record.read per start-of-proof channel; each element is built by a literal `one <row> <channel>` call that has its own entry here (rows 1, 2, 3, 4, 13, M3, M7), and replay evaluates the same list (vernac/proof_replay_env.ml providers)."},
 
     "read:engine/evarutil.ml:18/counter_start": {"row": "18"},
@@ -48,7 +52,10 @@
     "read:interp/notation.ml:11/prim_token": {"row": "11"},
     "read:interp/notation.ml:11/notation": {"row": "11"},
     "read:interp/notation.ml:11/arguments_scope": {"row": "11"},
+    "read:interp/notation.ml:11/scope_class": {"row": "11"},
+    "read:interp/notation.ml:11/notation_reference": {"row": "11"},
     "read:interp/reserve.ml:M2/reserved_type": {"row": "M2"},
+    "read:interp/reserve.ml:M2/reserved_type_rev": {"row": "M2"},
 
     "read:kernel/environ.ml:1/constant": {"row": "1"},
     "read:kernel/environ.ml:1/constant_exists": {"row": "1"},
@@ -99,9 +106,11 @@
     "ineligible:plugins/micromega/coq_micromega.ml:external_prover": {"ineligible": "@external_prover"},
     "read:plugins/micromega/persistent_cache.ml:23/micromega_cache": {"row": "23"},
     "ineligible:plugins/micromega/persistent_cache.ml:micromega_cache": {"ineligible": "@micromega_cache"},
+    "read:plugins/funind/indfun_common.ml:15/funind_info": {"row": "15"},
     "read:plugins/micromega/zify.ml:15/zify_table": {"row": "15"},
     "read:plugins/ring/ring.ml:15/ring_carrier_table": {"row": "15"},
     "read:plugins/ring/ring.ml:15/field_carrier_table": {"row": "15"},
+    "ineligible:plugins/ssr/ssrparser.mlg:printed_number": {"ineligible": "@printed_number"},
     "read:plugins/ssr/ssripats.ml:18/counter_start": {"row": "18"},
     "read:plugins/ssr/ssrview.ml:15/ssr_view_adaptor": {"row": "15"},
 
@@ -145,6 +154,7 @@
     "read:vernac/declare.ml:19/proof_using_set": {"row": "19"},
     "ineligible:vernac/declare.ml:mutual": {"ineligible": "@mutual"},
     "ineligible:vernac/declare.ml:dependent_start": {"ineligible": "@dependent_start"},
+    "ineligible:vernac/declare.ml:load": {"ineligible": "@load"},
     "read:vernac/proof_record_env.ml:2/universe_constraint": {"row": "2"},
     "ineligible:vernac/proof_record_env.ml:universe_footprint_missing": {"ineligible": "@universe_footprint_missing"},
     "read:vernac/proof_record_env.ml:1/retroknowledge": {"row": "1"},

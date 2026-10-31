@@ -258,11 +258,15 @@ module Recorded = struct
   let mind tbl = once tbl Mindmap_env.mem Mindmap_env.add MutInd.to_string
   let mpath tbl = once tbl ModPath.Map.mem ModPath.Map.add ModPath.to_string
 
-  (* The library of a kernel name, and that library's .vo digest. A module
-     or module type of a REQUIRED library is recorded by the digest and not
-     by its body: the digest pins every object the library holds, and a
-     module body holds every constant of the module. Constants and
-     inductives are recorded by value ([recorded_constant]). *)
+  (* The library of a kernel name, and the digest that library's .vo stores
+     for itself. A module or module type of a REQUIRED library is recorded
+     by that digest and not by its body. A proof step reads only a module's
+     field names, whether it is a functor, and whether it exists (Ltac2
+     Module primitives, Rocqlib), and the stored digest covers those. It
+     does not cover every value: under -location-free-label it is a label
+     that leaves out whether a constant is an axiom or an opaque proof, and
+     the opaque bodies. So no evaluator reads a constant through this digest:
+     constants and inductives are recorded by value ([recorded_constant]). *)
   let lib_digests = ref DirPath.Map.empty
 
   let rec root_lib = function
@@ -318,14 +322,14 @@ let recorded_constant kn env =
        body, and the kernel never unfolds an opaque body, so a proof sees an
        opaque constant only through its type: a changed proof of an
        unchanged statement is the same input (fixture lib_opaque_proof_changed). *)
-    let body = match cb.const_body with
-      | Undef inline -> `Undef inline
-      | Def c -> `Def c
-      | OpaqueDef _ -> `Opaque
-      | Primitive p -> `Primitive p
-      | Symbol rules -> `Symbol rules
-    in
     Some (Proof_recorder.digest_cached_by ~what:"constant" ~key:cb (fun () ->
+        let body = match cb.const_body with
+          | Undef inline -> `Undef inline
+          | Def c -> `Def c
+          | OpaqueDef _ -> `Opaque
+          | Primitive p -> `Primitive p
+          | Symbol rules -> `Symbol rules
+        in
         (cb.const_hyps, cb.const_univ_hyps, body, cb.const_type, cb.const_relevance,
          cb.const_universes, cb.const_inline_code, cb.const_typing_flags)))
 

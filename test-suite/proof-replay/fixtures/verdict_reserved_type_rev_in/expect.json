@@ -1,0 +1,4 @@
+{
+  "doc": "Implicit Types reserves another name for bool: the name an in clause gives an index it matches against a pattern changes in the proof term, so the replay compile must give the stock object",
+  "files": ["A.v"]
+}

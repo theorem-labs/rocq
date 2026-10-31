@@ -1,0 +1,4 @@
+{
+  "doc": "Implicit Types reserves another name for nat: the name unification gives the lambda that refines a function evar changes in the proof term, so the replay compile must give the stock object",
+  "files": ["A.v"]
+}
