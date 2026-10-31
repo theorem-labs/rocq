@@ -8,7 +8,10 @@ Definition unrelated : nat := 0.
 
 Section S.
 Let local_flag : bool := flag.
-Definition probe (_ : unit) : bool := local_flag.
+Definition probe (_ : unit) : bool :=
+  (* The fixpoint keeps the VM from expanding probe where it is used
+     (Genlambda.inlinable_body), so the use goes through probe's slot. *)
+  (fix keep (n : nat) : bool := match n with O => local_flag | S m => keep m end) O.
 
 Lemma target : True.
 Proof.

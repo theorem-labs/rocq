@@ -7,7 +7,10 @@
    too. *)
 Definition flag : bool := true.
 
-Definition probe (_ : unit) : bool := true.
+Definition probe (_ : unit) : bool :=
+  (* The fixpoint keeps the VM from expanding probe where it is used
+     (Genlambda.inlinable_body), so the use goes through probe's slot. *)
+  (fix keep (n : nat) : bool := match n with O => true | S m => keep m end) O.
 Eval vm_compute in (probe tt).
 
 Lemma seed : True.
@@ -20,7 +23,10 @@ Reset probe.
 
 Section S.
 Let local_flag : bool := flag.
-Definition probe (_ : unit) : bool := local_flag.
+Definition probe (_ : unit) : bool :=
+  (* The fixpoint keeps the VM from expanding probe where it is used
+     (Genlambda.inlinable_body), so the use goes through probe's slot. *)
+  (fix keep (n : nat) : bool := match n with O => local_flag | S m => keep m end) O.
 Eval vm_compute in (probe tt).
 
 Lemma target : True.
