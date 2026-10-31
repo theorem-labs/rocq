@@ -80,7 +80,7 @@ site stores no term). `@name` refers to an entry in the file's `reasons` object.
 | Tree | Commit | Scope | Sites | Result |
 |---|---|---|---|---|
 | theorem-labs/rocq | 03d5bb248e (9.2/qed-skip-typecheck) | every directory linked into `rocq compile` or a plugin it loads | 269: summary 104, object 78, nosummary-option 3, catchall 84 | 0 problems |
-| theorem-labs/rocq, recorder read sites (`rulings/channels.json`) | the commit that last changed `rulings/channels.json` (`git log -1 -- dev/tools/census/rulings/channels.json`), a child of e16e9d2ae4 on 9.2/proof-replay | the same | 111: read 82, ineligible 29 | 0 problems |
+| theorem-labs/rocq, recorder read sites (`rulings/channels.json`) | the commit that last changed `rulings/channels.json` (`git log -1 -- dev/tools/census/rulings/channels.json`), a child of e16e9d2ae4 on 9.2/proof-replay | the same | 112: read 82, ineligible 30 | 0 problems |
 | coqhammer (coq-hammer-tactics 1.3.2+9.2) | 1d581299c2 | `src/lib`, `src/tactics` (the installed package; `src/plugin` is not installed) | 7 catchall | 0 problems |
 | smpl (rocq-smpl.dev) | 1c3578c1f6 | `src` | summary 1, object 1 | 0 problems |
 | rocq-read-file 0.0.2 | 68887ad0c3 | `src` | 2 catchall | 0 problems |
@@ -91,7 +91,7 @@ The scan found tables that a tactic reads and that CHANNELS.md does not list. Th
 
 | Row | What is read | Where |
 |---|---|---|
-| N1 | Printing state: notation uninterpretation (`interp/notationextern.ml:241`), printing rules (`printing/ppextend.ml:79,82`), Ltac notation printing (`plugins/ltac/pptactic.ml:71`). A tactic's result depends on it only when printed text becomes data: Ltac2 `Message.to_string` (`plugins/ltac2/tac2core.ml:194`). | `Message.to_string` |
+| N1 | Printing state: notation uninterpretation (`interp/notationextern.ml:241`), printing rules (`printing/ppextend.ml:79,82`), Ltac notation printing (`plugins/ltac/pptactic.ml:71`). A tactic's result depends on it only when printed text becomes data: Ltac2 `Message.to_string` (`plugins/ltac2/tac2core.ml:194`), and an ssreflect index read from a term by printing it back as a number (`plugins/ssr/ssrparser.mlg` `interp_index`, `Notation.uninterp_prim_token`). | `Message.to_string`, `interp_index` |
 | N2 | `stepl`/`stepr` lemmas (`Declare Left Step`, `Declare Right Step`): `"transitivity-steps-l"`, `"transitivity-steps-r"` | `plugins/ltac/extratactics.mlg:377-398` |
 | N3 | Inductives whose case analysis is dependent by default although they are in Prop: `"PROP-BUT-DEFAULT-DEPENDENT-ELIM"` | `tactics/elimschemes.ml:24-49`, read by `destruct`, `case` and scheme lookup |
 | N4 | Default solver tactics: `Obligation Tactic` (`vernac/g_obligations.mlg:21-30`) and `Set Firstorder Solver` (`plugins/firstorder/g_ground.mlg:37-65`) | `vernac/tactic_option.ml:51-90` |
@@ -147,7 +147,7 @@ cache that no choke point can reach (a `lazy` of a `lib_ref`). Those reads go in
 | M6 | `-skip-qed-typecheck` unchecked mark (write) | Not stored: replay writes the mark of the grade compile's own flags. The header records which flag the recording compile ran under, and `kernel_check` records whether the kernel typed each proof | `lib/proof_record.mli` `skip_qed_typecheck`, `kernel_check` |
 | M7 | Template default levels | Recorded: one digest of the table at each proof's start | `proof_record_env.ml`; `engine/uState.ml` `template_default_univs` |
 | S2.1 | Parser state, load paths, loaded libraries | In key item 2: every loaded library in load order with its `.vo` digest, and the safe-loaded ones. The grammar is inside key item 1, the parsed sentences | `proof_record_env.ml` `toolchain`; `vernac/library.ml` `library_digest`, `safe_loaded_libraries` |
-| N1 | Printing state | Ineligible: Ltac2 `Message.to_string`, the one primitive that turns printed text into data (`message_to_string`) | `plugins/ltac2/tac2core.ml` |
+| N1 | Printing state | Ineligible: Ltac2 `Message.to_string`, a primitive that turns printed text into data (`message_to_string`); and an ssreflect index (the count of `do k!`, the goal index of `tac; first k` or `tac; last k`) that is a term, which ssreflect prints back as a number, so the number notations attached to the term's head and the open scopes decide it (`printed_number`; gate review, breadth audit gap BA6) | `plugins/ltac2/tac2core.ml`; `plugins/ssr/ssrparser.mlg` `interp_index` |
 | N2 | `stepl`/`stepr` lemmas | Recorded: the selected `transitivity-steps-l` or `transitivity-steps-r` table, before `stepl` or `stepr` searches it. A `Declare Left Step` that is removed leaves the lemma in place and takes it out of the search list, which no other read sees | `plugins/ltac/extratactics.mlg` |
 | N3 | Prop inductives with dependent elimination | Recorded: each `is_prop_but_default_dependent_elim`, by inductive | `tactics/elimschemes.ml` |
 | N4 | Default solver tactics | Recorded: the stored tactic at the `tactic_option` getter, by option name, absent included. `Obligation Tactic` and `Set Firstorder Solver` are Summary-backed tactic options, not Goptions options, so the row-13 snapshot does not hold them | `vernac/tactic_option.ml` |
