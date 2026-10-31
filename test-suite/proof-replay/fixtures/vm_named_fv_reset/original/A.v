@@ -9,7 +9,10 @@ Definition flag : bool := true.
 
 Definition probe (_ : unit) : bool :=
   (* The fixpoint keeps the VM from expanding probe where it is used
-     (Genlambda.inlinable_body), so the use goes through probe's slot. *)
+     (Genlambda.inlinable_body, speed-7 and later), so the use goes
+     through probe's slot, whose cache this fixture is about. Expanded,
+     the use agrees with cbv after a clearbody of the Let; the slot cache
+     returns the Let's old body. *)
   (fix keep (n : nat) : bool := match n with O => true | S m => keep m end) O.
 Eval vm_compute in (probe tt).
 
@@ -25,7 +28,10 @@ Section S.
 Let local_flag : bool := flag.
 Definition probe (_ : unit) : bool :=
   (* The fixpoint keeps the VM from expanding probe where it is used
-     (Genlambda.inlinable_body), so the use goes through probe's slot. *)
+     (Genlambda.inlinable_body, speed-7 and later), so the use goes
+     through probe's slot, whose cache this fixture is about. Expanded,
+     the use agrees with cbv after a clearbody of the Let; the slot cache
+     returns the Let's old body. *)
   (fix keep (n : nat) : bool := match n with O => local_flag | S m => keep m end) O.
 Eval vm_compute in (probe tt).
 
