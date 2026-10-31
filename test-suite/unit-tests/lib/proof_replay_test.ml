@@ -103,7 +103,7 @@ let () = Replay.register_evaluator "unit_test_channel" (fun _ -> !current)
 let () = Replay.register_precheck (fun _ -> true)
 
 let setup ?(budget = None) ?(proof = proof) ?(now = toolchain) ?(header = header) ?(perm = 0o444)
-    ?digest ?(library = "Top.File") () =
+    ?digest ?(library = "Top.File") ?(source = None) () =
   let path = write_record ~header ~proof ~perm () in
   (* The digest is mandatory; by default the test passes the right one. *)
   let digest = match digest with
@@ -111,7 +111,7 @@ let setup ?(budget = None) ?(proof = proof) ?(now = toolchain) ?(header = header
     | None -> Some (Proof_sha256.digest_hex (record_bytes ~header ~proof ()))
   in
   Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget ~peak_limit_kb:None ~digest;
-  Replay.start ~library ~source:None ~toolchain:(fun () -> now);
+  Replay.start ~library ~source ~toolchain:(fun () -> now);
   Unix.chmod path 0o644;
   Sys.remove path
 
@@ -454,6 +454,118 @@ let plugin_allowlist =
      let other = with_plugins [ ("rocq-read-file.plugin", "d"); ("some.other.plugin", "d") ] in
      alone <> None && other = None)
 
+(* A Require the text spells out in full carries its From prefix and its
+   names; a late word the scan cannot read that way carries none, so it is
+   late whatever is loaded. *)
+let require_scan =
+  let rq ?(imports_late = false) text =
+    List.map (fun (c : Replay.late_command) -> c.lc_require)
+      (snd (Replay.scan_late_commands ~imports_late text))
+  in
+  let r ?from names = Some Replay.{ rq_from = from; rq_names = names } in
+  let after_qed s = "Lemma a : True. Qed. " ^ s in
+  mk_bool_test "proof-replay-require-scan"
+    "a Require spelled out in full carries its From prefix and names; other late words carry none"
+    (rq (after_qed "Require A.") = [ r [ "A" ] ]
+     && rq (after_qed "From X.Y Require Import (* c *) A.B C(f, g(..)).") = [ r ~from:"X.Y" [ "A.B"; "C" ] ]
+     && rq (after_qed "Time Require Export -(notations) A.") = [ r [ "A" ] ]
+     && rq (after_qed "Fail Require (safe) Import A B'.") = [ r [ "A"; "B'" ] ]
+     && rq (after_qed "#[local] Time From X Require\nA(* c *).") = [ r ~from:"X" [ "A" ] ]
+     && rq ~imports_late:true (after_qed "Require Import A.") = [ None; r [ "A" ] ]
+     && rq (after_qed "Require A. Register x as y.") = [ None; r [ "A" ] ]
+     && rq (after_qed "Require x_Require.") = [ None; r [ "x_Require" ] ]
+     && rq "Require A. Lemma a : True. Qed." = []
+     && rq (after_qed "Require \xc3\x84.") = [ None ]
+     && rq (after_qed "Require A\xc3\x84.") = [ None ]
+     && rq (after_qed "Require Import.") = [ None ]
+     && rq (after_qed "Require A \"s\".") = [ None ]
+     && rq (after_qed "Require A.(B).") = [ None ]
+     && rq (after_qed "Require (unsafe) A.") = [ None ]
+     && rq (after_qed "Print Require.") = [ None ]
+     && rq (after_qed "From X Print Require A.") = [ None ])
+
+(* A later Require is late for a proof only while a library it names is not
+   loaded, and a Require whose names do not resolve stays late. A Require
+   that loads a library after a replayed proof stops the compile. *)
+let loaded_libraries = ref []
+
+let () =
+  Replay.register_require_resolver (fun _from names ->
+      if List.mem "Unresolved" names then None
+      else Some (fun () -> List.for_all (fun n -> List.mem n !loaded_libraries) names))
+
+let with_source text f =
+  let path = Filename.temp_file "proof-replay" ".v" in
+  let oc = open_out_bin path in
+  output_string oc text;
+  close_out oc;
+  Fun.protect ~finally:(fun () -> Sys.remove path) (fun () -> f path)
+
+let at_byte b = Replay.at_sentence (Loc.make_loc (b, b + 1))
+
+(* The record's one proof, opened at byte [b] of [text]: replayed or not. *)
+let replays_at text b =
+  with_source text (fun path ->
+      setup ~source:(Some path) ();
+      at_byte b;
+      decide () <> None)
+
+let require_rule =
+  (* The proof at byte 21 opens before the Require at byte 46, the one at
+     byte 59 after it. *)
+  let prefix = "Lemma a : True. Qed.\nLemma lemma : True. Qed.\n" in
+  let text = prefix ^ "Require A B.\nLemma c : True. Qed.\n" in
+  let detail () =
+    let path = Filename.temp_file "proof-replay" ".json" in
+    Replay.write_summary path;
+    let ic = open_in_bin path in
+    let s = really_input_string ic (in_channel_length ic) in
+    close_in ic;
+    Sys.remove path;
+    s
+  in
+  let has text s = CString.string_contains ~where:text ~what:s in
+  mk_bool_test "proof-replay-require-rule"
+    "a later Require is late only while a library it names is not loaded or does not resolve"
+    (current := Replay.Value (Some (String.make 32 'e'));
+     loaded_libraries := [];
+     let none_loaded = replays_at text 21 in
+     let summary = detail () in
+     loaded_libraries := [ "A" ];
+     let one_loaded = replays_at text 21 in
+     loaded_libraries := [ "A"; "B" ];
+     let both_loaded = replays_at text 21 in
+     let unresolved = replays_at (prefix ^ "Require Unresolved.\n") 21 in
+     let other_late = replays_at (prefix ^ "Require A B.\nRegister x as y.\n") 21 in
+     loaded_libraries := [];
+     let after = replays_at text 59 in
+     (not none_loaded) && (not one_loaded) && both_loaded && (not unresolved) && (not other_late) && after
+     && has summary "\"refused_detail\":\"Require at line 3; no proof run; then 1 Require, late if it loads a library\"")
+
+let require_tripwire =
+  let text = "Lemma a : True. Qed.\nLemma lemma : True. Qed.\nRequire A.\n" in
+  let stops () =
+    match Replay.note_require ~already_loaded:false with
+    | () -> false
+    | exception e when CErrors.is_sync_anomaly e -> true
+  in
+  mk_bool_test "proof-replay-require-tripwire"
+    "a Require that loads a library after a replayed proof stops the compile; before any replay it does not"
+    (current := Replay.Value (Some (String.make 32 'e'));
+     loaded_libraries := [ "A" ];
+     with_source text (fun path ->
+         setup ~source:(Some path) ();
+         at_byte 46;
+         let before_any_hit = not (stops ()) in
+         setup ~source:(Some path) ();
+         at_byte 21;
+         let hit = decide () <> None in
+         at_byte 46;
+         Replay.note_require ~already_loaded:true;
+         let after_hit = stops () in
+         loaded_libraries := [];
+         before_any_hit && hit && after_hit))
+
 (* A process-wide fence (Proof_recorder.fence_tripped): a closure a plugin
    installs over Rocq's own, or a cache that no longer matches its table, is
    state no recorded read sees. Once one trips, no proof of the process is
@@ -489,6 +601,7 @@ let tests =
     key_items_miss; ineligible_misses; other_toolchain_misses; other_toolchain_refuses_file;
     binding_refusals; overcommit_unknown_refuses; sha256_vectors; charged_clock; summary_counts;
     rebind_scan; late_events_scan; hit_hook_runs; miss_reason; plugin_audit_refuses; plugin_allowlist;
+    require_scan; require_rule; require_tripwire;
     (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]
 

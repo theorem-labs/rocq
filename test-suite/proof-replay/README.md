@@ -257,6 +257,26 @@ the proof after it misses on its key (the loaded plugins are in it).
 `Reset`, `Back` and `BackTo` are late commands too: they restore the Rocqlib
 table, not a lazy value a proof forced (`late_reset_congruence`).
 
+A `Require` is late for a proof only while a library it names is not loaded
+when the proof opens: one of loaded libraries loads nothing, so it applies no
+`Register` and loads no plugin.  `refused_detail` then counts the `Require`s
+after the last command that is late whatever is loaded.
+`late_require_loaded_hit`: two such `Require`s (a library the file loaded,
+and one the prelude loaded) after the first proof, and both proofs hit.
+`late_require_transitive`: the file requires `PR.Top` before its first proof,
+which loads `PR.Dep`; a later `Require Import PR.Dep` loads nothing, and the
+proof before it hits.  `late_require_unloaded`, `late_require_plugin`,
+`late_require_register`: a `Require` of a library not yet loaded (a plain
+one, one that loads a plugin, one that carries a `Register`) keeps the proof
+before it from replaying, and a second `Require` of it, after the next proof,
+does not.  A `Require` that loads a library after a replayed proof all the
+same stops the compile with an anomaly; the unit test
+`proof-replay-require-tripwire` checks that.  No fixture adds a load path
+between a proof and a `Require`: no command changes the load path since `Add
+LoadPath` was removed (`doc/sphinx/changes.rst`, #17394).  `Add LoadPath "d"
+as P.` is now a syntax error, and `Add LoadPath "d".` or `Remove LoadPath
+"d".` is an option-table command that fails: there is no `LoadPath` table.
+
 **The closer.**  `closer_admitted`: a registered `tac. Qed.` against an edited
 `tac. Admitted.` must miss.
 

@@ -272,7 +272,7 @@ let warn_deprecated_from_Coq =
     (fun (_qid : qualid) -> strbrk
         "\"From Coq\" has been replaced by \"From Stdlib\".")
 
-let deprecated_Coq from qidl =
+let deprecated_Coq ~warn:emit from qidl =
   let coq_id = Id.of_string "Coq" in
   let stdlib_id =
     (* temporary hack to enable HoTT and UniMath to compile with rocq-core *)
@@ -307,11 +307,14 @@ let deprecated_Coq from qidl =
            let w', qid = repl_Coq_qid qid in Option.append w w', qid)
          None qidl in
        w, from, qidl in
-  let () = warn |> Option.iter (fun qid -> warn_deprecated_from_Coq ?loc:qid.loc qid) in
+  let () = if emit then warn |> Option.iter (fun qid -> warn_deprecated_from_Coq ?loc:qid.loc qid) in
   from, qidl
 
-let require_locate from qidl =
-  let from, qidl = deprecated_Coq from qidl in
+(* The library each name of a [Require] stands for. [~warn:false] for
+   replay's decision, which must leave no trace: the [Require] itself warns
+   when it runs. *)
+let require_locate ?(warn = true) from qidl =
+  let from, qidl = deprecated_Coq ~warn from qidl in
   let root = match from with
   | None -> None
   | Some from ->
@@ -320,16 +323,31 @@ let require_locate from qidl =
   in
   List.map (fun qid ->
       let open Loadpath in
-      match locate_qualified_library ?root qid with
+      match locate_qualified_library ~warn ?root qid with
       | Ok (dir,_) -> (qid.loc, dir)
       | Error LibUnmappedDir -> Loc.raise ?loc:qid.loc (UnmappedLibrary (root, qid))
       | Error LibNotFound -> Loc.raise ?loc:qid.loc (NotFoundLibrary (root, qid)))
     qidl
 
-(* BET-84 measurement: whether a Require loads anything (Proof_replay.note_require). *)
+(* BET-84: whether a Require loads anything. The summary lists it
+   (Proof_replay.note_require), and replay stops the compile when one loads
+   a library after a replayed proof. *)
 let note_require modrefl =
   Proof_replay.note_require
     ~already_loaded:(List.for_all (fun (_, dir) -> Library.library_is_loaded dir) modrefl)
+
+(* BET-84: replay decides at each proof whether a later Require of the file
+   loads anything. It resolves the names with the Require's own function,
+   and tests them against the libraries loaded at that point, which is the
+   test [note_require] makes when the Require runs. A name that does not
+   resolve makes the Require late. *)
+let () =
+  Proof_replay.register_require_resolver (fun from names ->
+      match require_locate ~warn:false (Option.map Libnames.qualid_of_string from)
+              (List.map Libnames.qualid_of_string names) with
+      | modrefl ->
+        Some (fun () -> List.for_all (fun (_, dir) -> Library.library_is_loaded dir) modrefl)
+      | exception e when CErrors.noncritical e -> None)
 
 let synterp_safe_require ~intern from export qidl =
   let modrefl = require_locate from qidl in

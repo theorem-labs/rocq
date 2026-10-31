@@ -273,8 +273,9 @@ let warn_deprecated_missing_stdlib =
           ++ Libnames.pr_qualid qid ++ str "\"" ++ spc ()
           ++ str "for compatibility with older Coq versions."))
 
-(* temporary handling deprecated loading of stdlib without root *)
-let locate_qualified_library ?root qid =
+(* temporary handling deprecated loading of stdlib without root; [~warn:false]
+   resolves without the deprecation warning *)
+let locate_qualified_library ?(warn = true) ?root qid =
   let root_stdlib =
     Names.(Libnames.add_dirpath_suffix DirPath.empty (Id.of_string "Stdlib")) in
   match root, locate_qualified_library ?root qid with
@@ -282,7 +283,7 @@ let locate_qualified_library ?root qid =
   | None, (Error _ as e) ->
      match locate_qualified_library ~root:root_stdlib qid with
      | Error _ -> e
-     | Ok _ as o -> warn_deprecated_missing_stdlib ?loc:qid.loc qid; o
+     | Ok _ as o -> if warn then warn_deprecated_missing_stdlib ?loc:qid.loc qid; o
 
 (** { 5 Extending the load path } *)
 
