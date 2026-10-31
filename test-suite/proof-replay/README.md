@@ -634,6 +634,20 @@ Stock runs the tactic and reports its error.  Replay must run the sentences
 it kept, in order, before it raises the syntax error, so both compiles fail
 with the same stderr (`compare_stderr`).
 
+**Gate review of e560ab16e4, reviewer round 2, finding X1.**  The R3 fix ran
+the kept sentences before a syntax error only, not before a critical
+exception.  `parse_overflow_after_failing_tactic`: a tactic fails, and the
+next sentence nests a term 30000 levels deep, which overflows the parser's
+stack.  Stock reports the tactic's error.  Before the fix, replay reported
+`Stack overflow`.  The fixture compiles under a 1 MB stack (`stack_kb`).  How
+much stack the parser takes for each level depends on the build: under 1 MB
+a dune release build merged on 466ade627a overflowed at about 900 levels,
+and a make-world build of the branch did not overflow at 3000 levels (both
+2026-10-31).  1 MB holds 30000 levels only if the parser takes less than 35
+bytes for each level.  `parse_overflow_control` is the same term with no
+failing tactic before it: both compiles must fail with `Stack overflow`, so
+the first fixture cannot pass because the term does not overflow.
+
 **Gate review of 079bc4cb71, reviewer finding R5.**  `dropped_proof_stack`:
 `Abort All`, `Reset`, `Succeed` around a statement and `Fail Fail` around a
 statement each drop an open proof.  A grade compile has no recorder, so

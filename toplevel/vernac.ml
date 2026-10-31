@@ -286,11 +286,14 @@ let load_vernac_core ~echo ~check ~state ?source file =
      inside it. [kept] and [sentences] are newest first. *)
   let rec gather state ids kept sentences =
     match parse_next state with
-    | exception e when CErrors.noncritical e ->
+    | exception e ->
       (* A sentence that does not parse ends the proof. Stock parses it
          only after the sentences before it ran, so a tactic among them
          that fails gives its own error first (gate review R3). Run what
-         was kept, then raise the parse error where stock raises it. *)
+         was kept, then raise the parse error where stock raises it. The
+         same holds for a critical exception: a nested term deep enough
+         overflows the parser's stack (reviewer round 2 of e560ab16e4, X1).
+         Nothing is lost: the exception is raised again unchanged. *)
       let iexn = Exninfo.capture e in
       Proof_replay.abandon ();
       let _ : State.t * Stateid.t list = run_kept state ids kept in
