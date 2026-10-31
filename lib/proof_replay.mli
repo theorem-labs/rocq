@@ -73,8 +73,9 @@ val start :
     command after its first [Qed] or [Save] that can rebind a Rocqlib name or
     load code, every proof that opens before the last such command runs its
     tactics (outcome [ineligible], channel ["rebind"]), and [refused_detail]
-    names the first command and its line; an unreadable source is refused
-    whole (reason ["rebind"]). *)
+    names the first command and its line; a [Require] counts only while a
+    library it names is not loaded at the proof's opening. An unreadable
+    source is refused whole (reason ["rebind"]). *)
 
 val scan_late_rebind : string -> (string * int) option
 (** The first command in this source text, after its first [Qed] or [Save],
@@ -91,13 +92,36 @@ val scan_late_events : ?imports_late:bool -> string -> (string * int) option * i
     plain module ([Module M.], [Module Import M.]) is not late by itself,
     and its [End] only when a late word appeared inside it. *)
 
+type require_text = { rq_from : string option; rq_names : string list }
+(** A [Require] the source text spells out in full: its [From] prefix and
+    its library names, as written. *)
+
+type late_command = { lc_offset : int; lc_require : require_text option }
+(** A late command: its word's byte offset, and for a [Require] the text
+    spells out in full, that [Require]. *)
+
+val scan_late_commands : ?imports_late:bool -> string -> (string * int) option * late_command list
+(** {!scan_late_rebind}, and every late command, last first. A [Require]
+    carries its names when it is its sentence's command word, or follows
+    the sentence's [From q], and its sentence is [From q]? [Require]
+    [(safe)]? ([Import] or [Export], with import categories)? then names
+    of plain ASCII identifiers, each with an import filter or not. *)
+
+val register_require_resolver : (string option -> string list -> (unit -> bool) option) -> unit
+(** [f from names] resolves a [Require] as the [Require] itself will
+    resolve it, warning about nothing: [None] when a name does not resolve,
+    else a test of whether every library it names is loaded. Until one
+    registers, no [Require] resolves, so each one is late. *)
+
 val note_export_register : unit -> unit
 (** An export-locality Rocqlib registration was loaded or declared: from now
     on, [Import] and [Export] are late commands. *)
 
 val note_require : already_loaded:bool -> unit
 (** A [Require] runs; [already_loaded]: every library it names was loaded
-    before it. Listed in the summary, for measurement only. *)
+    before it. Listed in the summary. A [Require] that loads a library
+    after a proof of this file was replayed raises an anomaly: that replay
+    relied on no later [Require] loading one. *)
 
 val at_sentence : Loc.t -> unit
 (** The location of the sentence the toplevel is about to run. *)

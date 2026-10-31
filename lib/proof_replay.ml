@@ -129,9 +129,26 @@ let provided () =
     providers;
   (tbl, channels)
 
+(* A [Require] the source text spells out in full: its [From] prefix and
+   its library names, as written ({!scan_late_commands}). *)
+type require_text = { rq_from : string option; rq_names : string list }
+
+(* A late command of the source text: its word's byte offset and, for a
+   [Require] the text spells out in full, that [Require]. *)
+type late_command = { lc_offset : int; lc_require : require_text option }
+
+(* What a proof has to open after to replay: the last late command that is
+   late whatever is loaded, and the [Require]s after it, last first, with
+   their offsets. Each of those is late only while a library it names is
+   not loaded ({!opens_before_late_command}). *)
+type late_bound = { lb_last : int option; lb_requires : (int * require_text) list }
+
+let no_late = { lb_last = None; lb_requires = [] }
+
 type candidate = {
   c_name : string;
   c_proof : R.proof;
+  c_offset : int;  (** where the proof's opening sentence starts *)
   c_provided : (string * string, string option) Hashtbl.t * (string, unit) Hashtbl.t;
       (** the provided channels, read where the record read them: at the
           proof's start, not at its closer *)
@@ -160,11 +177,10 @@ type file_state = {
   f_refused : string option;
   f_refused_detail : string option;
       (** for ["rebind"], and for a file with a late command: the command and its line *)
-  f_replay_from : int option;
-      (** the last late command's offset, [Import] and [Export] counted: a
-          proof that opens before it runs once an export-locality
-          registration is loaded *)
-  f_replay_from_no_imports : int option;
+  f_late : late_bound;
+      (** the late commands, [Import] and [Export] counted: the bound once
+          an export-locality registration is loaded *)
+  f_late_no_imports : late_bound;
       (** the same, [Import] and [Export] not counted: the bound while no
           export-locality registration is loaded *)
   mutable f_candidate : candidate option;
@@ -343,7 +359,8 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    (outcome [ineligible], channel ["rebind"]). The commands, after the
    file's first [Qed] or [Save] (no proof can be replayed before it), are:
    [Register]; [Require] (a library brings its own [Register] objects and
-   plugins, which the text does not show); [Load]; [Declare] (ML Module,
+   plugins, which the text does not show), unless it loads nothing (below);
+   [Load]; [Declare] (ML Module,
    Module); [Import] and [Export] once an export-locality registration is
    loaded (see {!scan_late_events}); [Include]; a [Module] that is not plain
    (sealed, a functor, a module type, a definition); and an [End] that closes
@@ -356,8 +373,32 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    fixture late_reset_congruence). Once one of these appears, the sections
    and modules the scan keeps track of no longer follow the restored state,
    so every later [End] counts too. Decided from the source
-   text, before any proof is replayed, with the one runtime condition on
-   [Import]. The scan skips nested comments and strings, and
+   text, before any proof is replayed, with two runtime conditions: the one
+   on [Import], and the one on [Require].
+
+   A [Require] is not late for a proof when every library it names is
+   already loaded at the proof's opening. Such a [Require] loads nothing:
+   [Library.intern_library] stops at a loaded library, whose dependencies
+   are loaded too, so the closure it registers is empty; no object's load
+   function runs (a SuperGlobal [Register] acts at load,
+   [Libobject.object_with_locality]) and no plugin loads (an ML module acts
+   at load, [Mltop.inMLModule]). Its [Import] or [Export] part is a late
+   word of its own, under the [Import] rule. Nothing between the decision
+   and the [Require] can unload a library or resolve a name otherwise
+   without being late itself: only a [Require] loads a library, and one
+   that loads any is late; the [Load], the [End] and the [Reset] that could
+   undo a load are late; no command changes the load path (the [Add
+   LoadPath] commands were removed: doc/sphinx/changes.rst, #17394); the
+   decision resolves the names with the [Require]'s own function
+   ([Synterp.require_locate]), and coqc keeps the directory listings it
+   read ([System.trust_file_cache]). So the dependencies of the [Require]s
+   between the proof and this one add nothing to what is loaded: if one of
+   them loads a library, the proof runs anyway. A [Require] the text does
+   not spell out in full ({!require_sentence}), or one with a name that
+   does not resolve, stays late. A [Require] that loads a library after a
+   replayed proof all the same stops the compile ({!note_require}).
+
+   The scan skips nested comments and strings, and
    reads a number as Rocq's lexer reads one ([0-9][0-9_]*, a fraction and an
    exponent only when a digit follows, or [0x] and hexadecimal digits), so
    in [1Register], [0xaRegister] or [1End] the rest is a word (Claude delta
@@ -372,8 +413,132 @@ let restoring_words = [ "Reset"; "Back"; "BackTo" ]
 let late_words =
   [ "Register"; "Require"; "Load"; "Declare"; "Import"; "Export"; "Include"; "Module" ] @ restoring_words
 
-(* The first late command with its line, and the byte offset of the last
-   one's word. With [~imports_late:false], [Import] and [Export] are not late
+(* The [Require] sentence whose command word ([From] or [Require]) starts at
+   byte [k], read as the grammar reads one (vernac/g_vernac.mlg): [From q]
+   or nothing, [Require], [(safe)] or nothing, [Import] or [Export] with
+   its import categories or nothing, one or more names each with an import
+   filter or not, then the terminating dot. It gives the offset of the
+   [Require] word, the [From] prefix and the names. A name is plain ASCII
+   identifiers joined by dots with no blank around a dot, as the lexer
+   joins a qualified name. Anything else gives [None], and the [Require]
+   stays late: this reading can refuse a sentence Rocq accepts, and never
+   takes other names from one it accepts. *)
+let require_sentence text k =
+  let ( let* ) = Option.bind in
+  let n = String.length text in
+  let i = ref k in
+  let blank c = c = ' ' || c = '\n' || c = '\t' || c = '\r' in
+  let at s = !i + String.length s <= n && String.equal (String.sub text !i (String.length s)) s in
+  let skip_string () =
+    incr i;
+    let fin = ref false in
+    while not !fin && !i < n do
+      if text.[!i] <> '"' then incr i
+      else if !i + 1 < n && text.[!i + 1] = '"' then i := !i + 2
+      else (incr i; fin := true)
+    done
+  in
+  let skip_comment () =
+    i := !i + 2;
+    let depth = ref 1 in
+    while !depth > 0 && !i < n do
+      if at "(*" then (incr depth; i := !i + 2)
+      else if at "*)" then (decr depth; i := !i + 2)
+      else if text.[!i] = '"' then skip_string ()
+      else incr i
+    done
+  in
+  let rec blanks () =
+    if !i < n && blank text.[!i] then (incr i; blanks ())
+    else if at "(*" then (skip_comment (); blanks ())
+  in
+  let ident_start c = match c with 'a'..'z' | 'A'..'Z' | '_' -> true | _ -> false in
+  let ident_char c = ident_start c || (match c with '0'..'9' | '\'' -> true | _ -> false) in
+  let ident () =
+    if !i < n && ident_start text.[!i] then begin
+      let s = !i in
+      while !i < n && ident_char text.[!i] do incr i done;
+      let id = String.sub text s (!i - s) in
+      (* A byte above 127 goes on with a letter this reading does not take. *)
+      if (!i < n && Char.code text.[!i] >= 128) || String.equal id "_" then None else Some id
+    end
+    else None
+  in
+  let qualid () =
+    blanks ();
+    let* id = ident () in
+    let rec fields acc =
+      if !i + 1 < n && text.[!i] = '.' && ident_start text.[!i + 1] then begin
+        incr i;
+        let* id = ident () in
+        fields (acc ^ "." ^ id)
+      end
+      else Some acc
+    in
+    fields id
+  in
+  let word () = blanks (); ident () in
+  let opens () = !i < n && text.[!i] = '(' && not (at "(*") in
+  (* A group in parentheses: the import categories, or an import filter. *)
+  let group () =
+    let depth = ref 0 and ok = ref true and go = ref true in
+    while !ok && !go do
+      if !i >= n then ok := false
+      else if at "(*" then skip_comment ()
+      else match text.[!i] with
+        | '(' -> incr depth; incr i
+        | ')' -> decr depth; incr i; if !depth = 0 then go := false
+        | '"' -> ok := false
+        | '.' when !i + 1 >= n || blank text.[!i + 1] -> ok := false
+        | _ -> incr i
+    done;
+    if !ok then Some () else None
+  in
+  let ends () = !i < n && text.[!i] = '.' && (!i + 1 >= n || blank text.[!i + 1]) in
+  let* from =
+    let s = !i in
+    match word () with
+    | Some "From" -> let* q = qualid () in Some (Some q)
+    | Some "Require" -> i := s; Some None
+    | _ -> None
+  in
+  blanks ();
+  let at_require = !i in
+  let* () = match ident () with Some "Require" -> Some () | _ -> None in
+  blanks ();
+  let* () =
+    if not (opens ()) then Some ()
+    else begin
+      incr i;
+      match word () with
+      | Some "safe" -> blanks (); if !i < n && text.[!i] = ')' then (incr i; Some ()) else None
+      | _ -> None
+    end
+  in
+  let* () =
+    let s = !i in
+    match word () with
+    | Some ("Import" | "Export") ->
+      blanks ();
+      if !i < n && text.[!i] = '-' then (incr i; blanks (); if opens () then group () else None)
+      else if opens () then group ()
+      else Some ()
+    | _ -> i := s; Some ()
+  in
+  let rec names acc =
+    blanks ();
+    if ends () then (if acc = [] then None else Some (List.rev acc))
+    else
+      let* q = qualid () in
+      blanks ();
+      let* () = if opens () then group () else Some () in
+      names (q :: acc)
+  in
+  let* names = names [] in
+  Some (at_require, { rq_from = from; rq_names = names })
+
+(* The first late command with its line, and every late command, last
+   first. With [~imports_late:false], [Import] and [Export] are not late
    words: opening a module runs only its objects' open functions, which load
    no code (an ML module acts at load: [Mltop.inMLModule]) and change a
    Rocqlib answer only through an export-locality [Register]
@@ -386,8 +551,13 @@ let late_words =
    when a late word appeared inside it: ending it loads again only the
    objects declared in its body, and a body with no late word declares no
    Rocqlib registration and loads no code. A sealed module, a functor, a
-   module type and a module definition stay late, and their [End] too. *)
-let scan_late_events ?(imports_late = true) text =
+   module type and a module definition stay late, and their [End] too.
+
+   A [Require] that is the command word of its sentence, or follows the
+   sentence's [From q], carries what it names when {!require_sentence}
+   reads it. It still marks the frames it is in: the [End] of one stays
+   late. *)
+let scan_late_commands ?(imports_late = true) text =
   let late_words =
     if imports_late then late_words
     else List.filter (fun w -> w <> "Import" && w <> "Export") late_words
@@ -405,7 +575,9 @@ let scan_late_events ?(imports_late = true) text =
   (* A [Reset], [Back] or [BackTo] has appeared: the frames no longer follow
      the restored sections and modules. *)
   let restored = ref false in
-  let result = ref None and last = ref None in
+  let result = ref None and commands = ref [] in
+  (* The offset of this sentence's command word when that word is [From]. *)
+  let from_at = ref None in
   let is_letter c = match c with
     | 'a'..'z' | 'A'..'Z' -> true
     | c -> Char.code c >= 128
@@ -481,9 +653,9 @@ let scan_late_events ?(imports_late = true) text =
     i := i0; line := l0;
     plain
   in
-  let found w =
+  let found ?require w =
     if !result = None then result := Some (w, !line);
-    last := Some !i
+    commands := { lc_offset = !i; lc_require = require } :: !commands
   in
   (* A late word is found wherever its letters end a run that is not part of
      a longer word: Rocq's lexer reads [1Register], [1_Register] and
@@ -556,7 +728,18 @@ let scan_late_events ?(imports_late = true) text =
        | Some w ->
          List.iter (fun f -> f := true) !frames;
          if List.mem w restoring_words then restored := true;
-         if !closed then found w
+         if !closed then begin
+           (* A [Require] as the command word, or after [From q]. *)
+           let require =
+             if not (String.equal run "Require") then None
+             else
+               let start = if !at_start then Some !i else !from_at in
+               match Option.bind start (require_sentence text) with
+               | Some (at, r) when at = !i -> Some r
+               | _ -> None
+           in
+           found ?require w
+         end
        | None -> ());
       begin
         if !at_start && lead_letter && List.mem run prefixes then begin
@@ -565,6 +748,7 @@ let scan_late_events ?(imports_late = true) text =
         else if !at_start && not lead_letter then ()  (* [Timeout 5] *)
         else if !at_start then begin
           at_start := false;
+          if String.equal run "From" then from_at := Some !i;
           if not !under_fail then begin
             if String.equal run "Module" then cmd_module := true
             else if String.equal run "Section" then frames := ref false :: !frames
@@ -596,12 +780,18 @@ let scan_late_events ?(imports_late = true) text =
          a brace before a command leaves it at the start. *)
       if c = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1])
          && not (!i > 0 && text.[!i - 1] = '.') then begin
-        at_start := true; under_fail := false; cmd_module := false
+        at_start := true; under_fail := false; cmd_module := false; from_at := None
       end;
       step ()
     end
   done;
-  !result, !last
+  !result, !commands
+
+(* The first late command with its line, and the offset of the last one's
+   word. *)
+let scan_late_events ?imports_late text =
+  let first, commands = scan_late_commands ?imports_late text in
+  first, (match commands with c :: _ -> Some c.lc_offset | [] -> None)
 
 let scan_late_rebind text = fst (scan_late_events text)
 
@@ -640,11 +830,20 @@ let unaudited_plugin () =
       (fun (name, _) -> not (!plugin_audit name || List.mem name audited_outside_tree))
       (tc ()).R.plugins
 
+(* The bound that the late commands of a scan (last first) give. *)
+let late_bound commands =
+  let rec go requires = function
+    | { lc_offset; lc_require = Some r } :: rest -> go ((lc_offset, r) :: requires) rest
+    | { lc_offset; lc_require = None } :: _ -> { lb_last = Some lc_offset; lb_requires = List.rev requires }
+    | [] -> { lb_last = None; lb_requires = List.rev requires }
+  in
+  go [] commands
+
 type source_rebind =
   | No_late_event
-  | Late_events of string * int * int * int option
-      (** the first command, its line, the last one's offset, and the last
-          one's offset when [Import] and [Export] are not late *)
+  | Late_events of string * int * late_bound * late_bound
+      (** the first command, its line, the bound, and the bound when
+          [Import] and [Export] are not late *)
   | Unreadable_source
 
 let source_rebind = function
@@ -652,11 +851,38 @@ let source_rebind = function
   | Some path ->
     match read_file path with
     | text ->
-      (match scan_late_events text with
-       | Some (cmd, line), Some last ->
-         Late_events (cmd, line, last, snd (scan_late_events ~imports_late:false text))
+      (match scan_late_commands text with
+       | Some (cmd, line), (_ :: _ as commands) ->
+         Late_events (cmd, line, late_bound commands,
+                      late_bound (snd (scan_late_commands ~imports_late:false text)))
        | _ -> No_late_event)
     | exception (Sys_error _ | End_of_file) -> Unreadable_source
+
+(* The layer that runs [Require] resolves one for a proof's decision: given
+   the [From] prefix and the names as the text spells them, [None] when a
+   name does not resolve, else a test of whether every library they name is
+   loaded. Until one registers, no [Require] resolves, so each one is late. *)
+let require_resolver : (string option -> string list -> (unit -> bool) option) ref =
+  ref (fun _ _ -> None)
+
+let register_require_resolver f = require_resolver := f
+
+(* This file's late [Require]s, resolved, by offset. A name resolves the same
+   at every decision: the load path does not change after startup, and coqc
+   keeps the directory listings it read ([System.trust_file_cache]). *)
+let require_resolutions : (int, (unit -> bool) option) Hashtbl.t = Hashtbl.create 16
+
+(* Whether the late [Require] at [offset] names only libraries loaded now. *)
+let loads_nothing (offset, r) =
+  let resolved =
+    match Hashtbl.find_opt require_resolutions offset with
+    | Some t -> t
+    | None ->
+      let t = !require_resolver r.rq_from r.rq_names in
+      Hashtbl.add require_resolutions offset t;
+      t
+  in
+  match resolved with None -> false | Some loaded -> loaded ()
 
 (* An export-locality [Register] acts when its module is opened, so once one
    is loaded or declared in this process, [Import] and [Export] are late
@@ -668,7 +894,8 @@ let note_export_register () = export_register_seen := true
 
 (* The location, in the file being compiled, of the sentence being run.
    The toplevel sets it before each sentence; a driver that does not leaves
-   it before every late command, so no proof of such a file replays. *)
+   it before every late command, so a proof of such a file replays only when
+   every late command is a [Require] that loads nothing. *)
 let sentence_loc : Loc.t option ref = ref None
 
 let sentence_offset () = match !sentence_loc with Some l -> l.Loc.bp | None -> -1
@@ -677,14 +904,28 @@ let at_sentence loc = sentence_loc := Some loc
 
 (* Measurement (BET-84, ReplayFine): each [Require] run while replay is on,
    with its sentence's offset and whether every library it names was
-   already loaded before it ran. A [Require] of loaded libraries loads
-   nothing; the summary lists them so the share of the late-command rule
-   they cause can be counted. Replay does not use them. *)
+   already loaded before it ran. The summary lists them. *)
 let requires_seen : (int * bool) list ref = ref []
 
+(* Where the first proof this file replayed opens. A replay relies on no
+   later [Require] loading a library ({!opens_before_late_command}). *)
+let first_hit : int option ref = ref None
+
+(* A [Require] after a replayed proof that loads a library all the same
+   means the decision read the text or the load path otherwise than the
+   [Require] does. The proofs already replayed cannot run their tactics
+   now, so the compile stops. *)
 let note_require ~already_loaded =
   match !options with
-  | Some _ -> requires_seen := (sentence_offset (), already_loaded) :: !requires_seen
+  | Some _ ->
+    let here = sentence_offset () in
+    requires_seen := (here, already_loaded) :: !requires_seen;
+    (match !first_hit with
+     | Some hit when hit <= here && not already_loaded ->
+       CErrors.anomaly
+         Pp.(str "Proof replay: the Require at byte " ++ int here ++ str " loads a library, after a proof"
+             ++ str " replayed at byte " ++ int hit ++ str " on the condition that no later Require loads one.")
+     | _ -> ())
   | None -> ()
 
 (* How many proofs are open: a proof opened inside another one is part of
@@ -714,6 +955,8 @@ let start ~library ~source ~toolchain =
     Hashtbl.reset channel_miss;
     Hashtbl.reset miss_detail;
     requires_seen := [];
+    first_hit := None;
+    Hashtbl.reset require_resolutions;
     Hashtbl.reset proof_provided;
     pending_counters := [];
     let index = Hashtbl.create 256 in
@@ -747,29 +990,37 @@ let start ~library ~source ~toolchain =
        ([Proof_recorder.start]); a replay that does not run them would let
        a dirty history here match the clean one recorded there. From here
        on they run at each decision ({!decide}). *)
-    let refusal, refused_detail, replay_from, replay_from_no_imports =
+    let refusal, refused_detail, late, late_no_imports =
       match refusal with
-      | Some _ -> refusal, None, None, None
+      | Some _ -> refusal, None, no_late, no_late
       | None ->
         match source_rebind source with
-        | Unreadable_source -> Some "rebind", Some "an unreadable source", None, None
-        | Late_events (cmd, line, last, last_no_imports) ->
+        | Unreadable_source -> Some "rebind", Some "an unreadable source", no_late, no_late
+        | Late_events (cmd, line, late, late_no_imports) ->
           let bound = function None -> "no proof" | Some b -> Printf.sprintf "proofs before byte %d" b in
-          let detail =
-            if last_no_imports = Some last then Printf.sprintf "%s at line %d; %s run" cmd line (bound (Some last))
-            else Printf.sprintf "%s at line %d; %s run (byte %d after an export Register)"
-                cmd line (bound last_no_imports) last
+          let requires =
+            match List.length late_no_imports.lb_requires with
+            | 0 -> ""
+            | 1 -> "; then 1 Require, late if it loads a library"
+            | k -> Printf.sprintf "; then %d Requires, each late if it loads a library" k
           in
-          None, Some detail, Some last, last_no_imports
-        | No_late_event -> None, None, None, None
+          let detail =
+            match late.lb_last with
+            | Some last when late_no_imports.lb_last <> Some last ->
+              Printf.sprintf "%s at line %d; %s run%s (byte %d after an export Register)"
+                cmd line (bound late_no_imports.lb_last) requires last
+            | _ -> Printf.sprintf "%s at line %d; %s run%s" cmd line (bound late_no_imports.lb_last) requires
+          in
+          None, Some detail, late, late_no_imports
+        | No_late_event -> None, None, no_late, no_late
     in
     if refusal = None then Proof_recorder.start_tracking ();
     toolchain_now := Some toolchain;
     sentence_loc := None;
     open_depth := 0;
     state := Some { f_index = index; f_wall0 = process_start; f_refused = refusal;
-                    f_refused_detail = refused_detail; f_replay_from = replay_from;
-                    f_replay_from_no_imports = replay_from_no_imports;
+                    f_refused_detail = refused_detail; f_late = late;
+                    f_late_no_imports = late_no_imports;
                     f_candidate = None }
 
 let check_budget () =
@@ -837,11 +1088,14 @@ let unreplayable_writes (p : R.proof) =
        n > 0 && name <> "univ_level" && name <> "sort_quality" && not (can_advance name))
     p.R.writes.R.counters
 
+(* A late command comes after the proof that opens here: one that is late
+   whatever is loaded, or a [Require] that names a library not loaded now,
+   or one that does not resolve. *)
 let opens_before_late_command st =
-  let bound = if !export_register_seen then st.f_replay_from else st.f_replay_from_no_imports in
-  match bound with
-  | None -> false
-  | Some last -> sentence_offset () <= last
+  let bound = if !export_register_seen then st.f_late else st.f_late_no_imports in
+  let here = sentence_offset () in
+  (match bound.lb_last with Some last -> here <= last | None -> false)
+  || List.exists (fun ((offset, _) as rq) -> here <= offset && not (loads_nothing rq)) bound.lb_requires
 
 let open_proof ~name ~statement ~position ~toolchain_key =
   let nested = !open_depth > 0 in
@@ -872,7 +1126,8 @@ let open_proof ~name ~statement ~position ~toolchain_key =
             past it (opening the proof makes evars and levels of its own).
             So they are read here, where the record read them. *)
          st.f_candidate <-
-           Some { c_name = name; c_proof = p; c_provided = provided (); c_counters = counter_starts () })
+           Some { c_name = name; c_proof = p; c_offset = sentence_offset (); c_provided = provided ();
+                  c_counters = counter_starts () })
 
 (* A counter's start (row 18) matters to a proof only through the fresh
    names it makes from it: a proof whose record shows no advance of a
@@ -953,7 +1208,8 @@ let rec decide ~sentences ~closer =
 and decide_once ~sentences ~closer =
   match !state with
   | None | Some { f_candidate = None; _ } | Some { f_refused = Some _; _ } -> None
-  | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_provided = at_start; c_counters = starts };
+  | Some ({ f_candidate = Some { c_name = name; c_proof = p; c_offset; c_provided = at_start;
+                                 c_counters = starts };
             _ } as st) ->
     st.f_candidate <- None;
     (* A process-wide fence this process tripped (a stale Rocqlib cache, a
@@ -989,6 +1245,7 @@ and decide_once ~sentences ~closer =
           | Some (channel, why, detail) -> Hashtbl.replace miss_detail name detail; miss_read name channel why; None
           | None ->
             counts.n_hits <- counts.n_hits + 1;
+            if !first_hit = None then first_hit := Some c_offset;
             outcome name "hit" None;
             Queue.iter (fun f -> f (p.R.start_tables @ p.R.reads)) hit_hooks;
             take_counters ~starts ~recorded:p.R.writes.R.counters;
