@@ -58,8 +58,13 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
 
       (* A digest that must not depend on where in this file a value was
          written (a hint database's) leaves out this file's locations, in a
-         recording compile and a replaying one alike. *)
-      let () = Proof_recorder.set_locs_source (source ldir long_f_dot_in) in
+         recording compile and a replaying one alike. Only those compiles
+         digest: with neither option, no source value is made (deep review of
+         26528c8a34, R2-1). The test is the options themselves, as
+         [Proof_recorder.in_use] is set only below. *)
+      let () = if copts.proof_record || Option.has_some copts.proof_replay then
+          Proof_recorder.set_locs_source (source ldir long_f_dot_in)
+      in
       (* The record covers the proofs of this file only, so it starts after
          the prelude and the init vernaculars are loaded. *)
       let () = if copts.proof_record then begin
