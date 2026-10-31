@@ -66,6 +66,9 @@ type t =
       file. *)
 
   ; output_context : bool
+
+  (* -record-timeouts: write the timeout record beside the output file *)
+  ; record_timeouts : bool
   }
 
 val default : t
