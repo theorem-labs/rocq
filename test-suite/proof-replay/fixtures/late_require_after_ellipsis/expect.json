@@ -1,0 +1,19 @@
+{
+  "doc": "after \"idtac...\" the next sentence starts: the source scan reads the From Require there in full, it names only a loaded library, it is not late, and the proof before it replays",
+  "files": ["Lib.v", "A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true},
+                       "PR.A.q": {"ineligible": ["command_in_proof"], "stores_no_term": true},
+                       "PR.A.r": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 2,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "refused_detail": "Require at line 13; no proof run; then 1 Require, late if it loads a library",
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.p", "hit"], ["PR.A.q", "ineligible"], ["PR.A.r", "hit"]]
+    }
+  }
+}

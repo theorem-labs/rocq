@@ -406,140 +406,273 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    does not resolve, stays late. A [Require] that loads a library after a
    replayed proof all the same stops the compile ({!note_require}).
 
-   The scan skips nested comments and strings, and
-   reads a number as Rocq's lexer reads one ([0-9][0-9_]*, a fraction and an
-   exponent only when a digit follows, or [0x] and hexadecimal digits), so
-   in [1Register], [0xaRegister] or [1End] the rest is a word (Claude delta
-   reviews of 7b2a60f377 and a158379eb4, P1-1). It is meant to err toward a
-   later position: a late word inside a quotation, a notation's text or an
-   identifier ending in one ([x_Register]) counts too. A command a [Load]ed
-   file builds is covered because [Load] counts; one a plugin adds is
-   covered by the plugin audit below ({!toolchain_fence}), not by this
-   scan. *)
+   The scan reads the text with the source-token cursor below, as the
+   [Require] reader does. It is meant to err toward a later position: a late
+   word inside a quotation, a notation's text or an identifier ending in one
+   ([x_Register]) counts too. A command a [Load]ed file builds is covered
+   because [Load] counts; one a plugin adds is covered by the plugin audit
+   below ({!toolchain_fence}), not by this scan. *)
+
+(* {6 The source-token cursor}
+
+   The late-command scan and the [Require] reader read the source text with
+   one cursor, so that a lexer case is decided in one place (code-quality
+   finding MQ-2: each had its own character loop, and five of the P1
+   defects that review rounds found in the scan were lexer cases). It reads
+   as Rocq's lexer reads (parsing/cLexer.ml), for what the two readers need:
+   - blanks (space, newline, tab, carriage return) and comments, which nest
+     and hold strings: a ["*)"] in a string does not end a comment;
+   - a string, in which [""] is a quote;
+   - a number, as [NumTok.Unsigned.parse] reads one: [0-9][0-9_]*, a
+     fraction when a digit or [_] follows the dot, an exponent when a digit
+     follows the [e] and its sign, or [0x] and hexadecimal digits with a [p]
+     exponent. So in [1Register], [1_Register], [0xaRegister], [1End] or
+     [1._Register] the rest is a new word (Claude delta reviews of
+     7b2a60f377 and a158379eb4, P1-1);
+   - a run of dots. ["."] or ["..."] followed by a blank ends a sentence;
+     [".."] is one keyword and does not ([x .. y], an import filter's
+     [(.. )]);
+   - a word: a run of letters, digits, [_] and ['] that does not start with
+     a digit. Every byte above 127 counts as a letter, so a word can be
+     longer than the lexer's identifier: the scan errs toward a late word,
+     and the [Require] reader refuses such a word;
+   - any other byte, alone.
+   An attribute is read to its matching bracket on request
+   ({!skip_attribute}). *)
+
+type token = Eof | Word | Number | Quoted | Dots | Byte
+
+type cursor = {
+  text : string;
+  mutable pos : int;  (** where the next token is read from *)
+  mutable line : int;  (** the line of [pos] *)
+  mutable token : token;  (** the current token *)
+  mutable start : int;  (** its first byte *)
+  mutable token_line : int;  (** the line of [start] *)
+}
+
+let cursor text = { text; pos = 0; line = 1; token = Eof; start = 0; token_line = 1 }
+
+let copy c = { c with pos = c.pos }
+
+let is_letter ch = match ch with 'a'..'z' | 'A'..'Z' -> true | ch -> Char.code ch >= 128
+
+let is_word_byte ch = is_letter ch || (match ch with '0'..'9' | '_' | '\'' -> true | _ -> false)
+
+let is_digit ch = ch >= '0' && ch <= '9'
+
+let is_hex_digit ch = is_digit ch || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
+
+(* At a quote: past the closing quote, or to the end of the text. *)
+let skip_string c =
+  let text = c.text and n = String.length c.text in
+  c.pos <- c.pos + 1;
+  let fin = ref false in
+  while not !fin && c.pos < n do
+    if text.[c.pos] = '"' then
+      if c.pos + 1 < n && text.[c.pos + 1] = '"' then c.pos <- c.pos + 2
+      else (c.pos <- c.pos + 1; fin := true)
+    else begin
+      if text.[c.pos] = '\n' then c.line <- c.line + 1;
+      c.pos <- c.pos + 1
+    end
+  done
+
+(* At ["(*"]: past the matching ["*)"], or to the end of the text. *)
+let skip_comment c =
+  let text = c.text and n = String.length c.text in
+  c.pos <- c.pos + 2;
+  let depth = ref 1 in
+  while !depth > 0 && c.pos < n do
+    let ch = text.[c.pos] in
+    if ch = '(' && c.pos + 1 < n && text.[c.pos + 1] = '*' then (incr depth; c.pos <- c.pos + 2)
+    else if ch = '*' && c.pos + 1 < n && text.[c.pos + 1] = ')' then (decr depth; c.pos <- c.pos + 2)
+    else if ch = '"' then skip_string c
+    else begin
+      if ch = '\n' then c.line <- c.line + 1;
+      c.pos <- c.pos + 1
+    end
+  done
+
+(* Past the bytes [digit] takes, and underscores. *)
+let take_digits c digit =
+  let n = String.length c.text in
+  while c.pos < n && (digit c.text.[c.pos] || c.text.[c.pos] = '_') do c.pos <- c.pos + 1 done
+
+(* At a digit: past the number, as [NumTok.Unsigned.parse] reads it. *)
+let read_number c =
+  let text = c.text and n = String.length c.text in
+  let i = c.pos in
+  let hex =
+    text.[i] = '0' && i + 2 < n && (text.[i + 1] = 'x' || text.[i + 1] = 'X') && is_hex_digit text.[i + 2]
+  in
+  let digit = if hex then is_hex_digit else is_digit in
+  if hex then c.pos <- i + 2;
+  take_digits c digit;
+  if c.pos + 1 < n && text.[c.pos] = '.' && (digit text.[c.pos + 1] || text.[c.pos + 1] = '_') then begin
+    c.pos <- c.pos + 1;
+    take_digits c digit
+  end;
+  let at_exponent =
+    c.pos < n && (if hex then text.[c.pos] = 'p' || text.[c.pos] = 'P' else text.[c.pos] = 'e' || text.[c.pos] = 'E')
+  in
+  if at_exponent then begin
+    let k = if c.pos + 1 < n && (text.[c.pos + 1] = '+' || text.[c.pos + 1] = '-') then c.pos + 2 else c.pos + 1 in
+    if k < n && is_digit text.[k] then (c.pos <- k; take_digits c is_digit)
+  end
+
+(* Moves to the next token, past blanks and comments. *)
+let advance c =
+  let text = c.text and n = String.length c.text in
+  let fin = ref false in
+  while not !fin && c.pos < n do
+    match text.[c.pos] with
+    | ' ' | '\t' | '\r' -> c.pos <- c.pos + 1
+    | '\n' -> c.line <- c.line + 1; c.pos <- c.pos + 1
+    | '(' when c.pos + 1 < n && text.[c.pos + 1] = '*' -> skip_comment c
+    | _ -> fin := true
+  done;
+  c.start <- c.pos;
+  c.token_line <- c.line;
+  c.token <-
+    (if c.pos >= n then Eof
+     else match text.[c.pos] with
+       | '"' -> skip_string c; Quoted
+       | '0'..'9' -> read_number c; Number
+       | '.' -> while c.pos < n && text.[c.pos] = '.' do c.pos <- c.pos + 1 done; Dots
+       | ch when is_word_byte ch ->
+         while c.pos < n && is_word_byte text.[c.pos] do c.pos <- c.pos + 1 done; Word
+       | _ -> c.pos <- c.pos + 1; Byte)
+
+let not_eof c = match c.token with Eof -> false | _ -> true
+
+let token_text c = String.sub c.text c.start (c.pos - c.start)
+
+let is_word c w =
+  match c.token with
+  | Word -> c.pos - c.start = String.length w && CString.is_sub w c.text c.start
+  | _ -> false
+
+let is_byte c ch = match c.token with Byte -> c.text.[c.start] = ch | _ -> false
+
+(* A run of dots that ends a sentence: ["."], or ["..."] after a tactic,
+   then a blank or the end of the text. *)
+let sentence_end c =
+  match c.token with
+  | Dots ->
+    let k = c.pos - c.start in
+    (k = 1 || k = 3)
+    && (c.pos >= String.length c.text
+        || (match c.text.[c.pos] with ' ' | '\n' | '\t' | '\r' -> true | _ -> false))
+  | _ -> false
+
+(* The dot that ends a command: ["."] then a blank. *)
+let command_end c = sentence_end c && c.pos - c.start = 1
+
+(* The current word is followed by a field: a dot, then a letter or [_]. *)
+let field_follows c =
+  let n = String.length c.text in
+  c.pos + 1 < n && c.text.[c.pos] = '.' && (is_letter c.text.[c.pos + 1] || c.text.[c.pos + 1] = '_')
+
+(* The current word is a field: it follows a dot that follows a word or a
+   number. *)
+let is_field c = c.start >= 2 && c.text.[c.start - 1] = '.' && is_word_byte c.text.[c.start - 2]
+
+(* The current byte is ['#'] and ['['] follows it. *)
+let at_attribute c = is_byte c '#' && c.pos < String.length c.text && c.text.[c.pos] = '['
+
+(* At an attribute ({!at_attribute}): to its matching [']'], so that a [']']
+   in a comment or a string inside it does not end it (Claude review of
+   951eb445f9, P1-1). *)
+let skip_attribute c =
+  advance c;
+  let depth = ref 1 in
+  while !depth > 0 && not_eof c do
+    advance c;
+    if is_byte c '[' then incr depth else if is_byte c ']' then decr depth
+  done
+
+(* A word the [Require] reader takes as an identifier: plain ASCII, not
+   [_]. *)
+let ascii_ident c =
+  match c.token with
+  | Word ->
+    let ok = ref (c.text.[c.start] <> '\'' && (c.pos - c.start > 1 || c.text.[c.start] <> '_')) in
+    for i = c.start to c.pos - 1 do
+      if Char.code c.text.[i] >= 128 then ok := false
+    done;
+    !ok
+  | _ -> false
+
 let restoring_words = [ "Reset"; "Back"; "BackTo" ]
 
 let late_words =
   [ "Register"; "Require"; "Load"; "Cd"; "Declare"; "Import"; "Export"; "Include"; "Module" ] @ restoring_words
 
-(* The [Require] sentence whose command word ([From] or [Require]) starts at
-   byte [k], read as the grammar reads one (vernac/g_vernac.mlg): [From q]
-   or nothing, [Require], [(safe)] or nothing, [Import] or [Export] with
-   its import categories or nothing, one or more names each with an import
-   filter or not, then the terminating dot. It gives the offset of the
-   [Require] word, the [From] prefix and the names. A name is plain ASCII
-   identifiers joined by dots with no blank around a dot, as the lexer
-   joins a qualified name. Anything else gives [None], and the [Require]
-   stays late: this reading can refuse a sentence Rocq accepts, and never
-   takes other names from one it accepts. *)
-let require_sentence text k =
+(* The [Require] sentence whose command word ([From] or [Require]) is the
+   cursor's token, read as the grammar reads one (vernac/g_vernac.mlg):
+   [From q] or nothing, [Require], [(safe)] or nothing, [Import] or
+   [Export] with its import categories or nothing, one or more names each
+   with an import filter or not, then the dot that ends the command. It
+   gives the offset of the [Require] word, the [From] prefix and the names.
+   A name is plain ASCII identifiers joined by dots with no blank around a
+   dot, as the lexer joins a qualified name. Anything else gives [None], and
+   the [Require] stays late: this reading can refuse a sentence Rocq
+   accepts, and never takes other names from one it accepts. *)
+let require_sentence c =
   let ( let* ) = Option.bind in
-  let n = String.length text in
-  let i = ref k in
-  let blank c = c = ' ' || c = '\n' || c = '\t' || c = '\r' in
-  let at s = !i + String.length s <= n && CString.is_sub s text !i in
-  let skip_string () =
-    incr i;
-    let fin = ref false in
-    while not !fin && !i < n do
-      if text.[!i] <> '"' then incr i
-      else if !i + 1 < n && text.[!i + 1] = '"' then i := !i + 2
-      else (incr i; fin := true)
-    done
-  in
-  let skip_comment () =
-    i := !i + 2;
-    let depth = ref 1 in
-    while !depth > 0 && !i < n do
-      if at "(*" then (incr depth; i := !i + 2)
-      else if at "*)" then (decr depth; i := !i + 2)
-      else if text.[!i] = '"' then skip_string ()
-      else incr i
-    done
-  in
-  let rec blanks () =
-    if !i < n && blank text.[!i] then (incr i; blanks ())
-    else if at "(*" then (skip_comment (); blanks ())
-  in
-  let ident_start c = match c with 'a'..'z' | 'A'..'Z' | '_' -> true | _ -> false in
-  let ident_char c = ident_start c || (match c with '0'..'9' | '\'' -> true | _ -> false) in
-  let ident () =
-    if !i < n && ident_start text.[!i] then begin
-      let s = !i in
-      while !i < n && ident_char text.[!i] do incr i done;
-      let id = String.sub text s (!i - s) in
-      (* A byte above 127 goes on with a letter this reading does not take. *)
-      if (!i < n && Char.code text.[!i] >= 128) || String.equal id "_" then None else Some id
+  let rec qualid prefix =
+    if not (ascii_ident c) then None
+    else begin
+      let id = token_text c in
+      let q = match prefix with None -> id | Some p -> p ^ "." ^ id in
+      let field = field_follows c in
+      advance c;
+      if field then (advance c; qualid (Some q)) else Some q
     end
+  in
+  (* A group in parentheses, from its ['(']: the import categories, or an
+     import filter. *)
+  let group () =
+    let rec go depth =
+      match c.token with
+      | Eof | Quoted -> None
+      | _ when sentence_end c -> None
+      | _ when is_byte c '(' -> advance c; go (depth + 1)
+      | _ when is_byte c ')' -> advance c; if depth = 1 then Some () else go (depth - 1)
+      | _ -> advance c; go depth
+    in
+    go 0
+  in
+  let* from =
+    if is_word c "From" then (advance c; let* q = qualid None in Some (Some q))
+    else if is_word c "Require" then Some None
     else None
   in
-  let qualid () =
-    blanks ();
-    let* id = ident () in
-    let rec fields acc =
-      if !i + 1 < n && text.[!i] = '.' && ident_start text.[!i + 1] then begin
-        incr i;
-        let* id = ident () in
-        fields (acc ^ "." ^ id)
-      end
-      else Some acc
-    in
-    fields id
-  in
-  let word () = blanks (); ident () in
-  let opens () = !i < n && text.[!i] = '(' && not (at "(*") in
-  (* A group in parentheses: the import categories, or an import filter. *)
-  let group () =
-    let depth = ref 0 and ok = ref true and go = ref true in
-    while !ok && !go do
-      if !i >= n then ok := false
-      else if at "(*" then skip_comment ()
-      else match text.[!i] with
-        | '(' -> incr depth; incr i
-        | ')' -> decr depth; incr i; if !depth = 0 then go := false
-        | '"' -> ok := false
-        | '.' when !i + 1 >= n || blank text.[!i + 1] -> ok := false
-        | _ -> incr i
-    done;
-    if !ok then Some () else None
-  in
-  let ends () = !i < n && text.[!i] = '.' && (!i + 1 >= n || blank text.[!i + 1]) in
-  let* from =
-    let s = !i in
-    match word () with
-    | Some "From" -> let* q = qualid () in Some (Some q)
-    | Some "Require" -> i := s; Some None
-    | _ -> None
-  in
-  blanks ();
-  let at_require = !i in
-  let* () = match ident () with Some "Require" -> Some () | _ -> None in
-  blanks ();
+  let at_require = c.start in
+  let* () = if is_word c "Require" then (advance c; Some ()) else None in
   let* () =
-    if not (opens ()) then Some ()
+    if not (is_byte c '(') then Some ()
     else begin
-      incr i;
-      match word () with
-      | Some "safe" -> blanks (); if !i < n && text.[!i] = ')' then (incr i; Some ()) else None
-      | _ -> None
+      advance c;
+      if not (is_word c "safe") then None
+      else (advance c; if is_byte c ')' then (advance c; Some ()) else None)
     end
   in
   let* () =
-    let s = !i in
-    match word () with
-    | Some ("Import" | "Export") ->
-      blanks ();
-      if !i < n && text.[!i] = '-' then (incr i; blanks (); if opens () then group () else None)
-      else if opens () then group ()
+    if is_word c "Import" || is_word c "Export" then begin
+      advance c;
+      if is_byte c '-' then (advance c; if is_byte c '(' then group () else None)
+      else if is_byte c '(' then group ()
       else Some ()
-    | _ -> i := s; Some ()
+    end
+    else Some ()
   in
   let rec names acc =
-    blanks ();
-    if ends () then (if acc = [] then None else Some (List.rev acc))
+    if command_end c then (if acc = [] then None else Some (List.rev acc))
     else
-      let* q = qualid () in
-      blanks ();
-      let* () = if opens () then group () else Some () in
+      let* q = qualid None in
+      let* () = if is_byte c '(' then group () else Some () in
       names (q :: acc)
   in
   let* names = names [] in
@@ -570,8 +703,7 @@ let scan_late_commands ?(imports_late = true) text =
     if imports_late then late_words
     else List.filter (fun w -> w <> "Import" && w <> "Export") late_words
   in
-  let n = String.length text in
-  let line = ref 1 and i = ref 0 in
+  let c = cursor text in
   let closed = ref false in
   (* One frame per open [Section] or [Module]: whether its [End] can change
      what a Rocqlib name answers. A non-plain module's always can; a plain
@@ -584,93 +716,45 @@ let scan_late_commands ?(imports_late = true) text =
      the restored sections and modules. *)
   let restored = ref false in
   let result = ref None and commands = ref [] in
-  (* The offset of this sentence's command word when that word is [From]. *)
-  let from_at = ref None in
-  let is_letter c = match c with
-    | 'a'..'z' | 'A'..'Z' -> true
-    | c -> Char.code c >= 128
-  in
-  let is_run c = is_letter c || (match c with '0'..'9' | '_' | '\'' -> true | _ -> false) in
-  let step () = if text.[!i] = '\n' then incr line; incr i in
-  let skip_string () =
-    (* [""] inside a string is a quote *)
-    incr i;
-    let fin = ref false in
-    while not !fin && !i < n do
-      if text.[!i] = '"' then
-        if !i + 1 < n && text.[!i + 1] = '"' then i := !i + 2 else (incr i; fin := true)
-      else step ()
-    done
-  in
-  let skip_comment () =
-    i := !i + 2;
-    let depth = ref 1 in
-    while !depth > 0 && !i < n do
-      if text.[!i] = '(' && !i + 1 < n && text.[!i + 1] = '*' then (incr depth; i := !i + 2)
-      else if text.[!i] = '*' && !i + 1 < n && text.[!i + 1] = ')' then (decr depth; i := !i + 2)
-      else if text.[!i] = '"' then skip_string ()
-      else step ()
-    done
-  in
-  (* Whether the sentence from here to its terminating dot holds [:=],
-     comments and strings skipped. The position and line are restored. *)
+  (* The cursor at this sentence's command word when that word is [From]. *)
+  let from_word = ref None in
+  (* Whether the sentence after the current word holds [:=] before its end. *)
   let sentence_assigns () =
-    let i0 = !i and l0 = !line in
-    let res = ref None in
-    while !res = None && !i < n do
-      let c = text.[!i] in
-      if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
-      else if c = '"' then skip_string ()
-      else if c = ':' && !i + 1 < n && text.[!i + 1] = '=' then res := Some true
-      else if c = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1]) then res := Some false
-      else step ()
-    done;
-    i := i0; line := l0;
-    !res = Some true
+    let c = copy c in
+    let rec go () =
+      advance c;
+      match c.token with
+      | Eof -> false
+      | _ when sentence_end c -> false
+      | _ when is_byte c ':' && c.pos < String.length text && text.[c.pos] = '=' -> true
+      | _ -> go ()
+    in
+    go ()
   in
-  (* Whether the sentence from [j], just after its command word [Module], is
-     [Import] or [Export] at most, then one identifier, then the terminating
-     dot: a plain module. Comments are skipped; anything else (a binder, a
-     signature, [:=], [<:], [Type]) is not plain. The position and line are
-     restored. *)
-  let plain_module_after j =
-    let i0 = !i and l0 = !line in
-    i := j;
-    let skip_blank () =
-      let go = ref true in
-      while !go && !i < n do
-        let c = text.[!i] in
-        if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
-        else if String.contains " \n\t\r" c then step ()
-        else go := false
-      done
-    in
-    let word () =
-      skip_blank ();
-      let k = !i in
-      while !i < n && is_run text.[!i] do incr i done;
-      String.sub text k (!i - k)
-    in
-    let w = word () in
-    let name = if String.equal w "Import" || String.equal w "Export" then word () else w in
-    skip_blank ();
-    let plain =
-      name <> "" && (is_letter name.[0] || name.[0] = '_') && not (String.equal name "Type")
-      && !i < n && text.[!i] = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1])
-    in
-    i := i0; line := l0;
-    plain
+  (* Whether the sentence after the current word, its command word
+     [Module], is [Import] or [Export] at most, then one identifier, then the
+     dot that ends it: a plain module. Anything else (a binder, a signature,
+     [:=], [<:], [Type]) is not plain. *)
+  let plain_module () =
+    let c = copy c in
+    advance c;
+    if is_word c "Import" || is_word c "Export" then advance c;
+    match c.token with
+    | Word ->
+      let first = text.[c.start] in
+      (is_letter first || first = '_') && not (is_word c "Type") && (advance c; command_end c)
+    | _ -> false
   in
   let found ?require w =
-    if !result = None then result := Some (w, !line);
-    commands := { lc_offset = !i; lc_require = require } :: !commands
+    if !result = None then result := Some (w, c.token_line);
+    commands := { lc_offset = c.start; lc_require = require } :: !commands
   in
-  (* A late word is found wherever its letters end a run that is not part of
-     a longer word: Rocq's lexer reads [1Register], [1_Register] and
-     [0x1Register] as a number then [Register] (P1-1), so a late word counts
-     when it starts the run or follows a digit, [_] or ['] in it. This also
-     takes an identifier such as [x_Register] for the word, which only costs
-     a replay. *)
+  (* A late word is found wherever its letters end a word and do not
+     continue a longer one: in [1Register], [1_Register] and [0x1Register]
+     the cursor reads a number then [Register] (P1-1), and a late word also
+     counts when it follows a digit, [_] or ['] in its word. This takes an
+     identifier such as [x_Register] for the word, which only costs a
+     replay. *)
   let late_in run =
     List.find_opt
       (fun k ->
@@ -682,128 +766,78 @@ let scan_late_commands ?(imports_late = true) text =
   let prefixes =
     [ "Local"; "Global"; "Time"; "Timeout"; "Redirect"; "Instructions"; "Profile"; "Polymorphic";
       "Monomorphic"; "Cumulative"; "NonCumulative"; "Private"; "Program"; "Fail"; "Succeed" ] in
+  (* A number, a string, a bullet or a brace before the command word leaves
+     the sentence at its start: [Timeout 5 Register]. *)
   let at_start = ref true and under_fail = ref false and cmd_module = ref false in
-  while !i < n do
-    let c = text.[!i] in
-    if c = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
-    else if c = '"' then (skip_string ())
-    else if !at_start && c = '#' && !i + 1 < n && text.[!i + 1] = '[' then begin
-      (* An attribute before the command word: skip to its matching ']',
-         skipping comments and strings inside it, so a ']' in either does
-         not end it (Claude review of 951eb445f9, P1-1). *)
-      i := !i + 2;
-      let depth = ref 1 in
-      while !depth > 0 && !i < n do
-        let d = text.[!i] in
-        if d = '(' && !i + 1 < n && text.[!i + 1] = '*' then skip_comment ()
-        else if d = '"' then skip_string ()
-        else if d = '[' then (incr depth; incr i)
-        else if d = ']' then (decr depth; incr i)
-        else step ()
-      done
-    end
-    else if c >= '0' && c <= '9' then begin
-      (* A number, exactly as the lexer takes it; what follows is a new
-         word. It does not move the command start: [Timeout 5 Register]. *)
-      let is_dig ch = ch >= '0' && ch <= '9' in
-      let is_hex ch = is_dig ch || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') in
-      let take p = while !i < n && (p text.[!i] || text.[!i] = '_') do incr i done in
-      let hex = c = '0' && !i + 2 < n && (text.[!i + 1] = 'x' || text.[!i + 1] = 'X') && is_hex text.[!i + 2] in
-      let digits = if hex then is_hex else is_dig in
-      if hex then i := !i + 2;
-      take digits;
-      if !i + 1 < n && text.[!i] = '.' && digits text.[!i + 1] then (incr i; take digits);
-      let expo = if hex then (fun ch -> ch = 'p' || ch = 'P') else (fun ch -> ch = 'e' || ch = 'E') in
-      if !i < n && expo text.[!i] then begin
-        let k = if !i + 1 < n && (text.[!i + 1] = '+' || text.[!i + 1] = '-') then !i + 2 else !i + 1 in
-        if k < n && is_dig text.[k] then (i := k; take is_dig)
-      end
-    end
-    else if is_run c then begin
-      let j = ref !i in
-      while !j < n && is_run text.[!j] do incr j done;
-      let run = String.sub text !i (!j - !i) in
-      let lead_letter = is_letter c in
-      (* A component of a qualified identifier, [Module.module_contents] in
-         an Ltac2 tactic or [M.Register], is part of one identifier token to
-         Rocq's lexer, never a command keyword: the run is followed by a dot
-         and an identifier's first character, or follows a dot that follows
-         an identifier character. It is neither a late word nor a command
-         word. The name after a [Module] command keeps the rule below. *)
-      let qualified =
-        not !cmd_module
-        && ((!j + 1 < n && text.[!j] = '.' && (is_letter text.[!j + 1] || text.[!j + 1] = '_'))
-            || (!i >= 2 && text.[!i - 1] = '.' && is_run text.[!i - 2]))
-      in
-      let plain_module =
-        !at_start && not !under_fail && String.equal run "Module" && plain_module_after !j
-      in
-      if qualified then at_start := false
-      else if plain_module then begin
-        at_start := false;
-        frames := ref false :: !frames
-      end
-      else begin
-      (match late_in run with
-       | Some w ->
-         List.iter (fun f -> f := true) !frames;
-         if List.mem w restoring_words then restored := true;
-         if !closed then begin
-           (* A [Require] as the command word, or after [From q]. *)
-           let require =
-             if not (String.equal run "Require") then None
-             else
-               let start = if !at_start then Some !i else !from_at in
-               match Option.bind start (require_sentence text) with
-               | Some (at, r) when at = !i -> Some r
-               | _ -> None
-           in
-           found ?require w
-         end
-       | None -> ());
-      begin
-        if !at_start && lead_letter && List.mem run prefixes then begin
-          if String.equal run "Fail" || String.equal run "Succeed" then under_fail := true
-        end
-        else if !at_start && not lead_letter then ()  (* [Timeout 5] *)
-        else if !at_start then begin
-          at_start := false;
-          if String.equal run "From" then from_at := Some !i;
-          if not !under_fail then begin
-            if String.equal run "Module" then cmd_module := true
-            else if String.equal run "Section" then frames := ref false :: !frames
-            else if String.equal run "End" then begin
-              match !frames with
-              | f :: rest ->
-                frames := rest;
-                if !closed && !f then found "End (of a module, or of a section that loads or imports)"
-                else if !closed && !restored then found "End (after a Reset or Back)"
-              | [] -> if !closed then found "End"
+  advance c;
+  while not_eof c do
+    (match c.token with
+     | Byte when !at_start && at_attribute c -> skip_attribute c
+     | Word ->
+       let run = token_text c in
+       let lead_letter = is_letter text.[c.start] in
+       (* A component of a qualified identifier, [Module.module_contents] in
+          an Ltac2 tactic or [M.Register], is part of one identifier token to
+          Rocq's lexer, never a command keyword: it is followed by a field,
+          or is one. It is neither a late word nor a command word. The name
+          after a [Module] command keeps the rule below. *)
+       let qualified = not !cmd_module && (field_follows c || is_field c) in
+       if qualified then at_start := false
+       else if !at_start && not !under_fail && String.equal run "Module" && plain_module () then begin
+         at_start := false;
+         frames := ref false :: !frames
+       end
+       else begin
+         (match late_in run with
+          | Some w ->
+            List.iter (fun f -> f := true) !frames;
+            if List.mem w restoring_words then restored := true;
+            if !closed then begin
+              (* A [Require] as the command word, or after [From q]. *)
+              let require =
+                if not (String.equal run "Require") then None
+                else
+                  let start = if !at_start then Some c else !from_word in
+                  match Option.bind start (fun s -> require_sentence (copy s)) with
+                  | Some (at, r) when at = c.start -> Some r
+                  | _ -> None
+              in
+              found ?require w
             end
-          end
-        end
-        else if !cmd_module then begin
-          (* [Module Type T], [Module Export M]: the name comes later *)
-          if not (List.mem run [ "Type"; "Import"; "Export" ]) then begin
-            cmd_module := false;
-            i := !j;
-            if not (sentence_assigns ()) then frames := ref true :: !frames
-          end
-        end;
-        if String.equal run "Qed" || String.equal run "Save" then closed := true
-      end
-      end;
-      i := !j
-    end
-    else begin
-      (* A sentence ends at a dot followed by a space or the end; a bullet or
-         a brace before a command leaves it at the start. *)
-      if c = '.' && (!i + 1 >= n || String.contains " \n\t\r" text.[!i + 1])
-         && not (!i > 0 && text.[!i - 1] = '.') then begin
-        at_start := true; under_fail := false; cmd_module := false; from_at := None
-      end;
-      step ()
-    end
+          | None -> ());
+         if !at_start && lead_letter && List.mem run prefixes then begin
+           if String.equal run "Fail" || String.equal run "Succeed" then under_fail := true
+         end
+         else if !at_start && not lead_letter then ()
+         else if !at_start then begin
+           at_start := false;
+           if String.equal run "From" then from_word := Some (copy c);
+           if not !under_fail then begin
+             if String.equal run "Module" then cmd_module := true
+             else if String.equal run "Section" then frames := ref false :: !frames
+             else if String.equal run "End" then begin
+               match !frames with
+               | f :: rest ->
+                 frames := rest;
+                 if !closed && !f then found "End (of a module, or of a section that loads or imports)"
+                 else if !closed && !restored then found "End (after a Reset or Back)"
+               | [] -> if !closed then found "End"
+             end
+           end
+         end
+         else if !cmd_module then begin
+           (* [Module Type T], [Module Export M]: the name comes later *)
+           if not (List.mem run [ "Type"; "Import"; "Export" ]) then begin
+             cmd_module := false;
+             if not (sentence_assigns ()) then frames := ref true :: !frames
+           end
+         end;
+         if String.equal run "Qed" || String.equal run "Save" then closed := true
+       end
+     | _ when sentence_end c ->
+       at_start := true; under_fail := false; cmd_module := false; from_word := None
+     | _ -> ());
+    advance c
   done;
   !result, !commands
 

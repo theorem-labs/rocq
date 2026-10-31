@@ -657,6 +657,81 @@ let require_scan =
      && rq (after_qed "Print Require.") = [ None ]
      && rq (after_qed "From X Print Require A.") = [ None ])
 
+(* The late-command scan and the Require reader read the source with one
+   cursor (code-quality finding MQ-2). Each case gives the decision that
+   the two readers gave before they shared it. *)
+let scan_lexer =
+  let s = Replay.scan_late_rebind in
+  let rq ?(imports_late = false) text =
+    List.map (fun (c : Replay.late_command) -> c.lc_require)
+      (snd (Replay.scan_late_commands ~imports_late text))
+  in
+  let r ?from names = Some Replay.{ rq_from = from; rq_names = names } in
+  let qed = "Lemma a : True. Qed. " in
+  let end_ = "End (of a module, or of a section that loads or imports)" in
+  mk_bool_test "proof-replay-scan-lexer"
+    "comments, strings, numbers, qualified names, attributes, Require forms and sentences over lines give the same decisions as before"
+    ((* Nested comments; "(*)" opens one. *)
+     s (qed ^ "(* a (* b *) Register x as y. *) Lemma b : True. Qed.") = None
+     && s (qed ^ "(* a (* b *) c *) Register x as y.") = Some ("Register", 1)
+     && s (qed ^ "(*) Register x as y. *)") = None
+     && rq (qed ^ "Require (* a (* b *) c *) A.") = [ r [ "A" ] ]
+     (* Strings: "" is a quote. *)
+     && s (qed ^ "Check \"a\"\" Register \"\"b\".") = None
+     && s (qed ^ "Check \"a\"\"\". Register x as y.") = Some ("Register", 1)
+     (* A quoted string inside a comment: its "*)" does not end the comment. *)
+     && s (qed ^ "(* \"*)\" Register x as y. *)") = None
+     && rq (qed ^ "Require (* \"*)\" *) A.") = [ r [ "A" ] ]
+     (* Numbers with underscores, fractions and exponents: what follows is a new word. *)
+     && s (qed ^ "Timeout 1_000 Register x as y.") = Some ("Register", 1)
+     && s (qed ^ "Check 1_2.3_4e+5_6Register.") = Some ("Register", 1)
+     && s (qed ^ "Check 0x1F.aP-3Register.") = Some ("Register", 1)
+     && s (qed ^ "Check 1e_Register.") = Some ("Register", 1)
+     && rq (qed ^ "Require A 1e5.") = [ None ]
+     (* Qualified identifiers: no blank or comment around a dot. *)
+     && rq (qed ^ "Require A.B.C D.") = [ r [ "A.B.C"; "D" ] ]
+     && rq (qed ^ "Require A .B.") = [ None ]
+     && rq (qed ^ "Require A.(* c *)B.") = [ None ]
+     && s (qed ^ "Check 1.Register.") = None
+     (* Attributes, to their matching bracket. *)
+     && rq (qed ^ "#[local] Require A.") = [ r [ "A" ] ]
+     && rq (qed ^ "#[warnings=\"]\" (* ] *)] From X Require A.") = [ r ~from:"X" [ "A" ] ]
+     && s "Section S. Import M. #[a[b] Section] Definition d := 0. Lemma a : True. Qed. End S." = Some (end_, 1)
+     (* A Require with From. *)
+     && rq (qed ^ "From X.Y Require (safe) A.") = [ r ~from:"X.Y" [ "A" ] ]
+     && rq (qed ^ "From X Require.") = [ None ]
+     && rq (qed ^ "From \"X\" Require A.") = [ None ]
+     (* Require Import and Require Export. *)
+     && rq (qed ^ "Require Export A.") = [ r [ "A" ] ]
+     && rq ~imports_late:true (qed ^ "Require Export A.") = [ None; r [ "A" ] ]
+     && rq (qed ^ "From X Require Import (notations) A(B, c).") = [ r ~from:"X" [ "A" ] ]
+     && rq (qed ^ "Require Export - (notations) A.") = [ r [ "A" ] ]
+     (* Sentences over lines: the line of the late word, and a Require read across lines. *)
+     && s "Lemma a : True.\nQed.\nCheck (fun x =>\n  x).\nRegister\n  x as y." = Some ("Register", 5)
+     && s (qed ^ "(* \n\n *) Check \"\n\".\nRegister x as y.") = Some ("Register", 5)
+     && rq (qed ^ "From\n  X (* c\n *) Require\n  A\n  B.") = [ r ~from:"X" [ "A"; "B" ] ])
+
+(* Where the two readers read the same text differently, the cursor reads
+   it as Rocq's lexer does (parsing/cLexer.ml, interp/numTok.ml). *)
+let scan_lexer_fixes =
+  let s = Replay.scan_late_rebind in
+  let rq text =
+    List.map (fun (c : Replay.late_command) -> c.lc_require)
+      (snd (Replay.scan_late_commands ~imports_late:false text))
+  in
+  let r ?from names = Some Replay.{ rq_from = from; rq_names = names } in
+  let qed = "Lemma a : True. Qed. " in
+  mk_bool_test "proof-replay-scan-lexer-fixes"
+    "\"..\" then a blank does not end a sentence, \"...\" then a blank does, and a number's fraction can start with _"
+    ((* ".." then a blank is one token: the Require reader took it for the
+        end of the sentence, and the scan's module reading did too. *)
+     rq (qed ^ "Require Import A(B(.. )).") = [ r [ "A" ] ]
+     && s "Module M (X : T .. ) := F X. Lemma a : True. Qed. End M." = Some ("End", 1)
+     (* "..." then a blank ends a tactic sentence: the scan did not end it. *)
+     && rq (qed ^ "Lemma b : True. Proof. idtac... From X Require A.") = [ r ~from:"X" [ "A" ] ]
+     (* In 1._Register the number is 1._ and Register is a word, not a field. *)
+     && s (qed ^ "Timeout 1._Register x as y.") = Some ("Register", 1))
+
 (* A later Require is late for a proof only while a library it names is not
    loaded, and a Require whose names do not resolve stays late. A Require
    that loads a library after a replayed proof stops the compile. *)
@@ -776,7 +851,7 @@ let tests =
     sidecar_dir_refuses; sha256_vectors; charged_clock; summary_counts;
     rebind_scan; late_events_scan; hit_hook_runs; miss_reason; install_check_misses; plugin_audit_refuses;
     plugin_allowlist; unknown_toolchain_refuses;
-    require_scan; require_rule; require_tripwire;
+    require_scan; scan_lexer; scan_lexer_fixes; require_rule; require_tripwire;
     (* Defined last in the file, which is what makes it run last. *)
     fence_refuses ]
 

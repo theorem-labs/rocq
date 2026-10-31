@@ -358,6 +358,19 @@ between a proof and a `Require`: no command changes the load path since `Add
 LoadPath` was removed (`doc/sphinx/changes.rst`, #17394).  `Add LoadPath "d"
 as P.` is now a syntax error, and `Add LoadPath "d".` or `Remove LoadPath
 "d".` is an option-table command that fails: there is no `LoadPath` table.
+`late_require_filter_dots`: the import filter `t(.. )` holds `..` then a
+blank, which does not end a sentence, so the source scan reads the `Require`
+in full, and the proof before it hits.  `late_require_after_ellipsis`:
+`idtac...` ends its sentence, so the scan reads the `From PR Require Lib.`
+after it in full, and the proof before it hits.  Before the scan and the
+`Require` reader shared one cursor (code-quality finding MQ-2), one of the two
+read that sentence end otherwise, and the proof before the `Require` ran its
+tactics.  `late_require_lexer_forms`: a `Require` of a loaded library in each
+form that the `Require` reader read with its own lexer before MQ-2 (a nested
+comment that holds a string with `*)` in it, a sentence over lines with a
+comment in it, an attribute then `Export`, an import filter).  The scan reads
+each one in full, none is late, and each proof hits.  A form that the scan
+cannot read makes the proofs before it run their tactics.
 
 **The closer.**  `closer_admitted`: a registered `tac. Qed.` against an edited
 `tac. Admitted.` must miss.

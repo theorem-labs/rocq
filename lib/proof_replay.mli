@@ -101,7 +101,8 @@ val scan_late_rebind : string -> (string * int) option
     skipped; a number is read as Rocq's lexer reads it, and a late word also
     counts at the end of a longer identifier. A component of a qualified
     identifier ([Module.module_contents], [M.Register]) is one identifier
-    token to the lexer and is not a late word. *)
+    token to the lexer and is not a late word. A sentence ends at ["."] or
+    ["..."] followed by a blank, not at [".."]. *)
 
 val scan_late_events : ?imports_late:bool -> string -> (string * int) option * int option
 (** {!scan_late_rebind}, and the byte offset of the LAST such command's
