@@ -113,10 +113,12 @@ let discharge_keys (k,k') =
 type key_obj = key * key
 
 let inKeys : key_obj -> obj =
-  declare_object @@ superglobal_object "KEYS"
+  (* Two head keys (global references or term-former tags): no source
+     location. *)
+  declare_object { (superglobal_object "KEYS"
     ~cache:cache_keys
     ~subst:(Some subst_keys)
-    ~discharge:discharge_keys
+    ~discharge:discharge_keys) with interface_key = Key_as_is }
 
 let declare_equiv_keys ref ref' =
   Lib.add_leaf (inKeys (ref,ref'))

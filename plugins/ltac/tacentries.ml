@@ -280,6 +280,17 @@ let subst_tactic_notation (subst, (tobj, body)) =
 
 let classify_tactic_notation tacobj = Substitute
 
+(* [Extend.user_symbol] over [ArgT.any] holds strings, ints and argument
+   tags: only the [TacNonTerm] node carries a location. *)
+let strip_tactic_grammar_obj tobj =
+  let strip_prod = function
+    | TacTerm s -> TacTerm s
+    | TacNonTerm x -> TacNonTerm (LocStrip.located (fun v -> v) x)
+  in
+  let gram = tobj.tacobj_tacgram in
+  { tobj with
+    tacobj_tacgram = { gram with tacgram_prods = List.map strip_prod gram.tacgram_prods } }
+
 let ltac_notation_cat = Libobject.create_category "ltac.notations"
 
 let inTacticGrammar : tactic_grammar_obj * Tacenv.alias_tactic -> obj =
@@ -288,7 +299,10 @@ let inTacticGrammar : tactic_grammar_obj * Tacenv.alias_tactic -> obj =
        load_function = load_tactic_notation;
        cache_function = cache_tactic_notation;
        subst_function = subst_tactic_notation;
-       classify_function = classify_tactic_notation}
+       classify_function = classify_tactic_notation;
+       interface_key = Key_stripped (fun (tobj, body) ->
+           (strip_tactic_grammar_obj tobj,
+            { body with Tacenv.alias_body = Tacstrip.strip_tactic body.Tacenv.alias_body }))}
 
 let cache_tactic_syntax tobj =
   let key = tobj.tacobj_key in
@@ -322,7 +336,8 @@ let inTacticSyntax : tactic_grammar_obj -> obj =
        load_function = load_tactic_syntax;
        cache_function = cache_tactic_syntax;
        subst_function = subst_tactic_syntax;
-       classify_function = classify_tactic_syntax}
+       classify_function = classify_tactic_syntax;
+       interface_key = Key_stripped strip_tactic_grammar_obj}
 
 let cons_production_parameter = function
 | TacTerm _ -> None
@@ -834,6 +849,8 @@ let in_tacval =
   let subst_fun s v = v in
   let () = Genintern.register_intern0 wit intern_fun in
   let () = Gensubst.register_subst0 wit subst_fun in
+  (* An [ml_ltac_val] is a tactic name and bound identifiers: no location. *)
+  let () = Genstrip.register_strip0 wit (fun v -> v) in
   (* No need to register a value tag for it via register_val0 since we will
      never access this genarg directly. *)
   let interp_fun ist tac =
@@ -876,6 +893,10 @@ type ('a, 'b) argument_intern =
 type 'b argument_subst =
 | ArgSubstFun : 'b Gensubst.subst_fun -> 'b argument_subst
 | ArgSubstWit : ('a, 'b, 'c) Genarg.genarg_type -> 'b argument_subst
+
+type 'b argument_strip =
+| ArgStripFun : 'b Genstrip.strip_fun -> 'b argument_strip
+| ArgStripWit : ('a, 'b, 'c) Genarg.genarg_type -> 'b argument_strip
 
 type ('b, 'c) argument_interp =
 | ArgInterpRet : ('c, 'c) argument_interp
@@ -923,10 +944,18 @@ match arg.arg_interp with
     Ftactic.return (Geninterp.Val.inject tag v)
   end)
 
-let argument_extend (type a b c) ~plugin ~name ~ignore_kw (arg : (a, b, c) tactic_argument) =
+let argument_extend (type a b c) ~plugin ~name ~ignore_kw ?strip (arg : (a, b, c) tactic_argument) =
   let wit = Genarg.create_arg name in
   let () = Genintern.register_intern0 wit (intern_fun name arg) in
   let () = Gensubst.register_subst0 wit (subst_fun arg) in
+  let () = match (strip : b argument_strip option) with
+  | Some (ArgStripFun f) -> Genstrip.register_strip0 wit f
+  | Some (ArgStripWit w) -> Genstrip.register_strip0 wit (fun v -> Genstrip.strip w v)
+  | None ->
+    (* No stripper given (a plugin written before D18): the value as it is,
+       locations included, so a moved location changes the key. *)
+    Genstrip.register_strip0 wit (fun v -> v)
+  in
   let tag = match arg.arg_tag with
   | None ->
     let () = register_val0 wit None in

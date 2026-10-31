@@ -320,7 +320,16 @@ let require_locate from qidl =
   in
   List.map (fun qid ->
       let open Loadpath in
-      match locate_qualified_library ?root qid with
+      let result = locate_qualified_library ?root qid in
+      let () =
+        let library, found = match result with
+          | Ok (dir, file) -> Some dir, Some file
+          | Error _ -> None, None
+        in
+        Attempts.record_require_qualified ~root qid
+          ~probes:(fun () -> qualified_library_probes ?root qid) ~library ~found
+      in
+      match result with
       | Ok (dir,_) -> (qid.loc, dir)
       | Error LibUnmappedDir -> Loc.raise ?loc:qid.loc (UnmappedLibrary (root, qid))
       | Error LibNotFound -> Loc.raise ?loc:qid.loc (NotFoundLibrary (root, qid)))
@@ -486,7 +495,14 @@ and synterp_load ~intern verbosely fname =
     Envars.expand_path_macros ~warn:(fun x -> Feedback.msg_warning (Pp.str x)) fname in
   let fname = CUnix.make_suffix fname ".v" in
   let input =
-    let longfname = Loadpath.locate_file fname in
+    let longfname =
+      match Loadpath.locate_file fname with
+      | f -> Attempts.record_load fname ~probes:(fun () -> Loadpath.file_probes fname) ~found:(Some f); f
+      | exception e when CErrors.noncritical e ->
+        let e = Exninfo.capture e in
+        Attempts.record_load fname ~probes:(fun () -> Loadpath.file_probes fname) ~found:None;
+        Exninfo.iraise e
+    in
     let in_chan = Util.open_utf8_file_in longfname in
     Procq.Parsable.make ~loc:Loc.(initial (InFile { dirpath=None; file=longfname}))
         (Gramlib.Stream.of_channel in_chan) in

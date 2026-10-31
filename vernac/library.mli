@@ -75,6 +75,55 @@ val save_library_to :
     [require_library_syntax_from_dirpath] *)
 val save_library : DirPath.t -> library_t
 
+val set_location_free_label : bool -> unit
+(** [-location-free-label]: when [true], a saved library stores as the
+    digest of its [library] segment the first 16 bytes of the location-free
+    label of its summary and [library] segment ([LibkeyObjects.label])
+    instead of the MD5 of the segment's bytes, and stores the attempted
+    resolutions nothing else records ([Attempts]). Default [false]: the
+    file is what a stock [coqc] writes. A stock [coqc] cannot load a
+    library that holds an [ATTEMPTS] object (it does not know the object
+    kind). *)
+
+(** What [rocq-library-label] reads in a [.vo] file. The two digests are
+    computed when they are forced: a reader that only wants the records
+    pays for neither. *)
+type file_label = {
+  name : DirPath.t;
+  (** The library's logical name, from its [summary] segment. *)
+  stored : string;
+  (** The digest the file stores for its [library] segment: what its
+      dependents record. *)
+  segment_md5 : string Lazy.t;
+  (** The MD5 of that segment's bytes: what stock stores there. *)
+  label : (string, string) result Lazy.t;
+  (** The label (32 bytes) recomputed from the file's [summary] and
+      [library] segments ([LibkeyObjects.label_result]), or why the library
+      has none. *)
+  attempts : Attempts.t option;
+  (** The attempted-resolution records of its object segment. *)
+  axiom_report : LibkeyObjects.axiom_report Lazy.t;
+  (** The constants the label blinded, with their current status, and the
+      libraries this one holds a foreign opaque reference into
+      ([LibkeyObjects.axiom_report]): what the keep rule reads beside the
+      label for its monotone axiom condition. The tables a proof body was
+      read from (by an extraction, or by the walk that computes the
+      closures) are not here but in the keepfacts segment's queries. *)
+  keep_facts_segment : KeepFacts.t ObjFile.segment option;
+  (** Where the file's [keepfacts] segment is ([KeepFacts]: the assumption
+      closures, the foreign opacities its commands saw, and for each body
+      read the library holding the constant and the library whose opaque
+      table held the body), not its
+      value: nothing is read from it here. A reader parses it from there and
+      validates it against the checker's description of the segment
+      ([Values.v_keepfacts]) before it unmarshals it, as
+      [rocq-library-label] does. [None] for a file written without
+      [-location-free-label], or a [.vos]; the keep rule then rebuilds. *)
+}
+
+val read_file_label : CUnix.physical_path -> file_label
+(** Raises an exception when the file cannot be read as a [.vo] file. *)
+
 (** {6 Interrogate the status of libraries } *)
 
   (** - Tell if a library is loaded *)

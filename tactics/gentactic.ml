@@ -26,6 +26,8 @@ let print_glob = Pputils.pr_glb_generic
 
 let subst = Gensubst.generic_substitute
 
+let strip = Genstrip.generic_strip
+
 let intern ?(strict=true) env ?(ltacvars=Id.Set.empty) v =
   let ist = { (Genintern.empty_glob_sign ~strict env) with ltacvars } in
   let _, v = Genintern.generic_intern ist v in
@@ -41,6 +43,10 @@ let interp ?(lfun=Id.Map.empty) v =
   Ftactic.run v (fun _ -> Proofview.tclUNIT ())
 
 let wit_generic_tactic = Genarg.make0 "generic_tactic"
+
+(* [wit_generic_tactic] has no glob level ([Util.Empty.t]): nothing to
+   strip. *)
+let () = Genstrip.register_strip0 wit_generic_tactic (fun (e : Util.Empty.t) -> e)
 
 let () =
   let mkprint f v = Genprint.PrinterBasic (fun env sigma -> f env sigma v) in

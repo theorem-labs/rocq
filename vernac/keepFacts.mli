@@ -1,0 +1,79 @@
+(************************************************************************)
+(*         *      The Rocq Prover / The Rocq Development Team           *)
+(*  v      *         Copyright INRIA, CNRS and contributors             *)
+(* <O___,, * (see version control and CREDITS file for authors & dates) *)
+(*   \VV/  **************************************************************)
+(*    //   *    This file is distributed under the terms of the         *)
+(*         *     GNU Lesser General Public License Version 2.1          *)
+(*         *     (see LICENSE file for the text of the license)         *)
+(************************************************************************)
+
+open Names
+
+(** The keep rule's facts about a saved library that a [.vo] file's segments
+    cannot carry on their own (design D18, dispatch://INFRA-361): its
+    assumption closure, and the foreign opacities its strategy commands saw.
+    [Library] computes them while the library is saved and stores them in a
+    [keepfacts] segment the label does not cover. *)
+
+type query = {
+  constant : string;  (** its user name, as [LibkeyObjects.axiom_report] lists it *)
+  library : string option;  (** the library holding it; [None] for a functor parameter's *)
+  opaque : bool;
+  (** for a status check, whether it was an opaque proof when the command ran;
+      for a body read, always [true]: an opaque proof whose body was read *)
+  table : string option;
+  (** for a body read -- by an extraction, or by the walk that computes the
+      closures, of a constant of this library -- the library whose opaque
+      table holds that body: the holder's own, or, for a copy a module
+      operation did not strengthen, the library whose table the copy's
+      reference points into, however many copies away; [None] for a status
+      check (a strategy command, an extraction's axiom-or-opaque check) *)
+}
+
+type t = {
+  assumptions : (string * string list) list option;
+  (** The assumption closure of each constant and inductive the library
+      declares (by user name; sorted; empty closures left out): its axioms
+      and other [ContextObject]s as sorted canonical keys, plus theory flags,
+      traversing opaque proof bodies as [Print Assumptions] does. [None] when
+      it could not be computed. *)
+  opacity_queries : query list;
+  (** Each foreign constant a command told apart as an axiom ([Undef None]) or
+      an opaque proof (a non-opaque [Strategy]/[Transparent] command, an
+      extraction: [OpacityLog]), or whose opaque proof body an extraction
+      read (always [opaque = true], with its [table]), with its library and
+      the opacity it saw, sorted by name; also a constant of this library
+      whose body an extraction, or the walk that computes [assumptions], read
+      from another library's table (a copy of that library's proof: a functor
+      application, an [Include] of one, a sealed module whose implementation
+      is such an expression). Recorded several ways, [opaque = true] with the
+      body read's table. No other body form is recorded. *)
+}
+
+val compute :
+  access:Global.indirect_accessor ->
+  stored:(DirPath.t -> (string * string list) list option) -> self:DirPath.t -> t
+(** The facts for the library [self], computed from the current environment
+    (its constants and inductives, and the opaque bodies [access] reaches).
+    The walk that computes the closures reads bodies through a wrapper of
+    [access] that logs each body of a constant of [self] it reads from
+    another library's table as a body-read query, so a closure stored for a
+    copy is kept only while that table's library is byte-identical; the
+    closures are computed before the queries are collected.
+    Call it while the library being saved is still loaded. [stored dp] is the
+    [assumptions] field of the keepfacts segment of the loaded library [dp]
+    (read with its other segments), or [None]: the closure of a constant of
+    such a library is taken from there rather than by walking it. That gives
+    the closure [Print Assumptions] gives when no library it reaches was
+    recompiled since [dp] was. After a dependency was rebuilt to an equal label
+    under a kept [dp] (a keep round), it gives a superset: [dp]'s record still
+    lists what the dependency's old build used, and the keep rule keeps [dp]
+    only when no closure of its in-tree dependencies grew and every table its
+    own body-read queries name is byte-identical (the growth check alone is
+    not enough: misc/library-label-keepfacts.sh, BXA), so the record still
+    contains every current closure (the comment of [fast_closures] gives the
+    premise and the induction). ROCQ_KEEPFACTS_FULL_WALK=1 walks every body
+    instead (the current closure exactly, the reference this is checked
+    against), and ROCQ_KEEPFACTS_DEBUG=1 says on standard error how each
+    library's closures were computed. *)

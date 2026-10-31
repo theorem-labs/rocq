@@ -463,12 +463,7 @@ let visit_vo f =
   Printf.printf "Enjoy your guided tour of a Rocq .vo or .vi file\n";
   Printf.printf "Object sizes are in words (%d bits)\n" Sys.word_size;
   Printf.printf "Input h for help\n\n%!";
-  let known_segments = [
-    "summary", Values.v_libsum;
-    "library", Values.v_lib;
-    "opaques", Values.v_opaquetable;
-    Vmlibrary.segment_name, Values.v_vmlib;
-  ] in
+  let known_segments = Values.vo_segments in
   let repr =
     if Sys.word_size = 64 then (module ReprMem : S) else (module ReprObj : S)
     (* On 32-bit machines, representation may exceed the max size of arrays *)

@@ -1136,6 +1136,29 @@ let pr_rpattern = pr_pattern pr_cpattern pr_cpattern
 
 let wit_rpatternty = add_genarg "rpatternty" (fun env sigma -> pr_pattern pr_cpattern pr_cpattern)
 
+(* Interface key (D18): location strippers of the glob values. A glob
+   cpattern has no interpretation closure; one with a closure cannot be
+   stripped by type. *)
+let strip_cpattern ({ kind; pattern; interpretation } : cpattern) : cpattern =
+  match interpretation with
+  | Some _ -> LocStrip.unknown "ssrmatching cpattern with interp_sign"
+  | None ->
+    { kind; pattern = ConstrStrip.glob_constr_and_expr pattern; interpretation = None }
+
+let strip_ssrpattern fin ft = function
+  | T t -> T (ft t)
+  | In_T t -> In_T (ft t)
+  | X_In_T p -> X_In_T (fin p)
+  | In_X_In_T p -> In_X_In_T (fin p)
+  | E_In_X_In_T (e, p) -> E_In_X_In_T (ft e, fin p)
+  | E_As_X_In_T (e, p) -> E_As_X_In_T (ft e, fin p)
+
+let strip_rpattern (p : rpattern) : rpattern =
+  strip_ssrpattern
+    (fun (x, t) -> (strip_cpattern x, strip_cpattern t)) strip_cpattern p
+
+let () = Genstrip.register_strip0 wit_rpatternty strip_rpattern
+
 let id_of_cpattern {pattern = (c1, c2); _} =
   let open CAst in
   match DAst.get c1, c2 with

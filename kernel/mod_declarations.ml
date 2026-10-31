@@ -240,6 +240,54 @@ let hcons_module_body =
 let hcons_module_type =
   hcons_generic_module_body
 
+(** Mapping the constants of a module.
+
+    One traversal of the declarations a module holds, with every other field
+    kept as it is. The record pattern of [map_constants_gmb] names every
+    field and warning 9 is an error there, so a field added to
+    [generic_module_body] stops the build until this traversal says whether
+    it can hold a constant. [mod_type_alg] and the [Algebraic] implementation
+    are module *expressions* ([MEident], [MEapply], [MEwith]), which name
+    modules and, for [MEwith], carry a term, never a constant body; the
+    [FullStruct] implementation is the expanded type itself, which
+    [mod_type] already covers. *)
+
+let rec map_constants_sfb
+    (f : constant_body -> constant_body) (sfb : structure_field_body) : structure_field_body =
+  match sfb with
+| SFBconst cb -> SFBconst (f cb)
+| SFBmind _ | SFBrules _ -> sfb
+| SFBmodule mb -> SFBmodule (map_constants_gmb f mb)
+| SFBmodtype mtb -> SFBmodtype (map_constants_gmb f mtb)
+
+and map_constants_structure f struc =
+  List.map (fun (l, sfb) -> (l, map_constants_sfb f sfb)) struc
+
+and map_constants_signature f = function
+| NoFunctor struc -> NoFunctor (map_constants_structure f struc)
+| MoreFunctor (mbid, mtb, sign) ->
+  MoreFunctor (mbid, map_constants_gmb f mtb, map_constants_signature f sign)
+
+and map_constants_implem :
+  type a. (constant_body -> constant_body) ->
+    (a, module_implementation) when_mod_body -> (a, module_implementation) when_mod_body =
+  fun f expr -> match expr with
+| ModTypeNul -> ModTypeNul
+| ModBodyVal (Struct (reso, struc)) -> ModBodyVal (Struct (reso, map_constants_structure f struc))
+| ModBodyVal (Abstract | Algebraic _ | FullStruct) -> expr
+
+and map_constants_gmb :
+  'a. (constant_body -> constant_body) -> 'a generic_module_body -> 'a generic_module_body =
+  fun f mb ->
+  let[@warning "@9"] { mod_expr; mod_type; mod_type_alg; mod_delta; mod_retroknowledge } = mb in
+  { mod_expr = map_constants_implem f mod_expr;
+    mod_type = map_constants_signature f mod_type;
+    mod_type_alg;
+    mod_delta;
+    mod_retroknowledge }
+
+let map_constants f mb = map_constants_gmb f mb
+
 (** Operators *)
 
 let rec functor_smart_map fty f0 funct = match funct with

@@ -6,7 +6,8 @@
  (name coq_checklib)
  (public_name rocq-runtime.checklib)
  (synopsis "Rocq's Standalone Proof Checker")
- (modules :standard \ rocqchk coqchk votour)
+ (modules :standard \ rocqchk coqchk votour library_label vo_payloads
+  payload_types)
  (wrapped true)
  (libraries rocq-runtime.boot rocq-runtime.kernel))
 
@@ -39,4 +40,106 @@
  (modules votour)
  (flags :standard -open Coq_checklib)
  (libraries coq_checklib rocq-runtime.kernel))
+
+; rocq-library-label: the location-free library label of a .vo file
+; (vernac/libkeyObjects.ml), recomputed from its content, its
+; attempted-resolution records, and how this build represents what a .vo
+; stores. A reader of compiled libraries, as votour is, and the oracle of
+; test-suite/misc/library-label*.sh and misc/vo-format.sh. It links
+; rocqworker's toplevel and every plugin statically, so that the object
+; kinds registered here are the ones a compile registers once it has
+; loaded its plugins, and the checker's value schema for
+; --vo-representation.
+(executable
+ (name library_label)
+ (public_name rocq-library-label)
+ (package rocq-runtime)
+ (modules library_label payload_types)
+ (link_flags -linkall)
+ (libraries
+  rocq-runtime.vernac
+  rocq-runtime.toplevel
+  rocq-runtime.checklib
+  rocq-runtime.plugins.ltac
+  rocq-runtime.plugins.tauto
+  rocq-runtime.plugins.ltac2
+  rocq-runtime.plugins.ltac2_ltac1
+  rocq-runtime.plugins.ssrmatching
+  rocq-runtime.plugins.ssreflect
+  rocq-runtime.plugins.btauto
+  rocq-runtime.plugins.cc
+  rocq-runtime.plugins.derive
+  rocq-runtime.plugins.extraction
+  rocq-runtime.plugins.firstorder
+  rocq-runtime.plugins.funind
+  rocq-runtime.plugins.micromega
+  rocq-runtime.plugins.zify
+  rocq-runtime.plugins.nsatz
+  rocq-runtime.plugins.ring
+  rocq-runtime.plugins.rtauto
+  rocq-runtime.plugins.number_string_notation))
+
+; vo_payloads: the OCaml type of the payload of every object kind, read
+; from the typed trees (.cmt, .cmti) dune writes for the directories whose
+; code rocq-library-label links. It is a build-time tool, not installed;
+; what it prints is payload_types.ml, which rocq-library-label prints under
+; --vo-representation (checker/vo_payloads.ml says what it reads and what
+; it cannot reach).
+(executable
+ (name vo_payloads)
+ (modules vo_payloads)
+ ; one module, with no interface of its own
+ (flags (:standard -w -70))
+ (libraries compiler-libs.common))
+
+; The directories here are the ones the rocq-library-label executable above
+; links, minus checker's own: the kinds it registers are the kinds those
+; directories declare. checker is left out because coq_checklib depends on
+; kernel alone and so registers no kind, and because a rule cannot depend
+; on the directory it writes in. A library added to that executable needs
+; its directory added here as well: a kind it registers would otherwise
+; keep its object_kind line and get no payload line, which
+; test-suite/misc/vo-format.sh lets pass as a new kind.
+(rule
+ (target payload_types.ml)
+ ; the typed trees of a directory are what its [check] alias builds; they
+ ; live under its hidden object directories, which a glob does not reach,
+ ; so the directories are named twice: once as the dependencies here and
+ ; once as the arguments below. A directory dropped from the dependencies
+ ; and left in the arguments is one nothing builds, and the tool fails on a
+ ; directory with no typed tree in it (checker/vo_payloads.ml), so the two
+ ; lists cannot drift apart in a tree that is built from clean. Sandboxing
+ ; the rule would close the incremental case too, but dune does not copy
+ ; the files of an [alias_rec] dependency into the sandbox, so the rule
+ ; then sees no tree at all and the tool fails; (sandbox none) keeps that
+ ; from happening under `dune --sandbox` or a later dune default.
+ (deps
+  (sandbox none)
+  (alias_rec %{workspace_root}/boot/check)
+  (alias_rec %{workspace_root}/clib/check)
+  (alias_rec %{workspace_root}/engine/check)
+  (alias_rec %{workspace_root}/gramlib/check)
+  (alias_rec %{workspace_root}/interp/check)
+  (alias_rec %{workspace_root}/kernel/check)
+  (alias_rec %{workspace_root}/lib/check)
+  (alias_rec %{workspace_root}/library/check)
+  (alias_rec %{workspace_root}/parsing/check)
+  (alias_rec %{workspace_root}/plugins/check)
+  (alias_rec %{workspace_root}/pretyping/check)
+  (alias_rec %{workspace_root}/printing/check)
+  (alias_rec %{workspace_root}/proofs/check)
+  (alias_rec %{workspace_root}/stm/check)
+  (alias_rec %{workspace_root}/sysinit/check)
+  (alias_rec %{workspace_root}/tactics/check)
+  (alias_rec %{workspace_root}/toplevel/check)
+  (alias_rec %{workspace_root}/vernac/check))
+ (action
+  (with-stdout-to %{target}
+   (run ./vo_payloads.exe --ml
+    %{workspace_root}/boot %{workspace_root}/clib %{workspace_root}/engine
+    %{workspace_root}/gramlib %{workspace_root}/interp %{workspace_root}/kernel
+    %{workspace_root}/lib %{workspace_root}/library %{workspace_root}/parsing
+    %{workspace_root}/plugins %{workspace_root}/pretyping %{workspace_root}/printing
+    %{workspace_root}/proofs %{workspace_root}/stm %{workspace_root}/sysinit
+    %{workspace_root}/tactics %{workspace_root}/toplevel %{workspace_root}/vernac))))
 

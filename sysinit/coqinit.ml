@@ -179,6 +179,7 @@ let init_document opts =
   Global.set_indices_matter opts.config.logic.indices_matter;
   Global.set_check_universes (not opts.config.logic.type_in_type);
   Global.set_VM opts.config.enable_VM;
+  Library.set_location_free_label opts.config.location_free_label;
   Global.set_native_compiler (match opts.config.native_compiler with NativeOff -> false | NativeOn _ -> true);
   Global.set_rewrite_rules_allowed opts.config.logic.rewrite_rules;
   Opaques.skip_qed_typecheck := opts.config.skip_qed_typecheck;
@@ -270,6 +271,9 @@ let handle_injection ~intern = let open Coqargs in function
   | WarnSkipQedTypecheckIgnored -> warn_skip_qed_typecheck_ignored ()
 
 let start_library ~intern ~top injections =
+  (* The attempts of a library that a process abandoned are not the next
+     library's (they are not in the summary, so nothing else drops them). *)
+  Attempts.reset ();
   Flags.verbosely Declaremods.start_library top;
   CWarnings.override_unknown_warning[@ocaml.warning "-3"] := true;
   List.iter (handle_injection ~intern) injections;

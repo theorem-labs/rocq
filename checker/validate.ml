@@ -231,3 +231,9 @@ let validate v (o, mem) : unit =
     print_endline ("Context: "^String.concat"/"rctx);
     pr_obj mem obj;
     failwith ("Validation failed: "^msg^" (in "^(print_frame (List.hd ctx))^")")
+
+let check v (o, mem) =
+  match val_gen v mem mt_ec o with
+  | () -> Ok ()
+  | exception ValidObjError (msg, ctx, _) ->
+    Error (msg ^ " (in " ^ String.concat "/" (List.rev_map print_frame ctx) ^ ")")

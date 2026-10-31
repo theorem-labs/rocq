@@ -46,8 +46,10 @@ rocq c -noinit -R "$d/d2" "" "$d/d2/Defs.v"
 
 # Splice: library from d1 (body says true), vmlibrary from d2 (bytecode says
 # false), keeping d1's opaques/summary and its segment order.
-# misc/vo_container.py rebuilds the container, so every MD5 and every offset is
-# right.
+# misc/vo_container.py rebuilds the container: each segment keeps the digest
+# its file stored, which readers only compare against the copy after the data
+# (the library segment's is a label under -location-free-label, not the MD5 of
+# its bytes), and every offset is recomputed.
 python3 - "$(dirname "$0")" "$d" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])

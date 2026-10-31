@@ -58,6 +58,8 @@ let inRenameArgs = declare_object { (default_object "RENAME-ARGUMENTS" ) with
   classify_function = classify_rename_args;
   subst_function = subst_rename_args;
   discharge_function = discharge_rename_args;
+  (* A request flag, a global reference and names: no source location. *)
+  interface_key = Key_as_is;
 }
 
 let rename_arguments local r names =

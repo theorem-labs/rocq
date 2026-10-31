@@ -165,6 +165,15 @@ type ('a, 'b) ml_object = {
 val define_ml_object : ('a, 'b) Tac2dyn.Arg.tag -> ('a, 'b) ml_object -> unit
 val interp_ml_object : ('a, 'b) Tac2dyn.Arg.tag -> ('a, 'b) ml_object
 
+val define_ml_strip : ('a, 'b) Tac2dyn.Arg.tag -> ('b -> 'b) -> unit
+(** Register the location stripper (see {!LocStrip}) of the globalized
+    payload of an ML object: it must replace every source location of the
+    payload and change nothing else. *)
+
+val strip_ml_object : ('a, 'b) Tac2dyn.Arg.tag -> 'b -> 'b
+(** Apply the stripper registered for this ML object. Raises
+    [LocStrip.Unknown] when the object has none. *)
+
 (** {5 Absolute paths} *)
 
 val rocq_prefix : ModPath.t

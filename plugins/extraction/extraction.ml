@@ -1140,6 +1140,36 @@ let extract_constant table access env kn inst cb =
     let e,t = extract_std_constant table env sg kn inst c typ in
     Dterm (r,e,t)
   in
+  (* Every branch below tells an axiom ([Undef]: an axiom to realize, a
+     logical axiom) from an opaque proof (accessed, or extracted as an axiom),
+     and each of those warnings can be made an error, so a dependency's
+     [Admitted -> Qed] edit, which its label hides, can change whether this
+     library compiles. Logged for the keep rule (D18, dispatch://INFRA-361;
+     [OpacityLog]), with the body the global environment gives [kn]: the one
+     the dependency's label blinds and its axiom report lists. *)
+  let () =
+    let genv = Global.env () in
+    if Environ.mem_constant kn genv then OpacityLog.record kn (Environ.lookup_constant kn genv)
+  in
+  (* With AccessOpaque (the default), extraction reads the BODY of an opaque
+     proof, foreign ones included, and what it extracts depends on that body,
+     which no label covers. Each read is logged as an opaque query
+     ([opaque = true]), also when [cb] comes from a sealed module's
+     implementation and the global environment holds the signature's axiom,
+     or from a functor's body, which the global environment does not hold.
+     The query records two libraries: the holder, [kn]'s library, and the
+     table, the library whose opaque table holds the body read
+     ([Opaqueproof.repr c]). For a copy a module operation did not strengthen
+     (a functor application, an [Include] of one, at any depth, a sealed
+     [Module X : T := L.F A] rebuilt from its expression) the two can differ,
+     and the table's library need not be one the holder's compiled form
+     names.
+     The keep rule keeps the dependent only when the holder's object and the
+     table's object are both byte-identical. *)
+  let read_opaque c =
+    OpacityLog.record_body_read kn c;
+    get_opaque access env c
+  in
   try
     match flag_of_type env sg typ with
     | (Logic,TypeScheme) -> warn_log ();
@@ -1159,7 +1189,7 @@ let extract_constant table access env kn inst cb =
                 mk_typ body)
           | OpaqueDef c ->
             add_opaque (Common.State.get_table table) r;
-            if access_opaque () then mk_typ (get_opaque access env c)
+            if access_opaque () then mk_typ (read_opaque c)
             else mk_typ_ax ())
     | (Info,Default) ->
         (match cb.const_body with
@@ -1173,7 +1203,7 @@ let extract_constant table access env kn inst cb =
                 mk_def (qmono cb.const_universes inst body))
           | OpaqueDef c ->
             add_opaque (Common.State.get_table table) r;
-            if access_opaque () then mk_def (get_opaque access env c)
+            if access_opaque () then mk_def (read_opaque c)
             else mk_ax ())
   with SingletonInductiveBecomesProp ind ->
     error_singleton_become_prop ind
