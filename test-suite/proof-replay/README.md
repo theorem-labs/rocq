@@ -354,7 +354,14 @@ remove`); the plain lemma and the two section lemmas refer to it and miss on
 it abstracted) and the section `Let` (a section variable, with no table
 entry) kept their terms inline and replay.  `voref_object_changed`: one byte of
 the registered `.vo`'s opaque proofs changed (`vo_mutation: change`), and the
-proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
+proof that refers to it misses on `vo_term`.  So a `-proof-record-vo-ref`
+record replays only beside its registered `.vo`.  A file whose registered
+`.vo` cannot ship (a file the task cut edits, whose `.vo` holds the proofs
+the cut removes) never replays from such a record.  For that file,
+`rocq proof-record-inline RECORD VO OUT` (theorem-labs/rocq#20) writes each
+reference back as the inline term before the record ships.  A file whose
+`.vo` ships keeps its reference record, with the `.vo` beside it.
+`late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
