@@ -1,11 +1,10 @@
-(* Each lookup in a micromega cache reads, keyed by the cache file, what the
-   table loaded when it was opened. Both trees block .nia.cache with a
-   directory, as the grading engine does, so [same] reads no entry at the
-   registration and at the grade, and must replay. The registration tree
-   blocks .lia.cache too. The edited tree holds a .lia.cache instead, the one
-   a compile of this tree writes (tree_files), so [changed] reads the digest
-   of its bytes where it read no entry, and must miss on that read. Its
-   tactics then find their certificate in the cache, and both runs compile. *)
+(* Both trees block .nia.cache with a directory, as the grading engine
+   does. The registration tree blocks .lia.cache too, so no table opens
+   there and both proofs are eligible. The edited tree holds a .lia.cache
+   instead, the one a compile of this tree writes (tree_files). No table has
+   opened it when the grade decides [same], so the micromega_cache fence
+   trips there, and neither proof replays. [changed]'s tactics then find
+   their certificate in the cache, and both runs compile. *)
 From Stdlib Require Import ZArith Lia.
 Open Scope Z_scope.
 

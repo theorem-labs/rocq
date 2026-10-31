@@ -467,23 +467,22 @@ look their problem up in a certificate cache (`.lia.cache`, `.nia.cache`,
 `.nra.cache`, `.csdp.cache`, in the compile's working directory) before they
 run their prover, and no read recorded the cache.  The grading engine blocks
 these paths with directories, but the fixture runner and other users of this
-tree do not.  `micromega_cache_unknown`: the edited tree holds a `.lia.cache`
+tree do not.  The cache is now a process-wide fence (reason
+`micromega_cache`, the delta review of `e560ab16e4` below).
+`micromega_cache_unknown`: the edited tree holds a `.lia.cache`
 (`tree_files`) whose one entry is the registration's own entry for the
 proof's problem, with the result changed to `Certificate.Unknown`.
 `make_cache.ml`, beside the fixture, wrote it with the micromega plugin of
 the same build.  Stock reads `Unknown` and `lia` fails, so replay must fail
 too.  Before the fix, replay installed the stored term and compiled the file.
 `eval_micromega_cache`: both trees block `.nia.cache` (`tree_dirs`), as the
-grading engine does, so the `nia` proof `same` reads no entry in both runs
-and replays.  The registration blocks `.lia.cache` too, and the edited tree
-holds the `.lia.cache` that a compile of this tree with no block writes
-(`lia-cache.bin`: `rocq compile -q -Q . PR A.v` in a copy of `original/`).
-So the `lia` proof `changed` misses on `micromega_cache`.  Its entry is
-genuine, so stock and replay compile.  The replay `.vo` differs from stock's
-only in the sharing of the string "BinInt", as `vm_lia_hit`'s does
-(`EXEMPTIBLE_FIXTURES` in `runner.py`).  A cache file that differs from the
-registration's makes a proof miss also when its entries are genuine: the
-value is the file's digest, not each lookup's answer.
+grading engine does, and the registration blocks `.lia.cache` too, so both
+proofs are eligible.  The edited tree holds the `.lia.cache` that a compile
+of this tree with no block writes (`lia-cache.bin`: `rocq compile -q -Q . PR
+A.v` in a copy of `original/`).  No table has opened that file when the grade
+decides `same`, so the fence trips there (summary `fence` is
+`micromega_cache: .lia.cache`), and neither proof replays.  The entry is
+genuine, so stock and replay compile.
 
 **Gate review of 079bc4cb71, reviewer finding R1.**  A declaration can make
 universe levels of its own: the hint of a universe-polymorphic instance takes
@@ -534,20 +533,22 @@ and stock in two directories.
 
 **Gate review of 26528c8a34, finding CF4-R2.**  A micromega certificate
 cache reads an entry it has not read yet from its file's relative path again
-at each lookup, while the proof's `micromega_cache` read is the digest of the
-file its table opened.  A `Cd` makes those two files differ, and no read
-records the working directory.  With the recorder or replay on, each `Cd`
-trips the process-wide fence (reason `cd`), so no proof that opens after it
-replays.  `Cd` is also a late command, so no proof before it replays: a
-replayed proof would leave unopened a cache that stock opened in the old
-directory.  `cd_micromega_cache` is the reviewer's trigger.  `warm` (under
-`Time`, so it always runs) opens the lia cache in `cache0/`, whose one entry
-is the genuine entry for `target`.  After `Cd ".."`, `target`'s lia reads that
-entry from `./.lia.cache`, which holds the genuine entry in the registration
-and the same key with the result `Certificate.Unknown` in the edited tree
+at each lookup.  A `Cd` makes that file another one than the file its table
+opened, and no read records the working directory.  With the recorder or
+replay on, each `Cd` trips the process-wide fence (reason `cd`), so no proof
+that opens after it replays.  `Cd` is also a late command, so no proof before
+it replays: a replayed proof would leave unopened a cache that stock opened
+in the old directory.  `cd_micromega_cache` is the reviewer's trigger.
+`warm` (under `Time`, so it always runs) opens the lia cache in `cache0/`,
+whose one entry is the genuine entry for `target`.  After `Cd ".."`,
+`target`'s lia reads that entry from `./.lia.cache`, which holds the genuine
+entry in the registration and the same key with the result
+`Certificate.Unknown` in the edited tree
 (`tree_files`).  Stock fails with "Cannot find witness", and replay must fail
 too.  On `26528c8a34` the proof's read gave the digest of `cache0/.lia.cache`
-in both runs, and replay installed the stored term.
+in both runs, and replay installed the stored term.  Since the delta review
+of `e560ab16e4`, the `micromega_cache` fence trips at `warm` too, after the
+`cd` fence.
 `lia-cache-unknown.bin` is the file of `micromega_cache_unknown`.
 `lia-cache.bin` is the `.lia.cache` that `rocq compile -q -Q . PR A.v` writes
 in a copy of `micromega_cache_unknown/original/`, so its one entry is at the
@@ -663,6 +664,34 @@ proofs.  `eval_reserved_type_rev`: the name reserved for `nat` changes, so
 the proof that names a `nat` binder misses on `reserved_type_rev`; the name
 reserved for `bool` does not change, so the proof that names a `bool` binder
 replays.
+
+**Delta review of `e560ab16e4`, the micromega cache.**  The
+`micromega_cache` read held what a cache table loaded when it opened.  That
+does not fix a later lookup: the table keeps each entry's position, and the
+lookup reads the entry from the file only when it needs it, after a command
+can have written the file.  The read is gone.  With the recorder or replay
+on, a fence check in `plugins/micromega/persistent_cache.ml` trips the
+process-wide fence (reason `micromega_cache`, detail the file) when a table
+loaded entries of its file when it opened, and when a cache path holds a
+file (not a directory) while no table has opened it: a replayed proof does
+not open the table where stock opens it.  The check runs when a recorded
+proof opens and closes and at each replay decision.  A table that opened
+with no entry gives only what this process computed, so `vm_lia_hit`, whose
+compiles make their own caches, still replays.  `micromega_cache_truncated`
+is the reviewer's trigger.  Both trees start with the `.lia.cache` of
+`micromega_cache_unknown`, and `warm` (under `Time`, so it always runs)
+opens it.  In the registration only, `Print Universes Subgraph ( )
+".lia.cache".` writes over the file before `target`, so the registration's
+`target` finds no entry, computes its certificate and succeeds.  In the
+edited tree stock reads `Unknown` and fails, so replay must fail too.  On
+`e560ab16e4` the read gave the same value in both runs, and replay installed
+the stored term.  `micromega_cache_blocked`: the four paths are directories
+in both trees, as the grading engine makes them, so no table opens, the
+fence does not trip, and the `nia` and `lia` proofs replay.  Its replay
+`.vo` differs from stock's only in the sharing of the string "BinInt", as
+`vm_lia_hit`'s does, and it takes the place of `eval_micromega_cache`, which
+replays nothing now, in `EXEMPTIBLE_FIXTURES` (`runner.py`).
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its

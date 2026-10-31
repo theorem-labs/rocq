@@ -471,9 +471,10 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: library segment reaches the string "BinInt" through a shared pointer
 #: where the replay's does not (vodiff, 2026-10-30: 0 value differences,
 #: 2 sharing differences; the same on a switch built before the vm_global
-#: read). eval_micromega_cache replays one nia proof over Z, with the same
-#: two "BinInt" sharing differences (vodiff, 2026-10-31: 0 value
-#: differences, 2 sharing differences, the opaques segment equal).
+#: read). micromega_cache_blocked replays a nia and a lia proof over Z, with
+#: the same two "BinInt" sharing differences (vodiff, 2026-10-31, a build of
+#: e560ab16e4: 0 value differences, 2 sharing differences, opaques and
+#: vmlibrary equal).
 #: eval_abbreviation, eval_notation and eval_prim_token share the
 #: string "Datatypes" where stock does, and eval_ltac2_global,
 #: eval_ltac2_notation, ltac_alias_moved and ltac_redef_moved share
@@ -488,7 +489,7 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 #: a build of 6ef3d08b1a: 0 value differences, 2 sharing differences,
 #: opaques and vmlibrary equal).
 EXEMPTIBLE_FIXTURES = ("place_same_file", "hint_removed", "channels_unchanged", "write_scheme_rewrite",
-                       "vm_lia_hit", "eval_micromega_cache", "eval_abbreviation", "eval_notation",
+                       "vm_lia_hit", "micromega_cache_blocked", "eval_abbreviation", "eval_notation",
                        "eval_prim_token", "eval_ltac2_global", "eval_ltac2_notation", "ltac_alias_moved",
                        "ltac_redef_moved", "eval_option_tables")
 

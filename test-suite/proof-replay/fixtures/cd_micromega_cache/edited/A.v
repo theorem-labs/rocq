@@ -5,9 +5,9 @@
    that entry again from .lia.cache in this directory (tree_files): the
    registration's holds the genuine entry, the edited tree's holds the same
    key with the result Certificate.Unknown. Stock reads Unknown and lia
-   fails. The micromega_cache read of [target] is the digest of
-   cache0/.lia.cache when it opened, the same in both trees, so without the
-   cd fence [target] replays. *)
+   fails. The cd fence trips first, at [Cd "cache0"]. The micromega_cache
+   fence trips too, at [warm], because cache0/.lia.cache is a file that no
+   table has opened. *)
 From Stdlib Require Import ZArith Lia.
 Open Scope Z_scope.
 Set Warnings "-change-dir-deprecated".

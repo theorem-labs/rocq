@@ -1,5 +1,5 @@
 {
-  "doc": "a Cd makes lia read a cache entry from another .lia.cache than the one whose digest the proof recorded: stock reads Unknown and fails, so the proof after the Cd must not replay",
+  "doc": "a Cd makes lia read a cache entry from another .lia.cache than the one its table opened: stock reads Unknown and fails, so the proof after the Cd must not replay",
   "files": ["A.v"],
   "records": {"A.v": {"PR.A.warm": {"ineligible": ["control_flag", "cd"], "stores_no_term": true},
                        "PR.A.target": {"ineligible": ["cd"], "stores_no_term": true}}},

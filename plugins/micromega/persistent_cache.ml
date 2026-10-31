@@ -35,57 +35,57 @@ end
 open Hashtbl
 open System
 
-(* BET-84 census row 23. A lookup returns what the cache file held when its
-   table was opened, or what the prover computes. Its entries are read back
-   from the file, and the plugin only appends to a valid file, so what the
-   table loaded fixes every answer it gives. So a recorded proof reads, for
-   each cache file its provers look up, what the table held at its opening.
-   A replay that finds another value runs the tactics, which read the file
-   as stock does. *)
-type opened =
-  | No_entry
-  (* The table loaded no entry: its path is blocked (the grading engine makes
-     it a directory), or the file is absent, empty or reset. Every lookup
-     misses and the prover runs. *)
-  | Entries of string
-  (* The digest of the file's bytes. *)
-  | Unhashed
-  (* Entries, loaded while no record or replay was tracked
-     ([Proof_recorder.tracking]), so no digest was taken. *)
+(* BET-84 census row 23. A lookup gives what the prover computes, or an
+   entry of the cache file. [open_in] loads only each entry's hash and
+   position, and [find] reads the entry from the file at the first lookup
+   that needs it. That read can come long after the table opened, and the
+   file can change between the two (a command that writes a file truncates
+   it), so nothing that the opening saw fixes what a later lookup gets. An
+   entry that this process adds is kept in memory and is never read back.
 
-(* The table of each memo function, by its file name, opened as the memo's
-   first lookup opens it. *)
-let caches : (string, (unit -> opened) list) Hashtbl.t = Hashtbl.create 4
+   So a table that opened with no entry gives only what this process's
+   prover computed, and a table that never opens reads no file. Replay can
+   rely on a table only in these cases. The fence check below trips the
+   process-wide fence (reason [micromega_cache], detail the file) in the
+   two other cases:
+   - a table loaded entries from its file when it opened;
+   - no table has opened a cache path, and that path holds a file (not a
+     directory). A replayed proof does not open the table where stock
+     opens it, so a file there could give stock an entry that the
+     registration never read.
+   The check runs at each recorded proof's start and end and at each
+   replay decision (Proof_recorder.register_fence_check). The grading
+   engine makes each cache path a directory, so the table cannot open, the
+   check finds no file, and no proof loses its replay. *)
+type table =
+  | Unopened
+  | Fresh (* opened with no entry, or its file could not be opened *)
+  | Loaded (* opened with entries of its file *)
 
-let register_cache file opened =
-  let others = Option.default [] (Hashtbl.find_opt caches file) in
-  Hashtbl.replace caches file (opened :: others)
+(* Each memo function's file and the state of its table. *)
+let caches : (string * (unit -> table)) list ref = ref []
 
-(* ONE value function, called by the record site and by the replay evaluator
-   (dev/tools/census/replay_channels.py). [Unknown] for a file that no memo
-   uses or two memos use (each one loads its own table), and for entries
-   that no digest was taken of. *)
-let recorded_micromega_cache file =
-  match Hashtbl.find_opt caches file with
-  | Some [opened] ->
-    begin match opened () with
-    | No_entry -> Proof_replay.Value None
-    | Entries digest -> Proof_replay.Value (Some digest)
-    | Unhashed -> Proof_replay.Unknown
-    end
-  | Some _ | None -> Proof_replay.Unknown
+let register_cache file table = caches := (file, table) :: !caches
 
-let () = Proof_replay.register_evaluator "micromega_cache" recorded_micromega_cache
+(* Whether [path] holds something other than a directory. A stat that fails
+   for another reason than an absent path counts as a file. *)
+let holds_file path =
+  match Unix.stat path with
+  | { Unix.st_kind = Unix.S_DIR; _ } -> false
+  | _ -> true
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false
+  | exception Unix.Unix_error _ -> true
 
-let record_lookup file =
-  if Proof_recorder.active () then
-    Proof_recorder.read ~row:"23" ~channel:"micromega_cache" ~key:(fun () -> file)
-      ~value:(fun () ->
-          match recorded_micromega_cache file with
-          | Proof_replay.Value v -> v
-          | Proof_replay.Unknown ->
-            Proof_recorder.ineligible ~reason:"micromega_cache" ~detail:file;
-            None)
+let () =
+  Proof_recorder.register_fence_check (fun () ->
+      List.iter (fun (file, table) ->
+          let trip = match table () with
+            | Loaded -> true
+            | Fresh -> false
+            | Unopened -> holds_file file
+          in
+          if trip then Proof_recorder.trip_fence ~reason:"micromega_cache" ~detail:file)
+        !caches)
 
 module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
   open Unix
@@ -115,7 +115,7 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
   type 'a data = { pos : int option ; mutable obj : (Key.t * 'a) option }
 
   type 'a t = {outch : out_channel; mutable htbl : 'a data Table.t; file : string;
-               opened : opened (* BET-84: what the table loaded *) }
+               loaded : bool (* BET-84: the table loaded entries of [file] *) }
 
   let skip_blob ch =
     let hd = Bytes.create Marshal.header_size in
@@ -180,17 +180,6 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
       magic = ObjFile.magic_number && version = pcache_version
     with End_of_file -> false
 
-  (* BET-84: the bytes whose entries [xload] just loaded, read again under
-     the same lock, so that no writer appends between the two. Only a
-     compile that records or replays pays for this read. *)
-  let opened_of inch table =
-    if Table.is_empty table then No_entry
-    else if not (Proof_recorder.tracking ()) then Unhashed
-    else
-      match (seek_in inch 0; Digest.channel inch (-1)) with
-      | digest -> Entries (Digest.to_hex digest)
-      | exception e when CErrors.noncritical e -> Unhashed
-
   let open_in (type a) f : a t =
     let flags = [O_RDONLY; O_CREAT] in
     let finch = openfile f flags 0o666 in
@@ -205,16 +194,16 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
 
     try
       (* Locking of the (whole) file while reading *)
-      let loaded = do_under_lock Read finch (fun () ->
+      let htbl = do_under_lock Read finch (fun () ->
           let table = Table.empty in
           if check_magic_number_and_version inch
-          then let table = xload table in (table, opened_of inch table)
+          then xload table
           else raise InvalidTableFormat
         ) in
       let () = close_in_noerr inch in
       let outch = out_channel_of_descr (openfile f [O_WRONLY; O_APPEND; O_CREAT] 0o666) in
-      let htbl, opened = Option.default (Table.empty, No_entry) loaded in
-      { outch ; file = f; htbl; opened }
+      let htbl = Option.default Table.empty htbl in
+      { outch ; file = f; htbl; loaded = not (Table.is_empty htbl) }
     with InvalidTableFormat ->
       let () = close_in_noerr inch in
       let flags = [O_WRONLY; O_TRUNC; O_APPEND; O_CREAT] in
@@ -222,7 +211,7 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
       let outch = out_channel_of_descr out in
       output_int32 outch ObjFile.magic_number;
       output_int32 outch pcache_version;
-      {outch; htbl=Table.empty; file = f; opened = No_entry}
+      {outch; htbl=Table.empty; file = f; loaded = false}
 
   let add t k e =
     let {outch} = t in
@@ -274,18 +263,20 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
       | Some (Some v) -> v
       | None | Some None -> raise Not_found
 
-  (* The table [cache] names, opened at the first lookup. Replay finds it
-     by that name (BET-84 census row 23). *)
+  (* The table [cache] names, opened at the first lookup. The fence check
+     reads its state (BET-84 census row 23). *)
   let lazy_table cache =
     let tbl = lazy (try Some (open_in cache) with e when CErrors.noncritical e -> None) in
     register_cache cache (fun () ->
-        match Lazy.force tbl with None -> No_entry | Some t -> t.opened);
+        if not (Lazy.is_val tbl) then Unopened
+        else match Lazy.force tbl with
+          | Some { loaded = true; _ } -> Loaded
+          | Some { loaded = false; _ } | None -> Fresh);
     tbl
 
   let memo cache f =
     let tbl = lazy_table cache in
     fun x ->
-      record_lookup cache;
       match Lazy.force tbl with
       | None -> f x
       | Some tbl -> (
@@ -294,12 +285,9 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
           let res = f x in
           add tbl x res; res )
 
-  (* A proof records the read whether [cond x] holds or not: with no table,
-     [cond] is not evaluated. *)
   let memo_cond cache cond f =
     let tbl = lazy_table cache in
     fun x ->
-      record_lookup cache;
       match Lazy.force tbl with
       | None -> f x
       | Some tbl ->

@@ -1,0 +1,13 @@
+{
+  "doc": "a .lia.cache table opened with an entry whose file the registration overwrote before the lookup read it: stock reads Unknown in the grade and fails, so replay must fail too",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.warm": {"ineligible": ["control_flag", "micromega_cache"], "stores_no_term": true},
+                       "PR.A.target": {"ineligible": ["micromega_cache"], "stores_no_term": true}}},
+  "tree_files": {
+    "original": {".lia.cache": "lia-cache-unknown.bin"},
+    "edited": {".lia.cache": "lia-cache-unknown.bin"}
+  },
+  "compile_fails": ["A.v"],
+  "compare_stderr": ["A.v"],
+  "stderr_contains": {"A.v": ["Cannot find witness"]}
+}

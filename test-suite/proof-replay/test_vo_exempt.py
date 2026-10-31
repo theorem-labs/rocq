@@ -64,9 +64,9 @@ class Exemption(unittest.TestCase):
         """The list is explicit, so adding one is a deliberate act."""
         self.assertEqual(sorted(EXEMPTIBLE_FIXTURES),
                          ["channels_unchanged", "eval_abbreviation", "eval_ltac2_global",
-                          "eval_ltac2_notation", "eval_micromega_cache", "eval_notation", "eval_option_tables",
+                          "eval_ltac2_notation", "eval_notation", "eval_option_tables",
                           "eval_prim_token", "hint_removed", "ltac_alias_moved", "ltac_redef_moved",
-                          "place_same_file", "vm_lia_hit", "write_scheme_rewrite"])
+                          "micromega_cache_blocked", "place_same_file", "vm_lia_hit", "write_scheme_rewrite"])
 
 
 if __name__ == "__main__":
