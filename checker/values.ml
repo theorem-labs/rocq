@@ -634,5 +634,5 @@ let v_keepfacts =
 
 let vo_segments =
   [ ("summary", v_libsum); ("library", v_lib);
-    ("opaques", v_opaquetable); ("vmlibrary", v_vmlib);
+    ("opaques", v_opaquetable); (Vmlibrary.segment_name, v_vmlib);
     ("keepfacts", v_keepfacts) ]

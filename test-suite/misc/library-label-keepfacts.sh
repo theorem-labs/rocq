@@ -141,6 +141,27 @@ if [ -n "$eu" ] && [ "$ef" = "$eu" ]; then
 else
   bad "B3: E's closures by every root's own walk '$ef' differ from the stored-closure walk's '$eu'"
 fi
+
+# The keep rule's walk is not a query of the shared Print Assumptions cache
+# (the speed-8 integration member, vernac/assumptions.ml [traverse]). With
+# ROCQ_ASSUMPTIONS_SHARED_DIR set, an unguarded shared first phase would
+# shallow-walk E's whole closure, ignoring the stop that makes the keep walk
+# cheap, and install what it found in a memo this walk leaves as the previous
+# query keyed it. So E compiled with the directory set gets the closures it
+# gets without it, and the directory stays untouched: its first use creates
+# the entries tree ([AssumptionsShared.start]).
+mkdir -p _kfacts/shared/e _kfacts/shared/dir
+cp _kfacts/euse/E.v _kfacts/shared/e/E.v
+ROCQ_ASSUMPTIONS_SHARED_DIR=$PWD/_kfacts/shared/dir \
+  rocq c -q -location-free-label -R _kfacts/use A -R _kfacts/duse Ddep -R _kfacts/shared/e Edep \
+  _kfacts/shared/e/E.v
+es=$(field _kfacts/shared/e/E.vo assumptions)
+if [ -n "$eu" ] && [ "$es" = "$eu" ] && [ -z "$(ls -A _kfacts/shared/dir)" ]; then
+  pass "B3: the keep walk ignores the shared assumptions cache and writes nothing in it"
+else
+  bad "B3: with ROCQ_ASSUMPTIONS_SHARED_DIR set, E's closures are '$es' (want '$eu') \
+and the directory holds '$(ls -A _kfacts/shared/dir | tr '\n' ' ')'"
+fi
 # includes KEYS1 KEYS2: every key of the JSON list KEYS2 is in the JSON list KEYS1.
 includes() {
   local k

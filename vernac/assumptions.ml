@@ -379,12 +379,25 @@ let fresh_entries () =
   memo := fresh_memo ();
   AssumptionsShared.forget ()
 
+(** What the reuse above and the sharing below read about the libraries
+    loaded, which [Library] holds: see [library_facts] in the .mli for why
+    this module is told rather than asking. Unregistered, no query keeps
+    another's entries and no object has a shared key. *)
+type library_facts = {
+  opaque_tables_generation : unit -> int;
+  content_digests : unit -> (DirPath.t -> Digest.t option);
+}
+
+let library_facts : library_facts option ref = ref None
+
+let set_library_facts facts = library_facts := Some facts
+
 let sync_memo access =
   let env = Global.env () in
   let mp = Global.current_modpath () in
-  let opaques = Library.opaque_tables_generation () in
-  match !memo_key with
-  | Some (env', mp', access', opaques') when
+  let opaques = Option.map (fun f -> f.opaque_tables_generation ()) !library_facts in
+  match opaques, !memo_key with
+  | Some opaques, Some (env', mp', access', opaques') when
       env' == env && ModPath.equal mp' mp && access' == access && Int.equal opaques' opaques ->
     memo_heaviest := max !memo_heaviest !query_weight;
     query_weight := 0;
@@ -393,10 +406,12 @@ let sync_memo access =
       if debug_memo then Printf.eprintf "[assumptions-memo] cleared\n%!"
     end
   | _ ->
+    (* With no [library_facts] nothing says what the opaque tables are, so
+       the entries are left with no key and no query keeps another's. *)
     fresh_entries ();
     memo_heaviest := 0;
     query_weight := 0;
-    memo_key := Some (env, mp, access, opaques)
+    memo_key := Option.map (fun opaques -> (env, mp, access, opaques)) opaques
 
 (* [Map_env] compares user names only: the entry is [obj]'s when the
    canonical names agree too, since the value the walk gives a constant with
@@ -1271,7 +1286,10 @@ type phase1_stats = {
     can reach that has no entry yet, by the object that stands for it
     ([node_of]). *)
 let phase1 access grs stats =
-  let digests = Library.content_digests () in
+  let digests = match !library_facts with
+    | Some facts -> facts.content_digests ()
+    | None -> fun _ -> None
+  in
   let results = ref Shared.EMap.empty in
   (* the objects another process claimed, with their keys *)
   let waiting = ref Shared.EMap.empty in
@@ -1473,11 +1491,17 @@ let traverse access grs =
   let () = inductive_marks := [] in
   let () = type_stack := [] in
   let () = shallow := false in
-  let () = if Option.is_empty !walk_stop then sync_memo access in
+  (* The keep rule's walk ([reach], with [walk_stop] set) is no query of the
+     reuse above: it reads and records no entry, so it neither keys the
+     entries nor runs a shared first phase, which would shallow-walk the
+     whole closure, ignoring [stop], and [install] what it found under the
+     key the previous query left. *)
+  let query = Option.is_empty !walk_stop in
+  let () = if query then sync_memo access in
   let () = cache_init () in
   let env = Global.env () in
   match
-    if !Shared.usable then share access grs;
+    if query && !Shared.usable then share access grs;
     List.fold_left (fun accu gr ->
       let t, _ = UnivGen.fresh_global_instance env gr in
       traverse access (fresh_gen ()) Id.Set.empty no_cooking gr Context.Rel.empty accu t
@@ -1525,8 +1549,10 @@ let theory_of_flags f = {
 
 (* What [obj], whose value in a query's graph is [contents], adds to [accu]
    and to [flags]: the one place {!assumptions} and {!object_assumptions}
-   classify an object. *)
-let add_object_assumptions ~add_opaque ~add_transparent st ax2ty flags obj contents accu =
+   classify an object. [access] is the accessor the walk that gave
+   [contents] used; this reads an opaque proof's table through it, never a
+   body. *)
+let add_object_assumptions ~add_opaque ~add_transparent access st ax2ty flags obj contents accu =
   let open Printer in
   let open GlobRef in
   let collect_theory_flags (tf : Declarations.typing_flags) =
@@ -1630,14 +1656,14 @@ let assumptions ?(add_opaque=false) ?(add_transparent=false) access st grs =
   let (_, graph, ax2ty) = traverse access grs in
   let flags = fresh_theory_flags () in
   let map =
-    GlobRef.Map_env.fold (add_object_assumptions ~add_opaque ~add_transparent st ax2ty flags)
+    GlobRef.Map_env.fold (add_object_assumptions ~add_opaque ~add_transparent access st ax2ty flags)
       graph Printer.ContextObjectMap.empty in
   (theory_of_flags flags, map)
 
-let object_assumptions obj contents =
+let object_assumptions access obj contents =
   let flags = fresh_theory_flags () in
   let map =
-    add_object_assumptions ~add_opaque:false ~add_transparent:false TransparentState.full
+    add_object_assumptions ~add_opaque:false ~add_transparent:false access TransparentState.full
       GlobRef.Map_env.empty flags obj contents Printer.ContextObjectMap.empty in
   (theory_of_flags flags, map)
 

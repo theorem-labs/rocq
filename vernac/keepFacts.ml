@@ -114,6 +114,8 @@ let axiom_key = function
   | Printer.UncheckedEliminations gr -> "unchecked_elim:" ^ grkey gr
   | Printer.UIP m -> "uip:" ^ KerName.to_string (MutInd.canonical m)
   | Printer.IndicesNotMattering m -> "indices:" ^ KerName.to_string (MutInd.canonical m)
+  | Printer.UncheckedOpaque c ->
+    "unchecked_opaque:" ^ KerName.to_string (Constant.canonical c)
 
 let context_object_key = function
   | Printer.Variable id -> "variable:" ^ Id.to_string id
@@ -274,7 +276,7 @@ let fast_closures ~stored access self roots =
     | Some _ -> raise (Full_walk "two canonical names under one user name")
     | None -> raise (Full_walk "a reference the walk did not reach")
   in
-  let own gr v = SSet.of_list (keys (Assumptions.object_assumptions gr v)) in
+  let own gr v = SSet.of_list (keys (Assumptions.object_assumptions access gr v)) in
   let memo = ref GlobRef.Map_env.empty and memo_blocks = ref Mindmap_env.empty in
   let active = ref GlobRef.Set_env.empty and active_blocks = ref Mindmap_env.Set.empty in
   let rec closure gr =
@@ -440,7 +442,12 @@ let logging_access self (access : Global.indirect_accessor) : Global.indirect_ac
     | Some _ | None -> ()
   in
   { Global.access_proof = (fun o -> note o; access.Global.access_proof o);
-    access_uncooked_proof = (fun o -> note o; access.Global.access_uncooked_proof o) }
+    access_uncooked_proof = (fun o -> note o; access.Global.access_uncooked_proof o);
+    (* Not logged: the walk asks whether the kernel typed an opaque proof
+       only for one whose body it read in the same walk (vernac/assumptions.ml,
+       "The body was read above, so its table is available"), so the read
+       above has logged the table already. *)
+    access_unchecked = access.Global.access_unchecked }
 
 let compute ~access ~stored ~self =
   (* The closures first: their walk logs body reads [collect_opacity] reads

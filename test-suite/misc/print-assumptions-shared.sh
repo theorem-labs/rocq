@@ -31,6 +31,17 @@
 #               come from a file whose own dependencies the loaded library
 #               does not record, so no object of such a library is shared.
 #               Both arms must print what Rocq without the directory prints.
+# - labelled:   a library compiled with -location-free-label records its
+#               LABEL as the digest of its declarations, and the label is
+#               equal across an edit that swaps which of two lemmas is
+#               Admitted and which is proved. Two such libraries also carry
+#               the same opaque table, since the table holds the proof and
+#               not the name it is under, so a key built from the recorded
+#               digests would be the same for both and the second query
+#               would print the first's answer. No library whose recorded
+#               digest is not the MD5 of its declarations is shared
+#               (vernac/library.ml, [label_digested]), so both arms print
+#               what Rocq without the directory prints.
 # - unusable:   a directory that cannot be created turns sharing off.
 #
 # Q3 also queries objects of the file being compiled, inside and outside a
@@ -127,26 +138,65 @@ taken=$(count taken-over Q1 damaged)
 echo "damaged: Q1 took over $taken claims"
 [ "$taken" -eq 4 ] || { echo "damaged: expected 4 claims taken over"; status=1; }
 
+# [set -e] is off inside this subshell too, since its status is tested, so
+# each step that can fail ends the case itself.
 (
-  mkdir -p replaced && cd replaced
-  cp -r ../../replaced/first ../../replaced/second ../../replaced/Main.v .
-  cp Main.v first/
-  rocq c -q -native-compiler no -Q first "" first/Y.v
-  rocq c -q -native-compiler no -Q second "" second/Y.v
-  cp second/Y.vo first/X.vo
-  rocq c -q -native-compiler no -Q first "" first/Main.v > Main.plain.out 2> Main.plain.err
-  diff -u /dev/null Main.plain.err
-  mkdir -p D
+  mkdir -p replaced && cd replaced || exit 1
+  cp -r ../../replaced/first ../../replaced/second ../../replaced/Main.v . || exit 1
+  cp Main.v first/ || exit 1
+  rocq c -q -native-compiler no -Q first "" first/Y.v || exit 1
+  rocq c -q -native-compiler no -Q second "" second/Y.v || exit 1
+  cp second/Y.vo first/X.vo || exit 1
+  rocq c -q -native-compiler no -Q first "" first/Main.v > Main.plain.out 2> Main.plain.err \
+    || { echo "replaced: the query without a directory failed"; exit 1; }
+  diff -u /dev/null Main.plain.err || exit 1
+  mkdir -p D || exit 1
   # a process that queries Y before any replacement fills the directory
   printf 'Require Y.\nPrint Assumptions Y.c.\n' > first/Fill.v
   ROCQ_ASSUMPTIONS_SHARED_DIR="$PWD/D" \
-    rocq c -q -native-compiler no -Q first "" first/Fill.v > Fill.out 2> Fill.err
+    rocq c -q -native-compiler no -Q first "" first/Fill.v > Fill.out 2> Fill.err \
+    || { echo "replaced: the query that fills the directory failed"; exit 1; }
   ROCQ_DEBUG_ASSUMPTIONS_SHARED=1 ROCQ_ASSUMPTIONS_SHARED_DIR="$PWD/D" \
-    rocq c -q -native-compiler no -Q first "" first/Main.v > Main.shared.out 2> Main.shared.err
-  diff -u Main.plain.out Main.shared.out
+    rocq c -q -native-compiler no -Q first "" first/Main.v > Main.shared.out 2> Main.shared.err \
+    || { echo "replaced: the query with the directory failed"; exit 1; }
+  diff -u Main.plain.out Main.shared.out \
+    || { echo "replaced: the query answered from entries of the replaced table"; exit 1; }
   grep -v '^\[assumptions-shared\] ' Main.shared.err > Main.shared.other.err || true
-  diff -u /dev/null Main.shared.other.err
+  diff -u /dev/null Main.shared.other.err || exit 1
   echo "replaced: the query answered the same with a directory filled before the replacement"
+) || status=1
+
+# [set -e] is off inside this subshell, since its status is tested, so each
+# step that can fail ends the case itself.
+(
+  mkdir -p labelled && cd labelled || exit 1
+  mkdir -p a1 a2 q1 q2 q3 q4 D || exit 1
+  printf 'Lemma a : True.\nAdmitted.\nLemma b : True.\nProof. exact I. Qed.\n' > a1/A.v
+  printf 'Lemma a : True.\nProof. exact I. Qed.\nLemma b : True.\nAdmitted.\n' > a2/A.v
+  lc() { rocq c -q -native-compiler no -location-free-label "$@"; }
+  lc -R a1 "" a1/A.v || { echo "labelled: a1 did not compile"; exit 1; }
+  lc -R a2 "" a2/A.v || { echo "labelled: a2 did not compile"; exit 1; }
+  # The two labels must be equal, or the case tests nothing.
+  l1=$("${BIN}rocq-library-label" --check a1/A.vo) || exit 1
+  l2=$("${BIN}rocq-library-label" --check a2/A.vo) || exit 1
+  [ "$l1" = "$l2" ] || { echo "labelled: the two libraries have different labels ($l1, $l2)"; exit 1; }
+  printf 'Require A.\nPrint Assumptions A.b.\n' > q1/Q.v
+  for q in q2 q3 q4; do cp q1/Q.v $q/Q.v || exit 1; done
+  lc -R a1 "" -R q1 Q1 q1/Q.v > plain1.out || { echo "labelled: the query of a1 failed"; exit 1; }
+  lc -R a2 "" -R q2 Q2 q2/Q.v > plain2.out || { echo "labelled: the query of a2 failed"; exit 1; }
+  if diff -q plain1.out plain2.out > /dev/null; then
+    echo "labelled: the two libraries give one answer, so the case tests nothing"
+    exit 1
+  fi
+  # One directory, the first library's query first.
+  ROCQ_ASSUMPTIONS_SHARED_DIR="$PWD/D" lc -R a1 "" -R q3 Q3 q3/Q.v > shared1.out \
+    || { echo "labelled: the shared query of a1 failed"; exit 1; }
+  ROCQ_ASSUMPTIONS_SHARED_DIR="$PWD/D" lc -R a2 "" -R q4 Q4 q4/Q.v > shared2.out \
+    || { echo "labelled: the shared query of a2 failed"; exit 1; }
+  diff -u plain1.out shared1.out || { echo "labelled: a1's query changed with the directory"; exit 1; }
+  diff -u plain2.out shared2.out \
+    || { echo "labelled: a2's query answered for a1, the library with the same label"; exit 1; }
+  echo "labelled: each query answered for its own library"
 ) || status=1
 
 shared "$PWD/missing/dir" Q1 unusable
