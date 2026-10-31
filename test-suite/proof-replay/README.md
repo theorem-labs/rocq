@@ -358,6 +358,21 @@ proof that refers to it misses on `vo_term`.  `late_qualified_module_word`:
 `Module.module_contents` in a tactic is a qualified identifier, not a late
 command, and every proof of the file replays.
 
+**Gate review, breadth audit gap BA2.**  `unfold "FF"` finds the constant a
+notation names by searching every scope (or the one scope a delimiter names),
+with no notation query to record; when several notations match, the scope the
+open scopes give each one decides.  `verdict_notation_reference`: the edited
+tree adds a notation FF for another constant in a scope that is not open, no
+open scope chooses between the two, so the stock script fails and the replay
+compile must fail too.  `verdict_notation_reference_delimited`: `unfold
+"FF"%a` finds two notations in `a_scope`; the edited tree removes FF x from
+`b_scope`, which is open after `a_scope`, so neither notation is ruled out, the
+stock script fails with "Ambiguous notation", and the replay compile must fail
+too, although `a_scope` and the scope stack do not change.
+`eval_notation_reference`: the notation one proof unfolds names another
+constant, so the stored term is not the stock term, and that proof misses on
+`notation_reference`; the proof whose notation does not change replays.
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
