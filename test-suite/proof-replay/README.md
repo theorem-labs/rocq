@@ -528,6 +528,16 @@ too, although `a_scope` and the scope stack do not change.
 constant, so the stored term is not the stock term, and that proof misses on
 `notation_reference`; the proof whose notation does not change replays.
 
+**Gate review, breadth audit gap BA4.**  zify keeps a process-wide copy of its
+spec table: `init_cache` fills it and `zify_iter_specs` reads it without
+filling it.  `verdict_zify_cache_write`: a proof that ran `zify_op` (the first
+step of lia) replays and the next proof, edited, runs only `zify_iter_specs`;
+replay must leave the copy as `zify_op` left it, else the next proof fails
+only in the replay compile.  `verdict_zify_cache_history`: the copy an earlier
+proof filled holds another spec in the edited tree, so the stock script of an
+unchanged later proof fails, and the replay compile must fail too (that later
+proof misses on key `zify_specs_cache`).
+
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
 The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
