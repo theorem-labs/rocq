@@ -28,9 +28,25 @@
 # - outside the compiling process (review gate 15): B_par runs B_axiom's check under
 #   `par:` over two goals, which coqc runs in rocqworker processes, and B_parany reads
 #   A.c there; B_fork reads A.c in a child the plugin forks (kfpeek's
-#   fork_body_shape, as coq-hammer's best forks its candidates). Their records reach
-#   B's keepfacts through the opacity log file (library/opacityLog.ml): the same
-#   records as in-process. No log these compiles made is left in TMPDIR.
+#   fork_body_shape, as coq-hammer's best forks its candidates; the child leaves through
+#   `exit 0`, so the owner check that keeps it from removing the parent's log is
+#   exercised). Their records reach B's keepfacts through the opacity log file
+#   (library/opacityLog.ml): the same records as in-process;
+# - review gate 16: B_modpar (`Module M. Require A. End M.`, then a par: body read)
+#   records it; B_torn (a record appended with no newline), B_bad (a line that is not a
+#   record) and B_notmp (TMPDIR a missing directory) compile and have no keepfacts
+#   (null/null); B_wmissing (the log's directory moved away before the par:) and
+#   B_wmoved (the log moved away before the par:) fail with the opacity log's write
+#   error;
+# - review gate 17: B_devnull (B_parany with ROCQ_OPACITYLOG_FILE=/dev/null outside:
+#   the compiling process ignores it) records the read; B_wenv (the compiling process
+#   points the variable at a missing file before the par:: the worker pool still gives
+#   the workers its own log) records it; B_parnotmp (B_parany with TMPDIR a missing
+#   directory: the workers get an empty variable) compiles with no keepfacts; B_secpar
+#   (`Section S. Require A. End S.`, then a par: body read) records it; a coqc without
+#   -location-free-label and with ROCQ_OPACITYLOG_FILE=/nonexistent/x compiles a
+#   Transparent on an axiom (B_stock) and a par: body read (B_stockpar);
+# - this fixture's compiles use their own TMPDIR, which is empty at the end.
 
 set -e
 export PATH=$BIN:$PATH
@@ -115,7 +131,12 @@ let () = str_ext "log_append_raw" (fun s ->
 (* Move the log to [s] (its workers then cannot open it). *)
 let () = str_ext "log_move_to" (fun s -> Sys.rename (log_path ()) s; 0)
 
-(* Point the variable workers inherit at [s]. *)
+(* Move the log's directory to [s] (the workers' path then names a file in a
+   missing directory). *)
+let () = str_ext "log_dir_move_to" (fun s -> Sys.rename (Filename.dirname (log_path ())) s; 0)
+
+(* Set the variable in the compiling process, which a spawned worker would
+   inherit if the worker pool did not set it itself. *)
 let () = str_ext "log_env_set" (fun s -> Unix.putenv "ROCQ_OPACITYLOG_FILE" s; 0)
 EOF
 ( cd $D/pkg/kfpeek && ocamlfind ocamlopt -thread -shared -package rocq-runtime.plugins.ltac2 -o p.cmxs p.ml > build.log 2>&1 ) ||
@@ -140,6 +161,7 @@ Ltac2 @ external body_shape : constr -> int := "kfpeek" "body_shape".
 Ltac2 @ external fork_body_shape : constr -> int := "kfpeek" "fork_body_shape".
 Ltac2 @ external log_append_raw : string -> int := "kfpeek" "log_append_raw".
 Ltac2 @ external log_move_to : string -> int := "kfpeek" "log_move_to".
+Ltac2 @ external log_dir_move_to : string -> int := "kfpeek" "log_dir_move_to".
 Ltac2 @ external log_env_set : string -> int := "kfpeek" "log_env_set".'
 # b NAME BODY: the B file NAME, whose goal True is closed after BODY.
 b() {
@@ -185,20 +207,60 @@ build modpar qed1
 b torn 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "R|A.A.c|A.A|1|A.A" in ().'
 b bad 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "garbage~" in ().'
 build torn qed1; build bad qed1
-# B_wmissing: the workers' variable names a file in a missing directory; B_wmoved: the
-# log is moved away before the par:, so the workers cannot open it.
+# B_wmissing: the log's directory is moved away before the par:, so the workers' path
+# names a file in a missing directory; B_wmoved: the log itself is moved away. Either
+# way the workers cannot open it. B_wenv (round 17): the compiling process points the
+# variable at a missing file before the par:; the worker pool still gives the workers the
+# compile's own log, so their reads are recorded.
 parx() { # NAME PRE: B_parany with the toplevel command PRE before the goal
   mkdir -p $D/$1
   printf '%s\n%s\nLtac2 check () := let _ := body_shape constr:(A.c) in ().\nSet Default Proof Mode "Classic".\nGoal True /\\ True.\n  split.\n  par: (ltac2:(check ()); exact I).\nQed.\n' \
     "$head" "$2" > $D/$1/B.v
 }
-parx wmissing "Ltac2 Eval (log_env_set \"$PWD/$D/missing/x.log\")."
+parx wmissing "Ltac2 Eval (log_dir_move_to \"$PWD/$D/tmpw-gone\")."
 parx wmoved "Ltac2 Eval (log_move_to \"$PWD/$D/moved.log\")."
-build wmissing qed1; build wmoved qed1
+parx wenv "Ltac2 Eval (log_env_set \"$PWD/$D/missing/x.log\")."
+mkdir -p $D/tmpw
+mkdir -p $D/wmissing-qed1; cp $D/wmissing/B.v $D/wmissing-qed1/B.v
+if TMPDIR="$PWD/$D/tmpw" comp -R $D/qed1 A -R $D/wmissing-qed1 Bdep $D/wmissing-qed1/B.v > $D/wmissing-qed1/out 2>&1
+then echo ok > $D/wmissing-qed1/rc; else echo failed > $D/wmissing-qed1/rc; fi
+rm -rf $D/tmpw $D/tmpw-gone
+build wmoved qed1; build wenv qed1
 # B_notmp: TMPDIR is a missing directory, so the log cannot be made.
 mkdir -p $D/notmp-qed1; cp $D/print/B.v $D/notmp-qed1/B.v
 if TMPDIR="$PWD/$D/nodir" comp -R $D/qed1 A -R $D/notmp-qed1 Bdep $D/notmp-qed1/B.v > $D/notmp-qed1/out 2>&1
 then echo ok > $D/notmp-qed1/rc; else echo failed > $D/notmp-qed1/rc; fi
+
+# Round 17. envbuild NAME A ENV...: compile B NAME (copied to NAME-A) against A's variant
+# with the environment ENV and -location-free-label; rc in NAME-A/rc.
+envbuild() {
+  local name=$1 a=$2 d=$D/$1-$2; shift 2
+  mkdir -p $d; cp $D/$name/B.v $d/B.v
+  if env "$@" rocq c -q -location-free-label -R $D/$a A -R $d Bdep $d/B.v > $d/out 2>&1
+  then echo ok > $d/rc; else echo failed > $d/rc; fi
+}
+mkdir -p $D/devnull $D/parnotmp $D/stockpar
+cp $D/parany/B.v $D/devnull/B.v; cp $D/parany/B.v $D/parnotmp/B.v; cp $D/parany/B.v $D/stockpar/B.v
+envbuild devnull qed1 ROCQ_OPACITYLOG_FILE=/dev/null
+envbuild parnotmp qed1 TMPDIR="$PWD/$D/nodir"
+# B_secpar: A is required inside a section (rolled back at End S), then a par: body read.
+mkdir -p $D/secpar
+printf '%s\n' 'Require Import Ltac2.Ltac2.' 'Declare ML Module "kfpeek".' 'Section S. Require A. End S.' \
+  'Ltac2 @ external body_shape : constr -> int := "kfpeek" "body_shape".' \
+  'Ltac2 check () := let _ := body_shape constr:(A.c) in ().' 'Set Default Proof Mode "Classic".' \
+  'Goal True /\ True.' '  split.' '  par: (ltac2:(check ()); exact I).' 'Qed.' > $D/secpar/B.v
+build secpar qed1
+# A coqc without -location-free-label, with ROCQ_OPACITYLOG_FILE naming a missing file:
+# B_stock runs Transparent on an axiom in the compiling process, B_stockpar reads a body
+# in par: workers.
+mkdir -p $D/stock $D/stock-adm $D/stockpar-qed1
+printf 'Require A.\nTransparent A.c.\n' > $D/stock/B.v
+cp $D/stock/B.v $D/stock-adm/B.v; cp $D/stockpar/B.v $D/stockpar-qed1/B.v
+for nd in stock-adm:adm stockpar-qed1:qed1; do
+  d=$D/${nd%%:*}; a=${nd##*:}
+  if ROCQ_OPACITYLOG_FILE=/nonexistent/x rocq c -q -R $D/$a A -R $d Bdep $d/B.v > $d/out 2>&1
+  then echo ok > $d/rc; else echo failed > $d/rc; fi
+done
 
 s0=$(sed -n 's/^SHAPE //p' $D/print-adm/out); s1=$(sed -n 's/^SHAPE //p' $D/print-qed1/out); s2=$(sed -n 's/^SHAPE //p' $D/print-qed2/out)
 if [ "$s0/$s1/$s2" = "0/1/2" ]; then
@@ -290,6 +352,35 @@ cantwrite() { # NAME TEXT: the compile fails with the opacity log's write error
 }
 cantwrite wmissing "B_wmissing: a worker whose log is in a missing directory"
 cantwrite wmoved "B_wmoved: a worker whose log was moved away"
+
+# Round 17.
+qw=$(field $D/wenv-qed1/B.vo opacity_queries)
+if [ "$(cat $D/wenv-qed1/rc)" = ok ] && [ "$qw" = "$q_qed" ]; then
+  pass "B_wenv: the compiling process pointed the variable at a missing file, and its workers still record into its log: $qw"
+else
+  bad "B_wenv ($(cat $D/wenv-qed1/rc)): opacity_queries '$qw': $(tr '\n' ' ' < $D/wenv-qed1/out | cut -c1-400)"
+fi
+qd=$(field $D/devnull-qed1/B.vo opacity_queries)
+if [ "$(cat $D/devnull-qed1/rc)" = ok ] && [ "$qd" = "$q_qed" ]; then
+  pass "B_devnull: with ROCQ_OPACITYLOG_FILE=/dev/null outside, the compile still records the workers' read: $qd"
+else
+  bad "B_devnull ($(cat $D/devnull-qed1/rc)): opacity_queries '$qd': $(tr '\n' ' ' < $D/devnull-qed1/out | cut -c1-300)"
+fi
+nulls parnotmp "B_parnotmp: a par: body read with TMPDIR a missing directory (the workers get an empty variable)"
+qs=$(field $D/secpar-qed1/B.vo opacity_queries)
+if [ "$(cat $D/secpar-qed1/rc)" = ok ] && [ "$qs" = "$q_qed" ]; then
+  pass "B_secpar: after Section S. Require A. End S., a par: worker reads A.c's body and records it: $qs"
+else
+  bad "B_secpar ($(cat $D/secpar-qed1/rc)): opacity_queries '$qs': $(tr '\n' ' ' < $D/secpar-qed1/out | cut -c1-400)"
+fi
+for nd in "stock-adm:B_stock (Transparent A.c on an axiom)" "stockpar-qed1:B_stockpar (a par: body read)"; do
+  d=$D/${nd%%:*}
+  if [ "$(cat $d/rc)" = ok ]; then
+    pass "${nd#*:}: a coqc without -location-free-label and with ROCQ_OPACITYLOG_FILE=/nonexistent/x compiles"
+  else
+    bad "${nd#*:}: a coqc without the flag failed on the inherited variable: $(tr '\n' ' ' < $d/out | cut -c1-400)"
+  fi
+done
 # Each compile's log is private and removed at exit: this fixture's TMPDIR is empty.
 left=$(find "$TMPDIR" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
 if [ -z "$left" ]; then

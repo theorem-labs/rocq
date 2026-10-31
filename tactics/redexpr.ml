@@ -127,7 +127,9 @@ let check_not_fully_opaque l ref =
          (an edit the label hides). The record is kept in the error branch too:
          a command wrapped in [Fail] is rolled back but its compilation outcome
          still depended on what this saw. [OpacityLog] records only those two
-         body forms, and drops the call unless -location-free-label. *)
+         body forms, and only in a compile under -location-free-label, its
+         workers and the children it forks; in any other process the call
+         does nothing (it neither reads nor fails on an inherited log). *)
       OpacityLog.record sp cb;
       if Declareops.is_opaque cb (* FIXME *) then
         user_err

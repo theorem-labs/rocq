@@ -71,22 +71,29 @@ open Names
    [ROCQ_OPACITYLOG_FILE], overwriting any value it inherited: it never
    writes its records into a log it did not create (one named by an outer
    process, or a sink such as /dev/null, would lose them). A spawned worker
-   inherits the variable (the worker pool passes the environment,
-   [AsyncTaskQueue]; workers are not given [-location-free-label], so they
-   never create a log of their own), a forked child the open descriptor.
-   Every process that has the variable appends each record to that file as
-   one line with one write on an [O_APPEND] descriptor, so the lines of
-   several processes do not interleave, besides keeping it in memory. The
-   compiling process reads the file back with its own records ([get]) when it
-   saves the library and removes it at exit. A record a forked child made for
-   a candidate the parent then dropped is kept: that only makes the keep rule
-   rebuild more. A log that could not be created, written or read back whole
-   (every line a record, the last one ended) makes [get] answer [None], and
-   the library is saved with no [keepfacts] segment, which the keep rule
-   rebuilds. A process other than the compiling one that cannot open the log
-   its environment names, or cannot write a record to it, raises an error
-   before the caller gets the answer it records ([record],
-   [record_body_read]), so its tactic fails having used nothing unrecorded. *)
+   gets the variable from the worker pool, which sets it to the value
+   [worker_env_value] gives, whatever the inherited environment or
+   [-async-proofs-private-flags] say ([AsyncTaskQueue.spawn]): the owner's
+   log, or empty when the spawning process owns none, so the workers of a
+   coqc without [-location-free-label] record nothing. Workers are not given
+   [-location-free-label], so they never call [set_enabled true]. Only a
+   worker ([Flags.async_proofs_is_worker]) reads the variable; a forked child
+   inherits the open descriptor instead, and any other process ignores the
+   variable, so a coqc without the flag never writes to, or fails on, a log
+   an outer process named. Every process with a log appends each record to
+   that file as one line with one write on an [O_APPEND] descriptor, so the
+   lines of several processes do not interleave, besides keeping it in
+   memory. The compiling process reads the file back with its own records
+   ([get]) when it saves the library and removes it at exit. A record a
+   forked child made for a candidate the parent then dropped is kept: that
+   only makes the keep rule rebuild more. A log that could not be created,
+   written or read back whole (every line a record, the last one ended)
+   makes [get] answer [None], and the library is saved with no [keepfacts]
+   segment, which the keep rule rebuilds. A worker that cannot open the log
+   the variable names, or a worker or child that cannot write a record to
+   it, raises an error before the caller gets the answer it records
+   ([record], [record_body_read]), so its tactic fails having used nothing
+   unrecorded. *)
 
 type query = {
   constant : string;
@@ -115,17 +122,19 @@ let open_append p =
 
 let owner () = match !owner_pid with Some p -> p = Unix.getpid () | None -> false
 
-(* A process that did not create the log opens the one its environment names,
-   once, on its first record. *)
+(* A worker opens the log its environment names, once, on its first record;
+   a forked child of a process with a log has its descriptor already; no other
+   process reads the variable. *)
 let current_fd () =
   match !fd with
   | Some _ as d -> d
   | None ->
     if not !tried_env then begin
       tried_env := true;
-      match Sys.getenv_opt env_var with
-      | Some p when p <> "" -> path := Some p; fd := open_append p
-      | Some _ | None -> ()
+      if Flags.async_proofs_is_worker () then
+        match Sys.getenv_opt env_var with
+        | Some p when p <> "" -> path := Some p; fd := open_append p
+        | Some _ | None -> ()
     end;
     !fd
 
@@ -138,13 +147,17 @@ let set_enabled b =
     owner_pid := Some (Unix.getpid ());
     match Filename.temp_file "rocq-opacitylog" ".log" with
     | p ->
-      path := Some p;
       at_exit (fun () -> if owner () then try Sys.remove p with Sys_error _ -> ());
       (match open_append p with
-       | Some d -> fd := Some d; Unix.putenv env_var p
-       | None -> broken := true; Unix.putenv env_var "")
+       | Some d -> path := Some p; fd := Some d; Unix.putenv env_var p
+       | None -> path := None; broken := true; Unix.putenv env_var "")
     | exception Sys_error _ -> path := None; broken := true; Unix.putenv env_var ""
   end
+
+let worker_env_value () =
+  if owner () then (match !fd, !path with Some _, Some p -> p | _ -> "")
+  else if Flags.async_proofs_is_worker () then Option.default "" (Sys.getenv_opt env_var)
+  else ""
 
 let queries : query list ref = ref []
 

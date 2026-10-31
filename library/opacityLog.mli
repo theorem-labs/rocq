@@ -28,8 +28,8 @@ type query = {
 }
 
 val env_var : string
-(** ["ROCQ_OPACITYLOG_FILE"]: the path of the log file, exported by the
-    compiling process for its workers and children. *)
+(** ["ROCQ_OPACITYLOG_FILE"]: the path of the log file, which worker
+    processes read ({!worker_env_value}); no other process reads it. *)
 
 val set_enabled : bool -> unit
 (** [set_enabled true]: collect the queries of this compilation.
@@ -38,7 +38,16 @@ val set_enabled : bool -> unit
     then creates its own log and exports its path in {!env_var}, overwriting
     any inherited value (it never writes into a log it did not create); if
     the log cannot be made, {!get} answers [None]. Worker processes are not
-    given the flag, so they never call this and use the inherited log. *)
+    given the flag, so they never call [set_enabled true]; a worker
+    ([Flags.async_proofs_is_worker]) instead opens the log {!env_var} names
+    on its first record. *)
+
+val worker_env_value : unit -> string
+(** The value of {!env_var} a worker this process spawns must get: this
+    process's log when it owns one, the inherited value when this process is
+    a worker, and [""] (no log: the worker records nothing) otherwise.
+    [AsyncTaskQueue.spawn] sets it in place of any inherited or extra-env
+    entry. *)
 
 val reset : unit -> unit
 (** Forget the queries logged so far, and empty the log file if this

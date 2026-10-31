@@ -128,7 +128,17 @@ module Make(T : Task) () = struct
            CoqworkmgrApi.(string_of_priority priority)]
         in
         Array.of_list (wselect :: spawn_args @ worker_opts) in
-      let env = Array.append (T.extra_env ()) (Unix.environment ()) in
+      (* The keep rule's opacity log (D18, dispatch://INFRA-361): the worker
+         gets exactly the value [OpacityLog.worker_env_value] gives, so neither
+         an inherited entry nor one from -async-proofs-private-flags can
+         redirect its records, and the workers of a coqc that owns no log
+         record nothing. *)
+      let log_key = OpacityLog.env_var ^ "=" in
+      let not_log e = not (CString.is_prefix log_key e) in
+      let env = Array.concat [
+          [| log_key ^ OpacityLog.worker_env_value () |];
+          Array.of_list (List.filter not_log (Array.to_list (T.extra_env ())));
+          Array.of_list (List.filter not_log (Array.to_list (Unix.environment ()))) ] in
       let worker_name = get_toplevel_path "rocqworker" in
       Worker.spawn ~env worker_name args in
     name, proc, CThread.prepare_in_channel_for_thread_friendly_io ic, oc
