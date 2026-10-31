@@ -9,6 +9,7 @@
   },
   "reasons": {
     "unmarshallable": "Any row: the registration cannot marshal the proof's stored term (Marshal.to_string raised), so the proof stores no term and is never replayed (vernac/declare.ml stored_term).",
+    "declaration_counters": "Row 18: a replayed proof's declaration left the universe and sort counters elsewhere than the registration's declaration did, so it made another number of levels, from an input no read records (a declaration runs outside the recording: vernac/declare.ml record_close_gen). It started from the counters stock has at the closer, so its names and the counters it left are stock's, and they stay. The record no longer describes the file, so every later proof of the process is ineligible (vernac/declare.ml check_replayed_counters, lib/proof_recorder.ml trip_fence).",
     "warning": "Any row: the proof raised a warning whose status is not Disabled. Replay cannot raise it again as stock does: the status that decides is the one when the warning came, which a sentence's warnings attribute sets for that sentence only, and an error-level warning a tactic catches (try) lets the proof succeed. So the proof stores no term (lib/cWarnings.ml warn).",
     "warning_registry": "Any row: a warning or warning category was created while the proof was recorded (a deprecated reference's version warning is created the first time it is needed). The proofs after it can see that registration (a later warnings flag names it), and a replay would not make it, so the proof stores no term (lib/cWarnings.ml create_category, create_gen).",
     "vm_section_closure": "Row 1: the proof used the bytecode machine's slot (filled it or took it from the cache) of a constant whose code, or a code it calls, closes over a section variable. The value holds that variable as it was in the environment that filled the slot, which the current goal can differ from (clearbody), and a replayed proof fills no slot, so a later proof would find it empty where stock finds it filled. No read describes either, so the proof stores no term (kernel/vmsymtable.ml fence_section_closure).",
@@ -35,6 +36,7 @@
   },
   "sites": {
     "ineligible:vernac/declare.ml:unmarshallable": {"ineligible": "@unmarshallable"},
+    "ineligible:vernac/declare.ml:declaration_counters": {"ineligible": "@declaration_counters"},
     "read:vernac/proof_record_env.ml:read_at_start/row/channel": {"ruling": "BET-84 P3: read_at_start records the list start_reads builds, one Proof_record.read per start-of-proof channel; each element is built by a literal `one <row> <channel>` call that has its own entry here (rows 1, 2, 3, 4, 13, M3, M7), and replay evaluates the same list (vernac/proof_replay_env.ml providers)."},
 
     "read:engine/evarutil.ml:18/counter_start": {"row": "18"},
