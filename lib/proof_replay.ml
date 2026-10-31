@@ -330,7 +330,11 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    file's first [Qed] or [Save] (no proof can be replayed before it), are:
    [Register]; [Require] (a library brings its own [Register] objects and
    plugins, which the text does not show), unless it loads nothing (below);
-   [Load]; [Declare] (ML Module,
+   [Load]; [Cd], which changes the directory that a file opened by a
+   relative path is read from (a micromega certificate cache reads its
+   entries again from [.lia.cache] at each lookup), so a proof before it that
+   replays leaves unopened a file that stock opened there (gate review
+   CF4-R2); [Declare] (ML Module,
    Module); [Import] and [Export] once an export-locality registration is
    loaded (see {!scan_late_events}); [Include]; a [Module] that is not plain
    (sealed, a functor, a module type, a definition); and an [End] that closes
@@ -381,7 +385,7 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
 let restoring_words = [ "Reset"; "Back"; "BackTo" ]
 
 let late_words =
-  [ "Register"; "Require"; "Load"; "Declare"; "Import"; "Export"; "Include"; "Module" ] @ restoring_words
+  [ "Register"; "Require"; "Load"; "Cd"; "Declare"; "Import"; "Export"; "Include"; "Module" ] @ restoring_words
 
 (* The [Require] sentence whose command word ([From] or [Require]) starts at
    byte [k], read as the grammar reads one (vernac/g_vernac.mlg): [From q]

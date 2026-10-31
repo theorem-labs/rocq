@@ -87,10 +87,11 @@ val start :
 
 val scan_late_rebind : string -> (string * int) option
 (** The first command in this source text, after its first [Qed] or [Save],
-    that can rebind a Rocqlib name or load code — [Register], [Require],
-    [Load], [Declare], [Import], [Export], [Include], [Module], or an [End]
-    that closes a module or a section inside which one of those appeared —
-    with its line; [None] if there is none. Comments and strings are
+    that can rebind a Rocqlib name, load code or change the working
+    directory — [Register], [Require], [Load], [Cd], [Declare], [Import],
+    [Export], [Include], [Module], or an [End] that closes a module or a
+    section inside which one of those appeared — with its line; [None] if
+    there is none. Comments and strings are
     skipped; a number is read as Rocq's lexer reads it, and a late word also
     counts at the end of a longer identifier. A component of a qualified
     identifier ([Module.module_contents], [M.Register]) is one identifier

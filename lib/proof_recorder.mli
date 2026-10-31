@@ -88,7 +88,9 @@ val generation : unit -> int
     once per lookup. *)
 
 val loading : (unit -> 'a) -> 'a
-(** [loading f] runs [f], the sentences of a [Load]ed file. *)
+(** [loading f] runs [f], the sentences of a [Load]ed file. The toplevel
+    calls it only when {!in_use}: a compile with neither option runs the
+    file's sentences with nothing around them. *)
 
 val in_load : unit -> bool
 (** Whether a [Load]ed file's sentences run now. They run inside the one

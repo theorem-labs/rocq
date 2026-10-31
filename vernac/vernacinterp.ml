@@ -98,10 +98,14 @@ and vernac_load ~verbosely entries =
   let stack = st.Vernacstate.interp.lemmas in
   (* BET-84: a proof of the loaded file opens and closes inside this one
      sentence, where replay can neither key nor decide it
-     (Proof_recorder.loading). *)
+     (Proof_recorder.loading). A compile with neither option runs the stock
+     loop with nothing around it. *)
   let stack, pm =
     Dumpglob.with_glob_output Dumpglob.NoGlob
-    (fun () -> Proof_recorder.loading (fun () -> List.fold_left interp_entry (stack, pm) entries)) ()
+    (fun () ->
+       if Proof_recorder.in_use () then
+         Proof_recorder.loading (fun () -> List.fold_left interp_entry (stack, pm) entries)
+       else List.fold_left interp_entry (stack, pm) entries) ()
   in
   (* If Load left a proof open, we fail too. *)
   if Option.has_some stack then

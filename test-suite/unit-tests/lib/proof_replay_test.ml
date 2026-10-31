@@ -367,6 +367,7 @@ let rebind_scan =
      && s "Section S. Import M. #[warnings=\"]\"] Definition d := 0. Lemma a : True. Qed. End S." = Some (end_, 1)
      && s "Lemma a : True. Qed. Import M." = Some ("Import", 1)
      && s "Lemma a : True. Qed. Load \"f\"." = Some ("Load", 1)
+     && s "Lemma a : True. Qed. Cd \"d\"." = Some ("Cd", 1)
      && s "Lemma Requires : True. Qed." = None
      && s "Lemma a : True. Qed. Reset a." = Some ("Reset", 1)
      && s "Lemma a : True. Qed. Reset Initial." = Some ("Reset", 1)
