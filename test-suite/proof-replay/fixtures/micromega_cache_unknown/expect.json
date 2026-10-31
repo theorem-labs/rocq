@@ -1,0 +1,8 @@
+{
+  "doc": "a .lia.cache entry for the proof's problem whose result is changed to Unknown: stock's lia reads it and fails, so replay must fail too",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.target": {"eligible": true}}},
+  "tree_files": {"edited": {".lia.cache": "lia-cache-unknown.bin"}},
+  "compile_fails": ["A.v"],
+  "stderr_contains": {"A.v": ["Cannot find witness"]}
+}
