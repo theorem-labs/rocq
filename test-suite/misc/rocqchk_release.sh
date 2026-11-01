@@ -356,7 +356,8 @@ sched asks "$d/j16.log"
 #  - From outside, twice, once the handler is installed. The handler is
 #    installed at the first fork, which nothing prints without -d, so this
 #    reads the caught-signal mask of the process (SigCgt; SIGUSR1 is bit 9
-#    on Linux), and falls back to waiting one second without /proc.
+#    on Linux), and falls back to waiting one second where /proc has no
+#    such line (no /proc, or gVisor's, whose status has no Sig* lines).
 handler_set() {
   local m
   m=$(awk '/^SigCgt:/ { print $2 }' "/proc/$1/status" 2>/dev/null) || return 1
@@ -366,7 +367,7 @@ stray() {
   local main; shift
   "$@" &
   main=$!
-  if [ -r "/proc/$main/status" ]; then
+  if grep -q '^SigCgt:' "/proc/$main/status" 2>/dev/null; then
     for _ in $(seq 1 400); do handler_set "$main" && break; sleep 0.025; done
     handler_set "$main" || fail "(f) the main process never installed the handler"
   else
