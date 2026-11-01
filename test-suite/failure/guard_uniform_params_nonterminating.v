@@ -2,7 +2,7 @@
    all ACCEPT, with Print Assumptions reporting "Closed under the global
    context" and coqchk reporting no axiom and no unsafe fixpoint. This branch
    refuses it. Found by the review of this branch
-   (the grading harness, dispatch://BET-214, 2026-10-25).
+   (dispatch://BET-214, 2026-10-25).
 
    The inner fixpoint's recursive call [f (S a) k] increases its first
    argument, so nothing decreases along the chain [outer a] re-entered from

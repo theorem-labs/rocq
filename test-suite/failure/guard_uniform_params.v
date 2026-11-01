@@ -7,7 +7,7 @@
 
    The three definitions below are the three counterexamples known when this
    branch was written. The first was produced by a model under evaluation
-   (the grading harness, dispatch://BET-214); this base already rejects
+   (dispatch://BET-214); this base already rejects
    that exact definition, and it is kept as the record of what the model
    wrote. The second and third are the counterexamples of
    rocq-prover/rocq#21797 and rocq-prover/rocq#22382, and this base accepts
