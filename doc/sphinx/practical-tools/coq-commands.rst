@@ -455,6 +455,21 @@ and ``rocq repl``, unless stated otherwise:
   when interpreting :cmd:`Require` commands.
 :-vok: Indicate Rocq to check a file completely, to load ``.vos`` files instead
   of ``.vo`` files when interpreting :cmd:`Require` commands. No ``.vo`` file is written.
+:-record-timeouts: *Rocq compile only*. Write ``file.timeouts.json`` beside the
+  output file, holding ``{"format":1,"armed":A,"fired":F}``, where ``A`` counts
+  the timeouts this compilation armed (:tacn:`timeout`, :cmd:`Timeout`,
+  :opt:`Default Timeout` and the Ltac2 ``Control.timeout`` and
+  ``Control.timeoutf``) and ``F`` counts those that expired. A record of an
+  earlier compilation is removed before the compilation starts, and the new one
+  is written at exit, after the output file on success and after the error
+  message on failure, so a compilation killed by a signal Rocq does not catch,
+  such as ``SIGKILL``, leaves no record. A tactic worker of the ``par:``
+  selector sends back what it armed, and a task whose answer is lost counts as
+  one armed timeout, so a compilation that lost one never reports zero; the
+  option refuses ``-async-proofs`` and ``-vos``, whose delegated proofs send
+  nothing back. The record is named after the base name of the output file, so
+  a ``.vo`` and a ``.vok`` compilation of one file share it. Without the
+  option nothing is removed or written.
 :-w (all|none|w₁,…,wₙ): Configure the display of warnings. This
   option expects all, none or a comma-separated list of warning names or
   categories (see Section :ref:`controlling-display`).
@@ -726,6 +741,13 @@ It excludes for instance anything related to the concrete syntax of
 objects (customized syntax rules, association between short and long
 names), implicit arguments, etc.
 
+``rocqchk`` refuses a library that holds a name it may print, such as the
+name of the library, of a constant, of an inductive type, of a constructor or
+of a functor parameter, when that name is not made of identifiers, for
+instance when it holds a blank or a line break. Rocq's own commands never
+write such a name: only a plugin, or a modified ``.vo`` file, can. Printed,
+such a name could forge a line of the checker's output.
+
 This tool can be used for several purposes. One is to check that a
 compiled library provided by a third-party has not been forged and
 that loading it cannot introduce inconsistencies [#]_. Another point is
@@ -819,7 +841,9 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   It does not change the exit status. If the report stops after its start
   line, it has no ``END STATEMENT REPORT`` line and the checker emits a
   warning. A program that reads the report must treat such a stream as no
-  report, not as partial evidence.
+  report, not as partial evidence. The report stops this way at a name it
+  would print that is not made of identifiers, for instance the name of a
+  constant that a term of an admitted library names but no library declares.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.

@@ -395,6 +395,13 @@ let mind_node st view mind =
         (push_context declaration_view mib.mind_params_ctxt []) mib.mind_packets
     in
     let refs = walk st (fresh_gen st) empty_refs todo in
+    Array.iter (fun mip ->
+        if not (CheckNames.valid_id mip.mind_typename) then
+          CErrors.user_err
+            Pp.(str ("The statement report reached the inductive type name " ^
+                     CheckNames.quote (Id.to_string mip.mind_typename) ^
+                     ", which is not an identifier.")))
+      mib.mind_packets;
     let name = MutInd.to_string mind in
     let tf = mib.mind_typing_flags in
     let flags = typing_flags name tf [] in
@@ -433,6 +440,27 @@ let name_of = function
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> MutInd.to_string mind
   | GlobRef.VarRef id -> Id.to_string id
 
+(* Place 2 of the name check (checkNames.mli), for a name that the check at
+   load cannot see: a constant or an inductive that a term of an admitted
+   library names and that no library declares, which the report prints as an
+   axiom. Each object whose name an [axiom] or [flag] line would print is
+   tested when the closure reaches it, as are the type names of each inductive
+   block it resolves ([mind_node]). This is before the type verdict, whose
+   conversion can reach an anomaly that prints an unresolved inductive's name,
+   and before the statement's line, so a refusal leaves no END STATEMENT
+   REPORT line. *)
+let check_printed_name obj =
+  let valid = match obj with
+    | GlobRef.ConstRef kn -> CheckNames.valid_kername (Constant.user kn)
+    | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+      CheckNames.valid_kername (MutInd.user mind)
+    | GlobRef.VarRef id -> CheckNames.valid_id id
+  in
+  if not valid then
+    CErrors.user_err
+      Pp.(str ("The statement report would print the name " ^ CheckNames.quote (name_of obj) ^
+               ", which is not made of identifiers."))
+
 module FlagSet = Stdlib.Set.Make (struct
     type t = string * string
     let compare (k1, o1) (k2, o2) =
@@ -440,7 +468,8 @@ module FlagSet = Stdlib.Set.Make (struct
       if Int.equal c 0 then String.compare o1 o2 else c
   end)
 
-(** The axioms and flags of every object reachable from [root]. *)
+(** The axioms and flags of every object reachable from [root]. A name the
+    report must not print stops it ([check_printed_name]). *)
 let closure st root =
   let rec loop public_seen implementation_seen axioms flags = function
     | [] -> axioms, flags
@@ -452,6 +481,7 @@ let closure st root =
       if seen then loop public_seen implementation_seen axioms flags todo
       else
         let n = node st view obj in
+        if n.axiom || not (List.is_empty n.flags) then check_printed_name obj;
         let axioms = if n.axiom then CString.Set.add (name_of obj) axioms else axioms in
         let flags = List.fold_left (fun flags f -> FlagSet.add f flags) flags n.flags in
         let public_seen, implementation_seen = match view with

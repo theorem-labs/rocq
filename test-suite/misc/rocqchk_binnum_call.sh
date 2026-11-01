@@ -141,8 +141,12 @@ with padd_carry@{u} (x y : positive) : positive :=
     | xH, xH => xI xH
   end.
 """ + lemma("poly", "padd_carry (xI (xO xH)) (xI xH)") + """
-(* A call through a variable: [f] is not a constant at its call site. *)
-Definition through (f : positive -> positive -> positive) (x y : positive) := f x y.
+(* A call through a variable: [f] is not a constant at its call site. The
+   [fix] keeps the compiler from expanding the wrapper into its call site (an
+   expanded wrapper would beta-reduce [f] to the constant and make a call site
+   of it, kernel/genlambda.ml); it computes [f x y] either way. *)
+Definition through (f : positive -> positive -> positive) (x y : positive) : positive :=
+  (fix go (n : nat) : positive := match n with O => f x y | S m => go m end) O.
 """ + lemma("var", "through Pos.add_carry (xI (xO xH)) (xI xH)"))
 
 # (c) Around 64 bits.
