@@ -112,8 +112,12 @@ open Names
    and still read back as itself, never as another record or as an absent
    field. The compiling process reads the
    file back with its own records ([get]) when it saves the library and
-   removes the log and its private directory at exit. A child's records reach
-   it only when the child writes them
+   removes the log and its private directory at exit, but only when every
+   component of TMPDIR was secure at creation ([path_secure]: owned by this
+   uid or root, and either not group/other-writable or sticky) and lstat of
+   each still matches the recorded dev:ino; a substitute at the log name
+   (a different dev:ino) or an insecure parent leaves both. A child's records
+   reach it only when the child writes them
    before that read-back: a plugin whose forked child outlives the tactic
    that forked it, and whose result reaches the compile later, is outside
    the log (the plugins of the audited set wait for their children). A record a
@@ -206,20 +210,43 @@ let write_whole d s =
   with Unix.Unix_error _ -> false
 
 
-(* Whether cleanup may unlink by pathname. The parent directory's pathname
-   is stable against replacement by another uid when it is owned by this uid
-   or root and is either not writable by group/other or has the sticky bit
-   (the normal /tmp case). Where neither holds, cleanup leaves the log and
-   its directory in place: a small leak beats deleting the wrong file. Same-uid
-   code can replace any part of the process state already. *)
-let parent_stable root =
-  match Unix.stat root with
-  | { Unix.st_uid; st_perm; _ } ->
-    let mine_or_root = st_uid = Unix.getuid () || st_uid = 0 in
-    let no_other_write = st_perm land 0o022 = 0 in
-    let sticky = st_perm land 0o1000 <> 0 in
-    mine_or_root && (no_other_write || sticky)
-  | exception Unix.Unix_error _ -> false
+(* Secure-path walk: whether every directory from / down to [root] (resolved
+   through [realpath]) is owned by this uid or root and is either not
+   group/other-writable or has the sticky bit. A symlink in any component is
+   resolved by [realpath]; the walk lstat's the resolved path. Where any
+   component fails, cleanup leaves the log and its directory in place: a
+   small leak beats deleting the wrong file. Same-uid code can replace any
+   part of the process state already; the purpose of this check is to avoid
+   removing a file another uid put at a swapped pathname. *)
+let path_secure root =
+  let uid = Unix.getuid () in
+  let component_ok p =
+    match Unix.lstat p with
+    | { Unix.st_kind = Unix.S_DIR; st_uid; st_perm; _ } ->
+      let mine_or_root = st_uid = uid || st_uid = 0 in
+      let no_other_write = st_perm land 0o022 = 0 in
+      let sticky = st_perm land 0o1000 <> 0 in
+      mine_or_root && (no_other_write || sticky)
+    | _ | exception Unix.Unix_error _ -> false
+  in
+  (* Resolve symlinks once, then walk every prefix of the real path. *)
+  match
+    let ic = Unix.open_process_in (Printf.sprintf "realpath -- %s" (Filename.quote root)) in
+    let rp = String.trim (In_channel.input_all ic) in
+    (match Unix.close_process_in ic with Unix.WEXITED 0 -> Some rp | _ -> None)
+  with
+  | Some rp when Filename.is_relative rp -> false
+  | Some rp ->
+    let parts = String.split_on_char '/' rp in
+    let rec walk prefix = function
+      | [] -> true
+      | "" :: rest -> walk prefix rest  (* leading / or trailing / *)
+      | comp :: rest ->
+        let dir = if prefix = "/" then "/" ^ comp else prefix ^ "/" ^ comp in
+        component_ok dir && walk dir rest
+    in
+    component_ok "/" && walk "/" parts
+  | None | exception _ -> false
 
 (* A directory that only this uid can enter. [mkdir] makes its name atomically
    and retries a collision; the log's fixed name is then private to it. *)
@@ -240,18 +267,36 @@ let make_private_dir root =
   in
   make 128
 
-(* Remove the log and its directory by verifying dev:ino of each, but only
-   when the parent guarantee held at creation. A mismatch or an absent
-   guarantee leaves both: a small leak, never the wrong file. *)
-let remove_verified dir dir_id p log_id =
-  (match Unix.lstat p with
-   | { Unix.st_dev; st_ino; _ } when (st_dev, st_ino) = log_id ->
-     (try Sys.remove p with Sys_error _ -> ())
-   | _ | exception Unix.Unix_error _ -> ());
-  (match Unix.lstat dir with
-   | { Unix.st_dev; st_ino; _ } when (st_dev, st_ino) = dir_id ->
-     (try Unix.rmdir dir with Unix.Unix_error _ -> ())
-   | _ | exception Unix.Unix_error _ -> ())
+(* Create the log inside [dir]. Returns [(fd, log_id)] on success. *)
+let create_log dir =
+  let p = Filename.concat dir "log" in
+  match Unix.openfile p
+          [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_APPEND; Unix.O_CLOEXEC] 0o600 with
+  | exception Unix.Unix_error _ -> None
+  | d ->
+    let close () = try Unix.close d with Unix.Unix_error _ -> () in
+    match Unix.fstat d with
+    | exception Unix.Unix_error _ -> close (); None
+    | { Unix.st_dev; st_ino; _ } ->
+      let log_id = (st_dev, st_ino) in
+      if write_whole d header then Some (d, p, log_id)
+      else begin close (); None end
+
+(* Remove the log and its private directory when the path is secure and
+   lstat still matches the recorded identity. [stable] was computed at
+   creation over every component of TMPDIR. When it is false, or lstat
+   disagrees, nothing is removed: a small leak, never the wrong file. *)
+let cleanup_log ~stable dir dir_id p log_id =
+  if stable then begin
+    (match Unix.lstat p with
+     | { Unix.st_dev; st_ino; _ } when (st_dev, st_ino) = log_id ->
+       (try Sys.remove p with Sys_error _ -> ())
+     | _ | exception Unix.Unix_error _ -> ());
+    (match Unix.lstat dir with
+     | { Unix.st_dev; st_ino; _ } when (st_dev, st_ino) = dir_id ->
+       (try Unix.rmdir dir with Unix.Unix_error _ -> ())
+     | _ | exception Unix.Unix_error _ -> ())
+  end
 
 let owner () = match !owner_pid with Some p -> p = Unix.getpid () | None -> false
 
@@ -295,17 +340,15 @@ let set_enabled b =
   enabled := b;
   if b && not (owner ()) then begin
     (* The owner makes a private 0700 directory in TMPDIR, then creates the
-       log through its descriptor with O_CREAT|O_EXCL; no path is reopened.
-       The variables let the worker pool pass this log to its workers; native
-       code in this process can already read anything here, so they are a
-       check, not a secret. *)
+       log through [create_log] with O_CREAT|O_EXCL; no path is reopened.
+       Cleanup removes the log and directory only when every component of
+       TMPDIR was secure at creation ([path_secure]) and lstat of each still
+       matches ([cleanup_log]). *)
     tried_env := true;
     fd := None;
     path := None;
     identity := None;
     owner_pid := Some (Unix.getpid ());
-    (* The owner does not read these variables. Clear any outer values; the
-       worker pool passes path and identity from the refs below. *)
     Unix.putenv env_var "";
     Unix.putenv identity_env_var "";
     let failed () =
@@ -315,50 +358,35 @@ let set_enabled b =
     match
       let root = Filename.get_temp_dir_name () in
       let root = if Filename.is_relative root then Filename.concat (Sys.getcwd ()) root else root in
-      let stable = parent_stable root in
-      (make_private_dir root, root, stable)
+      let stable = path_secure root in
+      (make_private_dir root, stable)
     with
-    | (dir, _root, stable) ->
+    | (dir, stable) ->
       let dir_id = match Unix.lstat dir with
         | { Unix.st_dev; st_ino; _ } -> Some (st_dev, st_ino)
         | exception Unix.Unix_error _ -> None
       in
-      let p = Filename.concat dir "log" in
-      (match Unix.openfile p
-               [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_APPEND; Unix.O_CLOEXEC] 0o600 with
-       | exception Unix.Unix_error _ ->
-         (* O_EXCL failed: this process did not create the file. Remove only
-            the empty private directory it made. *)
-         (try Unix.rmdir dir with Unix.Unix_error _ -> ()); failed ()
-       | d ->
-         let close () = try Unix.close d with Unix.Unix_error _ -> () in
-         match Unix.fstat d with
-         | exception Unix.Unix_error _ ->
-           close ();
-           (match dir_id with
-            | Some did -> remove_verified dir did p (0, 0) (* log id unknown *)
-            | None -> ());
-           failed ()
-         | { Unix.st_dev; st_ino; _ } ->
-           let log_id = (st_dev, st_ino) in
-           if write_whole d header then begin
-             identity := Some log_id; path := Some p; fd := Some d;
-             at_exit (fun () ->
-                 if owner () then
-                   match stable, dir_id with
-                   | true, Some did -> remove_verified dir did p log_id
-                   | _ -> ()
-                   (* An unstable parent or a missing dir_id: leave the log.
-                      Same-uid code can replace any part of the process state
-                      already; what this avoids is removing a file another uid
-                      put at a swapped pathname. *))
-           end else begin
-             close ();
-             (match dir_id with
-              | Some did -> remove_verified dir did p log_id
-              | None -> ());
-             failed ()
-           end)
+      (match create_log dir with
+       | None ->
+         (* Creation or header write failed. Remove the private directory
+            only when path was secure and its dev:ino matches; rmdir also
+            refuses a non-empty one. Never unlink the file: O_EXCL may not
+            have created it. *)
+         (match stable, dir_id with
+          | true, Some did ->
+            (match Unix.lstat dir with
+             | { Unix.st_dev; st_ino; _ } when (st_dev, st_ino) = did ->
+               (try Unix.rmdir dir with Unix.Unix_error _ -> ())
+             | _ | exception Unix.Unix_error _ -> ())
+          | _ -> ());
+         failed ()
+       | Some (d, p, log_id) ->
+         identity := Some log_id; path := Some p; fd := Some d;
+         at_exit (fun () ->
+             if owner () then
+               match dir_id with
+               | Some did -> cleanup_log ~stable dir did p log_id
+               | None -> ()))
     | exception (Sys_error _ | Unix.Unix_error _) -> failed ()
   end
 

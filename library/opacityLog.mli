@@ -50,9 +50,12 @@ val set_enabled : bool -> unit
     path is absolute even when TMPDIR is relative, so a later change of
     directory does not change which file the path names. It records the
     device and inode of that descriptor; if the log cannot be made, {!get}
-    answers [None]. At exit it removes the log and its private directory;
-    another uid cannot enter that directory, and code of this uid is not an
-    isolation boundary. The compiling process clears any inherited values of
+    answers [None]. At exit it removes the log and its private directory
+    only when every component of TMPDIR was secure at creation (each
+    directory owned by this uid or root and either not group/other-writable
+    or sticky) and lstat of each still matches the recorded dev:ino; a
+    substitute at the log name or an insecure parent leaves both. The
+    compiling process clears any inherited values of
     {!env_var} and {!identity_env_var}; the worker pool gives workers
     {!worker_env_value} and {!worker_identity_env_value} from this process's
     retained descriptor instead. Worker processes are not
@@ -125,3 +128,10 @@ val decode_line : string -> query option
     a line that {!encode_line} does not write: [decode_line] is the inverse
     of {!encode_line} and refuses every other spelling, an empty constant
     included. *)
+
+val create_log : string -> (Unix.file_descr * string * (int * int)) option
+(** [create_log dir] creates a log file named ["log"] inside [dir] with
+    [O_CREAT|O_EXCL|O_APPEND], writes the header, and returns [(fd, path,
+    (dev, ino))]. Returns [None] when the file already exists (O_EXCL), the
+    open, fstat or header write fails; on failure it closes the descriptor
+    if it was opened. *)

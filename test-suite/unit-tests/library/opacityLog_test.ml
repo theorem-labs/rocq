@@ -165,4 +165,25 @@ let () = add_test "the log read back is the file this process made" (fun () ->
     append p (line r);
     assert_equal ~msg:"a torn last line" ~printer:show_get None (get ()))
 
+let () = add_test "create_log on a directory that already holds 'log'" (fun () ->
+    let cwd = Sys.getcwd () in
+    let base = Filename.concat cwd "opacitylog_create_test.tmp" in
+    let rm_rf d = ignore (Sys.command (Filename.quote_command "rm" ["-rf"; d])) in
+    rm_rf base;
+    Sys.mkdir base 0o700;
+    Fun.protect ~finally:(fun () -> Sys.chdir cwd; rm_rf base) @@ fun () ->
+    (* First create_log succeeds. *)
+    (match OpacityLog.create_log base with
+     | Some (d, p, _id) ->
+       assert_equal ~msg:"path" ~printer:Fun.id (Filename.concat base "log") p;
+       assert_bool "header written" (read p = "rocq-opacity-log 2\n");
+       Unix.close d
+     | None -> assert_failure "first create_log failed");
+    (* Second create_log fails (O_EXCL) and does not change the file. *)
+    let before = read (Filename.concat base "log") in
+    assert_equal ~msg:"O_EXCL" ~printer:string_of_bool false
+      (match OpacityLog.create_log base with Some _ -> true | None -> false);
+    assert_equal ~msg:"file unchanged" ~printer:Fun.id before
+      (read (Filename.concat base "log")))
+
 let _ = run_tests __FILE__ (open_log_out_ch __FILE__) (List.rev !tests)
