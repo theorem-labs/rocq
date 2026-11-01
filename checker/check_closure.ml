@@ -396,7 +396,7 @@ let constant_node st view kn =
        the verdict alone does not tell them apart. So the failure is named here.
        The exit status is deliberately unchanged: a stored-nowhere body is an
        ordinary answer, and failing the whole check on it would turn every
-       delayed proof into a failed grade. A reader who needs certainty reads the
+       delayed proof into a failed check run. A reader who needs certainty reads the
        warning, which names the constant. *)
     let body, axiom = match cb.const_body with
       | Def c -> [declaration_view, c], false

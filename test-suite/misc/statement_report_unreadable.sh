@@ -8,7 +8,7 @@
 # since intern — reads as a clean report of one more axiom.
 # The exit status stays the successful check's on purpose: a body stored
 # nowhere is an ordinary answer, and failing the check on it would turn every
-# delayed proof into a failed grade.
+# delayed proof into a failed check run.
 set -eu
 
 D=misc/statement_report_unreadable
