@@ -11,7 +11,9 @@
 open Pp
 open Names
 
-let debug = CDebug.create ~name:"checker-workers" ()
+let debug_flag, debug = CDebug.create_full ~name:"checker-workers" ()
+
+let debugging () = CDebug.get_flag debug_flag
 
 (* What a process is given to do: check the body of one opaque constant,
    or read one library's table of opaque proofs. *)
@@ -214,6 +216,75 @@ let flush_output () =
   Format.pp_print_flush Format.std_formatter ();
   Format.pp_print_flush Format.err_formatter ();
   flush_all ()
+
+(* Output held while the walk runs ahead of the intern. Stock prints every
+   line of the intern before any line of the walk; when the walk starts
+   before the intern ends, what the walk prints, in the main process and
+   replayed from its workers, waits here in order until the intern ends.
+   The main process prints through [Format.err_formatter] (the feedback
+   listener) and [Format.std_formatter] (a malformed object, [Validate]),
+   and replays its workers through [print_output]: those are the paths
+   held. *)
+type held_chunk = Out of string | Err of string
+
+let held : held_chunk Queue.t option ref = ref None
+
+(* The two formatters' own output functions while [hold_on] has replaced
+   them. *)
+let saved = ref None
+
+let start_holding () = held := Some (Queue.create ())
+
+let hold_on () =
+  match !held, !saved with
+  | Some q, None ->
+    Format.pp_print_flush Format.std_formatter ();
+    Format.pp_print_flush Format.err_formatter ();
+    saved := Some (Format.pp_get_formatter_output_functions Format.std_formatter (),
+                   Format.pp_get_formatter_output_functions Format.err_formatter ());
+    Format.pp_set_formatter_output_functions Format.std_formatter
+      (fun s pos len -> Queue.push (Out (String.sub s pos len)) q) ignore;
+    Format.pp_set_formatter_output_functions Format.err_formatter
+      (fun s pos len -> Queue.push (Err (String.sub s pos len)) q) ignore
+  | _ -> ()
+
+let restore_formatters () =
+  match !saved with
+  | None -> ()
+  | Some ((out, out_flush), (err, err_flush)) ->
+    saved := None;
+    Format.pp_set_formatter_output_functions Format.std_formatter out out_flush;
+    Format.pp_set_formatter_output_functions Format.err_formatter err err_flush
+
+let hold_off () =
+  if Option.has_some !saved then begin
+    Format.pp_print_flush Format.std_formatter ();
+    Format.pp_print_flush Format.err_formatter ();
+    restore_formatters ()
+  end
+
+let print_chunk = function
+  | Out s -> print_string s; flush stdout
+  | Err s -> output_string stderr s; flush stderr
+
+let release_held () =
+  hold_off ();
+  match !held with
+  | None -> ()
+  | Some q ->
+    held := None;
+    flush_output ();
+    Queue.iter print_chunk q
+
+let drop_held () =
+  hold_off ();
+  held := None
+
+(* A worker forked while output is held prints to its own files, as any
+   other worker. *)
+let reset_held_in_child () =
+  restore_formatters ();
+  held := None
 
 let rec waitpid_non_intr flags pid =
   try Unix.waitpid flags pid
@@ -561,11 +632,22 @@ let open_output () =
   | Some out, Some err -> Some (out, err)
   | out, err -> Option.iter close_fd out; Option.iter close_fd err; None
 
+(* Whether a worker can be given its two files now. *)
+let capture_available () =
+  match open_output () with
+  | Some (out, err) -> close_fd out; close_fd err; true
+  | None -> false
+
 let close_output w =
   Option.iter (fun (out, err) -> close_fd out; close_fd err) w.output;
   w.output <- None
 
-let spawn ?(releasable = true) tasks =
+(* The descriptors [deal] has opened for batches it has not forked yet. *)
+let prepared_fds : Unix.file_descr list ref = ref []
+
+(* [prepared]: the report pipe and the two output files, already open
+   ([deal], while output is held). *)
+let spawn ?(releasable = true) ?prepared tasks =
   let batch = batch_of_tasks tasks in
   (* Otherwise the child would print again what is still buffered. *)
   flush_output ();
@@ -581,9 +663,14 @@ let spawn ?(releasable = true) tasks =
         str "), checking here " ++ pr_tasks batch);
     Array.iter (fun t -> check_here t; note_one t.job) tasks
   in
-  match Unix.pipe ~cloexec:true () with
-  | exception Unix.Unix_error (err, _, _) -> check_here_instead (Unix.error_message err)
-  | report, report_out ->
+  let pipe = match prepared with
+    | Some (report, report_out, _) -> Ok (report, report_out)
+    | None ->
+      (try Ok (Unix.pipe ~cloexec:true ()) with Unix.Unix_error (err, _, _) -> Error err)
+  in
+  match pipe with
+  | Error err -> check_here_instead (Unix.error_message err)
+  | Ok (report, report_out) ->
     (* The main process never acts on a request; it sends them. A handler
        that ran here, for a signal from outside, set this flag, which the
        child would inherit and act on at entry, so it is dropped before the
@@ -592,7 +679,14 @@ let spawn ?(releasable = true) tasks =
        at entry, which is harmless, since the main process accepts any
        release whose count the final report matches. *)
     pending_request := false;
-    let output = open_output () in
+    let output = match prepared with
+      | Some (_, _, output) -> Some output
+      | None -> open_output ()
+    in
+    (* This worker's own descriptors are no longer another's to close. *)
+    let mine = report :: report_out ::
+               (match output with Some (out, err) -> [out; err] | None -> []) in
+    prepared_fds := List.filter (fun fd -> not (List.mem fd mine)) !prepared_fds;
     match Unix.fork () with
     | 0 ->
       Unix.close report;
@@ -600,8 +694,13 @@ let spawn ?(releasable = true) tasks =
           close_fd w.report;
           Option.iter (fun (out, err) -> close_fd out; close_fd err) w.output)
         !running;
+      (* Those [deal] opened for the batches it has not forked yet: a child
+         holding the write end of another worker's report would keep that
+         report from ever ending. *)
+      List.iter close_fd !prepared_fds;
       (* The worker counts only what it runs and reads itself. *)
       Vmbinnum.reset_stats ();
+      reset_held_in_child ();
       table_reads := 0;
       table_bytes := 0;
       run_worker parent report_out output tasks
@@ -669,8 +768,13 @@ let read_output w =
 let print_output (out, err) =
   if out <> "" || err <> "" then begin
     flush_output ();
-    if out <> "" then (print_string out; flush stdout);
-    if err <> "" then (output_string stderr err; flush stderr)
+    match !held with
+    | Some q ->
+      if out <> "" then Queue.push (Out out) q;
+      if err <> "" then Queue.push (Err err) q
+    | None ->
+      if out <> "" then print_chunk (Out out);
+      if err <> "" then print_chunk (Err err)
   end
 
 (* The worker [w] failed: every worker is stopped, and what it printed
@@ -806,7 +910,14 @@ let rec reap_finished () =
     | 0, _ -> ()
     | pid, status -> reaped pid status; reap_finished ()
 
-let free_slots slots = slots - List.length !running
+(* One slot kept for the worker of [validate_tables] while the walk runs
+   before it is started ([expect_validator]): from the start of the walk it
+   holds a slot, as it does when it is started first. It is not waited for:
+   the slots may all be held by checks that take long, or never end, while
+   a table the validator would refuse is waiting to be read. *)
+let validator_reserved = ref 0
+
+let free_slots slots = slots - List.length !running - !validator_reserved
 
 (* Asks the worker with the largest batch to release the checks it has not
    started, while a slot is free and nothing is queued: then the released
@@ -938,15 +1049,54 @@ let deal ?(walk = false) k size =
       if j >= 0 && dealt j then batches.(j) <- List.rev_append p batches.(j)
       else left := List.rev_append p !left)
     ps;
-  Queue.clear queue;
-  List.iter (fun t -> Queue.push t queue) (List.rev !left);
-  (* Only once the queue holds what was not dealt: a worker inherits it by
-     fork, and a batch whose fork fails is checked here. A batch is built
-     newest first. *)
-  Array.iter (fun b ->
-      if not (CList.is_empty b) then
-        spawn (Array.of_list (if walk then b else List.rev b)))
-    batches
+  (* While output is held, each worker is given its report pipe and its
+     two output files before anything leaves the queue: a worker without
+     them would print at once, among the lines still to come from the
+     intern. If any is missing, nothing is dealt now; the jobs wait in the
+     queue, as they were, for a deal after the output is printed. *)
+  let prepare b =
+    if CList.is_empty b then Ok None
+    else match Unix.pipe ~cloexec:true () with
+      | exception Unix.Unix_error _ -> Error ()
+      | report, report_out ->
+        match open_output () with
+        | Some output -> Ok (Some (report, report_out, output))
+        | None -> close_fd report; close_fd report_out; Error ()
+  in
+  let release_prepared = function
+    | Some (report, report_out, (out, err)) ->
+      close_fd report; close_fd report_out; close_fd out; close_fd err
+    | None -> ()
+  in
+  let prepared =
+    if Option.is_empty !held then Some (Array.map (fun _ -> None) batches)
+    else
+      let got = ref [] in
+      let ok = Array.for_all (fun b ->
+          match prepare b with
+          | Ok p -> got := p :: !got; true
+          | Error () -> false) batches
+      in
+      if ok then Some (Array.of_list (List.rev !got))
+      else (List.iter release_prepared !got; None)
+  in
+  match prepared with
+  | None -> ()
+  | Some prepared ->
+    Queue.clear queue;
+    List.iter (fun t -> Queue.push t queue) (List.rev !left);
+    prepared_fds := Array.fold_left (fun fds p -> match p with
+        | Some (report, report_out, (out, err)) -> report :: report_out :: out :: err :: fds
+        | None -> fds) [] prepared;
+    (* Only once the queue holds what was not dealt: a worker inherits it by
+       fork, and a batch whose fork fails is checked here. A batch is built
+       newest first. *)
+    Fun.protect ~finally:(fun () -> List.iter close_fd !prepared_fds; prepared_fds := [])
+      (fun () ->
+         Array.iteri (fun j b ->
+             if not (CList.is_empty b) then
+               spawn ?prepared:prepared.(j) (Array.of_list (if walk then b else List.rev b)))
+           batches)
 
 (* Hands out the batches a new job makes possible, at most once every
    [window] seconds. *)
@@ -1024,6 +1174,14 @@ let defer_table dp read =
     dispatch ()
   end
 
+(* The walk is about to run before [validate_tables] is called, which will
+   read every table: no per-library table task is queued meanwhile, so the
+   queue holds the same tasks as when [validate_tables] runs first, and the
+   validator's slot is kept free for it. *)
+let expect_validator () =
+  tables_validated := true;
+  validator_reserved := 1
+
 (* Stock parses every table while it interns the libraries, before it
    checks any, so a malformed table stops it there. The tables are read
    here, in that order, by one worker started before the walk, so that a
@@ -1045,6 +1203,7 @@ let defer_table dp read =
    looks for the first table that does not parse, starts where it stopped
    instead of reading them all again. *)
 let validate_tables tables =
+  validator_reserved := 0;
   if !max_workers > 0 && not (CList.is_empty tables) then begin
     let progress = open_capture () in
     let tasks = Array.of_list (List.mapi (fun i (dp, read) ->
