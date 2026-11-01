@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# D18 (dispatch://INFRA-361), Astra review 2 blockers 1 and 3: the [keepfacts]
+# D18: the [keepfacts]
 # segment that -location-free-label writes, read through
 # `rocq-library-label --axiom-report-json` (schema version 2).
 #

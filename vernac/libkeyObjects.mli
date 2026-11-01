@@ -10,7 +10,7 @@
 
 open Names
 
-(** The location-free label of a library (design D18, dispatch://INFRA-361).
+(** The location-free label of a library (design D18).
 
     [coqc -location-free-label] stores the first 16 bytes of the label as
     the digest of a library's [library] segment, in place of the MD5 of that
@@ -59,7 +59,7 @@ open Names
     Version 1 had no [summary']: two builds of a library that differed only
     in a [Require] made [Require (safe)] had the same label, although a
     dependent that also requires the dependency fully compiles against one
-    and fails against the other (Astra review of version 1, section 3.1).
+    and fails against the other (a reviewer review of version 1, section 3.1).
 
     Universe names and bound-module counters are read as they are: they
     escape into the dependents (a dependent that applies a functor stores
@@ -161,7 +161,7 @@ val blind_compiled :
 type assumption_status = Axiom | Proof
 
 (** What the keep rule reads beside the label to apply its monotone axiom
-    condition and its foreign-opaque-reference check (C1, dispatch://INFRA-361).
+    condition and its foreign-opaque-reference check (C1).
     Both are computed from the current compiled form, never recorded. *)
 type axiom_report = {
   blinded : (Constant.t * assumption_status) list;

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# S3 (D18, dispatch://INFRA-361; Astra review 2 §1.2, Claude review S3): a foreign
+# S3 (D18): a foreign
 # opaque reference survives a functor APPLICATION (an Include copies the proof locally
 # and holds no foreign reference, but applying another library's functor keeps an
-# Indirect into that library's opaque table, as Astra §3.3 noted). Label v2b drops the
+# Indirect into that library's opaque table, as a reviewer §3.3 noted). Label v2b drops the
 # opaque table index that reference carries, so an edit that shifts the index leaves
 # the owner's label equal -- which the keep rule's byte-identity guard over the
 # referenced owner has to catch, because the label cannot.

@@ -75,7 +75,7 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
   let warn = List.map (fun ({ UserWarn.note; cats } : UserWarn.warn) -> (note, cats)) warn in
   (name, Array.to_list deps, DirPath.Set.elements safe_deps, (depr, warn))
 
-(* The axiom-or-opaque-proof blinding (design S1b, dispatch://INFRA-361).
+(* The axiom-or-opaque-proof blinding (design S1b).
 
    [blind_constant] maps a constant whose body is [Undef None] (an axiom or
    parameter with no body, as [Admitted] and [Axiom] make) and one whose body
