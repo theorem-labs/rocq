@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# D18 (dispatch://INFRA-361), review gate 1 F1: an Admitted -> Qed edit inside a
-# functor body or a module type moves its library's label (label version 5).
+# An Admitted -> Qed edit inside a functor body or a module type moves its
+# library's label (label version 5).
 #
 # A functor application copies its body's axiom-or-opaque form into the library that
 # applies it (kernel/mod_typing.ml), and so do [Declare Module M : T] and

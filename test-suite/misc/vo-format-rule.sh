@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# misc/vo-format.sh's rule for a new .vo segment, both ways (D18 keepfacts,
-# dispatch://INFRA-361, review gate 1).
+# misc/vo-format.sh's rule for a new .vo segment, both ways.
 #
 # A wrapper stands in for rocq-library-label: it prints the real
 # --vo-representation of the build under test, edited, and misc/vo-format.sh

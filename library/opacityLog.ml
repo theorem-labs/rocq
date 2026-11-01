@@ -12,17 +12,27 @@ open Names
 
 (* Records of whether a constant was an axiom or an opaque proof when a
    command whose outcome depends on that distinction ran while a library was
-   compiled (design D18, dispatch://INFRA-361, Astra review 2 blocker 1).
+   compiled, and also of the opaque table that a proof body is read from.
 
-   [Tactics.Redexpr.check_not_fully_opaque] rejects a non-opaque strategy
-   command (`Transparent c.`, `Strategy expand [c].`) on a constant [c] whose
-   body is an opaque proof ([OpaqueDef]), but accepts it on an axiom
-   ([Undef]); extraction warns about an axiom to realize, or about an opaque
-   proof it accessed, and either warning can be an error
-   ([Extraction.extract_constant]). The library label ([Vernac.LibkeyObjects])
-   deliberately gives an axiom and an opaque proof of the library's own
-   signature the same label, so an edit that completes an admitted dependency
-   constant with a [Qed] proof keeps the dependency's label, yet a real
+   The observers, each of which logs here before it decides:
+   - [Tactics.Redexpr.check_not_fully_opaque] rejects a non-opaque strategy
+     command (`Transparent c.`, `Strategy expand [c].`) on a constant [c]
+     whose body is an opaque proof ([OpaqueDef]), but accepts it on an axiom
+     ([Undef]);
+   - extraction warns about an axiom to realize, or about an opaque proof it
+     accessed, and either warning can be an error
+     ([Extraction.extract_constant]);
+   - [Functional Scheme] makes the principle it generates an opaque proof
+     when the function's equation lemma is one, and a transparent definition
+     otherwise ([Gen_principle.make_scheme]);
+   - [Global.body_of_constant], the plugin API for a constant's body, answers
+     [None] for an axiom and the forced body for an opaque proof.
+   (Every other reader in this tree and in the plugins installed beside it
+   was checked for this distinction the same way.) The library label
+   ([Vernac.LibkeyObjects]) deliberately gives an axiom and an opaque proof
+   of the library's own signature the same label, so an edit that completes
+   an admitted dependency constant with a [Qed] proof keeps the dependency's
+   label, yet a real
    recompile of a dependent that ran such a command on that constant could
    now fail, or stop failing. A [local] strategy command (the default of
    [Opacity]) writes no persistent object, so a dependent's [.vo] does not
@@ -39,36 +49,215 @@ open Names
 
    An extraction with AccessOpaque (the default) also reads an opaque proof's
    BODY, and what it extracts depends on that body, which no label covers; so
-   does the walk that computes a library's assumption closures
-   ([KeepFacts]), whose result is stored. Such a read is logged with the
-   library whose opaque table it read ([record_body_read]): for a copy that a
+   does [Global.body_of_constant]'s caller, and the walk that computes a
+   library's assumption closures ([KeepFacts]), whose result is stored. Such a
+   read is logged with the library whose opaque table it read
+   ([record_body_read]): for a copy that a
    module operation did not strengthen (a functor application, an [Include]
    of one, at any depth, a sealed module whose implementation is such an
    expression) that table's library can differ from the one holding the
    constant read. The library's [foreign_opaque_libraries]
    ([LibkeyObjects.axiom_report]) names it only for a copy whose [Indirect]
    reference the compiled form keeps, not for one read from a sealed
-   module's expression. *)
+   module's expression.
+
+   Several processes. A record can be made outside the compiling process: a
+   [par:] tactic runs in a [rocqworker] process ([Partac]), an [-async-proofs]
+   proof in another, and a plugin tactic can fork (coq-hammer-tactics' [best]
+   tries each candidate in a forked child); none of them sends its records
+   back. So under [-location-free-label] the compiling process creates a
+   private log file ([Filename.temp_file], mode 0600, in TMPDIR) when the flag
+   is set, before any tactic runs. It never writes its records into a log it
+   did not create (one named by an outer process, or a sink such as
+   /dev/null, would lose them). A spawned worker gets the log's path from the
+   worker pool, which sets [ROCQ_OPACITYLOG_FILE] to the value
+   [worker_env_value] gives, whatever the inherited environment or
+   [-async-proofs-private-flags] say ([AsyncTaskQueue.spawn]): the log the
+   spawning process has open (the owner's, a worker's or a forked child's),
+   in a worker that has not opened it yet the value it inherited, and
+   otherwise empty, so the workers of a coqc without [-location-free-label]
+   record nothing. The compiling process also
+   sets the variable in its own environment (empty when no log was made), but
+   nothing in this tree reads it there: it is kept only so a tool running in
+   the same process can find the live log (the test plugin of
+   misc/library-label-bodyread.sh reads it to damage the log on purpose), and
+   so such a tool never finds an inherited path. Workers are not given
+   [-location-free-label], so they never call [set_enabled true]. Only a
+   worker ([Flags.async_proofs_is_worker]) reads the variable; a forked child
+   inherits the open descriptor instead, and any other process ignores the
+   variable, so a coqc without the flag never writes to, or fails on, a log
+   an outer process named. Only these append: the owner, a worker (through
+   the variable) and a forked child of either (through the descriptor). A
+   process outside them -- a separate rocq process a plugin starts by its own
+   means, rather than through the worker pool -- is outside the log; no plugin
+   installed beside the tree starts one (each of them was checked). Each of
+   them appends each record to that file as one line with one write on an
+   [O_APPEND] descriptor, so the lines of several processes do not
+   interleave, besides keeping it in memory. The compiling process reads the
+   file back with its own records ([get]) when it saves the library and
+   removes it at exit. A record a
+   forked child made for a candidate the parent then dropped is kept: that
+   only makes the keep rule rebuild more. A log that could not be created,
+   written or read back whole (every line a record, the last one ended)
+   makes [get] answer [None], and the library is saved with no [keepfacts]
+   segment, which the keep rule rebuilds. A worker that cannot open the log
+   the variable names, or a worker or child that cannot write a record to
+   it, raises an error before the caller gets the answer it records
+   ([record], [record_body_read]), so its tactic fails having used nothing
+   unrecorded. *)
+
+type query = {
+  constant : string;
+  library : string option;
+  opaque : bool;
+  table : string option;
+}
+
+let env_var = "ROCQ_OPACITYLOG_FILE"
 
 let enabled = ref false
 
-let set_enabled b = enabled := b
+(* The log file: its path, a descriptor opened on it in this process, the
+   pid of the process that created it (only that one reads it back and
+   removes it; a forked child inherits these refs, not the ownership), and
+   whether a write or the creation failed in the owner. *)
+let path : string option ref = ref None
+let fd : Unix.file_descr option ref = ref None
+let owner_pid : int option ref = ref None
+let broken = ref false
+let tried_env = ref false
 
-let queries : (Constant.t * bool * DirPath.t option) list ref = ref []
+let open_append p =
+  try Some (Unix.openfile p [Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CLOEXEC] 0o600)
+  with Unix.Unix_error _ -> None
 
-let reset () = queries := []
+let owner () = match !owner_pid with Some p -> p = Unix.getpid () | None -> false
+
+(* A worker opens the log its environment names, once, on its first record;
+   a forked child of a process with a log has its descriptor already; no other
+   process reads the variable. *)
+let current_fd () =
+  match !fd with
+  | Some _ as d -> d
+  | None ->
+    if not !tried_env then begin
+      tried_env := true;
+      if Flags.async_proofs_is_worker () then
+        match Sys.getenv_opt env_var with
+        | Some p when p <> "" -> path := Some p; fd := open_append p
+        | Some _ | None -> ()
+    end;
+    !fd
+
+let set_enabled b =
+  enabled := b;
+  if b && not (owner ()) then begin
+    (* Created empty, mode 0600, in TMPDIR; never an inherited log. The
+       [putenv]s are not read by anything in this tree (workers get
+       [worker_env_value] from the worker pool): they let a tool in this
+       process find the live log, the test plugin of
+       misc/library-label-bodyread.sh, and clear an inherited path. *)
+    tried_env := true;
+    fd := None;
+    owner_pid := Some (Unix.getpid ());
+    match Filename.temp_file "rocq-opacitylog" ".log" with
+    | p ->
+      at_exit (fun () -> if owner () then try Sys.remove p with Sys_error _ -> ());
+      (match open_append p with
+       | Some d -> path := Some p; fd := Some d; Unix.putenv env_var p
+       | None -> path := None; broken := true; Unix.putenv env_var "")
+    | exception Sys_error _ -> path := None; broken := true; Unix.putenv env_var ""
+  end
+
+let worker_env_value () =
+  match !fd, !path with
+  | Some _, Some p -> p
+  | _ -> if Flags.async_proofs_is_worker () then Option.default "" (Sys.getenv_opt env_var) else ""
+
+let queries : query list ref = ref []
+
+let reset () =
+  queries := [];
+  if owner () then
+    match !path with
+    | Some p -> (try Unix.truncate p 0 with Unix.Unix_error _ -> broken := true)
+    | None -> ()
+
+let rec mpfile_root = function
+  | ModPath.MPfile dp -> Some dp
+  | ModPath.MPdot (mp, _) -> mpfile_root mp
+  | ModPath.MPbound _ -> None
+
+let line_of q =
+  let opt = function Some s -> s | None -> "-" in
+  String.concat "\t" ["R"; q.constant; opt q.library; (if q.opaque then "1" else "0"); opt q.table] ^ "\n"
+
+let query_of_line l =
+  let opt = function "-" -> Some None | "" -> None | s -> Some (Some s) in
+  match String.split_on_char '\t' l with
+  | ["R"; c; lib; o; t] when c <> "" ->
+    (match opt lib, o, opt t with
+     | Some library, ("0" | "1"), Some table ->
+       Some { constant = c; library; opaque = String.equal o "1"; table }
+     | _ -> None)
+  | _ -> None
+
+let cannot_write why =
+  CErrors.user_err Pp.(str "Cannot write a record to the keep rule's opacity log " ++
+                       str (Option.default "" !path) ++ str ": " ++ str why ++ str ".")
+
+(* Appends [q]'s line to the log with one write. A process with no log to
+   write to (none named, or the owner whose log could not be made) adds
+   nothing here; the owner's [get] then answers [None]. *)
+let append_to_log q =
+  match current_fd () with
+  | None ->
+    if Option.has_some !path then
+      if owner () then broken := true else cannot_write "it cannot be opened"
+  | Some d ->
+    let l = line_of q in
+    let ok = try Unix.write_substring d l 0 (String.length l) = String.length l
+      with Unix.Unix_error _ -> false in
+    if not ok then
+      if owner () then broken := true else cannot_write "the write failed"
+
+let add c ~opaque ~table =
+  let q = {
+    constant = Constant.to_string c;
+    library = Option.map DirPath.to_string (mpfile_root (Constant.modpath c));
+    opaque;
+    table = Option.map DirPath.to_string table;
+  } in
+  if !enabled then queries := q :: !queries;
+  append_to_log q
 
 let record c (cb : Declarations.constant_body) =
-  if !enabled then
-    match cb.Declarations.const_body with
-    | Declarations.Undef None -> queries := (c, false, None) :: !queries
-    | Declarations.OpaqueDef _ -> queries := (c, true, None) :: !queries
-    | Declarations.Undef (Some _) | Declarations.Def _
-    | Declarations.Primitive _ | Declarations.Symbol _ -> ()
+  match cb.Declarations.const_body with
+  | Declarations.Undef None -> add c ~opaque:false ~table:None
+  | Declarations.OpaqueDef _ -> add c ~opaque:true ~table:None
+  | Declarations.Undef (Some _) | Declarations.Def _
+  | Declarations.Primitive _ | Declarations.Symbol _ -> ()
 
 let record_body_read c o =
-  if !enabled then
-    let (_, _, dp, _) = Opaqueproof.repr o in
-    queries := (c, true, Some dp) :: !queries
+  let (_, _, dp, _) = Opaqueproof.repr o in
+  add c ~opaque:true ~table:(Some dp)
 
-let get () = !queries
+let get () =
+  if !broken then None
+  else match !path with
+    | None -> if !enabled then None else Some !queries
+    | Some p ->
+      match In_channel.with_open_text p In_channel.input_all with
+      | exception Sys_error _ -> None
+      | text when text <> "" && text.[String.length text - 1] <> '\n' ->
+        None (* a torn last line *)
+      | text ->
+        let rec parse acc = function
+          | [] | [""] -> Some acc
+          | l :: rest ->
+            match query_of_line l with
+            | Some q -> parse (q :: acc) rest
+            | None -> None
+        in
+        Option.map (fun from_file -> from_file @ !queries)
+          (parse [] (String.split_on_char '\n' text))

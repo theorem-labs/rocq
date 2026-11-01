@@ -33,10 +33,12 @@
      [keepfacts] segment: "assumptions" (an object from each declaration's
      user name to its sorted assumption closure, empty closures left out; null
      when absent) and "opacity_queries" (each foreign constant a strategy
-     command or an extraction told apart as an axiom or an opaque proof, or
-     whose opaque body an extraction read; and each constant of this library
-     whose opaque body an extraction or the walk that computes the closures
-     read from another library's table; by user name, with the library
+     command, an extraction, a Functional Scheme (its equation lemma) or a
+     plugin's Global.body_of_constant told apart as an axiom or an opaque
+     proof, or whose opaque body an extraction or Global.body_of_constant
+     read; and each constant of this library whose opaque body one of those,
+     or the walk that computes the closures, read from another library's
+     table; by user name, with the library
      holding it, the opacity it saw, and "table": for a body read, the
      library whose opaque table holds the body read, else null; null when the
      file has no segment). A body read records both the holder and the table:

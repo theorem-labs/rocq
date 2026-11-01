@@ -39,8 +39,20 @@ module Intern : sig
   end
 
   type t = DirPath.t -> (library_t, Exninfo.iexn) Result.t * Provenance.t
+  (** An [Intern.t] must return [Ok] with the exact record (the same value,
+      not a copy) that its last call of [intern_from_file] returned. For any
+      other record nothing is filled: that library's opaque proofs then fail
+      to read with [Not_found], its stored closures are not used, and its file
+      name reads as ["<unavailable filename>"]. *)
 end
 
+(** Read a .vo file. It fills no table of loaded libraries (file name, opaque
+    proofs, stored closures): [require_library_syntax_from_dirpath] fills them
+    only once the file holds the library it asked for, so a failed [Require]
+    of a file that holds another library's name leaves them as they were. It
+    may still withhold the shared Print Assumptions cache from that name, if
+    the file it read records a label in place of a digest of its
+    declarations. *)
 val intern_from_file : CUnix.physical_path ->
   (library_t, Exninfo.iexn) Result.t * Intern.Provenance.t
 
@@ -139,12 +151,12 @@ val native_name_from_filename : string -> string
 
 (** {6 Opaque tables} *)
 
-(** Changes whenever the opaque proofs of a loaded library can have changed:
-    at each library file read, also by a [Require] that then fails, which can
-    replace the opaque proofs of a library that stays loaded. The rollback of
-    a failed command does not undo that, and does not change
-    [Global.env ()]. The opaque proofs of the library being compiled are part
-    of the state and are not counted. *)
+(** Changes whenever the opaque proofs a process can read for a loaded
+    library can have changed: at each library file read whose name check
+    passes, and when a process that interned nothing registers a table from
+    the handle its state carries. The rollback of a failed command does not
+    undo either, and neither changes [Global.env ()]. The opaque proofs of
+    the library being compiled are part of the state and are not counted. *)
 val opaque_tables_generation : unit -> int
 
 (** [content_digests ()] maps a loaded library to a digest of its name, of
@@ -154,10 +166,12 @@ val opaque_tables_generation : unit -> int
     library that is not loaded, such as the one being compiled. Two processes
     that give a library the same digest have loaded the same declarations and
     opaque proofs for it and for everything it depends on, as far as the
-    digests the files record tell. A library whose opaque table was replaced
-    by a later, failing [Require] gets [None], since its proofs then come from
-    a file whose own dependencies this library does not record. The function
-    memoizes: call it again after a library or an opaque table is loaded. *)
+    digests the files record tell. A library whose opaque table was replaced,
+    and one whose table was written with no digest of its own, get [None]: a
+    replacement records no source, so the proofs may come from a file whose
+    own dependencies this library does not record, and refusing the digest is
+    the conservative answer. The function memoizes: call it again after a
+    library or an opaque table is loaded. *)
 val content_digests : unit -> (DirPath.t -> Digest.t option)
 
 (** {6 Opaque accessors} *)

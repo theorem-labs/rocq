@@ -11,19 +11,19 @@
 open Names
 open Libobject
 
-(* Version 3 (S1b): the label blinds a constant's axiom-or-opaque-proof
+(* Version 3: the label first blinds a constant's axiom-or-opaque-proof
    distinction (see [blind_constant]); versions 2 and 3 therefore never
    produce the same label for a library that has an opaque constant.
-   Version 4 (BET-342): the plugin file digests of an ML-MODULE object and
+   Version 4 (plugins): the plugin file digests of an ML-MODULE object and
    of an [ml_module] attempt are out of the key (vernac/mltop.ml,
    vernac/attempts.ml), so a plugin rebuilt from the same sources leaves
    the label of the libraries that declare it unchanged.
-   Version 5 (D18 F1): the blinding covers only the constants of the
+   Version 5 (scoped): the blinding covers only the constants of the
    library's own signature (the ones [axiom_report] lists); in a functor
    body, a module type and every other place an opaque proof stays one,
    distinct from an axiom, with its table index erased ([blind_compiled]),
    so an [Admitted -> Qed] edit there moves the label.
-   Version 6 (speed-8): the key covers [vmlibrary_format_version], the
+   Version 6 (VM code): the key covers [vmlibrary_format_version], the
    format version of the VM-bytecode segment of the files this build reads
    and writes, so an object written under one VM format is never reused by
    a build that reads another. *)
@@ -98,8 +98,8 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
   let warn = List.map (fun ({ UserWarn.note; cats } : UserWarn.warn) -> (note, cats)) warn in
   (name, Array.to_list deps, DirPath.Set.elements safe_deps, (depr, warn))
 
-(* The axiom-or-opaque-proof blinding (design S1b, dispatch://INFRA-361;
-   restricted to the library's own signature in version 5, D18 F1).
+(* The axiom-or-opaque-proof blinding (in label versions 3 and later;
+   restricted to the library's own signature in versions 5 and later).
 
    [blind_constant] maps a constant whose body is [Undef None] (an axiom or
    parameter with no body, as [Admitted] and [Axiom] make) and one whose body
@@ -127,36 +127,41 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    Module M : T] and [Module X : T := ...] copy a module type's), where they
    decide whether the dependent compiles ([Transparent R.c] fails on an opaque
    proof) and what its [Print Assumptions] says, while no report lists them,
-   so the keep rule could not see an [Admitted -> Qed] edit there (review
-   gate 1, F1). Such an edit therefore moves the label; a shift of the opaque
+   so the keep rule could not see an [Admitted -> Qed] edit there (for
+   copied bodies). Such an edit therefore moves the label; a shift of the opaque
    table index alone still does not.
 
    Exactness. A dependent of this library never observes the difference the
    blinding erases, except through what the keep rule reads beside the label
    for exactly the constants [axiom_report] lists. The kernel's conversion
-   gets no body for either form ([Environ.constant_value_in] raises
-   [NotEvaluableConst] for both [OpaqueDef] and [Undef], and
-   [evaluable_constant] is [false] for both: kernel/environ.ml:654-677); the
+   gets no body for either form ([Environ.constant_value_in] raises the
+   identical [NotEvaluableConst NoBody] for both [OpaqueDef] and [Undef], so
+   not even an escaping exception's text tells them apart, and
+   [evaluable_constant] is [false] for both: kernel/environ.ml:663-685); the
    VM and the native compiler both lower a use of either form to a plain
    constant reference (kernel/vmbytegen.ml:988-990,
    kernel/genlambda.ml:797-798). So neither conversion, nor the VM, nor native
    code unfolds an opaque constant any more than it unfolds an axiom, and a
    dependent compiled against one form type-checks, reduces and compiles
-   identically against the other, but for three observables the label does
-   not carry: a non-opaque strategy command on the constant, which errors on
-   an opaque proof only, and an extraction of it, which warns (or, made an
-   error, fails) on an axiom to realize or an opaque proof accessed (the keep
-   rule compares the opacity the dependent's [keepfacts] recorded,
-   [OpacityLog], with the status [axiom_report] gives now); an extraction
-   with AccessOpaque (the default), which reads an opaque proof's BODY and
-   extracts what it finds there, which no label covers (the hook logs each
-   such read as an [opaque = true] query that records two libraries: the one
-   holding the constant read, and the one whose opaque table holds the body
-   read, which for a copy a module operation did not strengthen -- a functor
-   application, an [Include] of one, a sealed [Module X : T := L.F A] that the
-   extraction rebuilds from its expression -- can be another library, however
-   many copies away; the keep rule keeps the dependent only when both
-   libraries' objects are byte-identical); and the library's assumption set,
+   identically against the other, but for these observables the label does
+   not carry. Status observers, each of which logs the status it saw
+   ([OpacityLog]; the keep rule compares it with the status [axiom_report]
+   gives now): a non-opaque strategy command on the constant, which errors on
+   an opaque proof only; an extraction of it, which warns (or, made an error,
+   fails) on an axiom to realize or an opaque proof accessed; a [Functional
+   Scheme], whose principle is an opaque proof exactly when the function's
+   equation lemma is one; and a plugin's [Global.body_of_constant], which
+   answers [None] for an axiom. Body readers: an extraction with AccessOpaque
+   (the default), which reads an opaque proof's BODY and extracts what it
+   finds there, and a plugin's [Global.body_of_constant], neither of which any
+   label covers (each logs the read as an [opaque = true] query that records
+   two libraries: the one holding the constant read, and the one whose opaque
+   table holds the body read, which for a copy a module operation did not
+   strengthen -- a functor application, an [Include] of one, a sealed [Module
+   X : T := L.F A] that the extraction rebuilds from its expression -- can be
+   another library, however many copies away; the keep rule keeps the
+   dependent only when both libraries' objects are byte-identical). And the
+   library's assumption set,
    which [Print Assumptions] reads (the keep rule compares the closures the
    library's [keepfacts] stored with those of the current objects: its
    monotone axiom condition; the walk that computes them reads a copy's body
@@ -221,7 +226,7 @@ let blind_compiled (compiled : Safe_typing.compiled_library) : Safe_typing.compi
   let sign = map_own_signature (fun _ cb -> blind_constant cb) self (Mod_declarations.mod_type mb) in
   Safe_typing.replace_module_of_library compiled (Mod_declarations.set_signature sign mb)
 
-(* The report the keep rule needs beside the label (C1): per library, the
+(* The report that the keep rule needs beside the label: per library, the
    constants whose contribution the label blinded, each with its current
    assumption status, and the other libraries this one holds a foreign opaque
    reference into. *)

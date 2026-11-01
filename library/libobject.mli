@@ -91,7 +91,7 @@ type open_filter
 (** How the location-free interface key of a library reads an object of a
     given kind. The key is the label [coqc] stores as the digest of a
     library's [library] segment ([LibkeyObjects]): a digest of the library
-    in which source locations do not count (design D18). *)
+    in which source locations do not count (in any way). *)
 type 'a interface_key =
   | Not_in_key
   (** The default. The key does not know this kind: a library that holds

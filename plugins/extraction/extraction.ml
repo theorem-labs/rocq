@@ -1144,7 +1144,7 @@ let extract_constant table access env kn inst cb =
      logical axiom) from an opaque proof (accessed, or extracted as an axiom),
      and each of those warnings can be made an error, so a dependency's
      [Admitted -> Qed] edit, which its label hides, can change whether this
-     library compiles. Logged for the keep rule (D18, dispatch://INFRA-361;
+     library compiles. Logged for the keep rule (in each compiling process,
      [OpacityLog]), with the body the global environment gives [kn]: the one
      the dependency's label blinds and its axiom report lists. *)
   let () =
