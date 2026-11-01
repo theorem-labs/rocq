@@ -29,7 +29,7 @@ val version : int
 (** Version of the label's input: the byte layout below, and what
     [LibkeyObjects] feeds it. It is part of every label's input, so labels
     made under different versions never match. Version 2 (label v2, design
-    D18 after the Astra review, dispatch://INFRA-361): the encoding is
+    D18 after review): the encoding is
     version 1's; the version marks labels whose input includes the
     library's summary, and {!label} returns the whole SHA-256 where
     version 1 returned its first 16 bytes. *)

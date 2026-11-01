@@ -449,7 +449,7 @@ let discharge_constant obj = Some obj
 let classify_constant cst = Libobject.Substitute
 
 (* The label view of a constant object (design D18; version 3 blinds the
-   axiom-or-opaque-proof distinction, dispatch://INFRA-361).
+   axiom-or-opaque-proof distinction).
    - [cst_loc] is the declaration's source location ([Nametab.set_cci_src_loc]):
      stripped, like every location.
    - [cst_kind] is the documentation kind ([Dumpglob.add_constant_kind]): an
