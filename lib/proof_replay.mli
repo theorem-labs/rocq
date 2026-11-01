@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(** Replaying a proof's stored term (BET-84, part P3).
+(** Replaying a proof's stored term (part P3).
 
     [rocq compile -proof-replay FILE] (or [-proof-replay-dir DIR]) reads the
     record a registration compile wrote ({!Proof_record}) and, at each proof
@@ -26,9 +26,9 @@
     charges itself [ratio] times each replayed proof's registered wall
     seconds, on top of the time it really spent, and raises
     {!Budget_exhausted} when the total reaches the per-file budget. [ratio]
-    is the grade-to-registration ratio of per-file wall time, taken at the
+    is the check-to-registration ratio of per-file wall time, taken at the
     top of its measured spread, so near the budget replay is only ever
-    stricter than stock (GRADE, 2026-10-24 08:15Z). There is no default:
+    stricter than stock (the review, 2026-10-24 08:15Z). There is no default:
     [-proof-replay] without [-proof-replay-ratio] is a usage error. *)
 
 type source =
@@ -48,7 +48,7 @@ val configure :
     memory-safe on chosen bytes, and a stored term's declared type comes
     from it, so the record's parser is NOT a security boundary. A record is
     used only when it is bound to this compile: its bytes hash (SHA-256) to
-    [digest] when one is given (the grading engine passes the digest from
+    [digest] when one is given (the checking engine passes the digest from
     the registration's root-owned manifest), the compiling user cannot
     write it and nobody but its owner can, and its header names this
     library. Otherwise the whole file runs as stock and the summary names
@@ -129,7 +129,7 @@ val check_budget : unit -> unit
 
 val write_summary : string -> unit
 (** Writes [<base>.proof-replay.json] (see {!summary_path_of_vo}): the
-    counts this compile reached, for the grading engine's metadata. A no-op
+    counts this compile reached, for the checking engine's metadata. A no-op
     when no source is configured. *)
 
 val summary_path_of_vo : string -> string

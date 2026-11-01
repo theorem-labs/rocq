@@ -103,7 +103,7 @@ let declare_definition_scheme = ref (fun ~univs ~role ~name ~effs c ->
 let register_definition_scheme = ref (fun ~internal ~name ~const ~univs ?loc () ->
   CErrors.anomaly (Pp.str "scheme registering not registered"))
 
-(* BET-84: vernac/declare.ml installs Rocq's own of each once, when it
+(* Per-proof replay: vernac/declare.ml installs Rocq's own of each once, when it
    loads; a later one is a plugin's (Proof_recorder.closure_setter). The
    refs are not exported, so these setters are the only way in. *)
 let declare_definition_scheme_set =
@@ -170,7 +170,7 @@ let define ?loc internal role id c poly uctx sch =
   let univs = UState.univ_entry ~poly uctx in
   let effs = sch.sch_eff in
   let cst, effs = !declare_definition_scheme ~univs ~role ~name:id ~effs c in
-  (* BET-84 M4: the schemes a proof created, which replay declares again. *)
+  (* Row M4: the schemes a proof created, which replay declares again. *)
   if Proof_recorder.writing () then Proof_recorder.write_scheme (Constant.to_string cst);
   let reg = (id, cst, loc, univs) :: sch.sch_reg in
   cst, { sch_eff = effs; sch_reg = reg }

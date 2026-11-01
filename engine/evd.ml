@@ -712,7 +712,7 @@ let () = Proof_recorder.register_tables (fun () ->
     [ Proof_record.{ row = "18"; channel = "counter_start"; key = evar_counter_summary_name;
                      value = Some (string_of_int !evar_ctr) } ])
 
-(* BET-84 P3: a Summary counter, which the STM rolls back when a proof
+(* Replay part P3: a Summary counter, which the STM rolls back when a proof
    closes; replay leaves it alone ([Proof_replay.register_summary_counter]). *)
 let () = Proof_replay.register_summary_counter "evar"
 

@@ -59,7 +59,7 @@ let bidi_hints =
 let add_bidirectionality_hint env gr n =
   bidi_hints := GlobRefMap.add env gr n !bidi_hints
 
-(* BET-84 census row 12: ONE value for the bidirectionality_hint channel.
+(* Census row 12: ONE value for the bidirectionality_hint channel.
    The record site below and the replay evaluator call it
    (dev/tools/census/replay_channels.py). The key is the printed reference,
    which Arguments_renaming.globref_of_string reads back (it refuses a

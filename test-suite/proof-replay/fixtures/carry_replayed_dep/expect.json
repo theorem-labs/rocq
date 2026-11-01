@@ -1,5 +1,5 @@
 {
-  "doc": "the carry-over case: a grade that REUSES one object and REPLAYS the object it was compiled against — the reused B.vo must still load beside the replayed A.vo, and C.v must compile as it does in the all-stock control",
+  "doc": "the carry-over case: a check run that REUSES one object and REPLAYS the object it was compiled against — the reused B.vo must still load beside the replayed A.vo, and C.v must compile as it does in the all-stock control",
   "mode": "mixed",
   "files": ["A.v", "B.v", "C.v"],
   "mixed": {"replay_file": "A.v", "carry_files": ["B.v"], "check_files": ["C.v"]},

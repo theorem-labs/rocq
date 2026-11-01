@@ -684,7 +684,7 @@ let declare_constant ~loc ?(local = Locality.ImportDefaultBehavior) ~name ~kind 
       | Error _ -> true
     in
     let ctx = on_snd (Univ.UnivConstraints.filter is_new_constraint) ctx in
-    (* BET-84: the levels and the constraints this declaration adds, and the
+    (* Per-proof replay: the levels and the constraints this declaration adds, and the
        constraint-source record it writes (census rows 2, 18 and M5). *)
     if Proof_recorder.writing () then begin
       Proof_recorder.write_universes
@@ -1836,10 +1836,10 @@ let initialize_named_context_for_proof () =
 
 (* The universe and sort counters at the open proof's start: a replayed
    term's level names are this compile's names only from the same
-   counter (BET-84 P3, [replay_blob] below). *)
+   counter (replay part P3, [replay_blob] below). *)
 let open_counters = ref (0, 0)
 
-(* BET-84: the record's entry for a proof opens where the proof does and
+(* Per-proof replay: the record's entry for a proof opens where the proof does and
    closes where it is saved, aborted or admitted. Replay (P3) looks the
    proof up in the registration's record at the same point, so key items 1
    (name, statement), 2 (toolchain) and 3 (position) are checked before a
@@ -1867,7 +1867,7 @@ let record_open_proof name ~statement =
     ~toolchain_key:(fun () -> Proof_record.toolchain_key (Proof_record_env.toolchain ()));
   Proof_record_env.read_at_start ()
 
-(* BET-84 census row 19: the section variables [Proof using] declares. The
+(* Census row 19: the section variables [Proof using] declares. The
    value is the open proof's own, so replay takes it from here too. *)
 let record_using using =
   if Proof_recorder.active () then
@@ -1875,7 +1875,7 @@ let record_using using =
       ~value:(fun () -> match using with
           | None -> None
           | Some s -> Some (Proof_recorder.digest ~what:"proof_using" (Names.Id.Set.elements s)));
-  (* BET-84 P3: the value is the open proof's own, so replay takes it from
+  (* Replay part P3: the value is the open proof's own, so replay takes it from
      here too rather than from a table it cannot reach. *)
   if Proof_replay.candidate_open () then
     match using with
@@ -2241,7 +2241,7 @@ let control_only_guard { proof; pinfo } =
     with Exit -> ()
 
 let return_proof p = (prepare_proof p : closed_proof_output)
-(* BET-84 P3: what a replay of this proof declares.
+(* Replay part P3: what a replay of this proof declares.
 
    [rb_output] is the output of [close_proof] as it stands before the
    declaration: the entries, the universe state, and the side effects —
@@ -2255,7 +2255,7 @@ let return_proof p = (prepare_proof p : closed_proof_output)
    that, and leaves the counters where the tactics would have.
 
    A value the OCaml runtime cannot marshal stores nothing, so that proof
-   runs its tactics in every grade. The blob is read back only by a binary
+   runs its tactics in every check run. The blob is read back only by a binary
    whose digest is key item 2 of the same record, so its type is the type
    this unit was compiled with. *)
 type replay_blob = {
@@ -2310,7 +2310,7 @@ let replayed_proof_object ~blob ~(proof : t) =
        as [nat], where a full compile holds one. That is not cosmetic: a
        library compiled against the one object refuses to load against the
        other ("makes inconsistent assumptions over library", measured
-       2026-10-25), so a grade that reuses an object and replays its
+       2026-10-25), so a check run that reuses an object and replays its
        dependency fails its build. Hashconsing the entries and interning
        the universe state joins the copy to this compile's own values, as
        the kernel's own hashconsing does for a term the tactics built. *)
@@ -2345,7 +2345,7 @@ let close_proof ?warn_incomplete ~opaque ~keep_body_ucst_separate (proof : t) : 
   NewProfile.profile "close_proof" (fun () ->
   match Proof_replay.take_pending () with
   | Some blob ->
-    (* BET-84 P3: the proof's tactics never ran, so there is nothing to
+    (* Replay part P3: the proof's tactics never ran, so there is nothing to
        close: the stored term takes the place of [prepare_proof]'s output,
        and the counters move where the tactics would have left them, before
        the declaration, which then runs as stock's. *)
@@ -2448,9 +2448,9 @@ let finish_admitted ~pm ~pinfo ~sec_vars typs =
     let (_ : 'a list) = declare_possibly_mutual_parameters ~info ~cinfo ~sec_vars typs in
     pm
 
-(* BET-84: close the record entry around the declaration, so that the reads
+(* Per-proof replay: close the record entry around the declaration, so that the reads
    of the kernel check and of the declaration itself are not recorded: a
-   registration compile types the proof and a grade compile does not
+   registration compile types the proof and a check compile does not
    (-skip-qed-typecheck), and the two read sets must be equal. *)
 let record_close ?(replay = None) ~closer ~kernel_check declare =
   let res = Proof_recorder.without_recording declare in
@@ -2692,8 +2692,8 @@ end
 
 let default_tactic = ref (Proofview.tclUNIT ())
 
-(* BET-84: vernac/g_obligations.mlg installs Rocq's once, when it loads; a
-   later one is a plugin's (Proof_recorder.closure_setter; Claude review of
+(* Per-proof replay: vernac/g_obligations.mlg installs Rocq's once, when it loads; a
+   later one is a plugin's (Proof_recorder.closure_setter; review of
    23b37e36fb, finding 1). The ref is not exported. *)
 let default_tactic_set =
   Proof_recorder.closure_setter ~what:"Declare.Obls.set_default_tactic" ~stock:1

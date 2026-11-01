@@ -9,7 +9,7 @@
 (************************************************************************)
 
 (** The runtime that collects a {!Proof_record} file during one compile
-    (BET-84, part P2).
+    (part P2).
 
     [rocq compile -proof-record] calls {!start} once, and {!write} after the
     [.vo]. Between them, the choke points of the channel census call
@@ -262,4 +262,4 @@ val without_recording : (unit -> 'a) -> 'a
 (** Runs [f] with reads dropped, and restores the previous state, also when
     [f] raises. The [Qed] kernel check runs inside this, so the read set of
     a registration compile (which types the proof) equals the read set of a
-    grade compile (which does not, under [-skip-qed-typecheck]). *)
+    check compile (which does not, under [-skip-qed-typecheck]). *)

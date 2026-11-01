@@ -85,7 +85,7 @@ let with_implicit_protection f x =
   let open Memprof_coq.Resource_bind in
   let& () = Util.protect_ref implicit_args in
   f x
-(* BET-84 P3: a declaration puts the current flags record itself into the
+(* Replay part P3: a declaration puts the current flags record itself into the
    lib object it adds ([declare_constant_implicits] and its neighbours
    read [!implicit_args]), so two declarations that read one record share
    it in the written [.vo]. A full compile of two proofs writes two equal
@@ -560,7 +560,7 @@ let implicits_of_global_raw ref =
     with Not_found -> l
   with Not_found -> [DefaultImpArgs,[]]
 
-(* BET-84 census row 12: the implicit arguments of each global the proof
+(* Census row 12: the implicit arguments of each global the proof
    reads, with the renaming already applied. The value is computed here
    once, for the recorder at the lookup and for the replay evaluator that
    checks the record again (dev/tools/census/replay_channels.py). *)

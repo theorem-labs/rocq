@@ -101,7 +101,7 @@ let shrink_entry sign body typ =
   body, typ, args
 
 let build_constant_by_tactic ~name ~sigma ~env ~sign ~poly typ tac =
-  (* BET-84 census row 21: the proof declares a private constant whose name
+  (* Census row 21: the proof declares a private constant whose name
      depends on the names already taken, so it is never replayed. *)
   Proof_recorder.ineligible ~reason:"subproof" ~detail:(Names.Id.to_string name);
   let pfenv = Environ.reset_with_named_context sign env in

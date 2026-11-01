@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(** What {!Proof_recorder} needs from the vernac layer (BET-84, part P2). *)
+(** What {!Proof_recorder} needs from the vernac layer (part P2). *)
 
 val toolchain : unit -> Proof_record.toolchain
 (** Key item 2, read now: the running binary, every loaded plugin and

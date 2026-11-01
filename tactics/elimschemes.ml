@@ -35,7 +35,7 @@ let inPropButDefaultDepElim : inductive -> Libobject.obj =
 let declare_prop_but_default_dependent_elim i =
   Lib.add_leaf (inPropButDefaultDepElim i)
 
-(* BET-84 row N3: inductives in Prop whose case analysis is dependent by
+(* Row N3: inductives in Prop whose case analysis is dependent by
    default. [destruct] and [case] read it. *)
 let is_prop_but_default_dependent_elim i =
   let res = Indset_env.mem i !prop_but_default_dependent_elim in

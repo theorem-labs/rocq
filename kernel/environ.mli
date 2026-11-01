@@ -188,7 +188,7 @@ val mem_constant : Constant.t -> env -> bool
 val add_rewrite_rules : (Constant.t * machine_rewrite_rule) list -> env -> env
 val lookup_rewrite_rules : Constant.t -> env -> machine_rewrite_rule list
 
-(** {6 BET-84: the value of one recorded read of census row 1}
+(** {6 Per-proof replay: the value of one recorded read of census row 1}
 
     One function per channel, called by the recorder at the lookup and by
     the replay evaluator that checks the record again

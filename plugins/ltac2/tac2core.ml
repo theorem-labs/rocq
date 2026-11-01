@@ -191,7 +191,7 @@ let () = define "message_of_int" (int @-> ret pp) Pp.int
 
 let () = define "message_of_string" (string @-> ret pp) Pp.str
 
-(* BET-84 row N1: printed text becomes data here, and the printing state
+(* Row N1: printed text becomes data here, and the printing state
    is outside every recorded channel, so the proof is never replayed. *)
 let () = define "message_to_string" (pp @-> ret string) (fun p ->
     Proof_recorder.ineligible ~reason:"message_to_string" ~detail:"Ltac2 Message.to_string";

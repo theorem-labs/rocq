@@ -129,7 +129,7 @@ let warn { Msg.tag; warning } ?loc v =
   let tag = DMap.tag_of_onetag tag in
   let w = W (loc,tag,v) in
   let status = warning_status warning in
-  (* BET-84: a warning a proof raised is a write, because [Set Warnings
+  (* Per-proof replay: a warning a proof raised is a write, because [Set Warnings
      "+name"] can turn it into an error for a later proof. A disabled
      warning changes nothing and is not recorded. *)
   if status <> Disabled && Proof_recorder.writing () then

@@ -334,7 +334,7 @@ let close_proof ~closer ~kernel_check ~replay =
           wall_s = Unix.gettimeofday () -. p.p_wall0;
           cpu_s = cpu_time () -. p.p_cpu0;
           span;
-          (* An ineligible proof stores no term (BET-84 spec, gate step 2:
+          (* An ineligible proof stores no term (the replay design, gate step 2:
              "each ineligible class: the registration stores no term").
              The ineligibility is final only here: a reason can be added
              after the closer computed the term, by the declaration. *)
@@ -455,7 +455,7 @@ let trip_fence ~reason ~detail =
    they load, before any plugin can. A later call installs a plugin's
    closure, which can read plugin state no read sees (unicoq's Set Use
    Unicoq installs its unifier, and Unset does not remove it), so from then
-   on the fence is tripped (Claude review of the fix round at 467292ce69,
+   on the fence is tripped (review of the fix round at 467292ce69,
    findings 1 and 2). *)
 let closure_setter ~what ~stock =
   let sets = ref 0 in

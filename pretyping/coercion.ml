@@ -562,14 +562,14 @@ let activate_hook ~name =
   deactivate_hook ~name;
   active_hooks := name :: !active_hooks
 
-(* BET-84 census row 14: the active coercion hooks. A hook is a closure from a
+(* Census row 14: the active coercion hooks. A hook is a closure from a
    plugin, and what it returns can depend on state that neither its name nor
    the plugin's files fix: rocq-elpi's hook runs the elpi program that
    [Elpi CoercionFallbackTactic] names, with the clauses [Elpi Accumulate]
    gave it (Claude gate at 0f8d815732, finding 4). Rocq registers no hook, so
    a stock proof reads the empty list, and a proof that asks an active hook
    stores no term. *)
-(* BET-84: ONE value for the coercion_hooks channel, read under the fixed key
+(* Per-proof replay: ONE value for the coercion_hooks channel, read under the fixed key
    "" as the digest of the active names. The record site below and this
    replay evaluator call the same function, so the value is never computed
    two ways (dev/tools/census/replay_channels.py). A registration that read

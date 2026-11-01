@@ -9,7 +9,7 @@
 (************************************************************************)
 
 (** The resource limits of the running process, as strings for the proof
-    record (BET-84, census row 24). Each function reads a Linux file and
+    record (census row 24). Each function reads a Linux file and
     answers ["unknown"] when it cannot. They are never an error: a compile
     on another kernel records ["unknown"] and goes on. *)
 
@@ -22,7 +22,7 @@ val rlimit : string -> string
 val memory_cap : unit -> string
 (** The cgroup v2 memory cap of the process ([memory.max] of its cgroup):
     ["max"], a decimal byte count, or ["unknown"]. Recorded, never part of
-    a key: the registration and the grade run under different caps. *)
+    a key: the registration and the check run run under different caps. *)
 
 val overcommit_memory : unit -> string
 (** [/proc/sys/vm/overcommit_memory]: ["0"], ["1"], ["2"] or ["unknown"].

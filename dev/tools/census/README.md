@@ -1,9 +1,8 @@
 # Census check for per-proof replay
 
-Per-proof replay (dispatch://BET-84) lets the grade compile reuse a proof term that the registration
+Per-proof replay lets the check compile reuse a proof term that the registration
 compile stored, and skip the proof's tactics. The term is used only when every input the proof read has
-the same value. The inputs are listed in the channel census, CHANNELS.md (`sami-rocqperf
-/mnt/nvme/sami/speed/coord/reuse/CHANNELS.md`, research on Rocq 459869e3c2). GRADE's review added rows
+the same value. The inputs are listed in the channel census, CHANNELS.md (research on Rocq 459869e3c2). A cross-model review added rows
 M1-M7.
 
 This directory holds gate part 1 ("every channel is covered"):
@@ -39,7 +38,7 @@ entry whose site is gone reports `STALE`.
 Exit status: 0 when every site is ruled, 1 when a site is `UNMAPPED` or a ruling is `STALE` or
 `INVALID` (one line each on stdout), 2 on a usage or read error. `--list` prints every site with its
 disposition. Python 3.8+, standard library only. The fork's CI runs the Rocq check and the tests
-(`.github/workflows/ci-github.yml`, job `census`). the grading harness's `test-scripts` job runs the
+(`.github/workflows/ci-github.yml`, job `census`). The verification harness's `test-scripts` job runs the
 three plugin checks against the pins in `harness/toolchains/9.2/rocq-verify-harness.opam` and
 `Dockerfile`.
 
@@ -115,7 +114,7 @@ cache that no choke point can reach (a `lazy` of a `lib_ref`). Those reads go in
 |---|---|---|---|
 | 1 | Global env: constants, inductives, constructors, projections, rewrite rules, modules, module types | Recorded: each lookup, with a digest of the value found, or absent. Channels `constant`, `constant_exists`, `rewrite_rules`, `inductive`, `inductive_exists`, `module`, `modtype`. An object of a REQUIRED library is recorded by that library's `.vo` digest, which pins every object the library holds; only the objects of the library being compiled are digested. A constant's rewrite rules are digested either way: the file being compiled can add a rule to a symbol of a required library. Each key is recorded once per proof | `kernel/environ.ml` `Recorded`, `lookup_constant[_opt\|_key]`, `mem_constant`, `lookup_rewrite_rules`, `lookup_mind_key`, `mem_mind`, `lookup_module`, `lookup_modtype` |
 | 1 | Retroknowledge | In key item 2: only `Register` writes it, and the loaded libraries are part of the key | `vernac/proof_record_env.ml` `toolchain` |
-| 2 | Universes, constraints, sort qualities | Recorded: one digest of the whole universe graph and one of the quality graph, at each proof's start (GRADE, 2026-10-24 05:09Z). Writes: the levels and constraints each declaration adds | `proof_record_env.ml` `read_at_start`; `vernac/declare.ml` `declare_constant` |
+| 2 | Universes, constraints, sort qualities | Recorded: one digest of the whole universe graph and one of the quality graph, at each proof's start (the review, 2026-10-24 05:09Z). Writes: the levels and constraints each declaration adds | `proof_record_env.ml` `read_at_start`; `vernac/declare.ml` `declare_constant` |
 | 3 | Section context, variable opacity | Recorded: a digest of the named context and of `Decls.variable_opacity` over it, at each proof's start | `proof_record_env.ml` `read_at_start` |
 | 4 | Typing flags, conversion oracle | Recorded: one digest of `Environ.typing_flags` at each proof's start. The oracle is a field of that record (`Environ.oracle env = (typing_flags env).conv_oracle`), so the digest covers every oracle query | `proof_record_env.ml` `read_at_start`; `kernel/environ.ml:324,329` |
 | 5 | `simpl` behaviour | Recorded: each `ReductionBehaviour.get`, by constant, and one digest of the whole database at each proof's start. `simpl` does not use the wrapper: it takes the raw table with `Db.get`, reads the whole never-unfold set and calls `get_from_db`, so only the table read covers it | `pretyping/reductionops.ml` `ReductionBehaviour.get`, `register_tables`; `pretyping/tacred.ml:662,722-738,871` |
@@ -136,14 +135,14 @@ cache that no choke point can reach (a `lazy` of a `lib_ref`). Those reads go in
 | 20 | Lib state: module path, section prefix | Key item 3, in the `position` field. `module_path` is the path the `.glob` writes (sections excluded), `section_path` adds the open sections | `proof_record_env.ml` `position` |
 | 21 | Commands inside a proof, `abstract`, Program obligations, mutual proofs, `par:` | Ineligible: a sentence that the classifier does not call a proof step (`command_in_proof`); an `abstract` or other sub-proof (`subproof`); a proof opened inside another (`nested_proof`); a proof that declares more than one constant (`mutual`), which one entry cannot join to its objects; a sentence under a control flag (`control_flag`: `Time`, `Instructions`, `Profile`, `Redirect`, `Timeout`, `Fail`, `Succeed`), whose result depends on the clock, on the output channel, or on a state restored behind the recorder's back; a `par:` goal selector (`par`), which `rocq compile` runs in tactic worker processes by default whatever the async mode, so the tactic's reads happen where no recorder runs and this process only installs the term a worker returns; and a recorder that holds a proof the live proof stack does not (`recorder_desync`). An `Abort` writes no entry and frees the recorder, so the proofs after it keep theirs | `toplevel/vernac.ml`; `proofs/subproof.ml`; `lib/proof_recorder.ml` `open_proof`, `drop_proof`; `vernac/vernacControl.ml` `under_one_control`; `vernac/comTactic.ml` `solve_parallel`; `vernac/vernacentries.ml` `vernac_abort`; `vernac/vernacstate.ml` `discard_all` |
 | 22 | Time and timeouts | Ineligible: every `Control.timeout`, which is the one point `Timeout`, `timeout` and Ltac2 `timeout` pass through (`timeout`), and the `Timeout` control itself (`control_flag`). A watchdog that does not pass through `Control.timeout` is in a plugin, and an ML tactic of a plugin this tree does not hold is already `ml_tactic` (row 16) | `lib/control.ml` `timeout`; `vernac/vernacControl.ml`; `plugins/ltac/tacinterp.ml` |
-| 23 | Files and external processes | Ineligible: `native_compute` (`native_compute`) and the external prover `csdpcert` that `psatz` calls (`external_prover`). Micromega's certificate caches are already blocked in grading | `kernel/nativelib.ml` `compile`; `plugins/micromega/coq_micromega.ml` `really_call_csdpcert` |
-| 24 | Resource limits | Recorded in the header: `stack_limit` (in key item 2), `memory_cap`, `rlimit_as`, `rlimit_data`, `overcommit_memory`. The cap is recorded and never compared (GRADE, 12:19Z); replay is refused when an address-space limit is set or `overcommit_memory` is 2 | `lib/proof_limits.ml` |
+| 23 | Files and external processes | Ineligible: `native_compute` (`native_compute`) and the external prover `csdpcert` that `psatz` calls (`external_prover`). Micromega's certificate caches are already blocked in a check run | `kernel/nativelib.ml` `compile`; `plugins/micromega/coq_micromega.ml` `really_call_csdpcert` |
+| 24 | Resource limits | Recorded in the header: `stack_limit` (in key item 2), `memory_cap`, `rlimit_as`, `rlimit_data`, `overcommit_memory`. The cap is recorded and never compared (the review, 12:19Z); replay is refused when an address-space limit is set or `overcommit_memory` is 2 | `lib/proof_limits.ml` |
 | M1 | Abbreviations | Recorded: each `find_opt` and `find_interp`, by kernel name | `interp/abbreviation.ml` |
 | M2 | Reserved types | Recorded: each `find_reserved_type`, by identifier root | `interp/reserve.ml` |
 | M3 | Generalizable variables | Recorded: one digest of the table at each proof's start | `proof_record_env.ml`; `interp/implicit_quantifiers.ml` `generalizable_idents` |
 | M4 | Schemes created (write) | Write: each scheme the proof created, by name | `tactics/ind_tables.ml` `define` |
 | M5 | Universe constraint sources (write) | Write: the constant whose declaration wrote a constraint-source record | `vernac/declare.ml` `declare_constant` |
-| M6 | `-skip-qed-typecheck` unchecked mark (write) | Not stored: replay writes the mark of the grade compile's own flags. The header records which flag the recording compile ran under, and `kernel_check` records whether the kernel typed each proof | `lib/proof_record.mli` `skip_qed_typecheck`, `kernel_check` |
+| M6 | `-skip-qed-typecheck` unchecked mark (write) | Not stored: replay writes the mark of the check compile's own flags. The header records which flag the recording compile ran under, and `kernel_check` records whether the kernel typed each proof | `lib/proof_record.mli` `skip_qed_typecheck`, `kernel_check` |
 | M7 | Template default levels | Recorded: one digest of the table at each proof's start | `proof_record_env.ml`; `engine/uState.ml` `template_default_univs` |
 | S2.1 | Parser state, load paths, loaded libraries | In key item 2: every loaded library in load order with its `.vo` digest, and the safe-loaded ones. The grammar is inside key item 1, the parsed sentences | `proof_record_env.ml` `toolchain`; `vernac/library.ml` `library_digest`, `safe_loaded_libraries` |
 | N1 | Printing state | Ineligible: Ltac2 `Message.to_string`, the one primitive that turns printed text into data (`message_to_string`) | `plugins/ltac2/tac2core.ml` |

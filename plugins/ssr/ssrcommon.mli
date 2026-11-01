@@ -172,7 +172,7 @@ val red_product_skip_id :
 val set_ssrautoprop_tac : unit Proofview.tactic -> unit
 (** Installs the tactic that solves Prop side conditions. ssrtacs.mlg installs
     ssreflect's once, when it loads; a later call is a plugin's, and makes every
-    later proof of the process ineligible (BET-84). *)
+    later proof of the process ineligible. *)
 
 val mkProt :
   Environ.env ->

@@ -109,7 +109,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
      AST. The replay path below runs buffered sentences through it too, so
      a proof that is not replayed is interpreted exactly as stock. *)
   let interp_one ~tstart state ast =
-    (* BET-84 P3: the charge for the proofs replay did not run is part of
+    (* Replay part P3: the charge for the proofs replay did not run is part of
        the file's clock, so a sentence that would carry the clock past the
        budget is stopped inside it, as stock's own timeout stops it, not
        only at the next sentence boundary. *)
@@ -125,7 +125,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
                [("cmd", `String (Pp.string_of_ppcmds (Topfmt.pr_cmd_header ast)));
                 ("line", `String lnum)])
            (fun () ->
-             (* BET-84: key item 1 is the parsed sentences of a proof, with
+             (* Per-proof replay: key item 1 is the parsed sentences of a proof, with
                 the locations of this file removed. A sentence that is not
                 a proof step is a command inside the proof (census row 21),
                 which replay cannot make again. *)
@@ -208,7 +208,7 @@ let load_vernac_core ~echo ~check ~state ?source file =
     | exception Proof_record.Unhashable _ -> "unhashable"
   in
 
-  (* BET-84 P3. The record's key item 1 holds every sentence from the
+  (* Replay part P3. The record's key item 1 holds every sentence from the
      statement to the closer, so the decision cannot be taken before the
      closer is parsed, and it must be taken before a tactic runs. So, at a
      proof the record has an entry for, the sentences are parsed and kept

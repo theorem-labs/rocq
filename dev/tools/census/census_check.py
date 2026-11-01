@@ -1428,7 +1428,7 @@ def _module_spans(unit):
 # --------------------------------------------------------------------------
 # Tree scan and rulings check
 
-# Census rows: CHANNELS.md rows 1-24, GRADE's M1-M7, CHANNELS.md section 2 items (S2.n), and rows the
+# Census rows: CHANNELS.md rows 1-24, the review's M1-M7, CHANNELS.md section 2 items (S2.n), and rows the
 # census check itself found missing from CHANNELS.md (N1-N5, defined in README.md).
 VALID_ROWS = (
     {str(i) for i in range(1, 25)}

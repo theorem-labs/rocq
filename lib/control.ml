@@ -102,7 +102,7 @@ let timeout_fun = match Sys.os_type with
 let timeout_fun_ref = ref timeout_fun
 let set_timeout f = timeout_fun_ref := f
 
-(* BET-84 census row 22: a proof whose result can depend on how long a
+(* Census row 22: a proof whose result can depend on how long a
    tactic ran is never replayed. *)
 let timeout n f =
   Proof_recorder.ineligible ~reason:"timeout" ~detail:(string_of_float n);

@@ -155,7 +155,7 @@ let call_compiler ?profile:(profile=false) ml_filename =
     error_native_compiler_failed (Inr e)
 
 let compile fn code ~profile:profile =
-  (* BET-84 census row 23: native_compute runs an external compiler, so the
+  (* Census row 23: native_compute runs an external compiler, so the
      proof is never replayed. *)
   Proof_recorder.ineligible ~reason:"native_compute" ~detail:fn;
   write_ml_code fn code;

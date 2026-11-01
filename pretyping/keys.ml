@@ -78,9 +78,9 @@ let add_kv k v m =
 let add_keys k v =
   keys := add_kv k v (add_kv v k !keys)
 
-(* BET-84 census row 15: the Keys table, as one digest, when a proof
+(* Census row 15: the Keys table, as one digest, when a proof
    compares two keys. *)
-(* BET-84: ONE value for the keys channel, read under the fixed key
+(* Per-proof replay: ONE value for the keys channel, read under the fixed key
    "" as one digest of the whole table. The record site below and this
    replay evaluator call the same function, so the value is never computed
    two ways (dev/tools/census/replay_channels.py). *)

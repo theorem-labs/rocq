@@ -583,7 +583,7 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
 
   let the_tab = Summary.ref ~stage:SI.stage ~name:SI.summary_name Tab.empty
 
-  (* BET-84 census row 6: each lookup in this nametab, with the value
+  (* Census row 6: each lookup in this nametab, with the value
      found, or absent. [channel] is the table's summary name, so each
      nametab is its own channel. A failed lookup is recorded too: a proof
      can take a different path because a name is not yet in scope. *)
@@ -595,7 +595,7 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
   let ch_of_path = SI.summary_name ^ "/of_path"
   let ch_exists = SI.summary_name ^ "/exists"
 
-  (* BET-84: ONE value for each of this nametab's channels. The record sites
+  (* Per-proof replay: ONE value for each of this nametab's channels. The record sites
      below and the replay evaluators at the end of this module both call it,
      so a lookup's value is never computed two ways
      (dev/tools/census/replay_channels.py). A lookup that finds nothing
@@ -666,7 +666,7 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
       record ~channel:ch_exists ~id:v (fun () -> Libnames.string_of_path v) (fun () -> res);
     res
 
-  (* BET-84 P3: the same lookups, evaluated again from the key the record
+  (* Replay part P3: the same lookups, evaluated again from the key the record
      holds. A qualid and a path print and parse back to themselves, so each
      key names the lookup the proof made. A key that does not parse back
      answers [Unknown], and the proof runs its tactics. *)

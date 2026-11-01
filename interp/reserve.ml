@@ -105,7 +105,7 @@ let declare_reserved_type idl t =
   let env = Global.env () in
   List.iter (fun id -> declare_reserved_type_binding env id t) (List.rev idl)
 
-(* BET-84 row M2: each reserved type ([Implicit Types]) the proof reads. *)
+(* Row M2: each reserved type ([Implicit Types]) the proof reads. *)
 let find_reserved_type id =
   let res = Id.Map.find_opt (root_of_id id) !reserve_table in
   if Proof_recorder.active () then

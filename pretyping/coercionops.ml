@@ -92,7 +92,7 @@ let class_tab =
 let coercion_tab =
   Summary.ref ~name:"coercion_tab" (CoeTypMap.empty : coe_info_typ CoeTypMap.t)
 
-(* BET-84: ONE value for the class_tab channel, read under the fixed key
+(* Per-proof replay: ONE value for the class_tab channel, read under the fixed key
    "" as one digest of the whole table. The record site below and this
    replay evaluator call the same function, so the value is never computed
    two ways (dev/tools/census/replay_channels.py). *)
@@ -110,7 +110,7 @@ let record_class_tab () =
     Proof_recorder.read ~row:"14" ~channel:"class_tab" ~key:(fun () -> "")
       ~value:recorded_class_tab
 
-(* BET-84: ONE value for the coercion_tab channel, read under the fixed key
+(* Per-proof replay: ONE value for the coercion_tab channel, read under the fixed key
    "" as one digest of the whole table. The record site below and this
    replay evaluator call the same function, so the value is never computed
    two ways (dev/tools/census/replay_channels.py). *)
@@ -167,7 +167,7 @@ end
 let inheritance_graph =
   Summary.ref ~name:"inheritance_graph" ClGraph.empty
 
-(* BET-84: ONE value for the coercion_graph channel, read under the fixed key
+(* Per-proof replay: ONE value for the coercion_graph channel, read under the fixed key
    "" as one digest of the whole table. The record site below and this
    replay evaluator call the same function, so the value is never computed
    two ways (dev/tools/census/replay_channels.py). *)
@@ -335,7 +335,7 @@ let apply_on_class_of env sigma t cont =
     if not (Int.equal (List.length args) n1) then raise Not_found;
     cont cl
 
-(* BET-84 census row 14: every coercion-path lookup reads the graph. *)
+(* Census row 14: every coercion-path lookup reads the graph. *)
 let lookup_path_between env sigma ~src:s ~tgt:t =
   apply_on_class_of env sigma s (fun i ->
       apply_on_class_of env sigma t (fun j ->
@@ -378,7 +378,7 @@ let path_comparator :
   (Environ.env -> Evd.evar_map -> cl_typ -> inheritance_path -> inheritance_path -> bool) ref =
   ref (fun _ _ _ _ _ -> false)
 
-(* BET-84: pretyping/pretyping.ml installs Rocq's own once, when it loads; a
+(* Per-proof replay: pretyping/pretyping.ml installs Rocq's own once, when it loads; a
    later one is a plugin's (Proof_recorder.closure_setter). *)
 let path_comparator_set =
   Proof_recorder.closure_setter ~what:"Coercionops.install_path_comparator" ~stock:1

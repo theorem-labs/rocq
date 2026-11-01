@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# BET-84 P2. Three registries let a plugin take over part of elaboration with
+# replay part P2. Three registries let a plugin take over part of elaboration with
 # a closure registered under a name: typeclass solvers
 # ([Class_tactics.register_solver]), coercion hooks ([Coercion.register_hook])
 # and canonical-solution hooks ([Evarconv.register_hook]). What such a closure
@@ -33,7 +33,7 @@
 #        detail of each of those setters.
 #
 # The second plugin, library_closures, does the same for the fenced setters
-# that belong to Ltac2 and ssreflect (Claude review of e16e9d2ae4), in
+# that belong to Ltac2 and ssreflect (review of e16e9d2ae4), in
 # theories/Library.v, which loads both. Off (TestSetLibraryClosures commented
 # out): after_library must be eligible, so loading Ltac2 and ssreflect trips
 # nothing (no stock count too low). On: after_library must carry the detail

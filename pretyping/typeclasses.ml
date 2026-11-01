@@ -80,8 +80,8 @@ let hint_priority is = is.is_info.hint_priority
 let classes : typeclasses ref = Summary.ref GlobRefMap.empty ~name:"classes"
 let instances : instances ref = Summary.ref GlobRefMap.empty ~name:"instances"
 
-(* BET-84 census row 8: the typeclass tables a proof reads, by name. A
-   whole-table digest; M1 measures its miss rate. *)
+(* Census row 8: the typeclass tables a proof reads, by name. A
+   whole-table digest; M1 measures its miss count. *)
 let record_table name tbl =
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"8" ~channel:"typeclass_table" ~id:name ~key:(fun () -> name)
@@ -239,7 +239,7 @@ let solve_all_instances_hook = ref (fun env evd filter unique fail -> assert fal
 let solve_all_instances env evd filter unique fail =
   !solve_all_instances_hook env evd filter unique fail
 
-(* BET-84: tactics/class_tactics.ml installs Rocq's own once, when it loads;
+(* Per-proof replay: tactics/class_tactics.ml installs Rocq's own once, when it loads;
    a later one is a plugin's (Proof_recorder.closure_setter). *)
 let solve_all_instances_set =
   Proof_recorder.closure_setter ~what:"Typeclasses.set_solve_all_instances" ~stock:1
@@ -275,7 +275,7 @@ let solve_one_instance = ref (fun env evm t -> assert false)
 let resolve_one_typeclass ?unique:_ env evm t =
   !solve_one_instance env evm t
 
-(* BET-84: as for [set_solve_all_instances]. *)
+(* Per-proof replay: as for [set_solve_all_instances]. *)
 let solve_one_instance_set =
   Proof_recorder.closure_setter ~what:"Typeclasses.set_solve_one_instance" ~stock:1
 

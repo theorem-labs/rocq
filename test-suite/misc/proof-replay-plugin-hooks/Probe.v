@@ -31,7 +31,7 @@ Proof. try exact (tt : nat). exact I. Qed.
 (* [unwrap ?w] against [true] asks for a canonical solution of [unwrap];
    there is none, so the lookup asks the canonical-solution hooks. The proof
    also reads the notation [=] and the canonical_structure table, channels
-   replay does not evaluate yet, so it misses on one of them in every grade
+   replay does not evaluate yet, so it misses on one of them in every check run
    (the runs show notation): the test requires only that it never replays. *)
 Lemma uses_canonical : True.
 Proof. try exact (eq_refl : unwrap _ = true). exact I. Qed.

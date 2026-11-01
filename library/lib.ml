@@ -686,7 +686,7 @@ let init () =
   Summary.Synterp.init_summaries ();
   Summary.Interp.init_summaries ()
 
-(* BET-84 P3: the reference a kernel name printed by [Names.*.to_string]
+(* Replay part P3: the reference a kernel name printed by [Names.*.to_string]
    names now, for the replay evaluators that read a recorded key back. Its
    absolute path is the printed name, except while sections are open: the
    nametab binds an object declared in an open section under a path that

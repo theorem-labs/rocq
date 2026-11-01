@@ -184,6 +184,6 @@ val library_part :  GlobRef.t -> DirPath.t
 val init : unit -> unit
 
 val global_of_kernel_string : string -> Names.GlobRef.t
-(** BET-84 P3: what the kernel name printed as this string names now, also
+(** Replay part P3: what the kernel name printed as this string names now, also
     for an object declared in an open section (whose nametab path holds the
     section). Raises [Not_found] when nothing binds it. *)

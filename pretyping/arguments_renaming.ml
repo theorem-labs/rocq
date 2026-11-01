@@ -72,7 +72,7 @@ let rename_arguments local r names =
   let req = if local then ReqLocal else ReqGlobal in
   Lib.add_leaf (inRenameArgs (req, (r, names)))
 
-(* BET-84: ONE value for the arguments_names channel, called by the record
+(* Per-proof replay: ONE value for the arguments_names channel, called by the record
    sites below and by the replay evaluator
    (dev/tools/census/replay_channels.py). *)
 let recorded_arguments_names env r =

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# BET-84 P2. A replay may reuse a proof's stored term only when everything the
+# replay part P2. A replay may reuse a proof's stored term only when everything the
 # proof read is unchanged, so an edit of an input a proof reads must show in
 # its record. Each directory under misc/proof-record-edits/ is one edit: A.v
 # and B.v differ in one input of the proofs that its `expect` file names, and

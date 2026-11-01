@@ -81,7 +81,7 @@ let define_global kn e =
   let state = !ltac_state in
   ltac_state := { state with ltac_tactics = KerName.Map.add kn e state.ltac_tactics }
 
-(* BET-84 census row 10: each Ltac2 definition the proof reads. *)
+(* Census row 10: each Ltac2 definition the proof reads. *)
 let record channel k v =
   if Proof_recorder.active () then
     Proof_recorder.read_by ~row:"10" ~channel ~id:k ~key:(fun () -> KerName.to_string k)
@@ -109,11 +109,11 @@ let record_global kn =
   if Proof_recorder.active () then
     record "ltac2_global" kn (KerName.Map.find_opt kn ltac_state.contents.ltac_tactics)
 
-(* BET-84: [Tac2interp.eval_global] runs the closure stored here in place of
+(* Per-proof replay: [Tac2interp.eval_global] runs the closure stored here in place of
    the global's definition, and row 10 records the definition only. Nothing
    in this tree calls this, so every entry is a plugin's closure, and the
    first one makes every later proof of the process ineligible
-   (Proof_recorder.closure_setter; Claude review of e16e9d2ae4, finding 1). *)
+   (Proof_recorder.closure_setter; review of e16e9d2ae4, finding 1). *)
 let compiled_global_set =
   Proof_recorder.closure_setter ~what:"Tac2env.set_compiled_global" ~stock:0
 
@@ -217,11 +217,11 @@ let fence_primitive { mltac_plugin; mltac_tactic } =
 
 let primitive_map = ref MLMap.empty
 
-(* BET-84: a second definition of a primitive replaces its closure under an
+(* Per-proof replay: a second definition of a primitive replaces its closure under an
    unchanged name, possibly an audited plugin's, which [fence_primitive]
    trusts by name, and row 10 records the source definitions only. Rocq
    defines each primitive once, so a redefinition makes every later proof of
-   the process ineligible (Proof_recorder.closure_setter; Claude review of
+   the process ineligible (Proof_recorder.closure_setter; review of
    beb759fef3, finding 1). *)
 let primitive_redefined =
   Proof_recorder.closure_setter ~what:"Tac2env.define_primitive" ~stock:0
@@ -362,7 +362,7 @@ module MLType = Tac2dyn.ArgMap(MLTypeObj)
 
 let ml_object_table = ref MLType.empty
 
-(* BET-84: as for [define_primitive]: the ML object behind a quotation is
+(* Per-proof replay: as for [define_primitive]: the ML object behind a quotation is
    defined once per tag by Rocq. *)
 let ml_object_redefined =
   Proof_recorder.closure_setter ~what:"Tac2env.define_ml_object" ~stock:0

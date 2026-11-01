@@ -1,6 +1,6 @@
 open Utest
 
-(* BET-84 P3. The defect these tests exist for: a replay that accepts a
+(* Replay part P3. The defect these tests exist for: a replay that accepts a
    stored term after an input the proof read has changed. Replay is sound
    only because every recorded read is checked again, so each way of
    failing to check one is a case here:
@@ -284,7 +284,7 @@ let sha256_vectors =
      && Proof_sha256.digest_hex (String.make 1_000_000 'a')
         = "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
 
-(* The whole-file refusal (Claude review of c2190e74e0, P1): after the first
+(* The whole-file refusal (review of c2190e74e0, P1): after the first
    closer, a command that can rebind a Rocqlib name or load code refuses the
    file. Before it, nothing has been replayed, so it is allowed; comments and
    strings are not commands. *)
@@ -396,7 +396,7 @@ let plugin_audit_refuses =
      Replay.register_plugin_audit (fun _ -> false);
      refused = None && audited <> None)
 
-(* rocq-read-file.plugin, which every BET memory image loads, is audited by
+(* rocq-read-file.plugin, which every verification image loads, is audited by
    name (Main's ruling): alone it leaves replay on; with any other plugin
    beside it, replay is off. *)
 let plugin_allowlist =

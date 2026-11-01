@@ -41,7 +41,7 @@ let add kn fpa =
 let fold f acc =
   KerName.Map.fold f !abbrev_table acc
 
-(* BET-84 row M1: each abbreviation the proof reads. *)
+(* Row M1: each abbreviation the proof reads. *)
 let record k v =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"M1" ~channel:"abbreviation"

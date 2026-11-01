@@ -1212,7 +1212,7 @@ let activate_solver ~name =
   deactivate_solver ~name;
   active_solvers := name :: !active_solvers
 
-(* BET-84 census row 8: the ordered list of active typeclass solvers. A
+(* Census row 8: the ordered list of active typeclass solvers. A
    solver and its condition are closures from a plugin, and what they do can
    depend on state that neither the solver's name nor the plugin's files fix:
    rocq-elpi's condition reads a mode table that [Elpi TC Solver Override]

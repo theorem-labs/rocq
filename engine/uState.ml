@@ -530,7 +530,7 @@ let union uctx uctx' =
 
 let context_set uctx = uctx.local
 
-(* BET-84 P3: a universe state read back from a Marshal blob is a fresh
+(* Replay part P3: a universe state read back from a Marshal blob is a fresh
    copy, so its levels are equal to, but not the same values as, the ones
    this compile made. A [.vo] marshals the library with its sharing, so a
    replayed proof would write two equal copies of a level where a full

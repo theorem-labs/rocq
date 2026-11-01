@@ -464,7 +464,7 @@ let lookup_eq_eliminator_with_error ?(het_eq=false) env sigma eq ~dep ~inccl ~l2
 let lookup_eq_eliminator_opt env sigma eq ~dep het_eq ~inccl l2r ~c_sort ~e_sort ~p_sort =
   try Some (lookup_eq_eliminator_with_error ~het_eq env sigma eq ~dep ~inccl ~l2r ~e_sort ~c_sort ~p_sort)
   with e ->
-    (* BET-84: a critical exception here takes the fallback path, so the
+    (* Per-proof replay: a critical exception here takes the fallback path, so the
        term can differ; the proof is never replayed. *)
     if not (CErrors.noncritical e) then
       Proof_recorder.ineligible ~reason:"catchall" ~detail:"tactics/equality.ml:466";
@@ -1350,7 +1350,7 @@ let build_injector env sigma dflt c cpath =
     sigma, (injcode,resty)
 
 let eq_dec_scheme_kind_name = ref (fun _ -> failwith "eq_dec_scheme undefined")
-(* BET-84: vernac/auto_ind_decl.ml sets Rocq's own once, when it loads; a
+(* Per-proof replay: vernac/auto_ind_decl.ml sets Rocq's own once, when it loads; a
    later one is a plugin's (Proof_recorder.closure_setter). *)
 let eq_dec_scheme_kind_set =
   Proof_recorder.closure_setter ~what:"Equality.set_eq_dec_scheme_kind" ~stock:1

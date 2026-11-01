@@ -26,7 +26,7 @@ type t =
 
   ; proof_record : bool
 
-  (* BET-84 P3: replay a proof's stored term. A source with no ratio is a
+  (* Replay part P3: replay a proof's stored term. A source with no ratio is a
      usage error: the charged clock has no default. *)
   ; proof_replay : Proof_replay.source option
   ; proof_replay_ratio : float option
@@ -146,7 +146,7 @@ let parse arglist : t =
           let file = next () in
           { oval with glob_out = Some (GlobFile file) }
 
-        (* Per-proof record (BET-84 P2) and replay (P3) *)
+        (* Per-proof record (replay part P2) and replay (P3) *)
         |"-proof-record" ->
           { oval with proof_record = true }
         |"-proof-replay" ->
@@ -183,7 +183,7 @@ let parse arglist : t =
   in
   try
     let opts, extra = parse default in
-    (* BET-84 P3: replay charges each replayed proof r times its registered
+    (* Replay part P3: replay charges each replayed proof r times its registered
        wall seconds. There is no default r, because a charge that is too
        small lets a file pass that stock's own timeout kills. *)
     (match opts.proof_replay, opts.proof_replay_ratio with

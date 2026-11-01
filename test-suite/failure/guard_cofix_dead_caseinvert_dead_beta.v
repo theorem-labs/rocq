@@ -11,7 +11,7 @@
    test-suite/success/sprop_uip.v does): with a bare "srefl" the definition
    is refused by elaboration, and the Fail below would then succeed for a
    reason that is not the guard. Ported from 9.3/guard-cofix-prefix
-   cc0d0871ad63. dispatch://BET-241 *)
+   cc0d0871ad63. *)
 Set Definitional UIP.
 Inductive seq {A : Type} (a : A) : A -> SProp := srefl : seq a a.
 CoInductive SB : Type := consB : SB -> SB.

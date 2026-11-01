@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(* What a recorded read is worth now (BET-84, part P3). One evaluator per
+(* What a recorded read is worth now (part P3). One evaluator per
    channel of the census. An evaluator answers [Unknown] rather than
    guessing: the proof then runs its tactics, as today. *)
 

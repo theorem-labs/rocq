@@ -205,7 +205,7 @@ let () =
       [Proof_record.{ row = "18"; channel = "counter_start"; key = "HINT-COUNTER";
                       value = Some (string_of_int !hint_counter) }])
 
-(* BET-84 P3: a Summary counter, which the STM rolls back when a proof
+(* Replay part P3: a Summary counter, which the STM rolls back when a proof
    closes; replay leaves it alone ([Proof_replay.register_summary_counter]).
    Without this a proof whose tactics made a hint key is refused. *)
 let () = Proof_replay.register_summary_counter "hint_counter"
@@ -639,7 +639,7 @@ val digest : t -> string
 end =
 struct
 
-  (* BET-84 census row 7. The fingerprint of a database is its ORDERED
+  (* Census row 7. The fingerprint of a database is its ORDERED
      CONTENTS, not the identifiers of its hints: a uid names an allocation (a
      module path and a counter), so an earlier [Hint Extern] edited at the same
      command position keeps its uid, its head and every counter, and a later
@@ -960,7 +960,7 @@ type hint_db = Hint_db.t
 
 let searchtable = Summary.ref ~name:"searchtable" Hintdbmap.empty
 
-(* BET-84 census row 7: each database the proof searches, by name, with a
+(* Census row 7: each database the proof searches, by name, with a
    digest of its immutable semantic summary. The summary excludes the mutable
    discrimination net cache and is kept with the persistent database value.
 

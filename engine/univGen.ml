@@ -122,7 +122,7 @@ let () = CErrors.register_handler (function
 
 (* Generator of levels. The two counters are process-wide and monotone, so
    a level's name depends on how many were made before it in this compile.
-   BET-84 P3 reads them at a proof's start and sets them after a replay, so
+   replay part P3 reads them at a proof's start and sets them after a replay, so
    that a replayed proof leaves them where its tactics would have, and the
    proofs after it name their levels as stock does. *)
 let univ_level_counter = ref 0

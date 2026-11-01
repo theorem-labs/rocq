@@ -86,7 +86,7 @@ let rebuild env s =
   let nparams = mib.Declarations.mind_nparams in
   { s with nparams }
 
-(* BET-84 census row 14: the record structures a proof reads. ONE value
+(* Census row 14: the record structures a proof reads. ONE value
    function per channel, called by the record sites here and by the replay
    evaluators registered beside them
    (dev/tools/census/replay_channels.py). *)
@@ -445,7 +445,7 @@ type t = {
   cvalue_arguments : EConstr.t list;
 }
 
-(* BET-84 census row 14: the canonical-structure table a proof reads. *)
+(* Census row 14: the canonical-structure table a proof reads. *)
 let find env sigma (proj,pat) =
   if Proof_recorder.active () then
     Proof_recorder.read ~row:"14" ~channel:"canonical_structure"
@@ -557,7 +557,7 @@ let prim_table =
 let register p c =
   prim_table := Cmap_env.add c p !prim_table
 
-(* BET-84 census row 14: whether a constant is a primitive projection.
+(* Census row 14: whether a constant is a primitive projection.
    The value is computed once, for the recorder at the lookup and for the
    replay evaluator (dev/tools/census/replay_channels.py). *)
 let recorded_primitive_projection v =

@@ -1,4 +1,4 @@
-# Per-proof replay fixtures (BET-84 gate part 2)
+# Per-proof replay fixtures (gate part 2)
 
 `run.sh` compiles each fixture twice and compares the two compiles.  It answers
 one question per fixture: **after this edit, does a replay compile give the same
@@ -16,13 +16,13 @@ run.sh --register-only BINDIR OUT   # only the registration half (recorder Rocq)
 `ROCQRUNTIMELIB` and `OCAMLPATH`; export them before the call, the runner passes
 the environment through.  Nothing but `python3` is needed.  Rocq builds are not
 allowed on sami-rocqperf: run this on speed-r1, under
-`scripts/speed_loop/lanes/box/untimed.sh`.
+an untimed harness run.
 
 ## What one fixture is
 
 ```
 fixtures/<name>/original/*.v   the tree that gets registered
-fixtures/<name>/edited/*.v     the tree that gets graded
+fixtures/<name>/edited/*.v the tree that gets checked
 fixtures/<name>/expect.json    what must happen
 ```
 
@@ -42,7 +42,7 @@ The runner, per fixture:
 depend on the length of the build path.
 
 The `.vo` comparison follows lane R1's rule
-(`scripts/speed_loop/lanes/r1/segcmp_norm.ml` in the grading harness): the
+(the segment comparison in the verification harness): the
 `vmlibrary` segment by value, every other segment by bytes.  Pass `--segcmp
 PATH` (or `SEGCMP_NORM`) to use that program, which is the rule itself.  Without
 it the runner compares segments in Python by the MD5 the segment table records;
@@ -61,10 +61,10 @@ it then cannot decide a `vmlibrary`-only difference and reports
 | `native_compiler` | the `-native-compiler` value (default `no`) |
 | `common_flags` | flags for every compile, registration included |
 | `register_flags` | flags for the registration only |
-| `grade_flags` | flags for both grade compiles (for example `-skip-qed-typecheck`) |
+| `grade_flags` | flags for both check compiles (for example `-skip-qed-typecheck`) |
 | `replay_extra_flags` | flags for the replay compile only |
 | `ratio` | the `-proof-replay-ratio` value (default `1`) |
-| `stack_kb` | the stack limit every compile of this fixture runs under (default 8192, the limit a grade runs under; lane R1 measured that this changes `.vo` bytes, so stock and replay must share it). `prlimit` is required |
+| `stack_kb` | the stack limit every compile of this fixture runs under (default 8192, the limit a check run runs under; lane R1 measured that this changes `.vo` bytes, so stock and replay must share it). `prlimit` is required |
 | `record_layout` | `dotted`, `slashed` or `both`: which name the record is published under |
 | `records` | per file, per proof: `ineligible` reasons it must carry, `eligible`, `writes_nonempty`, `stores_no_term` |
 | `summaries` | per file: `proofs`, `hits`, `misses`, `refused`, `killed`, `fence`, `outcomes` |
@@ -172,7 +172,7 @@ calibrated, and `replay_wall_max` is tight enough (70 s against a ~92 s proof)
 that a kill which lands only between top-level sentences, instead of inside
 the third proof's tactic, fails the fixture.
 
-**The carry-over.**  `carry_replayed_dep` (`mixed` mode): a grade that reuses
+**The carry-over.** `carry_replayed_dep` (`mixed` mode): a check run that reuses
 one registered object and replays the object it was compiled against.  `B.vo`
 is compiled against the STOCK `A.vo`, then placed beside the REPLAYED `A.vo`,
 and `C.v` is compiled on top.  It must behave as the all-stock control does,
@@ -181,7 +181,7 @@ broken setup fails there instead of looking like a pass.
 
 ## Comparing a replayed `.vo` against stock: the contract, and two traps
 
-The acceptance contract (GRADE, 2026-10-26) is **not** byte identity.  In its
+The acceptance contract (2026-10-26) is **not** byte identity. In its
 words: "verdict identical; the tree loads; `coqchk` accepts every replayed
 object; and every segment's content is value-equal to stock's, EXCLUDING
 recorded dependency digests, whose differences must each be explained by a

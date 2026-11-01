@@ -38,7 +38,7 @@ let inScheme : Libobject.locality * (string * (inductive * GlobRef.t)) -> Libobj
 let declare_scheme local kind indcl =
   Lib.add_leaf (inScheme (local,(kind,indcl)))
 
-(* BET-84 census row 15: each scheme the proof looks up, by kind and
+(* Census row 15: each scheme the proof looks up, by kind and
    inductive, absent when it is not yet declared. ONE value function,
    called by the record site here and by the replay evaluator
    (dev/tools/census/replay_channels.py). *)
