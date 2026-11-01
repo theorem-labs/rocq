@@ -60,7 +60,7 @@ Ltac2 l2 (n : int) := n.
 
 Require Corelib.Classes.CMorphisms.
 
-(* An Admitted axiom (lax) and a section lemma (lsec): the S1b variants edit
+(* An Admitted axiom (lax) and a section lemma (lsec): the blinding variants edit
    these. lax Admitted->Qed and l1 Qed->Admitted keep the label (version 3
    blinds the axiom-or-opaque distinction); lax Admitted->Defined and a
    Proof-using change on lsec move it. *)

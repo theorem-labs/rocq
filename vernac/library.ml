@@ -123,11 +123,14 @@ let location_free_label = ref false
    digest of its library segment, read with its other segments
    ([intern_from_file]): [KeepFacts.compute] takes a constant's closure from
    here instead of walking it. Each intern of a library sets or removes its
-   entry, so the entry is that of the file interned last, which is the file
-   loaded (a loaded library is not interned again), and the reader also
-   requires the digest the loaded library has. Not a field of [library_t],
-   whose type the REQUIRE kind's payload reaches (misc/vo-format.sh prints
-   it), and not synchronized, like [libraries_filename_table]. *)
+   entry once the file is known to hold the library asked for
+   ([take_interned], after [intern_library]'s name check), so the entry is
+   that of the file interned last for that name, which is the file loaded (a
+   loaded library is not interned again, and a file that holds another name,
+   such as a loaded library's, writes nothing), and the reader also requires
+   the digest the loaded library has. Not a field of [library_t], whose type
+   the REQUIRE kind's payload reaches (misc/vo-format.sh prints it), and not
+   synchronized, like [libraries_filename_table]. *)
 let stored_closures_table :
   (Safe_typing.vodigest * (string * string list) list) DirPath.Map.t ref =
   ref DirPath.Map.empty
@@ -219,11 +222,10 @@ type table_status =
 let opaque_tables =
   ref (DirPath.Map.empty : table_status DirPath.Map.t)
 
-(* [opaque_tables] is not part of the state a rollback restores, and
-   [add_opaque_table] can replace the table of a library that stays loaded:
-   [intern_from_file] writes it under the name the file holds, before
-   [intern_library] checks that name, so a Require that finds a file holding
-   a loaded library replaces that library's table and then fails. The
+(* [opaque_tables] is not part of the state a rollback restores. Its writers
+   are the [fill] of an intern, which waits for the name check
+   ([interned_pending]), and [stored_opaque] in a process that interned
+   nothing, which registers a table from the handle the state carries. The
    generation counts the writes, for a cache of what the tables return. The
    [Fetched] write of [access_table] does not count: it keeps what the table
    returns. *)
@@ -231,16 +233,16 @@ let opaque_generation = ref 0
 
 (* The digest of the segment each table in [opaque_tables] was read from, as
    the file records it: what [content_digests] covers of a library's opaque
-   proofs. Written with the table, so a Require that replaces the table of a
-   loaded library replaces it too.
+   proofs. Written with the table, so whatever replaces a table replaces it
+   too, and a table written with no digest leaves the name without one.
 
-   A library whose table was REPLACED gets no digest at all. Its proofs then
-   come from another file, which may read libraries that this library's own
-   recorded dependencies do not name, and a digest built from those
-   dependencies would not cover what a walk of its objects now reads
-   (AstraSoundness, 2026-10-27). Refusing a digest costs the sharing of that
-   library's objects, and of every library whose digest names it, and nothing
-   else. *)
+   A library whose table was REPLACED gets no digest at all. The write
+   records no source, so the proofs may come from another file, which may
+   read libraries that this library's own recorded dependencies do not
+   name, and a digest built from those dependencies would then not cover
+   what a walk of its objects reads. Refusing one is the conservative
+   answer, and it costs the sharing of that library's objects, and of every
+   library whose digest names it, and nothing else. *)
 let opaque_digests = ref (DirPath.Map.empty : Digest.t DirPath.Map.t)
 let opaque_replaced = ref DirPath.Set.empty
 
@@ -252,24 +254,63 @@ let opaque_replaced = ref DirPath.Set.empty
    axiom or an opaque proof, and the index of a proof in the opaque table is
    erased. Two such files can carry one label and one opaque table and still
    give Print Assumptions different answers, so neither gets a digest here
-   and nothing of them is shared, as for a replaced table above. Measured:
-   with both members in and no guard, a second process printed the first
-   library's answer.
+   and nothing of them is shared, as for a replaced table above. Measured
+   with no guard: a second process printed the first library's answer.
 
    The test is the one thing that decides it, the digest against the bytes,
    so it holds for a .vo and a .vos alike and needs nothing of how the file
    was written. [intern_from_file] runs it only while the shared directory
-   is usable, which is the only reader of [content_digests], and writes it
-   under the name the file holds, before [intern_library] checks that name,
-   as the opaque table above is written. *)
+   is usable, which is the only reader of [content_digests], and marks the
+   name the file holds before [intern_library] checks that name; the comment
+   there says why the mark, unlike the table writes, does not wait. *)
 let label_digested = ref DirPath.Set.empty
 
-let add_opaque_table dp digest st =
+(* [digest] is the digest the file records for the table, or [None] for the
+   write of [stored_opaque], whose process read no file of [dp]. Such a
+   process must share nothing of that library: the marks that decide sharing
+   ([label_digested], [opaque_replaced]) are per process, and only the
+   process that read the file holds them. *)
+let add_opaque_table dp (digest : Digest.t option) st =
   incr opaque_generation;
   if DirPath.Map.mem dp !opaque_tables then
     opaque_replaced := DirPath.Set.add dp !opaque_replaced;
-  opaque_digests := DirPath.Map.add dp digest !opaque_digests;
+  opaque_digests := DirPath.Map.update dp (fun _ -> digest) !opaque_digests;
   opaque_tables := DirPath.Map.add dp st !opaque_tables
+
+(* Where each interned library's opaque proofs are on disk. [opaque_tables]
+   is per-process: a worker process ([par:] runs its tactic in a rocqworker
+   under coqc, and an [-async-proofs] proof runs in one) gets the state but
+   interns no library, so a foreign opaque body read there (a plugin's
+   [Global.body_of_constant], coq-hammer's [sunfolding]) found no table and
+   raised [Not_found]. So the handles are part of the state the worker gets
+   ([opaque_disk_handles], a summary entry), and the worker registers a
+   table from them on first use ([stored_opaque]). [fetch_delayed]
+   unmarshals the segment and then compares the digest stored after it with
+   the one recorded when the library was loaded, so a file rebuilt since with
+   other opaque proofs is refused, never used. (This holds for
+   every worker, too: the keep rule's records from a worker reach the
+   library through the opacity log, and the read they record must then
+   succeed there as in the compiling process.)
+
+   A summary entry is rolled back when a module or a section closes, and a
+   library's intern fills [opaque_handles_interned] only once
+   ([take_interned]), so the entry is also filled where the loaded library
+   itself is registered for the state:
+   [register_one_syntax], which the REQUIRE-SYNTAX object runs when it is
+   cached and when it is replayed (at [End M] after a [Require] inside [M]),
+   from [opaque_handles_interned], which is per-process and never rolled
+   back. The handle is not a field of [library_t], whose type the REQUIRE
+   kind's payload reaches (misc/vo-format.sh prints it). *)
+let opaque_handles_interned : Opaques.opaque_disk delayed DirPath.Map.t ref =
+  ref DirPath.Map.empty
+
+let opaque_disk_handles : Opaques.opaque_disk delayed DirPath.Map.t ref =
+  Summary.ref DirPath.Map.empty ~stage:Summary.Stage.Synterp ~name:"LIBRARY-OPAQUE-HANDLES"
+
+let publish_opaque_handle dp =
+  match DirPath.Map.find_opt dp !opaque_handles_interned with
+  | Some f -> opaque_disk_handles := DirPath.Map.add dp f !opaque_disk_handles
+  | None -> ()
 
 let opaque_tables_generation () = !opaque_generation
 
@@ -342,8 +383,13 @@ let stored_opaque o =
   let (_sub, _ci, dp, i) = Opaqueproof.repr o in
   if DirPath.equal dp (Global.current_dirpath ()) then
     Opaques.get_current_opaque i
-  else
+  else begin
+    (if not (DirPath.Map.mem dp !opaque_tables) then
+       match DirPath.Map.find_opt dp !opaque_disk_handles with
+       | Some f -> add_opaque_table dp None (ToFetch f)
+       | None -> ());
     access_table "opaque proofs" opaque_tables dp i
+  end
 
 let access_opaque_table o =
   let (sub, ci, _, _) = Opaqueproof.repr o in
@@ -443,10 +489,32 @@ let mk_library sd md digests vm =
     library_vm = vm;
   }
 
-let mk_intern_library sum lib digest_lib proofs digest_proofs vm =
-  add_opaque_table sum.md_name digest_proofs (ToFetch proofs);
-  let open Safe_typing in
-  mk_library sum lib (Dvo_or_vi digest_lib) vm
+(* The tables a library's intern fills, under the name its file holds:
+   [libraries_filename_table], [opaque_tables], [opaque_handles_interned] and,
+   under [-location-free-label], [stored_closures_table]. None of them is
+   synchronized, so a [Fail Require] does not roll them back. [intern_from_file]
+   therefore only reads the file; [intern_library] fills them
+   ([take_interned]) once the file is known to hold the library asked for.
+   Before, a failed Require of a file that holds a loaded library's name (for
+   example a copy of that library's file built with other proofs, at another
+   logical path) replaced the loaded library's entries with that file's: its
+   stored closures, which the next save of a dependent took as the loaded
+   library's, and its opaque proofs. (A failed Require now leaves them.) *)
+let interned_pending : (library_t * (unit -> unit)) option ref = ref None
+
+(* The table writes of [m]'s intern, or nothing for a library this process
+   did not read last. Taking empties the slot, before the name check, and
+   so does a failed intern ([intern_library]). A record that never reaches
+   [take_interned] (an exception after [intern_from_file] returned, or an
+   [Intern.t] that returns another record) stays in the slot until the next
+   intern; that is harmless, since only that exact record can take it. *)
+let take_interned m =
+  let fill = match !interned_pending with
+    | Some (m', fill) when m' == m -> fill
+    | Some _ | None -> ignore
+  in
+  interned_pending := None;
+  fill
 
 let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
@@ -515,7 +583,7 @@ let segment_bytes_md5 file (seg : _ ObjFile.segment) =
    raises here, and a session that meets one at every Require would otherwise
    keep a descriptor per attempt. *)
 let intern_from_file file =
-  let lsd, lmd, digest_lmd, del_opaque, digest_opaque, vmlib =
+  let lsd, lmd, digest_lmd, del_opaque, digest_opaque, vmlib, closures =
     let open Memprof_coq.Resource_bind in
     let& ch = Memprof_coq.Masking.with_resource ~acquire:raw_intern_library ~release:ObjFile.close_in file in
     let lsd, _ = ObjFile.marshal_in_segment ch ~segment:summary_seg in
@@ -523,8 +591,9 @@ let intern_from_file file =
     let del_opaque, digest_opaque = in_delayed file ch ~segment:opaques_seg in
     let vmlib = Vmlibrary.load lsd.md_name ~file ch in
     (* Under [-location-free-label] only: the closures the library stored, read
-       now, from the file whose other segments are loaded
-       ([stored_closures_table]). Read unvalidated, as the other segments are: a
+       now, from the file whose other segments are loaded, and written to
+       [stored_closures_table] by [fill], once the name is checked. Read
+       unvalidated, as the other segments are: a
        change to a RELEASED [KeepFacts.t] needs a vo_magic bump, which refuses
        older files (the vo-format chain in vernac/libkeyObjects.mli). Its query
        shape changed before release with none (no released build ever wrote
@@ -532,42 +601,52 @@ let intern_from_file file =
        since this takes only [assumptions], whose shape did not change, and
        never touches the queries; rocq-library-label, which reads them,
        validates the segment first. *)
-    let () =
+    let closures =
       if !location_free_label then
-        let closures = match ObjFile.marshal_in_segment ch ~segment:keepfacts_seg with
-          | ({ KeepFacts.assumptions; _ }, _) -> assumptions
-          | exception Not_found -> None
-        in
-        stored_closures_table := match closures with
-          | Some a ->
-            DirPath.Map.add lsd.md_name (Safe_typing.Dvo_or_vi digest_lmd, a) !stored_closures_table
-          | None -> DirPath.Map.remove lsd.md_name !stored_closures_table
+        Some (match ObjFile.marshal_in_segment ch ~segment:keepfacts_seg with
+            | ({ KeepFacts.assumptions; _ }, _) -> assumptions
+            | exception Not_found -> None)
+      else None
     in
     (* Is the digest just read the MD5 of the bytes it covers, or a label
        ([label_digested])? Only a process that shares entries asks, since
        only its queries read [content_digests], and the answer costs one
        pass over the segment.
 
-       The mark is only ever added. This runs before the file is accepted --
-       before its OCaml version is checked and before [intern_library]
-       checks the name it holds -- so a read that then fails would otherwise
-       clear the mark of the loaded library of that name and give its
-       objects back to the sharing, which is the hazard the mark exists for.
-       So once any file this process read carries a label under a name,
-       that name stays unshared, as a library whose opaque table was
-       replaced does. *)
+       The mark is only ever added, and it is made here, before the file is
+       accepted -- before its OCaml version is checked and before
+       [intern_library] checks the name it holds. The table writes of this
+       intern wait for that check ([fill]); this one does not, because
+       adding a mark can only withhold sharing: a file refused after the
+       read leaves the table of the loaded library of that name as it was,
+       and the mark costs the sharing of that library and of every loaded
+       library whose digest names it, and nothing more. So once any file
+       this process read carries a label under a name, that name stays
+       unshared, as a library whose opaque table was replaced does. *)
     let () =
       if !AssumptionsShared.usable then
         let md5 = segment_bytes_md5 file (ObjFile.get_segment ch ~segment:library_seg) in
         if not (String.equal md5 digest_lmd) then
           label_digested := DirPath.Set.add lsd.md_name !label_digested
     in
-    lsd, lmd, digest_lmd, del_opaque, digest_opaque, vmlib
+    lsd, lmd, digest_lmd, del_opaque, digest_opaque, vmlib, closures
   in
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
-  register_library_filename lsd.md_name file;
   Library_info.warn_library_info ~transitive:true lsd.md_name lsd.md_info;
-  mk_intern_library lsd lmd digest_lmd del_opaque digest_opaque vmlib
+  let m = mk_library lsd lmd (Safe_typing.Dvo_or_vi digest_lmd) vmlib in
+  let fill () =
+    register_library_filename lsd.md_name file;
+    add_opaque_table lsd.md_name (Some digest_opaque) (ToFetch del_opaque);
+    opaque_handles_interned := DirPath.Map.add lsd.md_name del_opaque !opaque_handles_interned;
+    match closures with
+    | None -> ()
+    | Some (Some a) ->
+      stored_closures_table :=
+        DirPath.Map.add lsd.md_name (Safe_typing.Dvo_or_vi digest_lmd, a) !stored_closures_table
+    | Some None -> stored_closures_table := DirPath.Map.remove lsd.md_name !stored_closures_table
+  in
+  interned_pending := Some (m, fill);
+  m
 
 let intern_from_file file =
   let provenance = ("file", file) in
@@ -619,9 +698,12 @@ let rec intern_library ~intern (needed, contents as acc) dir =
       (* We intern the library, and then intern the deps *)
       match intern dir with
       | Ok m, provenance ->
+        let fill = take_interned m in
         check_library_expected_name ~provenance dir m.library_name;
+        fill ();
         intern_library_deps ~intern acc dir m
       | Error iexn, provenance ->
+        interned_pending := None;
         error_in_intern provenance dir iexn
 
 and intern_library_deps ~intern (needed, contents) dir m =
@@ -825,7 +907,9 @@ let register_safe_library m =
    are only imported kernel-side. Interleaving the two in one object preserves
    the order (a full library's object replay may rely on an earlier one). *)
 
-let register_one_syntax (mode, root, m) = match mode with
+let register_one_syntax (mode, root, m) =
+  publish_opaque_handle m.library_name;
+  match mode with
   | ModeFull -> register_library_syntax ~root m
   | ModeSafe -> register_safe_library_syntax ~root m
 
@@ -1063,7 +1147,8 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   in
   let keepfacts = match todo_proofs with
     | ProofsTodoNone when !location_free_label ->
-      Some (KeepFacts.compute ~access:indirect_accessor ~stored ~self:dir)
+      (* [None] too when the opacity log could not be read back whole *)
+      KeepFacts.compute ~access:indirect_accessor ~stored ~self:dir
     | ProofsTodoNone | ProofsTodoSomeEmpty _ -> None
   in
   OpacityLog.reset ();

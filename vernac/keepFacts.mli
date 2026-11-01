@@ -11,10 +11,12 @@
 open Names
 
 (** The keep rule's facts about a saved library that a [.vo] file's segments
-    cannot carry on their own (design D18, dispatch://INFRA-361): its
-    assumption closure, and the foreign opacities its strategy commands saw.
-    [Library] computes them while the library is saved and stores them in a
-    [keepfacts] segment the label does not cover. *)
+    cannot carry on their own (the library label omits them all): its
+    assumption closure, and the foreign constants whose axiom-or-opaque status
+    or opaque body its compilation observed (a strategy command, an
+    extraction, a [Functional Scheme], a plugin's [Global.body_of_constant],
+    the closure walk). [Library] computes them while the library is saved and
+    stores them in a [keepfacts] segment the label does not cover. *)
 
 type query = {
   constant : string;  (** its user name, as [LibkeyObjects.axiom_report] lists it *)
@@ -23,12 +25,14 @@ type query = {
   (** for a status check, whether it was an opaque proof when the command ran;
       for a body read, always [true]: an opaque proof whose body was read *)
   table : string option;
-  (** for a body read -- by an extraction, or by the walk that computes the
-      closures, of a constant of this library -- the library whose opaque
-      table holds that body: the holder's own, or, for a copy a module
-      operation did not strengthen, the library whose table the copy's
-      reference points into, however many copies away; [None] for a status
-      check (a strategy command, an extraction's axiom-or-opaque check) *)
+  (** for a body read -- by an extraction, a caller of
+      [Global.body_of_constant], or the walk that computes the closures, of a
+      constant of this library -- the library whose opaque table holds that
+      body: the holder's own, or, for a copy a module operation did not
+      strengthen, the library whose table the copy's reference points into,
+      however many copies away; [None] for a status check (a strategy
+      command, an extraction's axiom-or-opaque check, a [Functional Scheme],
+      [Global.body_of_constant] on an axiom) *)
 }
 
 type t = {
@@ -41,10 +45,12 @@ type t = {
   opacity_queries : query list;
   (** Each foreign constant a command told apart as an axiom ([Undef None]) or
       an opaque proof (a non-opaque [Strategy]/[Transparent] command, an
-      extraction: [OpacityLog]), or whose opaque proof body an extraction
-      read (always [opaque = true], with its [table]), with its library and
-      the opacity it saw, sorted by name; also a constant of this library
-      whose body an extraction, or the walk that computes [assumptions], read
+      extraction, a [Functional Scheme] (its equation lemma), a plugin's
+      [Global.body_of_constant]: [OpacityLog]), or whose opaque proof body an
+      extraction or [Global.body_of_constant] read (always [opaque = true],
+      with its [table]), with its library and the opacity it saw, sorted by
+      name; also a constant of this library whose body an extraction,
+      [Global.body_of_constant] or the walk that computes [assumptions] read
       from another library's table (a copy of that library's proof: a functor
       application, an [Include] of one, a sealed module whose implementation
       is such an expression). Recorded several ways, [opaque = true] with the
@@ -53,14 +59,19 @@ type t = {
 
 val compute :
   access:Global.indirect_accessor ->
-  stored:(DirPath.t -> (string * string list) list option) -> self:DirPath.t -> t
+  stored:(DirPath.t -> (string * string list) list option) -> self:DirPath.t -> t option
 (** The facts for the library [self], computed from the current environment
     (its constants and inductives, and the opaque bodies [access] reaches).
     The walk that computes the closures reads bodies through a wrapper of
     [access] that logs each body of a constant of [self] it reads from
     another library's table as a body-read query, so a closure stored for a
     copy is kept only while that table's library is byte-identical; the
-    closures are computed before the queries are collected.
+    closures are computed before the queries are collected. The queries are
+    those of every process that compiled [self] ([OpacityLog.get]: its
+    [par:] and [-async-proofs] workers and the children a plugin forked
+    append to a log file); [None] when that log could not be read back
+    whole, so that the library is saved with no keepfacts, which the keep
+    rule rebuilds, rather than with an incomplete list.
     Call it while the library being saved is still loaded. [stored dp] is the
     [assumptions] field of the keepfacts segment of the loaded library [dp]
     (read with its other segments), or [None]: the closure of a constant of

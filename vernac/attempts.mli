@@ -10,8 +10,8 @@
 
 open Names
 
-(** Records of attempted resolutions (design D18, dispatch://INFRA-361,
-    spec item 3).
+(** Records of attempted resolutions (of a [Require], [Load] or
+    [Declare ML Module]).
 
     A [Require], [Load] or [Declare ML Module] that a library attempted can
     leave no trace in it: a command under [Fail] or [Succeed] is rolled

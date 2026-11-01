@@ -249,10 +249,10 @@ let fold_with_full_binders g f n acc c =
     sealed modules are looked up, see [lookup_module_in_impl]), the
     opaque-proof accessor, and the generation of the opaque tables of loaded
     libraries ([Library.opaque_tables_generation]). Those tables are not part
-    of the environment: a Require that fails, because the file it finds holds
-    another library, replaces the opaque proofs of that library when it is
-    loaded, and leaves [Global.env ()] as it was. Any difference clears every
-    entry.
+    of the environment: a process that interned no library registers a
+    library's table from the handle its state carries, when a body of that
+    library is first read, and leaves [Global.env ()] as it was. Any
+    difference clears every entry.
 
     The entries are also cleared, at the start of a query, when they weigh
     more than [memo_factor] times the heaviest query so far in the
@@ -1170,10 +1170,10 @@ and traverse_context access gen bound cooking current ctx accu ctxt =
       shared; those of the library being compiled, and section variables,
       are walked by each process.
     - The key carries over the rule that clears the entries above when an
-      opaque table changes: a Require that replaces the opaque table of a
-      loaded library changes that library's [Library.content_digests], which
-      covers the segment the table now comes from, so no entry walked from
-      the old table matches.
+      opaque table changes: a library whose table was replaced, and one
+      whose table was written with no digest of its own, get no
+      [Library.content_digests], so no entry walked from an earlier table of
+      theirs matches.
 
     The first phase can walk objects the second does not reach: [traverse]
     does not go down into the axiom of a match on an empty type

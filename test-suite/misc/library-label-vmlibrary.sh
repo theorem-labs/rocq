@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The vmlibrary format in the library label (label version 6, speed-8).
+# The vmlibrary format in the library label (label version 6).
 #
 # Two builds whose [vmlibrary] segments (the VM bytecode a .vo carries) are in
 # different formats cannot read each other's files, so they must never agree

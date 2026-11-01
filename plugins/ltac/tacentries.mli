@@ -153,7 +153,7 @@ type 'b argument_subst =
 | ArgSubstFun : 'b Gensubst.subst_fun -> 'b argument_subst
 | ArgSubstWit : ('a, 'b, 'c) Genarg.genarg_type -> 'b argument_subst
 
-(** How the location-free interface key (design D18) reads a stored,
+(** How the location-free interface key (see Libkey) reads a stored,
     globalized value of an argument: through a location stripper (see
     [Genstrip]), or through the stripper of another argument. The optional
     [?strip] of [argument_extend]. *)

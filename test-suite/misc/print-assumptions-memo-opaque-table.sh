@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Print Assumptions reuses traversals while the environment stays the same,
 # and the opaque proofs it reads are not part of the environment. A Require
-# that fails because the file it finds holds another library still records
-# that file's opaque proofs, under the name of the library in the file, before
-# it checks that name. When that library is already loaded, the Require
-# replaces its opaque proofs and leaves the environment as it was. A query
-# after it must read the new proofs, as without reuse: Main.out is the output
-# of Rocq without the reuse.
+# that fails because the file it finds holds another library reads that
+# file, and fills no table of the library whose name the file holds: the
+# name is checked first. When that library is already loaded, its opaque
+# proofs are therefore the ones it was loaded with, and a query after the
+# failed Require must print them, with the reuse as without it: Main.out is
+# the output of Rocq without the reuse.
 set -e
 export PATH=$BIN:$PATH
 cd misc/print-assumptions-memo-opaque-table

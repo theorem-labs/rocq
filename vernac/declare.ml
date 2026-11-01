@@ -448,20 +448,25 @@ let discharge_constant obj = Some obj
 
 let classify_constant cst = Libobject.Substitute
 
-(* The label view of a constant object (design D18; version 3 blinds the
-   axiom-or-opaque-proof distinction, dispatch://INFRA-361).
+(* The label view of a constant object (label versions 3 and up blind the
+   axiom-or-opaque-proof distinction of a constant's body).
    - [cst_loc] is the declaration's source location ([Nametab.set_cci_src_loc]):
      stripped, like every location.
    - [cst_kind] is the documentation kind ([Dumpglob.add_constant_kind]): an
      [Axiom]/[Parameter] is [IsAssumption], a [Qed] lemma [IsProof], a
-     [Definition] [IsDefinition], and so on. No dependent observes it -- it
-     feeds the glob output, not a [.vo] a dependent loads -- and it is the one
-     place, besides the compiled body, where an [Admitted] axiom and a [Qed]
-     proof of the same statement differ (the body the label blinds in
-     [LibkeyObjects.blind_constant]). So the view reads a single canonical kind,
-     which is what makes [Admitted <-> Qed] keep the label. What distinguishes a
-     transparent definition from an opaque proof or an axiom is the compiled
-     body (its transparency class), which the label does read.
+     [Definition] [IsDefinition], and so on. The library's own [.vo] stores
+     it and a dependent loads it, but in the dependent it reaches only the
+     glob output and vernacular output ([Search is:<kind>] filters on it,
+     vernac/search.ml:85-91), never the [.vo] the dependent writes, and a
+     compile can read printed output only through [Redirect] (a command's
+     output into a file) and a [Load] of that file, which a caller's source
+     rule may refuse. It is the one place, besides the compiled body, where an
+     [Admitted] axiom and a [Qed] proof of the same statement differ (the
+     body the label blinds in [LibkeyObjects.blind_constant]). So the view
+     reads a single canonical kind, which is what makes [Admitted <-> Qed]
+     keep the label. What distinguishes a transparent definition from an
+     opaque proof or an axiom is the compiled body (its transparency class),
+     which the label does read.
    - [cst_locl] (whether the constant is exported) and [cst_warn] (its
      deprecation, which a dependent's use replays as a warning) a dependent does
      observe, so the view keeps them. *)

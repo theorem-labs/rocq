@@ -25,12 +25,16 @@
 #               the claimants' locks) instead of waiting, and walk the four
 #               objects itself;
 # - replaced:   a Require that fails because the file it finds holds another
-#               library replaces that library's opaque proofs. A process that
-#               filled the directory before the replacement must not answer
-#               the later query from its entries: a replaced table's proofs
-#               come from a file whose own dependencies the loaded library
-#               does not record, so no object of such a library is shared.
-#               Both arms must print what Rocq without the directory prints.
+#               library must not reach the sharing of the library whose name
+#               that file holds. The intern fills no table before the name
+#               is checked, so the loaded library keeps its own proofs, and
+#               a process that filled the directory before the failed
+#               Require must answer the later query with them. Both arms
+#               must print what Rocq without the directory prints. The
+#               refusal of a library whose table WAS replaced
+#               ([opaque_replaced]) is not reached here: the writer left is
+#               an intern of a library this process interned before and did
+#               not load.
 # - labelled:   a library compiled with -location-free-label records its
 #               LABEL as the digest of its declarations, and the label is
 #               equal across an edit that swaps which of two lemmas is
@@ -150,8 +154,14 @@ echo "damaged: Q1 took over $taken claims"
   rocq c -q -native-compiler no -Q first "" first/Main.v > Main.plain.out 2> Main.plain.err \
     || { echo "replaced: the query without a directory failed"; exit 1; }
   diff -u /dev/null Main.plain.err || exit 1
+  # Both queries must answer for the loaded Y, the build whose [c] uses
+  # [ax1], with no directory in play: the failed Require of a file holding
+  # Y's name leaves Y's opaque proofs. Without this the case passes whether
+  # or not that holds, since the two arms would both answer for X.vo.
+  printf 'Axioms:\nY.ax1 : nat\nAxioms:\nY.ax1 : nat\n' | diff -u - Main.plain.out \
+    || { echo "replaced: the failed Require changed Y's proofs"; exit 1; }
   mkdir -p D || exit 1
-  # a process that queries Y before any replacement fills the directory
+  # a process that queries Y before the failed Require fills the directory
   printf 'Require Y.\nPrint Assumptions Y.c.\n' > first/Fill.v
   ROCQ_ASSUMPTIONS_SHARED_DIR="$PWD/D" \
     rocq c -q -native-compiler no -Q first "" first/Fill.v > Fill.out 2> Fill.err \
@@ -160,10 +170,10 @@ echo "damaged: Q1 took over $taken claims"
     rocq c -q -native-compiler no -Q first "" first/Main.v > Main.shared.out 2> Main.shared.err \
     || { echo "replaced: the query with the directory failed"; exit 1; }
   diff -u Main.plain.out Main.shared.out \
-    || { echo "replaced: the query answered from entries of the replaced table"; exit 1; }
+    || { echo "replaced: the query answered from another file's proofs"; exit 1; }
   grep -v '^\[assumptions-shared\] ' Main.shared.err > Main.shared.other.err || true
   diff -u /dev/null Main.shared.other.err || exit 1
-  echo "replaced: the query answered the same with a directory filled before the replacement"
+  echo "replaced: the query answered the same with a directory filled before the failed Require"
 ) || status=1
 
 # [set -e] is off inside this subshell, since its status is tested, so each

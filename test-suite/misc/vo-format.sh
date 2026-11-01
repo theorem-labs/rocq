@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# What a .vo stores, against the .vo format version (BET-342 M8).
+# What a .vo stores, against the .vo format version.
 #
 # rocq-library-label --vo-representation prints how this build represents a
 # .vo; what that printing covers, and what it does not, is at

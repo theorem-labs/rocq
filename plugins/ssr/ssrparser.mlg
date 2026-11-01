@@ -186,7 +186,7 @@ let pr_name = function Name id -> pr_id id | Anonymous -> str "_"
 let pr_spc () = str " "
 let pr_list = prlist_with_sep
 
-(* Interface key (D18): typed location strippers of ssr glob values. *)
+(* The interface key's typed location strippers for ssr glob values. *)
 
 let strip_ssrhyp (SsrHyp h) = SsrHyp (LocStrip.located (fun id -> id) h)
 
