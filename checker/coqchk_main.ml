@@ -161,6 +161,64 @@ let set_worker_budget s =
   | _ ->
     fatal_error (str "Option -worker-budget expects a number of seconds, got " ++ qstring s ++ str ".") 1
 
+(* "<library> <seconds>" per line; a later line for a library replaces an
+   earlier one. Costs only order the workers' checks, so nothing about the
+   file can stop the check: a malformed line is skipped, and anything but a
+   regular file of at most [max_cost_hints_bytes] that can be read to its
+   end is ignored whole, with a warning. The bound is on the bytes read,
+   not on the size the file reports. *)
+let max_cost_hints_bytes = 16 * 1024 * 1024
+
+let set_cost_hints f =
+  let ignored why =
+    Feedback.msg_warning (str "Ignoring the cost hints " ++ qstring f ++ str " (" ++
+                          str why ++ str "); the checks are dealt without them.")
+  in
+  let parse line =
+    let fields = List.filter (fun s -> s <> "")
+        (String.split_on_char ' ' (String.map (fun c -> if c = '\t' then ' ' else c) line)) in
+    match fields with
+    | [lib; s] ->
+      (match float_of_string_opt s with
+       | Some c when c >= 0. && Float.is_finite c -> Some (lib, c)
+       | _ -> None)
+    | _ -> None
+  in
+  (* At most [max_cost_hints_bytes + 1] bytes, so that a source reporting
+     a wrong size, or growing, cannot make the read unbounded. *)
+  let read_bounded ch =
+    let buf = Buffer.create 65536 in
+    let chunk = Bytes.create 65536 in
+    let rec go () =
+      let want = min (Bytes.length chunk) (max_cost_hints_bytes + 1 - Buffer.length buf) in
+      if want <= 0 then Error "too large"
+      else match input ch chunk 0 want with
+        | 0 -> Ok (Buffer.contents buf)
+        | n -> Buffer.add_subbytes buf chunk 0 n; go ()
+    in
+    go ()
+  in
+  (* Opened without blocking, and its kind read from the open descriptor:
+     whatever the path names when it is opened, a FIFO cannot block the
+     check and only a regular file is read. *)
+  match Unix.openfile f [Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC] 0 with
+  | exception Unix.Unix_error (e, _, _) -> ignored (Unix.error_message e)
+  | fd ->
+    let contents =
+      match (Unix.fstat fd).Unix.st_kind with
+      | exception Unix.Unix_error (e, _, _) -> Unix.close fd; Error (Unix.error_message e)
+      | Unix.S_REG ->
+        Unix.clear_nonblock fd;
+        let ch = Unix.in_channel_of_descr fd in
+        set_binary_mode_in ch true;
+        Fun.protect ~finally:(fun () -> close_in_noerr ch) (fun () ->
+            try read_bounded ch with Sys_error e -> Error e)
+      | _ -> Unix.close fd; Error "not a regular file"
+    in
+    match contents with
+    | Error why -> ignored why
+    | Ok s -> CheckWorkers.set_cost_hints (List.filter_map parse (String.split_on_char '\n' s))
+
 let make_senv () =
   let senv = Safe_typing.empty_environment in
   let senv = Safe_typing.set_impredicative_set !impredicative_set senv in
@@ -223,6 +281,8 @@ let print_usage_channel co command =
 \n  -worker-budget s            with -j, a worker process stops after s seconds\
 \n                              (default is 20) and its remaining checks are given\
 \n                              to another one; this bounds the memory it uses\
+\n  -cost-hints f               with -j, deal first the checks of the libraries that f\
+\n                              says cost most (\"<library> <seconds>\" per line)\
 \n\
 \n  -impredicative-set          set sort Set impredicative\
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
@@ -446,6 +506,8 @@ let parse_args argv =
     | "-worker-budget" :: s :: rem -> set_worker_budget s; parse rem
     | "-worker-budget" :: [] -> usage 1
 
+    | "-cost-hints" :: f :: rem -> set_cost_hints f; parse rem
+    | "-cost-hints" :: [] -> usage 1
     | s :: _ when s<>"" && s.[0]='-' ->
         fatal_error (str "Unknown option " ++ str s) 1
     | s :: rem ->  add_compile s; parse rem

@@ -150,4 +150,35 @@ TMPDIR="$d/none" compare "ill-typed proof, no files for workers' output" error \
 grep -q 'Worker process' "$d/stream.log" ||
   { echo "expected the failing worker to be reported"; fail=1; }
 
+# Cost hints change only the order in which the workers check the proofs:
+# the same libraries are accepted with the same output, and the same proof
+# is refused. The file also has a line that is not a pair, which is skipped.
+printf 'Bad 100\nB 50\nnot a pair here\nA 1\n' > "$d/hints"
+r1=0; r2=0
+rocqchk -j 4 -R "$d/src" "" -norec A -norec B -norec C > "$d/plain.out" 2> "$d/plain.err" || r1=$?
+rocqchk -j 4 -cost-hints "$d/hints" -R "$d/src" "" -norec A -norec B -norec C \
+  > "$d/hints.out" 2> "$d/hints.err" || r2=$?
+if [ "$r1" = 0 ] && [ "$r2" = 0 ] && cmp -s "$d/plain.out" "$d/hints.out" && cmp -s "$d/plain.err" "$d/hints.err"
+then echo "correct libraries, cost hints: same (exit code 0)"
+else echo "correct libraries, cost hints: differs (exit codes $r1 and $r2)"; fail=1
+fi
+compare "ill-typed proof, cost hints" error -cost-hints "$d/hints" \
+  -R "$d/src" "" -norec A -norec B -norec Bad
+grep -q 'while checking the opaque proof of Bad.l1\.' "$d/stream.log" ||
+  { echo "expected the proof of Bad.l1 to be reported with cost hints"; fail=1; }
+# Hints that cannot be used are ignored with a warning, and the libraries
+# are still checked and accepted: a directory, a device that reports no
+# size and never ends, and a file over the 16 MiB bound.
+head -c $((17 * 1024 * 1024)) /dev/zero | tr '\0' 'x' > "$d/big.hints"
+for src in "$d" /dev/zero "$d/big.hints"; do
+  r3=0
+  rocqchk -j 4 -cost-hints "$src" -R "$d/src" "" -norec A -norec B -norec C \
+    > "$d/dir.out" 2> "$d/dir.err" || r3=$?
+  if [ "$r3" = 0 ] && grep -q 'Ignoring the cost hints' "$d/dir.err" && cmp -s "$d/plain.out" "$d/dir.out"
+  then echo "unusable cost hints ($src): ignored (exit code 0)"
+  else echo "unusable cost hints ($src): not ignored (exit code $r3)"; fail=1
+  fi
+done
+rm -f "$d/big.hints"
+
 exit $fail

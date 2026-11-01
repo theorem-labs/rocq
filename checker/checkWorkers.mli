@@ -105,6 +105,13 @@ val expect_validator : unit -> unit
     from now on [defer_table] queues no task, as after [validate_tables],
     and one worker slot is kept for the validator until it starts. *)
 
+val set_cost_hints : (string * float) list -> unit
+(** [set_cost_hints [(lib, seconds); ...]]: the expected cost of each
+    library's checks, by its full name. With workers, the queued checks of
+    costlier libraries are dealt first, and a worker runs them first in its
+    batch. Costs decide only that order: which checks run, and what is
+    accepted, do not depend on them. A library without a cost costs 0. *)
+
 val debugging : unit -> bool
 (** Whether the checker-workers debug output is on. *)
 
