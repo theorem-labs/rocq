@@ -401,7 +401,7 @@ let synterp_chdir = function
          no read records the working directory. With the recorder or replay
          on, a [Cd] trips the process-wide fence, so no proof that opens
          after it replays. A proof before it does not replay either: [Cd] is
-         a late command (Proof_replay.scan_late_rebind). *)
+         a late command (Proof_replay_scan.scan_late_rebind). *)
       if Proof_recorder.in_use () then Proof_recorder.trip_fence ~reason:"cd" ~detail:path;
       warn_chdir ();
       begin
@@ -520,7 +520,7 @@ and synterp_load ~intern verbosely fname =
      files a compile could have written: with the recorder or replay on, a
      Load trips the process-wide fence, so no proof that opens after it
      replays. A proof before it does not replay either: Load is a late
-     command (Proof_replay.scan_late_rebind). The fence trips before the file
+     command (Proof_replay_scan.scan_late_rebind). The fence trips before the file
      is parsed, so the Requires and the proofs it holds come after it. A
      compile with neither option does nothing here. *)
   if Proof_recorder.in_use () then Proof_recorder.trip_fence ~reason:"load" ~detail:fname;

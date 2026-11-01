@@ -28,7 +28,7 @@ type t =
   ; proof_record_no_graph : bool
   ; proof_record_vo_ref : bool
 
-  ; proof_replay : Proof_replay.source option
+  ; proof_replay : Proof_replay_record.source option
   ; proof_replay_ratio : float option
   ; proof_replay_budget : float option
   ; proof_replay_peak_limit_kb : int option
@@ -156,9 +156,9 @@ let parse arglist : t =
         |"-proof-record-vo-ref" ->
           { oval with proof_record_vo_ref = true }
         |"-proof-replay" ->
-          { oval with proof_replay = Some (Proof_replay.Record_file (next ())) }
+          { oval with proof_replay = Some (Proof_replay_record.Record_file (next ())) }
         |"-proof-replay-dir" ->
-          { oval with proof_replay = Some (Proof_replay.Record_dir (next ())) }
+          { oval with proof_replay = Some (Proof_replay_record.Record_dir (next ())) }
         |"-proof-replay-ratio" ->
           let s = next () in
           (match float_of_string_opt s with
@@ -213,7 +213,7 @@ let parse arglist : t =
        digest the caller took from a trusted place (reviews P3Deep F1,
        P3Bugs). A directory of records carries one [.sha256] beside each. *)
     (match opts.proof_replay, opts.proof_replay_digest with
-     | Some (Proof_replay.Record_file _), None ->
+     | Some (Proof_replay_record.Record_file _), None ->
        arg_error Pp.(str "-proof-replay needs -proof-replay-digest: the SHA-256 of the record, from the "
                      ++ str "registration's manifest. Replay is refused without it.")
      | _ -> ());

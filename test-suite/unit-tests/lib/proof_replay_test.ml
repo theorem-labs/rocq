@@ -16,6 +16,9 @@ let log_out_ch = open_log_out_ch __FILE__
 
 module R = Proof_record
 module Replay = Proof_replay
+module Compile = Proof_replay_compile
+module Record = Proof_replay_record
+module Scan = Proof_replay_scan
 
 let toolchain : R.toolchain = R.{
   binary = "0123456789abcdef0123456789abcdef";
@@ -115,8 +118,8 @@ let setup ?(budget = None) ?(proof = proof) ?(now = toolchain) ?(header = header
     | Some d -> d
     | None -> Some (Proof_sha256.digest_hex (record_bytes ~header ~proof ()))
   in
-  Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget ~peak_limit_kb:None ~digest;
-  Replay.start ~library ~source ~toolchain:(fun () -> now);
+  Compile.configure ~source:(Record.Record_file path) ~ratio:2.0 ~budget ~peak_limit_kb:None ~digest;
+  Compile.start ~library ~source ~toolchain:(fun () -> now);
   Unix.chmod path 0o644;
   Sys.remove path
 
@@ -240,7 +243,7 @@ let summary_counts =
      setup ();
      let _ = decide () in
      let path = Filename.temp_file "proof-replay" ".json" in
-     Replay.write_summary path;
+     Compile.write_summary path;
      let ic = open_in_bin path in
      let text = really_input_string ic (in_channel_length ic) in
      close_in ic;
@@ -285,9 +288,9 @@ let unreadable_record_refuses =
     "a -proof-replay FILE that does not exist is refused as bad_record, and start does not raise"
     (let path = Filename.temp_file "proof-replay" ".absent" in
      Sys.remove path;
-     Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
+     Compile.configure ~source:(Record.Record_file path) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
        ~digest:(Some (String.make 64 '0'));
-     match Replay.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain) with
+     match Compile.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain) with
      | () -> Replay.refused () = Some "bad_record" && decide () = None
      | exception (Sys_error _ | End_of_file) -> false)
 
@@ -300,9 +303,9 @@ let no_record_refuses =
     (let dir = Filename.temp_file "proof-replay" ".dir" in
      Sys.remove dir;
      Sys.mkdir dir 0o755;
-     Replay.configure ~source:(Replay.Record_dir dir) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
+     Compile.configure ~source:(Record.Record_dir dir) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
        ~digest:None;
-     Replay.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain);
+     Compile.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain);
      Sys.rmdir dir;
      Replay.refused () = Some "no_record" && decide () = None)
 
@@ -327,9 +330,9 @@ let sidecar_dir_refuses =
   in
   let remove path = Sys.remove path; Sys.remove (path ^ ".sha256") in
   let attempt dir =
-    Replay.configure ~source:(Replay.Record_dir dir) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
+    Compile.configure ~source:(Record.Record_dir dir) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
       ~digest:None;
-    Replay.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain);
+    Compile.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> toolchain);
     (Replay.refused (), decide ())
   in
   current := Replay.Value (Some (String.make 32 'e'));
@@ -379,7 +382,7 @@ let sha256_vectors =
    file. Before it, nothing has been replayed, so it is allowed; comments and
    strings are not commands. *)
 let rebind_scan =
-  let s = Replay.scan_late_rebind in
+  let s = Scan.scan_late_rebind in
   let end_ = "End (of a module, or of a section that loads or imports)" in
   mk_bool_test "proof-replay-rebind-scan"
     "a Register, Require, Load, Declare, Import, Export, Include, Module, Reset, Back, BackTo, or an End that can rebind, after the first closer, is found with its line"
@@ -449,7 +452,7 @@ let rebind_scan =
 (* The scan also gives the offset of the LAST late command: every proof that
    opens before it runs, every proof after it may replay. *)
 let late_events_scan =
-  let s = Replay.scan_late_events in
+  let s = Scan.scan_late_events in
   mk_bool_test "proof-replay-late-events-scan"
     "the first late command keeps its line, and the last one's offset is the start of its word"
     (s "Lemma a : True. Qed. Import M. Lemma b : True. Qed. Export N. Lemma c : True. Qed."
@@ -458,9 +461,9 @@ let late_events_scan =
      && s "Require Import M. Lemma a : True. Qed." = (None, None)
      && s "Lemma a : True. Qed. Register x as core.eq.type." = (Some ("Register", 1), Some 21)
      && s "Lemma a : True. Qed. Module M. Import N. End M." = (Some ("Import", 1), Some 41)
-     && Replay.scan_late_events ~imports_late:false "Lemma a : True. Qed. Module M. Import N. End M."
+     && Scan.scan_late_events ~imports_late:false "Lemma a : True. Qed. Module M. Import N. End M."
         = (None, None)
-     && Replay.scan_late_events ~imports_late:false "Lemma a : True. Qed. Import N. Require M."
+     && Scan.scan_late_events ~imports_late:false "Lemma a : True. Qed. Import N. Require M."
         = (Some ("Require", 1), Some 31)
      && s "Lemma a : True. Qed. Module M : T. End M." = (Some ("Module", 1), Some 35)
      (* After a Reset the frames are not followed: the plain module's End,
@@ -491,7 +494,7 @@ let hit_hook_runs =
 let miss_reason =
   let summary_text () =
     let path = Filename.temp_file "proof-replay" ".json" in
-    Replay.write_summary path;
+    Compile.write_summary path;
     let ic = open_in_bin path in
     let text = really_input_string ic (in_channel_length ic) in
     close_in ic; Sys.remove path; text
@@ -519,7 +522,7 @@ let miss_reason =
 let install_check_misses =
   let summary_text () =
     let path = Filename.temp_file "proof-replay" ".json" in
-    Replay.write_summary path;
+    Compile.write_summary path;
     let ic = open_in_bin path in
     let text = really_input_string ic (in_channel_length ic) in
     close_in ic; Sys.remove path; text
@@ -605,9 +608,9 @@ let unknown_toolchain_refuses =
   let later () =
     let now = ref toolchain in
     let path = write_record () in
-    Replay.configure ~source:(Replay.Record_file path) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
+    Compile.configure ~source:(Record.Record_file path) ~ratio:2.0 ~budget:None ~peak_limit_kb:None
       ~digest:(Some (Proof_sha256.digest_hex (record_bytes ())));
-    Replay.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> !now);
+    Compile.start ~library:"Top.File" ~source:None ~toolchain:(fun () -> !now);
     Unix.chmod path 0o644;
     Sys.remove path;
     now := R.{ toolchain with plugins = [ ("rocq-read-file.plugin", "unknown") ] };
@@ -632,10 +635,10 @@ let unknown_toolchain_refuses =
    late whatever is loaded. *)
 let require_scan =
   let rq ?(imports_late = false) text =
-    List.map (fun (c : Replay.late_command) -> c.lc_require)
-      (snd (Replay.scan_late_commands ~imports_late text))
+    List.map (fun (c : Scan.late_command) -> c.lc_require)
+      (snd (Scan.scan_late_commands ~imports_late text))
   in
-  let r ?from names = Some Replay.{ rq_from = from; rq_names = names } in
+  let r ?from names = Some Scan.{ rq_from = from; rq_names = names } in
   let after_qed s = "Lemma a : True. Qed. " ^ s in
   mk_bool_test "proof-replay-require-scan"
     "a Require spelled out in full carries its From prefix and names; other late words carry none"
@@ -661,12 +664,12 @@ let require_scan =
    cursor (code-quality finding MQ-2). Each case gives the decision that
    the two readers gave before they shared it. *)
 let scan_lexer =
-  let s = Replay.scan_late_rebind in
+  let s = Scan.scan_late_rebind in
   let rq ?(imports_late = false) text =
-    List.map (fun (c : Replay.late_command) -> c.lc_require)
-      (snd (Replay.scan_late_commands ~imports_late text))
+    List.map (fun (c : Scan.late_command) -> c.lc_require)
+      (snd (Scan.scan_late_commands ~imports_late text))
   in
-  let r ?from names = Some Replay.{ rq_from = from; rq_names = names } in
+  let r ?from names = Some Scan.{ rq_from = from; rq_names = names } in
   let qed = "Lemma a : True. Qed. " in
   let end_ = "End (of a module, or of a section that loads or imports)" in
   mk_bool_test "proof-replay-scan-lexer"
@@ -714,12 +717,12 @@ let scan_lexer =
 (* Where the two readers read the same text differently, the cursor reads
    it as Rocq's lexer does (parsing/cLexer.ml, interp/numTok.ml). *)
 let scan_lexer_fixes =
-  let s = Replay.scan_late_rebind in
+  let s = Scan.scan_late_rebind in
   let rq text =
-    List.map (fun (c : Replay.late_command) -> c.lc_require)
-      (snd (Replay.scan_late_commands ~imports_late:false text))
+    List.map (fun (c : Scan.late_command) -> c.lc_require)
+      (snd (Scan.scan_late_commands ~imports_late:false text))
   in
-  let r ?from names = Some Replay.{ rq_from = from; rq_names = names } in
+  let r ?from names = Some Scan.{ rq_from = from; rq_names = names } in
   let qed = "Lemma a : True. Qed. " in
   mk_bool_test "proof-replay-scan-lexer-fixes"
     "\"..\" then a blank does not end a sentence, \"...\" then a blank does, and a number's fraction can start with _"
@@ -765,7 +768,7 @@ let require_rule =
   let text = prefix ^ "Require A B.\nLemma c : True. Qed.\n" in
   let detail () =
     let path = Filename.temp_file "proof-replay" ".json" in
-    Replay.write_summary path;
+    Compile.write_summary path;
     let ic = open_in_bin path in
     let s = really_input_string ic (in_channel_length ic) in
     close_in ic;
@@ -833,7 +836,7 @@ let fence_refuses =
      setup ();
      let tripped = decide () in
      let path = Filename.temp_file "proof-replay" ".json" in
-     Replay.write_summary path;
+     Compile.write_summary path;
      let ic = open_in_bin path in
      let text = really_input_string ic (in_channel_length ic) in
      close_in ic;

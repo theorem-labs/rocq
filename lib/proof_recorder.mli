@@ -32,14 +32,14 @@ val active : unit -> bool
 
 val in_use : unit -> bool
 (** Whether this process records or replays: true from {!start} or from
-    [Proof_replay.configure] on, for the rest of the process. One load, no
+    [Proof_replay_compile.configure] on, for the rest of the process. One load, no
     allocation. A hook site in the toplevel, in [Declare] (a proof's start
     and every closer) or in [Vernacentries] ([Abort]) tests it first, so
     that a compile with neither option builds no hook argument and runs the
     stock path. *)
 
 val set_in_use : unit -> unit
-(** Makes {!in_use} true for the rest of the process. [Proof_replay.configure]
+(** Makes {!in_use} true for the rest of the process. [Proof_replay_compile.configure]
     calls it; {!start} sets it itself. *)
 
 val tracking : unit -> bool

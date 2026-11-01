@@ -89,13 +89,13 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
         | None -> ()
         | Some source ->
           Proof_replay_env.init ();
-          Proof_replay.configure ~source
+          Proof_replay_compile.configure ~source
             ~ratio:(Option.get copts.proof_replay_ratio)
             ~budget:copts.proof_replay_budget
             ~peak_limit_kb:copts.proof_replay_peak_limit_kb
             ~digest:copts.proof_replay_digest;
-          Proof_replay.set_vo_path long_f_dot_out;
-          Proof_replay.start ~library:(Names.DirPath.to_string ldir) ~source:(Some long_f_dot_in)
+          Proof_replay_compile.set_vo_path long_f_dot_out;
+          Proof_replay_compile.start ~library:(Names.DirPath.to_string ldir) ~source:(Some long_f_dot_in)
             ~toolchain:Proof_record_env.toolchain
       in
       let wall_clock1 = Unix.gettimeofday () in
@@ -118,7 +118,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
              did not run has reached the file's budget. The file ends as
              stock's own timeout ends it: no .vo, and the exit code the
              engine's wrapper records as a per-file kill. *)
-          Proof_replay.killed_summary (Proof_replay.summary_path_of_vo long_f_dot_out);
+          Proof_replay_compile.killed_summary (Proof_replay_compile.summary_path_of_vo long_f_dot_out);
           (* The .glob was opened before the file ran, and a killed file
              writes none, as stock's timeout leaves none. *)
           (try Sys.remove (Filename.remove_extension long_f_dot_out ^ ".glob") with Sys_error _ -> ());
@@ -142,8 +142,8 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
             ~vo_opaques:(fun () -> Library.opaques_segment_sha256 long_f_dot_out)
             (Proof_record.path_of_vo long_f_dot_out)
       in
-      let () = if Proof_replay.configured () then
-          Proof_replay.write_summary (Proof_replay.summary_path_of_vo long_f_dot_out)
+      let () = if Proof_replay_compile.configured () then
+          Proof_replay_compile.write_summary (Proof_replay_compile.summary_path_of_vo long_f_dot_out)
       in
       let () = Aux_file.record_in_aux_at "vo_compile_time"
           (Printf.sprintf "%.3f" (wall_clock2 -. wall_clock1))

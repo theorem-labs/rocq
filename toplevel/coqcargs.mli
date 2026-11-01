@@ -46,7 +46,7 @@ type t =
       opaque proofs of the [.vo] beside the record, when the term there is
       the same; else the term itself. *)
 
-  ; proof_replay : Proof_replay.source option
+  ; proof_replay : Proof_replay_record.source option
   (** [-proof-replay FILE] or [-proof-replay-dir DIR]: the registration's
       record this compile replays from. *)
   ; proof_replay_ratio : float option

@@ -28,40 +28,16 @@
     {!Budget_exhausted} when the total reaches the per-file budget. [ratio]
     is the grade-to-registration ratio of per-file wall time, taken at the
     top of its measured spread, so near the budget replay is only ever
-    stricter than stock (GRADE, 2026-10-24 08:15Z). There is no default:
-    [-proof-replay] without [-proof-replay-ratio] is a usage error. *)
+    stricter than stock (GRADE, 2026-10-24 08:15Z).
 
-type source =
-  | Record_file of string  (** one record file, for this compile only *)
-  | Record_dir of string
-      (** a directory of records: the file's record is the first that
-          exists of [DIR/<dotted logical name>.proof-record.jsonl],
-          [DIR/<the same with dots turned into slashes>.proof-record.jsonl]
-          and [DIR/<V>.proof-record.jsonl], where V is the path of the
-          object this compile writes, without its extension, when that path
-          is relative and has no parent-directory part. *)
+    This module holds the replay state of the file and decides each
+    proof. The compile drives it through {!Proof_replay_compile}; the
+    record comes from {!Proof_replay_record} and the late commands of the
+    source from {!Proof_replay_scan}. *)
 
-val configure :
-  source:source -> ratio:float -> budget:float option -> peak_limit_kb:int option ->
-  digest:string option -> unit
-(** The command line's options. Call before the compile. It also makes
-    {!Proof_recorder.in_use} true.
-
-    {b The record is a trusted input, at the same tier as the binary.} Its
-    stored terms are read back with [Marshal.from_string], which is not
-    memory-safe on chosen bytes, and a stored term's declared type comes
-    from it, so the record's parser is NOT a security boundary. A record is
-    used only when it is bound to this compile: its bytes hash (SHA-256) to
-    [digest] when one is given (the grading engine passes the digest from
-    the registration's root-owned manifest), the compiling user cannot
-    write it and nobody but its owner can, and its header names this
-    library. With a [Record_dir] and no [digest], the digest comes from the
-    [<record>.sha256] file beside the record, and the same write rule holds
-    for that file, for [DIR] and for each directory between [DIR] and the
-    record. Otherwise the whole file runs as stock and the summary names
-    the reason ([digest], [writable], [library], [format]). *)
-
-val configured : unit -> bool
+val configure_clock : ratio:float -> budget:float option -> unit
+(** The charged clock's [ratio] and the per-file [budget], in seconds, from
+    the command line ({!Proof_replay_compile.configure}). *)
 
 exception Budget_exhausted
 (** The charged clock reached the budget. The compile writes no [.vo] and
@@ -70,60 +46,22 @@ exception Budget_exhausted
 (** {6 The compile} *)
 
 val start :
-  library:string -> source:string option -> toolchain:(unit -> Proof_record.toolchain) -> unit
-(** Loads the record for this library and starts the clock. A no-op when no
-    source is configured. A [Record_dir] that holds no record for this
-    library is refused whole (reason ["no_record"]): the file is one the
-    registration did not record. A record that is named or found but cannot
-    be read, or does not parse, is refused whole (reason ["bad_record"]).
-    After it, {!refused} says whether the whole file runs without replay,
-    and why. [toolchain] is this compile's: a record whose header names
-    another binary, plugin set, load order, safe-dependency set or stack
-    limit is refused for the whole file, before any of its proofs is
-    declared (reason ["toolchain"]). So is a record when this compile could
-    not read the digest of its binary or of a plugin's files
-    ({!Proof_record.unknown_digest}); a plugin with such a digest that loads
-    later makes each later proof [ineligible]. In a file with a command
-    after its first [Qed] or [Save] that can rebind a Rocqlib name or load
-    code, every proof that opens before the last such command runs its
-    tactics (outcome [ineligible], channel ["rebind"]), and [refused_detail]
-    names the first command and its line; a [Require] counts only while a
-    library it names is not loaded at the proof's opening. An unreadable
-    source is refused whole (reason ["rebind"]). *)
-
-val scan_late_rebind : string -> (string * int) option
-(** The first command in this source text, after its first [Qed] or [Save],
-    that can rebind a Rocqlib name, load code or change the working
-    directory — [Register], [Require], [Load], [Cd], [Declare], [Import],
-    [Export], [Include], [Module], or an [End] that closes a module or a
-    section inside which one of those appeared — with its line; [None] if
-    there is none. Comments and strings are
-    skipped; a number is read as Rocq's lexer reads it, and a late word also
-    counts at the end of a longer identifier. A component of a qualified
-    identifier ([Module.module_contents], [M.Register]) is one identifier
-    token to the lexer and is not a late word. A sentence ends at ["."] or
-    ["..."] followed by a blank, not at [".."]. *)
-
-val scan_late_events : ?imports_late:bool -> string -> (string * int) option * int option
-(** {!scan_late_rebind}, and the byte offset of the LAST such command's
-    word. With [~imports_late:false], [Import] and [Export] are not late. A
-    plain module ([Module M.], [Module Import M.]) is not late by itself,
-    and its [End] only when a late word appeared inside it. *)
-
-type require_text = { rq_from : string option; rq_names : string list }
-(** A [Require] the source text spells out in full: its [From] prefix and
-    its library names, as written. *)
-
-type late_command = { lc_offset : int; lc_require : require_text option }
-(** A late command: its word's byte offset, and for a [Require] the text
-    spells out in full, that [Require]. *)
-
-val scan_late_commands : ?imports_late:bool -> string -> (string * int) option * late_command list
-(** {!scan_late_rebind}, and every late command, last first. A [Require]
-    carries its names when it is its sentence's command word, or follows
-    the sentence's [From q], and its sentence is [From q]? [Require]
-    [(safe)]? ([Import] or [Export], with import categories)? then names
-    of plain ASCII identifiers, each with an import filter or not. *)
+  record:(Proof_replay_record.loaded, string) result ->
+  source_late:(unit -> (Proof_replay_scan.late_events option, unit) result) ->
+  toolchain:(unit -> Proof_record.toolchain) -> unit
+(** Starts the state and the clock of one file: [record] is the loaded
+    record, or the reason the whole file runs without replay
+    ({!Proof_replay_record.load}). For a loaded record, [source_late ()]
+    gives the late commands of the source, [Ok None] for none, or
+    [Error ()] for a source that cannot be read, which is refused whole
+    (reason ["rebind"]). Every proof that opens before the last late
+    command runs its tactics (outcome [ineligible], channel ["rebind"]),
+    and the summary's [refused_detail] names the first late command and
+    its line; a [Require] counts only while a library it names is not
+    loaded at the proof's opening. [toolchain] is this compile's: a plugin
+    that loads later with a digest that could not be read
+    ({!Proof_record.unknown_digest}) makes each later proof
+    [ineligible]. *)
 
 val register_require_resolver : (string option -> string list -> (unit -> bool) option) -> unit
 (** [f from names] resolves a [Require] as the [Require] itself will
@@ -170,11 +108,6 @@ val register_hit_hook : (Proof_record.read list -> unit) -> unit
     them as looked up, or make the write to the cache that the skipped
     tactics made (zify's copies of its tables). *)
 
-val set_vo_path : string -> unit
-(** The [.vo] this compile writes, as its command line gives it. With
-    [-proof-replay-dir], its path relative to the working directory is one
-    of the places the record is looked for. Call it before {!start}. *)
-
 val register_precheck : (string -> bool) -> unit
 (** A last check on the stored term, run at the closer and before any
     tactic: the layer that made the blob says whether this compile can
@@ -207,7 +140,7 @@ val refused : unit -> string option
 (** The reason the whole file runs without replay: ["no_record"] (no record
     for this library in the directory), ["bad_record"] (a record that cannot
     be read or does not parse), ["digest"], ["writable"], ["library"],
-    ["format"] (see {!configure}), ["toolchain"], ["memory"] (the recorded
+    ["format"] (see {!Proof_replay_record}), ["toolchain"], ["memory"] (the recorded
     peak is above the limit), ["rlimit"], ["overcommit"], or ["rebind"] for a
     source the late-command scan cannot read. A late command keeps only the
     proofs before it from replaying. *)
@@ -215,16 +148,10 @@ val check_budget : unit -> unit
 (** Raises {!Budget_exhausted} when the elapsed time plus the charge has
     reached the budget. Call it at each sentence. *)
 
-val write_summary : string -> unit
-(** Writes [<base>.proof-replay.json] (see {!summary_path_of_vo}): the
-    counts this compile reached, for the grading engine's metadata. A no-op
-    when no source is configured. *)
-
-val summary_path_of_vo : string -> string
-(** [summary_path_of_vo "dir/Foo.vo"] is ["dir/Foo.proof-replay.json"]. *)
-
-val killed_summary : string -> unit
-(** {!write_summary} for a compile the charged clock killed. *)
+val summary : killed:bool -> string
+(** The summary of this file as JSON: the counts this compile reached, for
+    the grading engine's metadata ({!Proof_replay_compile.write_summary}).
+    [killed]: the charged clock killed the compile. *)
 
 (** {6 One proof} *)
 
