@@ -109,7 +109,7 @@ let eval_glb_ext ist (Tac2dyn.Arg.Glb (tag,e)) =
     globals, the globals and, through [eval_pure]'s [GTacPrm] arm, the ML primitives. The value of
     a global is therefore the same as long as the three are the ones it was computed under, and
     computing it again is work that can be saved. On Igraph/RtLgTopA.v of the speed lane's fast
-    set, [eval_global] was about 9% of the samples (dispatch://INFRA-217).
+    set, [eval_global] was about 9% of the samples.
 
     Reusing a value is not the same as computing it again where Ltac2 code can write into the
     value or into a value it holds: [Valexpr.set_field] writes into the fields of any block
@@ -141,7 +141,7 @@ struct
 
 (* [names] holds one entry per global, keyed by its name. A global's name is one object in each
    library that refers to it (unmarshalling copies it), and comparing two copies compares their
-   strings: on Igraph/RtLgTopA.v that was 2.5% of the samples (dispatch://INFRA-217). So [copies]
+   strings: on Igraph/RtLgTopA.v that was 2.5% of the samples. So [copies]
    maps each name object met so far, by physical equality, to the entry of its name in [names]:
    a lookup compares strings only the first time it meets a copy. *)
 module KNTbl = Hashtbl.Make(struct
@@ -910,7 +910,7 @@ and eval_simple_list ist = function
     the pure steps (building values, binding variables, matching, writing fields, pure primitives,
     calls) are done directly, without the proof monad's binds and without allocating continuations.
     On Igraph/RtLgTopA.v, 185 million Ltac2 calls ran in compiled bodies, and the continuations and
-    binds were most of their cost (dispatch://INFRA-217).
+    binds were most of their cost.
 
     This holds by induction on the expression, arm by arm of [compile_node] against [interp]'s,
     with [return v >>= k] = [k v] and associativity of bind (no handler is moved, nothing runs in
