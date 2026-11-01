@@ -328,6 +328,7 @@
     "catchall:vernac/vernacinterp.ml:interp_gen/exn -> let exn = Exninfo.capture exn in": {"ruling": "@reraises-annotated"},
     "summary:vernac/library.ml:\"LIBRARY\"": {"row": "S2.1"},
     "summary:vernac/library.ml:\"LIBRARY-LOAD\"": {"row": "S2.1"},
+    "summary:vernac/library.ml:\"LIBRARY-OPAQUE-HANDLES\"": {"row": "S2.1", "note": "the on-disk opaque-proof handle of each loaded library, a function of the loaded libraries; stored_opaque reads it only in a process that interned no file of that library, a par: worker (the proof is ineligible, reason par) or an async-proofs worker (rocq compile runs APoff); the compiling process reads each body from its own table, and row 1 records the constant by its library's .vo digest, which pins the body"},
     "summary:vernac/library.ml:\"NATIVE-LIBRARY-LOAD\"": {"ruling": "@native"},
     "object:vernac/attempts.ml:\"ATTEMPTS\"": {"ruling": "@label-only"},
     "object:vernac/library.ml:\"REQUIRE\"": {"row": "S2.1"},
