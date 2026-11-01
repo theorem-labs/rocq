@@ -102,7 +102,7 @@ let set_budget t =
    of the heap. The faults are paid once per fork, or once for several
    forks made together. A worker slot left empty while the libraries are
    being checked costs a whole core for as long as it is empty, and that
-   is the larger cost: measured on a production final grade at -j 16, 143
+   is the larger cost: measured on a production final check run at -j 16, 143
    of the run's 339 idle core-seconds fall inside the walk, where 11.6
    workers of 16 are busy on average while the checks that would fill the
    others are already queued (the median check starts 11.0 s after its
@@ -249,7 +249,7 @@ let rec waitpid_non_intr flags pid =
    this setting, on six trees at -j 8 under 44 GB the worst worker grows
    from 4.1-4.7 to 6.8-11.8 GB), and a cap that the default fits can then
    kill a worker, which fails the run (r160 -j 8 under 22 GB). Production
-   runs -j 16 for a final grade (124 GB) and -j 5 or -j 8 for a mid-run
+   runs -j 16 for a final check run (124 GB) and -j 5 or -j 8 for a mid-run
    check, whose memory cap sets its width, so the lazier GC is used only
    when [!max_workers], which is -j minus 1, is at least
    [lazy_gc_min_max_workers] (-j 10 and wider): narrower runs keep the
