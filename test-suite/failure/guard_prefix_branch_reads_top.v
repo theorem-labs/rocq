@@ -1,4 +1,4 @@
-(* Red on the release-7 rule: compiled with coqchk 0, Eval cbv overflows the stack. After the let is substituted, the call sits in the branch the decided match does not select, inside the match the walk checks as a whole. dispatch://BET-214 *)
+(* Red on the release-7 rule: compiled with coqchk 0, Eval cbv overflows the stack. After the let is substituted, the call sits in the branch the decided match does not select, inside the match the walk checks as a whole. *)
 (* Top-level fixpoint. The call's let is read only in the branch of a
    decided match that the reduction does not select; the walk checks the
    match as a whole term, where the call is only "Rel x". *)

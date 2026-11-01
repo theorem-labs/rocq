@@ -1,6 +1,6 @@
 (* Red on the release-7 rule: compiled with coqchk 0, and Eval cbv overflows the
    stack. The prefix walk now erases cast types, so x is dead and its value is
-   checked. dispatch://BET-214 *)
+   checked. *)
 (* Top-level fixpoint. The call's let is read only in a cast TYPE in the
    prefix; the walk follows a cast's term, never its type. *)
 Definition top_castty : nat -> nat.

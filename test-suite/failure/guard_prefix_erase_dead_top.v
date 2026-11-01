@@ -2,7 +2,7 @@
    in a second annotation. Erasing the chains types makes all three lets dead,
    so the value "f (S O)" is reported. Red on 2ebccafb3188 (the release-7 rule)
    and on 9e24663c6e07: both accept it with coqchk 0, and Eval cbv then
-   computes f (S O) for ever. dispatch://BET-214 *)
+   computes f (S O) for ever. *)
 Definition erase_dead_top : nat -> nat.
 Proof.
   fix f 1.

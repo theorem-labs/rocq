@@ -1,7 +1,7 @@
 (* A terminating fixpoint whose own function occurs only in a let ANNOTATION
    of its binder prefix. Nothing evaluates an annotation, so the prefix walk
    erases it and accepts the definition, as stock Rocq 9.0.1 does. Found by
-   the review of the substitution commit (dispatch://BET-214). *)
+   the review of the substitution commit. *)
 Definition compat_annot : nat -> nat.
 Proof.
   fix f 1.

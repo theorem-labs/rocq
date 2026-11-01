@@ -1,6 +1,6 @@
 (* The nested form of guard_prefix_erase_dead_top.v: the inner fixpoints
    prefix hides the call behind two let annotations. Red on 2ebccafb3188 and on
-   9e24663c6e07. dispatch://BET-214 *)
+   9e24663c6e07. *)
 Definition erase_dead_nested : nat -> nat.
 Proof.
   fix outer 1.
