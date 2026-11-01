@@ -8,7 +8,7 @@
    mentions the block, so this definition is refused with an ordinary guard
    error. That refusal is the accepted cost of the rule; an anomaly would be
    a defect. [Fail] does not catch an anomaly, so this file fails on a
-   kernel that raises one (q4 of dispatch://BET-241). Ported from
+   kernel that raises one (q4). Ported from
    9.3/guard-cofix-prefix cc0d0871ad63. *)
 CoInductive SB : Type := consB : SB -> SB.
 Definition f_nat (s : SB) : nat := 0.
