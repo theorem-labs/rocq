@@ -129,14 +129,18 @@ module Make(T : Task) () = struct
         in
         Array.of_list (wselect :: spawn_args @ worker_opts) in
       (* The keep rule's opacity log (in each compiling process): the worker
-         gets exactly the value [OpacityLog.worker_env_value] gives, so neither
-         an inherited entry nor one from -async-proofs-private-flags can
+         gets exactly the path and device/inode [OpacityLog] gives, so neither
+         an inherited entry nor one from [-async-proofs-private-flags] can
          redirect its records, and the workers of a coqc that owns no log
          record nothing. *)
       let log_key = OpacityLog.env_var ^ "=" in
-      let not_log e = not (CString.is_prefix log_key e) in
+      let identity_key = OpacityLog.identity_env_var ^ "=" in
+      let not_log e =
+        not (CString.is_prefix log_key e || CString.is_prefix identity_key e)
+      in
       let env = Array.concat [
-          [| log_key ^ OpacityLog.worker_env_value () |];
+          [| log_key ^ OpacityLog.worker_env_value ();
+             identity_key ^ OpacityLog.worker_identity_env_value () |];
           Array.of_list (List.filter not_log (Array.to_list (T.extra_env ())));
           Array.of_list (List.filter not_log (Array.to_list (Unix.environment ()))) ] in
       let worker_name = get_toplevel_path "rocqworker" in
