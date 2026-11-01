@@ -16,7 +16,7 @@
    On a build that truncates instead of refusing, each of the five compiles
    with "Closed under the global context" and a clean coqchk -o, and [cbv]
    on the result reports Stack overflow (measured 2026-10-25,
-   the verification harness, the guard-condition audit, on this branch's own 9.0 and
+   dispatch://BET-214, on this branch's own 9.0 and
    9.2 heads before the raw-prefix rule; the match variant evaluates to 0
    because its erased branch is not the one taken). Rocq 9.0.1 refuses all
    five, for the unrelated reason that it lacks rocq-prover/rocq#22384.

@@ -2,7 +2,7 @@
    branch and refused by every released toolchain: the rewriting walked the
    stripped bodies at the wrong de Bruijn depth, so the test that recognises
    the block selected the innermost prefix binders and deleted arguments from
-   an unrelated application. Found by the break attempt. *)
+   an unrelated application. Found by the break attempt. dispatch://BET-214 *)
 
 (* E1 — exploit of the de Bruijn shift in [drop_uniform_parameters].
 

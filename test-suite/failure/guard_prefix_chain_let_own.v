@@ -5,7 +5,7 @@
    under the global context" and `coqchk -o -norec` exit 0, and `Eval cbv`
    on it overflows the stack (Port90's bug-finder file f6b). The walk now
    follows the live let and sees "inner O (S O)" in the dead one. Ported
-   from 9.0/guard-cofix-prefix 9e24663c6e07. *)
+   from 9.0/guard-cofix-prefix 9e24663c6e07. dispatch://BET-214 *)
 Definition outer_own_chain : nat -> nat.
 Proof.
   fix outer 1.

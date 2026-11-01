@@ -68,7 +68,7 @@
 # - with a cache that keeps every entry until the environment changes,
 #   1,240,000 to 1,280,000 KiB, which runs out here.
 # The cap above leaves 80,000 KiB over the largest of the first three. Builds
-# of the check harness bound memory by their cgroup, not by address space.
+# of the grader bound memory by their cgroup, not by address space.
 #
 # Constants without a body (axioms, parameters, Admitted lemmas) whose types
 # name many objects. The walk without reuse keeps no reference of such a type

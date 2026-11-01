@@ -4,7 +4,7 @@
    in inductive_of_mutfix then sees the function itself and raises Anomaly
    "in check_one_fix: Bad occurrence of recursive call." (Port90's
    bug-finder file a1). It must be a guard refusal. Ported from
-   9.0/guard-cofix-prefix 9e24663c6e07. *)
+   9.0/guard-cofix-prefix 9e24663c6e07. dispatch://BET-214 *)
 Definition top_dom : nat -> nat.
 Proof.
   fix f 1.

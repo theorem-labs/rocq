@@ -1,7 +1,7 @@
 (*
    Three definitions that must be refused, and are refused by Rocq 9.2.0 and
    Rocq 9.3+rc1 with an ordinary "ill-formed" diagnostic. Found by the review
-   of this branch (2026-10-25).
+   of this branch (dispatch://BET-214, 2026-10-25).
 
    Each carries an occurrence of the inner fixpoint in the BINDER PREFIX of
    that fixpoint, where the uniform-parameter analysis cannot see it and the

@@ -1,7 +1,7 @@
 (* Two cofixpoints that the guard checker must refuse. Each of them gives a
    closed proof of False that uses no axiom and no typing flag, and the kernel
-   re-check (rocqchk) reports nothing, so a check harness that reads axioms and unsafe
-   flags sees a clean proof. *)
+   re-check (rocqchk) reports nothing, so a grader that reads axioms and unsafe
+   flags sees a clean proof (dispatch://BET-214). *)
 
 (* rocq-prover/rocq#22386: the recursion tree of the block was computed from
    the type of the first body, in the environment of the whole block, so the
