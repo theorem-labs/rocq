@@ -22,7 +22,7 @@
     both of the collector's costs were much larger than they need to be. Measured on speed-r2 with
     the lane's four files compiled at once, against the former [32*1024*1024] words and [200]
     (per-file wall seconds, median of five interleaved runs of each arm, every range disjoint;
-    dispatch://INFRA-217):
+    ):
 
       A0IgPO 41.9 -> 35.8, RtLgTopA 41.9 -> 32.5, B0IgPO 38.3 -> 33.4, AMWrapMallocRf 33.7 -> 25.6
 
@@ -43,7 +43,7 @@
     still answer. test-suite/misc/print-assumptions-memo-limits.sh pins one per case, and upstream's
     policy answers under it; at [space_overhead = 3200] two cases run out of memory instead.
     Smallest address space at which each answers, bisected in 10,000 KiB steps on one box
-    (OCaml 4.14.2+flambda, -release), against the ceiling the test pins (dispatch://INFRA-213):
+    (OCaml 4.14.2+flambda, -release), against the ceiling the test pins:
 
                       ceiling    upstream 32 Mwords/200    2 Mwords/3200    2 Mwords/1600
       BlockRetain64   1,000,000        890,000              1,110,000  FAIL     810,000
@@ -59,7 +59,7 @@
     What 1600 costs against 3200 is nothing that this lane can measure. On tree r316's Igraph cone
     (206 files, 16 jobs, median of 3 interleaved runs, one box): wall 515.7 s against 512.2, CPU
     1,533 s against 1,521, where upstream's policy takes 548.0 s and 1,588 s. On the heaviest file,
-    AgentSubmission/Igraph/RtInitC.v: 471.6 s at 1600, 481.3 s at 3200, 581.4 s under upstream's
+    the submission tree's Igraph/RtInitC.v: 471.6 s at 1600, 481.3 s at 3200, 581.4 s under upstream's
     policy, with a peak RSS of 14.8 GiB, 15.9 GiB and 4.0 GiB.
 
     Neither value changes what rocq computes. OCaml's collector decides when a value moves and when
@@ -79,7 +79,7 @@
     sees between two runs of one build (lever 7). The lane checks both halves: its normalising
     segment compare for the summary, library and opaques segments, and, for the vmlibrary segment
     that compare leaves out, unmarshalling both and marshalling them again with [No_sharing], which
-    gives the same bytes (dispatch://INFRA-217). coqchk does not install this policy at all
+    gives the same bytes. coqchk does not install this policy at all
     ([init_ocaml]'s only caller is toplevel/coqtop.ml) and compiles its own bytecode.
 *)
 
