@@ -1012,7 +1012,7 @@ let nlia prfdepth sys =
 
 (* For regression testing, if bench = true generate a Rocq goal *)
 
-(* certstore corpus (dispatch://INFRA-213; measurement instrumentation, not for upstream). With
+(* certstore corpus (measurement instrumentation, not for upstream). With
    LIA_CORPUS_DIR set, every call of the four oracles below appends one Marshal'd [corpus_entry] to
    <LIA_CORPUS_DIR>/<source>.corpus, where <source> is this process's last *.v argument with '/' replaced by
    '%' (or "pid<N>" when there is none). The results are returned unchanged. *)
