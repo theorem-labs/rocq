@@ -104,7 +104,7 @@ let eval_glb_ext ist (Tac2dyn.Arg.Glb (tag,e)) =
     globals, the globals and, through [eval_pure]'s [GTacPrm] arm, the ML primitives. The value of
     a global is therefore the same as long as the three are the ones it was computed under, and
     computing it again is work that can be saved. On Igraph/RtLgTopA.v of the speed lane's fast
-    set, [eval_global] was about 9% of the samples (dispatch://INFRA-217).
+    set, [eval_global] was about 9% of the samples.
 
     Reusing a value is not the same as computing it again where Ltac2 code can write into the
     value or into a value it holds: [Valexpr.set_field] writes into the fields of any block
