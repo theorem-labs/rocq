@@ -152,6 +152,8 @@ let () = add_test "the log read back is the file this process made" (fun () ->
     append p (OpacityLog.encode_line r);
     assert_equal ~msg:"a record after the reset log is put back" ~printer:show_get
       (Some [r]) (get ());
+    Unix.truncate p 0;
+    assert_equal ~msg:"the log emptied in place" ~printer:show_get None (get ());
     (* A wrong header in the owner file, with the same length as the right one. *)
     write p ("rocq-opacity-log 1\n" ^ OpacityLog.encode_line r);
     assert_equal ~msg:"a wrong header in the owner file" ~printer:show_get None (get ());

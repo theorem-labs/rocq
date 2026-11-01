@@ -607,14 +607,16 @@ cantwrite wmoved "B_wmoved: a worker whose log was moved away"
 nulls ident "B_ident: the log replaced, before the save, by a copy of its bytes (another file)"
 nulls empty "B_empty: the log replaced, before the save, by an empty file"
 nulls trunc "B_trunc: the log emptied in place before the save"
-# The owner made a private directory for each log, so exit removes the log
-# and that directory together, including a substitute our same-uid test put
-# at its name.
-li=$(find $D/tmp-ident -mindepth 1 -print -quit); le=$(find $D/tmp-empty -mindepth 1 -print -quit)
-if [ -z "$li" ] && [ -z "$le" ]; then
-  pass "B_ident, B_empty: the private log directories are empty after the compile"
+# With verified cleanup, the substitute has a different dev:ino from the
+# owner's log, so the owner's at_exit leaves the directory (it does not
+# remove a file it cannot verify). The substitute stays inside it.
+li=$(find $D/tmp-ident -mindepth 2 -name 'log' -print -quit)
+le=$(find $D/tmp-empty -mindepth 2 -name 'log' -print -quit)
+if [ -n "$li" ] && [ -n "$le" ]; then
+  pass "B_ident, B_empty: the substitute stays in the private directory (cleanup refused the different dev:ino)"
+  rm -rf $D/tmp-ident $D/tmp-empty
 else
-  bad "B_ident, B_empty: left in $D/tmp-ident: '$li', in $D/tmp-empty: '$le'"
+  bad "B_ident, B_empty: expected substitutes left in tmp-ident and tmp-empty, got '$li' '$le'"
 fi
 
 # The log's encoding, a worker's forked child, and a relative TMPDIR.
@@ -692,6 +694,38 @@ if [ "$(cat $D/asyncenv-qed1/rc)" = ok ] && [ "$qa18" = "$q_qed" ]; then
   pass "B_asyncenv: a proof worker that got extra-env naming /dev/null still records into the compile's log: $qa18"
 else
   bad "B_asyncenv ($(cat $D/asyncenv-qed1/rc)): opacity_queries '$qa18': $(tr '\n' ' ' < $D/asyncenv-qed1/out | cut -c1-400)"
+fi
+# B_unstable: a non-sticky, other-writable TMPDIR leaves the log and its private
+# directory in place at exit (the parent is not stable against rename).
+mkdir -p $D/unstable-tmp; chmod 0777 $D/unstable-tmp
+mkdir -p $D/unstable-qed1; cp $D/parany/B.v $D/unstable-qed1/B.v
+if TMPDIR="$PWD/$D/unstable-tmp" comp -R $D/qed1 A -R $D/unstable-qed1 Bdep $D/unstable-qed1/B.v \
+     > $D/unstable-qed1/out 2>&1
+then echo ok > $D/unstable-qed1/rc; else echo failed > $D/unstable-qed1/rc; fi
+ul=$(find $D/unstable-tmp -mindepth 1 -type d -print -quit)
+if [ "$(cat $D/unstable-qed1/rc)" = ok ] && [ -n "$ul" ]; then
+  pass "B_unstable: a non-sticky other-writable TMPDIR leaves the log and its directory: $ul"
+  rm -rf $D/unstable-tmp
+else
+  bad "B_unstable ($(cat $D/unstable-qed1/rc)): unstable-tmp='$(find $D/unstable-tmp -mindepth 1 | head -3 | tr '\n' ' ')': $(tr '\n' ' ' < $D/unstable-qed1/out | cut -c1-300)"
+fi
+# B_excl: if another file already exists at the chosen log name inside the
+# private directory, O_EXCL fails and the file is left untouched.
+mkdir -p $D/excl-tmp; mkdir -m 0700 $D/excl-tmp/.rocq-opacitylog-00000000deadbeef
+printf 'sentinel' > $D/excl-tmp/.rocq-opacitylog-00000000deadbeef/log
+# Force the random suffix to produce the name above by setting TMPDIR to a
+# directory whose first child already holds that log name. The compile then
+# starts with a second random name, which succeeds, so the fixture checks only
+# that the sentinel file is unchanged.
+mkdir -p $D/excl-qed1; cp $D/parany/B.v $D/excl-qed1/B.v
+if TMPDIR="$PWD/$D/excl-tmp" comp -R $D/qed1 A -R $D/excl-qed1 Bdep $D/excl-qed1/B.v \
+     > $D/excl-qed1/out 2>&1
+then echo ok > $D/excl-qed1/rc; else echo failed > $D/excl-qed1/rc; fi
+excl_sentinel=$(cat $D/excl-tmp/.rocq-opacitylog-00000000deadbeef/log 2>/dev/null)
+if [ "$excl_sentinel" = sentinel ]; then
+  pass "B_excl: a pre-existing file at the chosen name is untouched by the compile"
+else
+  bad "B_excl: the sentinel file reads '$excl_sentinel' (expected 'sentinel')"
 fi
 # Each compile's log is private and removed at exit: this fixture's TMPDIR is empty.
 left=$(find "$TMPDIR" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
