@@ -449,14 +449,15 @@ let name_of = function
    conversion can reach an anomaly that prints an unresolved inductive's name,
    and before the statement's line, so a refusal leaves no END STATEMENT
    REPORT line. *)
+let printable_name obj =
+  match obj with
+  | GlobRef.ConstRef kn -> CheckNames.valid_kername (Constant.user kn)
+  | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+    CheckNames.valid_kername (MutInd.user mind)
+  | GlobRef.VarRef id -> CheckNames.valid_id id
+
 let check_printed_name obj =
-  let valid = match obj with
-    | GlobRef.ConstRef kn -> CheckNames.valid_kername (Constant.user kn)
-    | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-      CheckNames.valid_kername (MutInd.user mind)
-    | GlobRef.VarRef id -> CheckNames.valid_id id
-  in
-  if not valid then
+  if not (printable_name obj) then
     CErrors.user_err
       Pp.(str ("The statement report would print the name " ^ CheckNames.quote (name_of obj) ^
                ", which is not made of identifiers."))
@@ -468,9 +469,17 @@ module FlagSet = Stdlib.Set.Make (struct
       if Int.equal c 0 then String.compare o1 o2 else c
   end)
 
-(** The axioms and flags of every object reachable from [root]. A name the
-    report must not print stops it ([check_printed_name]). *)
-let closure st root =
+(* Test-only seam, beside [test_fault] below: how many objects the report's
+   walks entered, counted where an object is first reached rather than found
+   already done. A report of [r] requests that shares one walk counts about
+   the size of the union of their closures; one walk for each request counts
+   about [r] times that. [COQ_TEST_SUITE_STATEMENT_REPORT_WALK] prints it. *)
+let walk_visits = ref 0
+
+(** The axioms and flags of every object reachable from [root], walked for
+    that root alone. A name the report must not print stops it
+    ([check_printed_name]). *)
+let closure_per_root st root =
   let rec loop public_seen implementation_seen axioms flags = function
     | [] -> axioms, flags
     | (view, obj) :: todo ->
@@ -481,6 +490,7 @@ let closure st root =
       if seen then loop public_seen implementation_seen axioms flags todo
       else
         let n = node st view obj in
+        incr walk_visits;
         if n.axiom || not (List.is_empty n.flags) then check_printed_name obj;
         let axioms = if n.axiom then CString.Set.add (name_of obj) axioms else axioms in
         let flags = List.fold_left (fun flags f -> FlagSet.add f flags) flags n.flags in
@@ -491,6 +501,157 @@ let closure st root =
         loop public_seen implementation_seen axioms flags (List.rev_append n.refs todo)
   in
   loop GlobRef.Set_env.empty GlobRef.Set_env.empty CString.Set.empty FlagSet.empty [Public, root]
+
+(** {6 One walk for every request}
+
+    A root's answer is the union, over the objects the root reaches, of what
+    each object itself declares: its name when it is an axiom, and its relaxed
+    typing flags. Nothing in it depends on which root the walk started from.
+    So the sub-closure of an object is worth keeping, and a report of [r]
+    requests over one tree costs one pass over the union of their closures
+    instead of [r] passes.
+
+    [r] is not small in the runs this checker grades: a vendor-v21 production
+    grade asks for 479 to 7,594 statements over one tree, 1,472 at the median
+    of 66 such grades (dispatch://INFRA-167, the DeepCoqchk reading). The sets
+    a node unions are small in the same grades: a statement's whole closure
+    reports 14 axioms and a handful of flags.
+
+    Correctness rests on two things, and the walk gives up and falls back to
+    [closure_per_root] rather than guess at either:
+
+    - The reference graph must be well founded, apart from the self reference
+      of an inductive block, whose constructor types name the block. A body
+      names only objects declared before it, so no other cycle can arise; a
+      cycle all the same raises [Not_shareable].
+    - A name the report must not print must stop the report where it stops it
+      today. The shared walk reaches objects in the same order as
+      [closure_per_root] (see [push_refs]), so the first such name is the same
+      one; it raises [Not_shareable] and lets [closure_per_root] report it, so
+      the error text comes from the same code as before.
+
+    The memo holds one pair of sets for each object reached. [budget] bounds
+    the elements it may hold, so a tree with far more axioms than these grades
+    carry falls back instead of growing the heap without bound. *)
+
+exception Not_shareable
+
+type memo = {
+  mutable public_closure : (CString.Set.t * FlagSet.t) GlobRef.Map_env.t;
+  mutable implementation_closure : (CString.Set.t * FlagSet.t) GlobRef.Map_env.t;
+  mutable pending_public : GlobRef.Set_env.t;
+  mutable pending_implementation : GlobRef.Set_env.t;
+  mutable budget : int;
+  (* Set once a walk gave up: every later request takes [closure_per_root]. *)
+  mutable shareable : bool;
+}
+
+(* The elements the memo may hold. 2^22 is far above what one of these trees
+   needs (14 axioms over about 10^5 objects) and small enough that the memo
+   cannot be the reason a checker runs out of memory. *)
+let memo_budget = 1 lsl 22
+
+let new_memo () = {
+  public_closure = GlobRef.Map_env.empty;
+  implementation_closure = GlobRef.Map_env.empty;
+  pending_public = GlobRef.Set_env.empty;
+  pending_implementation = GlobRef.Set_env.empty;
+  budget = memo_budget;
+  shareable = true;
+}
+
+let memo_find m view obj = match view with
+  | Public -> GlobRef.Map_env.find_opt obj m.public_closure
+  | Implementation -> GlobRef.Map_env.find_opt obj m.implementation_closure
+
+let memo_add m view obj v = match view with
+  | Public -> m.public_closure <- GlobRef.Map_env.add obj v m.public_closure
+  | Implementation -> m.implementation_closure <- GlobRef.Map_env.add obj v m.implementation_closure
+
+let pending_mem m view obj = match view with
+  | Public -> GlobRef.Set_env.mem obj m.pending_public
+  | Implementation -> GlobRef.Set_env.mem obj m.pending_implementation
+
+let pending_set m view obj on = match view, on with
+  | Public, true -> m.pending_public <- GlobRef.Set_env.add obj m.pending_public
+  | Public, false -> m.pending_public <- GlobRef.Set_env.remove obj m.pending_public
+  | Implementation, true ->
+    m.pending_implementation <- GlobRef.Set_env.add obj m.pending_implementation
+  | Implementation, false ->
+    m.pending_implementation <- GlobRef.Set_env.remove obj m.pending_implementation
+
+let same_object (view1, obj1) (view2, obj2) =
+  (match view1, view2 with
+   | Public, Public | Implementation, Implementation -> true
+   | Public, Implementation | Implementation, Public -> false)
+  && GlobRef.UserOrd.equal obj1 obj2
+
+type step = Enter of vref | Leave of vref
+
+(* [closure_per_root] visits the references of a node with
+   [List.rev_append refs todo], so the last reference comes first. The shared
+   walk pushes them in the same order, and the [Leave] marker it puts under
+   them changes no [Enter]. *)
+let push_refs self refs stack =
+  List.fold_left (fun stack r -> if same_object r self then stack else Enter r :: stack) stack refs
+
+let shared_closure st m root =
+  let rec run = function
+    | [] -> ()
+    | Enter (view, obj) :: rest ->
+      (match memo_find m view obj with
+       | Some _ -> run rest
+       | None ->
+      if pending_mem m view obj then raise Not_shareable
+      else begin
+        let n = node st view obj in
+        incr walk_visits;
+        if n.axiom || not (List.is_empty n.flags) then begin
+          (* The per-root walk must be the one that reports it. *)
+          if not (printable_name obj) then raise Not_shareable
+        end;
+        pending_set m view obj true;
+        run (push_refs (view, obj) n.refs (Leave (view, obj) :: rest))
+      end)
+    | Leave (view, obj) :: rest ->
+      let n = node st view obj in
+      let axioms = if n.axiom then CString.Set.singleton (name_of obj) else CString.Set.empty in
+      let flags = List.fold_left (fun s f -> FlagSet.add f s) FlagSet.empty n.flags in
+      let self = (view, obj) in
+      let axioms, flags =
+        List.fold_left (fun (a, f) r ->
+            if same_object r self then (a, f)
+            else
+              let (rview, robj) = r in
+              match memo_find m rview robj with
+              | Some (a', f') -> CString.Set.union a a', FlagSet.union f f'
+              | None -> raise Not_shareable)
+          (axioms, flags) n.refs
+      in
+      m.budget <- m.budget - CString.Set.cardinal axioms - FlagSet.cardinal flags;
+      if m.budget < 0 then raise Not_shareable;
+      pending_set m view obj false;
+      memo_add m view obj (axioms, flags);
+      run rest
+  in
+  run [Enter (Public, root)];
+  match memo_find m Public root with
+  | Some v -> v
+  | None -> raise Not_shareable
+
+(** The axioms and flags of every object reachable from [root]. *)
+let closure st m root =
+  if not m.shareable then closure_per_root st root
+  else
+    match shared_closure st m root with
+    | v -> v
+    | exception Not_shareable ->
+      m.shareable <- false;
+      m.public_closure <- GlobRef.Map_env.empty;
+      m.implementation_closure <- GlobRef.Map_env.empty;
+      m.pending_public <- GlobRef.Set_env.empty;
+      m.pending_implementation <- GlobRef.Set_env.empty;
+      closure_per_root st root
 
 (** {6 The type match} *)
 
@@ -605,6 +766,11 @@ let line fmt = Printf.ksprintf (fun s -> Feedback.msg_notice (Pp.str s)) fmt
 (* Test-only seam: a test sets this for one process to exercise the public
    incomplete-report contract. It has no effect unless the test variable is
    explicitly set. *)
+let test_walk_count () =
+  match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_WALK" with
+  | Some "1" -> line "walk %d" !walk_visits
+  | None | Some _ -> ()
+
 let test_fault () =
   match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_FAILURE" with
   | Some "1" -> CErrors.user_err Pp.(str "test statement-report failure")
@@ -620,6 +786,10 @@ let print env access requests =
     public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty; gen = 0;
     keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
   } in
+  (* One memo for the whole report: the requests share the walk (see
+     "One walk for every request"). *)
+  let memo = new_memo () in
+  walk_visits := 0;
   line "STATEMENT REPORT";
   test_fault ();
 
@@ -628,7 +798,7 @@ let print env access requests =
       match CString.Map.find_opt r.req_model index with
       | None -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
       | Some model ->
-        let axioms, flags = closure st (GlobRef.ConstRef model) in
+        let axioms, flags = closure st memo (GlobRef.ConstRef model) in
         let verdict = match r.req_trusted with
           | None -> "not-requested"
           | Some t ->
@@ -641,4 +811,5 @@ let print env access requests =
         CString.Set.iter (line "axiom %s %s" r.req_name) axioms;
         FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) flags)
     requests;
+  test_walk_count ();
   line "END STATEMENT REPORT"
