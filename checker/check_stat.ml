@@ -157,7 +157,7 @@ let record_inductive ~indices_matter c mib =
    environment the Axioms section can fold over, so the checker records the
    ones it walks past and the section adds them to what the fold saw. Why
    that walk looks where it does, and what it leaves out, is explained where
-   it lives: [record_sealed_axioms] in mod_checking.ml (dispatch://BET-245). *)
+   it lives: [record_sealed_axioms] in mod_checking.ml. *)
 let sealed_axioms = ref []
 
 let record_axiom c =
@@ -200,7 +200,7 @@ let pr_assumptions ass axs =
    recorded behind it. [Module M : T := E] puts T in the environment, so a
    field E defines has no body there either, and both of those reported it as
    an axiom while [Print Assumptions] read a proof that uses it closed
-   (dispatch://BET-245). [Mod_impl] answers whether the implementation leaves
+. [Mod_impl] answers whether the implementation leaves
    a constant assumed, and what the fold yields, from the environment and
    from those records alike, is dropped where it does not. The names
    [record_sealed_axioms] collected are added after, unasked: each is a

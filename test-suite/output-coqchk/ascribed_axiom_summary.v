@@ -2,7 +2,7 @@
    environment: a field T declares as a parameter has no body there even where
    E defines it. The summary read that as an axiom and named it, while
    Print Assumptions resolves the field through the implementation and reads a
-   proof that uses it closed (dispatch://BET-245). No shape below whose
+   proof that uses it closed. No shape below whose
    expression defines the field is listed here, each whose expression assumes
    it is, under the name Print Assumptions prints for the proof beside it,
    and the three it keeps that no proof's Print Assumptions names say so

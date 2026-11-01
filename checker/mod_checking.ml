@@ -297,7 +297,7 @@ let rec collect_constants_without_body sign mp accu =
    [register_opacified_constant] above recovers one that a sealed constant's
    own body names, but a helper that also lives in the implementation has a
    body, and the fold over its uses keeps only bodyless constants, so the
-   axioms behind such a helper are lost (dispatch://BET-245). The walk below
+   axioms behind such a helper are lost. The walk below
    records every axiom declared in an implementation the environment does
    not hold, whether or not a proof reaches it, which is what the fold does
    for the axioms it can see.
@@ -306,7 +306,7 @@ let rec collect_constants_without_body sign mp accu =
    the module each application makes ([App.in_f]), the name the environment
    fold and [Print Assumptions] both use. Upstream rocq-prover/rocq#22623
    makes the other choice and reports [F.in_f]; keeping ours is deliberate,
-   for the two joins in the BET grader (TrueJudge.lean, grade.py).
+   for the two joins in the verification harness (the statement checker, the engine's driver).
 
    It would rather leave an axiom unreported, which both joins fail closed
    on, than report a name no [Print Assumptions] prints, which they read as

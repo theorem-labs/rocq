@@ -2,8 +2,8 @@
 # The Axioms section of rocqchk -o and Print Assumptions must name the same
 # constants where [Module M : T := E] puts T in the environment and E defines
 # the field. The summary once read "no body in the environment" as "assumed"
-# and named a definition (dispatch://BET-245), a name only one of the two
-# accounts prints, which the BET grader's join reads as a smuggled assumption.
+# and named a definition a name only one of the two
+# accounts prints, which the verification harness's join reads as a smuggled assumption.
 #
 # The shapes are the ones output-coqchk/ascribed_axiom_summary.v declares,
 # read here through the other account: that file pins the whole summary under

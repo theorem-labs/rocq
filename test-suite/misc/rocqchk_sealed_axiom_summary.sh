@@ -8,7 +8,7 @@
 # The second half pins the NAME. An axiom declared in a functor is reported
 # after the applied module (App.in_f), which is also what Print Assumptions
 # prints for it; the functor's own name (F.in_f) must not appear. A reader that
-# joins the two accounts by name, as the BET grader does, fails closed on any
+# joins the two accounts by name, as the verification harness does, fails closed on any
 # name that only one of them prints, so where the summary cannot tell an
 # assumption from a definition it reports nothing: an application inside a seal
 # is named by Print Assumptions alone, and that is checked here too.
