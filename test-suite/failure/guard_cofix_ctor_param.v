@@ -5,7 +5,7 @@
    Typing accepts the term: [SN (f0 (hdN recur))] converts to [SN 0]. The
    9.2 release-7 cut 18da2c8ff497 accepts it (this file fails there with
    "The command has not failed!"). Ported from the 9.3 member
-   9.3/guard-cofix-prefix cc0d0871ad63. dispatch://BET-241 *)
+   9.3/guard-cofix-prefix cc0d0871ad63. *)
 CoInductive SN (n : nat) : Type := consN : SN n -> SN n.
 Arguments consN {n} _.
 Definition hdN {n : nat} (s : SN n) : SN n := match s with consN t => t end.

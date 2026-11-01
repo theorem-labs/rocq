@@ -3,7 +3,7 @@
    coqchk by Rocq 9.3.0, by upstream master and by this branch before the
    raw-prefix scan; evaluation does not terminate (Eval cbv overflows the
    stack). Found by the break attempt on the matching-term candidate.
-   dispatch://BET-214 *)
+ *)
 
 (* D2b — dead beta argument under a cast in the prefix, holding a
    non-decreasing outer call. *)

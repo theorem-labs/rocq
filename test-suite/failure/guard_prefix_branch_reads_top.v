@@ -6,7 +6,7 @@
    definition with "Closed under the global context" and `coqchk -o -norec`
    exit 0, and `Eval cbv` on it overflows the stack (Port90's bug-finder
    file f7). Ported from 9.0/guard-cofix-prefix 9e24663c6e07.
-   dispatch://BET-214 *)
+ *)
 Definition top_branch : nat -> nat.
 Proof.
   fix f 1.

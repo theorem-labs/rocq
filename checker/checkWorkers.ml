@@ -236,7 +236,7 @@ let rec waitpid_non_intr flags pid =
    this setting, on six trees at -j 8 under 44 GB the worst worker grows
    from 4.1-4.7 to 6.8-11.8 GB), and a cap that the default fits can then
    kill a worker, which fails the run (r160 -j 8 under 22 GB). Production
-   runs -j 16 for a final grade (124 GB) and -j 5 or -j 8 for a mid-run
+   runs -j 16 for a final check run (124 GB) and -j 5 or -j 8 for a mid-run
    check, whose memory cap sets its width, so the lazier GC is used only
    when [!max_workers], which is -j minus 1, is at least
    [lazy_gc_min_max_workers] (-j 10 and wider): narrower runs keep the

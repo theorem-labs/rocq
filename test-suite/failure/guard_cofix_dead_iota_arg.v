@@ -4,7 +4,7 @@
    cofixpoint rule does not walk into the scrutinee's arguments) accepts it
    with "Closed under the global context" and `coqchk -o -norec` exit 0,
    and `Eval cbv in (hdB (hdB cycleC))` dies with "Error: Stack overflow"
-   (q1 of dispatch://BET-241). Ported from 9.3/guard-cofix-prefix
+   (q1). Ported from 9.3/guard-cofix-prefix
    cc0d0871ad63. *)
 CoInductive SB : Type := consB : SB -> SB.
 Definition hdB (s : SB) : SB := match s with consB t => t end.
