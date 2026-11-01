@@ -16,7 +16,7 @@
 
    The same refusal is given by upstream master and by Rocq 9.3.0, so a
    development that relies on this shape already fails on those toolchains
-   (measured 2026-10-25, the grading harness, dispatch://BET-214). The
+   (measured 2026-10-25, the verification harness). The
    remedy in a development is to write the carried value as an ordinary
    argument of the inner fixpoint instead of a local definition. *)
 

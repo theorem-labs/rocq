@@ -4,7 +4,7 @@
    context" and `coqchk -o -norec` exit 0, and `Eval cbv` on it overflows
    the stack (Port90's bug-finder file f4b). The prefix walk now erases cast
    types, so x is dead and its value is checked. Ported from
-   9.0/guard-cofix-prefix ebe9febceafe. dispatch://BET-214 *)
+   9.0/guard-cofix-prefix ebe9febceafe. *)
 Definition top_castty : nat -> nat.
 Proof.
   fix f 1.

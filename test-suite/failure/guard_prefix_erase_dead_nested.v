@@ -2,7 +2,7 @@
    prefix hides the call behind a let annotation. The release-7 cut
    18da2c8ff497 accepts the definition (this file fails there with "The
    command has not failed!"). Ported from 9.0/guard-cofix-prefix
-   ebe9febceafe. dispatch://BET-214 *)
+   ebe9febceafe. *)
 Definition erase_dead_nested : nat -> nat.
 Proof.
   fix outer 1.
