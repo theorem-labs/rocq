@@ -117,7 +117,13 @@ let () = add_test "the log read back is the file this process made" (fun () ->
     OpacityLog.set_enabled true;
     let p = OpacityLog.worker_env_value () in
     assert_bool ("the log's path is absolute: " ^ p) (p <> "" && not (Filename.is_relative p));
-    assert_equal ~msg:"in TMPDIR" ~printer:Fun.id (Filename.concat base "tmp") (Filename.dirname p);
+    let log_dir = Filename.dirname p in
+    assert_equal ~msg:"the private directory is in TMPDIR" ~printer:Fun.id
+      (Filename.concat base "tmp") (Filename.dirname log_dir);
+    assert_equal ~msg:"the private directory mode" ~printer:string_of_int 0o700
+      ((Unix.stat log_dir).Unix.st_perm land 0o777);
+    assert_equal ~msg:"the log file mode" ~printer:string_of_int 0o600
+      ((Unix.stat p).Unix.st_perm land 0o777);
     let get () = OpacityLog.get () in
     assert_equal ~msg:"a new log" ~printer:show_get (Some []) (get ());
     (* A worker's record. *)

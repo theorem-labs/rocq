@@ -74,10 +74,11 @@ open Names
    proof in another, and a plugin tactic can fork (coq-hammer-tactics' [best]
    tries each candidate in a forked child); none of them sends its records
    back. So under [-location-free-label] the compiling process creates a
-   private log file ([Filename.temp_file], mode 0600, in TMPDIR) when the flag
-   is set, before any tactic runs, and names it by an absolute path: a
-   relative TMPDIR is taken from the directory current at that moment, so a
-   later [Cd] does not change which file a worker, the read-back or the
+   private directory (mode 0700) and its log inside it (mode 0600) when the
+   flag is set, before any tactic runs, through an [O_CREAT|O_EXCL]
+   descriptor, and names it by an absolute path: a relative TMPDIR is taken
+   from the directory current at that moment, so a later [Cd] does not change
+   which file a worker, the read-back or the
    removal names. It never writes its records into a log it
    did not create (one named by an outer process, or a sink such as
    /dev/null, would lose them). A spawned worker gets the log's path and its
@@ -86,23 +87,19 @@ open Names
    [worker_identity_env_value] give, whatever the inherited environment or
    [-async-proofs-private-flags] say ([AsyncTaskQueue.spawn]): the log the
    spawning process has open (the owner's, a worker's or a forked child's),
-   in a worker that has not opened it yet the values it inherited, and
-   otherwise empty, so the workers of a coqc without [-location-free-label]
-   record nothing. A worker opens the path at its first record and keeps the
+   in a worker that has not opened it yet the values it captured at startup,
+   and otherwise empty, so the workers of a coqc without
+   [-location-free-label] record nothing. A worker clears both variables at
+   startup, then opens its captured path at its first record and keeps the
    descriptor only when its device and inode are those it was given; another
    file at the path, even one put there only while the worker opens it, is
-   refused like a missing one. The compiling process also
-   sets both variables in its own environment (empty when no log was made), but
-   nothing in this tree reads them there: they are kept only so a tool running in
-   the same process can find the live log (the test plugin of
-   misc/library-label-bodyread.sh reads it to damage the log on purpose), and
-   so such a tool never finds an inherited path. Workers are not given
-   [-location-free-label], so they never call [set_enabled true]. Only a
-   worker ([Flags.async_proofs_is_worker]) reads the variables; a forked child
-   inherits the open descriptor instead, and any other process ignores the
-   variables, so a coqc without the flag never writes to, or fails on, a log
-   an outer process named. Only these append: the owner, a worker (through
-   the variables) and a forked child of either (through the descriptor). A
+   refused like a missing one. The compiling process clears any inherited
+   values too. Only a worker ([Flags.async_proofs_is_worker]) captures the
+   variables; a forked child inherits the open descriptor instead, and any
+   other process ignores them, so a coqc without the flag never writes to, or
+   fails on, a log an outer process named. Only these append: the owner, a
+   worker (through the captured values) and a forked child of either (through
+   the descriptor). A
    process outside them -- a separate rocq process a plugin starts by its own
    means, rather than through the worker pool -- is outside the log; no plugin
    of the audited plugin set starts one, and nothing here keeps a plugin
@@ -115,8 +112,8 @@ open Names
    and still read back as itself, never as another record or as an absent
    field. The compiling process reads the
    file back with its own records ([get]) when it saves the library and
-   removes it at exit (only the file it made: another file put at its path
-   stays). A child's records reach it only when the child writes them
+   removes the log and its private directory at exit. A child's records reach
+   it only when the child writes them
    before that read-back: a plugin whose forked child outlives the tactic
    that forked it, and whose result reaches the compile later, is outside
    the log (the plugins of the audited set wait for their children). A record a
@@ -149,17 +146,24 @@ type query = {
 
 let enabled = ref false
 
-(* The log file: its path, a descriptor opened on it in this process, the
-   pid of the process that created it (only that one reads it back and
-   removes it; a forked child inherits these refs, not the ownership), the
-   device and inode of the file it created (its read-back reads no other
-   file), and whether a write or the creation failed in the owner. *)
+(* The log file: its path, a descriptor opened on it in this process, the pid
+   of the process that created it (only that one reads it back and removes
+   it; a forked child inherits these refs, not the ownership), the device and
+   inode of the file it created (its read-back reads no other file), and
+   whether a write or the creation failed in the owner. The private directory
+   is held by the owner's cleanup closure. *)
 let path : string option ref = ref None
 let fd : Unix.file_descr option ref = ref None
 let owner_pid : int option ref = ref None
 let identity : (int * int) option ref = ref None
 let broken = ref false
 let tried_env = ref false
+
+(* A worker reads these once during its startup, then clears them from its
+   environment. A child worker gets them explicitly again from the state
+   below, not from its environment. *)
+let worker_environment : (string * string option) option ref = ref None
+let worker_environment_captured = ref false
 
 (* The first line of the log: written when the log is made and again when
    [reset] empties it, so a file that does not start with it, an empty one
@@ -178,6 +182,20 @@ let identity_of_string = function
        (try Some (int_of_string dev, int_of_string ino) with Failure _ -> None)
      | _ -> None)
 
+let capture_worker_environment () =
+  if not !worker_environment_captured then begin
+    worker_environment_captured := true;
+    if Flags.async_proofs_is_worker () then begin
+      let p = Sys.getenv_opt env_var in
+      let id = Sys.getenv_opt identity_env_var in
+      Unix.putenv env_var "";
+      Unix.putenv identity_env_var "";
+      match p with
+      | Some p when p <> "" -> worker_environment := Some (p, id)
+      | _ -> ()
+    end
+  end
+
 let open_append p =
   try Some (Unix.openfile p [Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CLOEXEC] 0o600)
   with Unix.Unix_error _ -> None
@@ -187,13 +205,38 @@ let write_whole d s =
   try Unix.write_substring d s 0 (String.length s) = String.length s
   with Unix.Unix_error _ -> false
 
+
+(* A directory that only this uid can enter. [mkdir] makes its name atomically
+   and retries a collision; the log's fixed name is then private to it. *)
+let make_private_dir root =
+  let random = Random.State.make_self_init () in
+  let rec make tries =
+    if tries = 0 then
+      raise (Unix.Unix_error (Unix.EEXIST, "mkdir", root))
+    else
+      let suffix =
+        Printf.sprintf "%08x%08x"
+          (Random.State.bits random) (Random.State.bits random)
+      in
+      let dir = Filename.concat root (".rocq-opacitylog-" ^ suffix) in
+      match Unix.mkdir dir 0o700 with
+      | () -> dir
+      | exception Unix.Unix_error (Unix.EEXIST, _, _) -> make (tries - 1)
+  in
+  make 128
+
+(* The owner made [dir] 0700. No other uid can replace an entry there; code
+   with this uid can do anything already, so cleanup does not check then unlink. *)
+let remove_private_log path dir =
+  (try Sys.remove path with Sys_error _ -> ());
+  (try Unix.rmdir dir with Unix.Unix_error _ -> ())
+
 let owner () = match !owner_pid with Some p -> p = Unix.getpid () | None -> false
 
-(* A worker opens the log its environment names, once, on its first record;
-   a forked child of a process with a log has its descriptor already; no other
-   process reads the variables. The worker gets the device and inode of the
-   log its parent has open and accepts an opened path only when it names that
-   same file. *)
+(* A worker opens the log it captured at startup, once, on its first record;
+   a forked child of a process with a log has its descriptor already. The
+   worker accepts an opened path only when it is the device and inode its
+   parent captured. *)
 let open_worker_log p expected =
   match open_append p with
   | None -> None
@@ -204,91 +247,93 @@ let open_worker_log p expected =
      | exception Unix.Unix_error _ -> (try Unix.close d with Unix.Unix_error _ -> ()); None)
 
 let current_fd () =
+  capture_worker_environment ();
   match !fd with
   | Some _ as d -> d
   | None ->
     if not !tried_env then begin
       tried_env := true;
-      if Flags.async_proofs_is_worker () then
-        match Sys.getenv_opt env_var, Sys.getenv_opt identity_env_var with
-        | Some p, Some expected when p <> "" ->
-          path := Some p;
-          (match identity_of_string expected with
-           | Some expected ->
-             (match open_worker_log p expected with
-              | Some d -> identity := Some expected; fd := Some d
-              | None -> ())
-           | None -> ())
-        | _ -> ()
+      match !worker_environment with
+      | Some (p, expected) ->
+        (* A missing or malformed identity is a refusal, not disabled
+           logging: leaving [path] set makes [append_to_log] raise. *)
+        path := Some p;
+        (match Option.bind expected identity_of_string with
+         | Some expected ->
+           (match open_worker_log p expected with
+            | Some d -> identity := Some expected; fd := Some d
+            | None -> ())
+         | None -> ())
+      | None -> ()
     end;
     !fd
 
 let set_enabled b =
+  capture_worker_environment ();
   enabled := b;
   if b && not (owner ()) then begin
-    (* Created mode 0600 in TMPDIR, by an absolute path, holding only its
-       first line; never an inherited log. The
-       [putenv]s are not read by anything in this tree (workers get
-       [worker_env_value] from the worker pool): they let a tool in this
-       process find the live log, the test plugin of
-       misc/library-label-bodyread.sh, and clear an inherited path. *)
+    (* The owner makes a private 0700 directory in TMPDIR, then creates the
+       log through its descriptor with O_CREAT|O_EXCL; no path is reopened.
+       The variables let the worker pool pass this log to its workers; native
+       code in this process can already read anything here, so they are a
+       check, not a secret. *)
     tried_env := true;
     fd := None;
+    path := None;
     identity := None;
     owner_pid := Some (Unix.getpid ());
+    (* The owner does not read these variables. Clear any outer values; the
+       worker pool passes path and identity from the refs below. *)
+    Unix.putenv env_var "";
+    Unix.putenv identity_env_var "";
     let failed () =
       path := None; identity := None; broken := true;
       Unix.putenv env_var ""; Unix.putenv identity_env_var ""
     in
-    (* Removes [p] only while it is the file [id] names. *)
-    let remove_if_same p id =
-      match Unix.lstat p with
-      | { Unix.st_dev; st_ino; _ } when id = (st_dev, st_ino) ->
-        (try Sys.remove p with Sys_error _ -> ())
-      | _ -> ()
-      | exception Unix.Unix_error _ -> ()
-    in
     match
-      let dir = Filename.get_temp_dir_name () in
-      let dir = if Filename.is_relative dir then Filename.concat (Sys.getcwd ()) dir else dir in
-      Filename.temp_file ~temp_dir:dir "rocq-opacitylog" ".log"
+      let root = Filename.get_temp_dir_name () in
+      let root = if Filename.is_relative root then Filename.concat (Sys.getcwd ()) root else root in
+      make_private_dir root
     with
-    | p ->
-      (match open_append p with
-       | None -> failed ()
-       | Some d ->
+    | dir ->
+      let p = Filename.concat dir "log" in
+      (match Unix.openfile p
+               [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_APPEND; Unix.O_CLOEXEC] 0o600 with
+       | exception Unix.Unix_error _ ->
+         remove_private_log p dir; failed ()
+       | d ->
          let close () = try Unix.close d with Unix.Unix_error _ -> () in
          match Unix.fstat d with
-         | exception Unix.Unix_error _ -> close (); failed ()
+         | exception Unix.Unix_error _ ->
+           close (); remove_private_log p dir; failed ()
          | { Unix.st_dev; st_ino; _ } ->
            let id = (st_dev, st_ino) in
            if write_whole d header then begin
              identity := Some id; path := Some p; fd := Some d;
-             Unix.putenv env_var p;
-             Unix.putenv identity_env_var (string_of_identity id);
-             (* Registered only after [id] exists: at exit, the file it
-                made, never another file put at [p] after creation. *)
-             at_exit (fun () -> if owner () then remove_if_same p id)
+             at_exit (fun () -> if owner () then remove_private_log p dir)
            end else begin
-             (* A failed creation removes the file it opened, not another
-                file at [p]. *)
-             remove_if_same p id; close (); failed ()
+             close (); remove_private_log p dir; failed ()
            end)
-    | exception Sys_error _ -> failed ()
+    | exception (Sys_error _ | Unix.Unix_error _) -> failed ()
   end
 
 let worker_env_value () =
+  capture_worker_environment ();
   match !fd, !path with
   | Some _, Some p -> p
-  | _ -> if Flags.async_proofs_is_worker () then Option.default "" (Sys.getenv_opt env_var) else ""
+  | _ ->
+    (match !worker_environment with
+     | Some (p, _) -> p
+     | None -> "")
 
 let worker_identity_env_value () =
+  capture_worker_environment ();
   match !fd, !identity with
   | Some _, Some id -> string_of_identity id
   | _ ->
-    if Flags.async_proofs_is_worker () then
-      Option.default "" (Sys.getenv_opt identity_env_var)
-    else ""
+    (match !worker_environment with
+     | Some (_, Some id) -> id
+     | Some (_, None) | None -> "")
 
 let queries : query list ref = ref []
 

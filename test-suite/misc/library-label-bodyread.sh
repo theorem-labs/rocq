@@ -67,12 +67,17 @@
 #   owner's log before the save. The worker gets the owner log's device and
 #   inode with its path and refuses the substitute, so the compile fails
 #   rather than save a proper subset of the worker's records;
+# - B_missingidentity: a worker's plugin removes the identity environment
+#   variable before its first tactic; it uses the identity it captured at
+#   startup and records the read. The environment carries no log path or
+#   identity after startup;
 # - the log read back is the file the compile made, with what was written to it:
 #   B_ident (a copy of the log's bytes put at its path before the save), B_empty (an
 #   empty file put there) and B_trunc (the log emptied in place) compile and have no
-#   keepfacts (null/null), and the files B_ident and B_empty put there are still there
-#   after the compile; B_reltmp (TMPDIR relative, and a Cd before the par:) records
-#   the workers' read and leaves no log behind;
+#   keepfacts (null/null); the owner made each log in a private directory, so B_ident
+#   and B_empty leave those two directories empty after the compile. B_reltmp (TMPDIR
+#   relative, and a Cd before the par:) records the workers' read and leaves no log
+#   behind;
 # - B_forge: a par: worker records a constant whose name holds tabs and a newline,
 #   spelled so that a log that wrote names as they are would read two records: it
 #   reads back as one record, with its own name;
@@ -112,6 +117,19 @@ EOF
 cat > $D/pkg/kfpeek/p.ml <<'EOF'
 open Ltac2_plugin
 
+(* This marker verifies that a worker captured and cleared both log values
+   before loading plugins, then clears the identity again before its first
+   tactic. The body read below must still reach the owner's log. *)
+let () =
+  if Flags.async_proofs_is_worker () &&
+     Sys.getenv_opt "KFPEEK_DROP_OPACITY_IDENTITY" = Some "1"
+  then begin
+    if Sys.getenv_opt OpacityLog.env_var <> Some "" ||
+       Sys.getenv_opt OpacityLog.identity_env_var <> Some ""
+    then failwith "the worker opacity-log environment was not cleared";
+    Unix.putenv OpacityLog.identity_env_var ""
+  end
+
 let shape c =
   match Global.body_of_constant Library.indirect_accessor c with
   | None -> 0
@@ -144,8 +162,9 @@ let () =
        | Constr.Const (cst, _) -> fork_shape cst
        | _ -> -1)
 
-(* Tamper with the live opacity log, to test what a broken log does. *)
-let log_path () = Option.default "" (Sys.getenv_opt "ROCQ_OPACITYLOG_FILE")
+(* The worker environment is cleared at startup. The log module retains the
+   path it captured then, and this plugin asks it for the live path. *)
+let log_path () = OpacityLog.worker_env_value ()
 
 let str_ext name f =
   Tac2externals.define
@@ -248,6 +267,38 @@ EOF
 ( cd $D/pkg/kfpeek && ocamlfind ocamlopt -thread -shared -package rocq-runtime.plugins.ltac2 -o p.cmxs p.ml > build.log 2>&1 ) ||
   { echo "FAIL cannot build the test plugin kfpeek"; cat $D/pkg/kfpeek/build.log; exit 1; }
 export OCAMLPATH="$PWD/$D/pkg${OCAMLPATH:+:$OCAMLPATH}"
+
+# The worker's path and identity are captured by OpacityLog itself before a
+# tactic runs. Compile that exact source as a second module with no .mli, so
+# this small probe can call its private append_to_log directly: a worker with
+# a path but no or malformed identity must refuse before it can return from a
+# record. This uses the same ocamlfind command as the local test plugin.
+cp ../../library/opacityLog.ml $D/xfOpacityLog.ml
+cat > $D/worker_env_probe.ml <<'EOF'
+let () =
+  let path = Sys.argv.(1) and identity = Sys.argv.(2) in
+  Flags.async_proofs_worker_id := "worker-env-probe";
+  Unix.putenv XfOpacityLog.env_var path;
+  if not (String.equal identity "absent") then
+    Unix.putenv XfOpacityLog.identity_env_var identity;
+  XfOpacityLog.set_enabled false;
+  let q = { XfOpacityLog.constant = "A.A.c"; library = Some "A.A";
+            opaque = true; table = Some "A.A" } in
+  match XfOpacityLog.append_to_log q with
+  | () -> print_endline "RETURNED"
+  | exception _ -> print_endline "REFUSED"
+EOF
+( cd $D && ocamlfind ocamlopt -thread -linkpkg -package rocq-runtime.library \
+    -o worker-env-probe xfOpacityLog.ml worker_env_probe.ml > worker-env-build.log 2>&1 ) ||
+  { echo "FAIL cannot build the opacity-log worker probe"; cat $D/worker-env-build.log; exit 1; }
+: > $D/worker-env.log
+env -u ROCQ_OPACITYLOG_IDENTITY "$PWD/$D/worker-env-probe" "$PWD/$D/worker-env.log" absent > $D/worker-env.out
+"$PWD/$D/worker-env-probe" "$PWD/$D/worker-env.log" malformed >> $D/worker-env.out
+if [ "$(tr '\n' ' ' < $D/worker-env.out)" = "REFUSED REFUSED " ]; then
+  pass "worker capture: a nonempty path with an absent or malformed identity refuses before a record returns"
+else
+  bad "worker capture: expected two refusals for absent and malformed identities, got '$(tr '\n' ' ' < $D/worker-env.out)'"
+fi
 
 printf 'Lemma c : True.\nAdmitted.\n' > $D/adm/A.v
 printf 'Lemma c : True.\nProof. exact I. Qed.\n' > $D/qed1/A.v
@@ -406,18 +457,26 @@ then echo ok > $D/asyncenv-qed1/rc; else echo failed > $D/asyncenv-qed1/rc; fi
 # worker itself has opened the log (the child opens it from the variable it inherited).
 parb parfork 'let _ := fork_body_shape constr:(A.c) in ().'
 build parfork adm; build parfork qed1
+# B_missingidentity: a worker's plugin clears its inherited identity before
+# its first tactic. The worker must have captured it at startup, so the body
+# read still reaches the log.
+parb missingidentity 'let _ := body_shape constr:(A.c) in ().'
+mkdir -p $D/missingidentity-qed1; cp $D/missingidentity/B.v $D/missingidentity-qed1/B.v
+if KFPEEK_DROP_OPACITY_IDENTITY=1 comp -R $D/qed1 A -R $D/missingidentity-qed1 Bdep \
+     $D/missingidentity-qed1/B.v > $D/missingidentity-qed1/out 2>&1
+then echo ok > $D/missingidentity-qed1/rc; else echo failed > $D/missingidentity-qed1/rc; fi
 # B_workerreplace: the compiling process puts a substitute at its log path;
 # a par: worker makes its first body read there and puts the owner's file back
 # before the save. The worker must refuse the substitute, so the compile fails
 # instead of saving the restored owner's log with the worker's query missing.
-mkdir -p $D/workerreplace
+mkdir -p $D/workerreplace $D/tmp-workerreplace
 { printf '%s\n' "$head"
   printf '%s\n' 'Ltac2 Eval (log_worker_substitute "").' \
     'Ltac2 check () := let _ := worker_shape_restore constr:(A.c) in ().' \
     'Set Default Proof Mode "Classic".' 'Goal True /\ True.' '  split.' \
     '  par: (ltac2:(check ()); exact I).' 'Qed.'
 } > $D/workerreplace/B.v
-build workerreplace qed1
+TMPDIR="$PWD/$D/tmp-workerreplace" build workerreplace qed1
 # B_forge: a par: worker records, through the log, a constant whose name holds tabs
 # and a newline (kfpeek's record_forged).
 parb forge 'let _ := record_forged constr:(A.c) in ().'
@@ -425,8 +484,8 @@ build forge adm
 # pard NAME POST: B_parany with the toplevel command POST after the proof, before the
 # library is saved. B_ident puts a copy of the log's bytes at its path, B_empty an
 # empty file, and B_trunc empties the log itself: the workers' records are in none.
-# B_ident and B_empty use their own TMPDIR: the file put at the log's path is not the
-# compile's, so it must stay there after the compile.
+# B_ident and B_empty use their own TMPDIR; the owner removes the complete private
+# directory after the compile, including the same-uid substitute at the log name.
 pard() {
   mkdir -p $D/$1
   printf '%s\nLtac2 check () := let _ := body_shape constr:(A.c) in ().\nSet Default Proof Mode "Classic".\nGoal True /\\ True.\n  split.\n  par: (ltac2:(check ()); exact I).\nQed.\n%s\n' \
@@ -548,12 +607,12 @@ cantwrite wmoved "B_wmoved: a worker whose log was moved away"
 nulls ident "B_ident: the log replaced, before the save, by a copy of its bytes (another file)"
 nulls empty "B_empty: the log replaced, before the save, by an empty file"
 nulls trunc "B_trunc: the log emptied in place before the save"
-# The files put at the log's path stay: one file each, the copy holding the log's
-# first line, the empty one empty.
-li=$(find $D/tmp-ident -type f); le=$(find $D/tmp-empty -type f)
-if [ "$(printf '%s\n' "$li" | grep -c .)" = 1 ] && head -1 "$li" | grep -q '^rocq-opacity-log ' \
-   && [ "$(printf '%s\n' "$le" | grep -c .)" = 1 ] && [ ! -s "$le" ]; then
-  pass "B_ident, B_empty: the file put at the log's path is still there after the compile (it removes only the file it made)"
+# The owner made a private directory for each log, so exit removes the log
+# and that directory together, including a substitute our same-uid test put
+# at its name.
+li=$(find $D/tmp-ident -mindepth 1 -print -quit); le=$(find $D/tmp-empty -mindepth 1 -print -quit)
+if [ -z "$li" ] && [ -z "$le" ]; then
+  pass "B_ident, B_empty: the private log directories are empty after the compile"
 else
   bad "B_ident, B_empty: left in $D/tmp-ident: '$li', in $D/tmp-empty: '$le'"
 fi
@@ -572,12 +631,19 @@ if [ "$(cat $D/parfork-adm/rc)" = ok ] && [ "$(cat $D/parfork-qed1/rc)" = ok ] &
 else
   bad "B_parfork ($(cat $D/parfork-adm/rc) $(cat $D/parfork-qed1/rc)): opacity_queries '$qpf' (Admitted A), '$qpfq' (proved A): $(tr '\n' ' ' < $D/parfork-qed1/out | cut -c1-300)"
 fi
+qmi=$(field $D/missingidentity-qed1/B.vo opacity_queries)
+if [ "$(cat $D/missingidentity-qed1/rc)" = ok ] && [ "$qmi" = "$q_qed" ]; then
+  pass "B_missingidentity: a worker uses the identity it captured at startup after its environment is cleared: $qmi"
+else
+  bad "B_missingidentity ($(cat $D/missingidentity-qed1/rc)): opacity_queries '$qmi': $(tr '\n' ' ' < $D/missingidentity-qed1/out | cut -c1-300)"
+fi
+lwr=$(find $D/tmp-workerreplace -mindepth 1 -print -quit)
 if [ "$(cat $D/workerreplace-qed1/rc)" = failed ] \
    && grep -q "Cannot write a record to the keep rule's opacity log" $D/workerreplace-qed1/out \
-   && [ ! -e $D/workerreplace-qed1/B.vo ]; then
-  pass "B_workerreplace: a worker refuses a substitute log even after the owner log returns before the save"
+   && [ ! -e $D/workerreplace-qed1/B.vo ] && [ -z "$lwr" ]; then
+  pass "B_workerreplace: a worker refuses a substitute log and cleanup removes its private directory"
 else
-  bad "B_workerreplace ($(cat $D/workerreplace-qed1/rc)): $(tr '\n' ' ' < $D/workerreplace-qed1/out | cut -c1-400)"
+  bad "B_workerreplace ($(cat $D/workerreplace-qed1/rc)): left in $D/tmp-workerreplace: '$lwr': $(tr '\n' ' ' < $D/workerreplace-qed1/out | cut -c1-400)"
 fi
 qr=$(field $D/reltmp-qed1/B.vo opacity_queries)
 leftr=$(find "$D/tmprel" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
