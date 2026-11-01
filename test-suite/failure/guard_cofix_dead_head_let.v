@@ -5,7 +5,7 @@
    does not look at what that drops) and by this branch's 9.3 parent, each
    with "Closed under the global context" and `coqchk -o -norec` exit 0,
    while `Eval cbv in (hdB (hdB cycleH))` dies with "Error: Stack
-   overflow". (q2 of dispatch://BET-241.) *)
+   overflow". (q2 of the cofix guard audit.) *)
 CoInductive SB : Type := consB : SB -> SB.
 Definition hdB (s : SB) : SB := match s with consB t => t end.
 

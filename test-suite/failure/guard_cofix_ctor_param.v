@@ -6,7 +6,7 @@
    by the same-family review of this branch (BugFind93 bf93_01, Review93 r3).
    This branch's parent, and upstream's source at the v9.3 commit
    d91dbf084f, have the same Construct case, which skips the parameters.
-   dispatch://BET-241 *)
+ *)
 CoInductive SN (n : nat) : Type := consN : SN n -> SN n.
 Arguments consN {n} _.
 Definition hdN {n : nat} (s : SN n) : SN n := match s with consN t => t end.

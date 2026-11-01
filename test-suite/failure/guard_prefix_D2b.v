@@ -4,7 +4,7 @@
    this branch's 9.3 parent (9.3/guard-uniform-bounds 30a1b2bbefca);
    evaluation does not terminate (Eval cbv overflows the stack). Found by
    the break attempt on the matching-term candidate.
-   dispatch://BET-214 *)
+ *)
 
 (* D2b — dead beta argument under a cast in the prefix, holding a
    non-decreasing outer call. *)

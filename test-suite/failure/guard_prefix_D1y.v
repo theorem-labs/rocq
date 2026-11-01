@@ -3,7 +3,7 @@
    missed this one, and an earlier head of the 9.2 member accepted it with a
    clean coqchk; this branch's 9.3 parent (9.3/guard-uniform-bounds
    30a1b2bbefca) accepts it too. Eval cbv overflows the stack.
-   dispatch://BET-214 *)
+ *)
 
 (* D1y — the D1 carrier under cbv only. *)
 Definition outerD1 : nat -> nat.

@@ -10,7 +10,7 @@
    block, so this definition is refused with an ordinary guard error. That
    refusal is the accepted cost of the rule; an anomaly would be a defect.
    [Fail] does not catch an anomaly, so this file fails on a kernel that
-   raises one. (q4 of dispatch://BET-241.) *)
+   raises one. (q4 of the cofix guard audit.) *)
 CoInductive SB : Type := consB : SB -> SB.
 Definition f_nat (s : SB) : nat := 0.
 

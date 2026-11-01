@@ -4,7 +4,7 @@
    recursive call" on it, which [Fail] does not catch. The raw-prefix rule in
    [check_fix_pre_sorts] runs before [inductive_of_mutfix] and refuses the
    definition with an ordinary guard error. (breaka/D5.v of
-   dispatch://BET-241.) *)
+   the cofix guard audit.) *)
 Definition outerD5 : nat -> nat.
 Proof.
   fix outer 1.

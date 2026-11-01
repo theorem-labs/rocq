@@ -16,7 +16,7 @@
    On a build that truncates instead of refusing, each of the five compiles
    with "Closed under the global context" and a clean coqchk -o, and [cbv]
    on the result reports Stack overflow (measured 2026-10-25,
-   the grading harness, dispatch://BET-214, on the 9.0 and 9.2 heads
+   the verification harness, the guard-condition audit, on the 9.0 and 9.2 heads
    of this change before the raw-prefix rule; the match variant evaluates
    to 0 because its erased branch is not the one taken). This branch's 9.3
    parent (9.3/guard-uniform-bounds 30a1b2bbefca) accepts the five too.

@@ -5,7 +5,7 @@
    the matching-term candidate. This branch's 9.3 parent
    (9.3/guard-uniform-bounds 30a1b2bbefca) already refuses it; the file
    pins that the rule here keeps refusing it.
-   dispatch://BET-214 *)
+ *)
 
 (* D2c — chain of dead lets in the prefix; the first holds a non-decreasing
    outer call, the last pairs it with the inner fixpoint. *)

@@ -2,7 +2,7 @@
    built the same way, whose prefix definition mentions nothing recursive.
    The rule must keep accepting it, so that the refusal of the sibling call
    next door says something. Accepted by the 9.3 base and by this commit,
-   each with "Closed under the global context". dispatch://BET-241 *)
+   each with "Closed under the global context". *)
 Definition outer_sib_ok : nat -> nat.
 Proof.
   fix outer 1.

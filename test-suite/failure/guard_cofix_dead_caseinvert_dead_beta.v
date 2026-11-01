@@ -8,7 +8,7 @@
    ("srefl _", as test-suite/success/sprop_uip.v:23 does): with a bare
    "srefl" the file is refused by elaboration on every build, and the Fail
    below then succeeds for a reason that is not the guard. Found by the
-   same-family review of this branch (Review93, r1); dispatch://BET-241. *)
+   same-family review of this branch (Review93, r1); the cofix guard audit. *)
 Set Definitional UIP.
 Inductive seq {A : Type} (a : A) : A -> SProp := srefl : seq a a.
 CoInductive SB : Type := consB : SB -> SB.
