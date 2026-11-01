@@ -22,7 +22,7 @@
     both of the collector's costs were much larger than they need to be. Measured on speed-r2 with
     the lane's four files compiled at once, against the former [32*1024*1024] words and [200]
     (per-file wall seconds, median of five interleaved runs of each arm, every range disjoint;
-    dispatch://INFRA-217):
+    ):
 
       A0IgPO 41.9 -> 35.8, RtLgTopA 41.9 -> 32.5, B0IgPO 38.3 -> 33.4, AMWrapMallocRf 33.7 -> 25.6
 
@@ -56,7 +56,7 @@
     sees between two runs of one build (lever 7). The lane checks both halves: its normalising
     segment compare for the summary, library and opaques segments, and, for the vmlibrary segment
     that compare leaves out, unmarshalling both and marshalling them again with [No_sharing], which
-    gives the same bytes (dispatch://INFRA-217). coqchk does not install this policy at all
+    gives the same bytes. coqchk does not install this policy at all
     ([init_ocaml]'s only caller is toplevel/coqtop.ml) and compiles its own bytecode.
 *)
 
