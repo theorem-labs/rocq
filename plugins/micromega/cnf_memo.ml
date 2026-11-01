@@ -15,7 +15,7 @@
    clause is dropped. Distributing a disjunction over a conjunction meets the same pairs of
    literals in many clauses, and every meeting computes [deduce] again (a polynomial sum). On the
    files of speed lane R2's fast set these checks were 11-16% of the samples of the CNF at tactic
-   time and nearly all of the extracted checker's (dispatch://INFRA-217).
+   time and nearly all of the extracted checker's.
 
    Here the conversion runs on literals that carry an identifier, the same for structurally equal
    literals, and the check of a pair of identifiers is computed once.
