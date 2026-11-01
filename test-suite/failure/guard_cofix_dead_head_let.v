@@ -4,7 +4,7 @@
    (whose cofixpoint rule reduces the head with [whd_all] and does not look
    at what that drops) accepts it with "Closed under the global context"
    and `coqchk -o -norec` exit 0, and `Eval cbv in (hdB (hdB cycleH))` dies
-   with "Error: Stack overflow" (q2). Ported from
+   with "Error: Stack overflow". Ported from
    9.3/guard-cofix-prefix cc0d0871ad63. *)
 CoInductive SB : Type := consB : SB -> SB.
 Definition hdB (s : SB) : SB := match s with consB t => t end.
