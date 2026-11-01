@@ -248,18 +248,15 @@ let () = str_ext "log_worker_substitute" (fun _ ->
     Out_channel.with_open_bin p (fun oc -> output_string oc "worker substitute\n");
     0)
 
+(* Race-safe restore: rename .owner back first. ENOENT means another worker
+   already restored it. One goal avoids a split-then-par: race entirely, but
+   the handler is safe regardless. *)
 let worker_shape_restore c sigma =
   let p = log_path () in
   Fun.protect
     ~finally:(fun () ->
         let owner = p ^ ".owner" in
-        if Sys.file_exists owner then begin
-          let substitute = p ^ ".substitute." ^ string_of_int (Unix.getpid ()) in
-          Sys.rename p substitute;
-          Fun.protect
-            ~finally:(fun () -> if Sys.file_exists substitute then Sys.remove substitute)
-            (fun () -> Sys.rename owner p)
-        end)
+        (try Sys.rename owner p with Sys_error _ -> ()))
     (fun () ->
        match EConstr.kind sigma c with
        | Constr.Const (cst, _) -> ignore (shape cst); 0
@@ -728,11 +725,44 @@ if [ "$(cat $D/unstable-qed1/rc)" = ok ] && [ -n "$ul" ]; then
 else
   bad "B_unstable ($(cat $D/unstable-qed1/rc)): unstable-tmp='$(find $D/unstable-tmp -mindepth 1 | head -3 | tr '\n' ' ')': $(tr '\n' ' ' < $D/unstable-qed1/out | cut -c1-300)"
 fi
+# B_symlink: TMPDIR given through a symlink. The private directory is created
+# under the resolved path, not the symlink spelling.
+TMPDIR_REAL=$(mktemp -d /tmp/bodyread-sym-XXXXXXXXXX)
+ln -s "$TMPDIR_REAL" $D/symlink-tmp
+mkdir -p $D/symlink-qed1; cp $D/parany/B.v $D/symlink-qed1/B.v
+if TMPDIR="$PWD/$D/symlink-tmp" comp -R $D/qed1 A -R $D/symlink-qed1 Bdep $D/symlink-qed1/B.v \
+     > $D/symlink-qed1/out 2>&1
+then echo ok > $D/symlink-qed1/rc; else echo failed > $D/symlink-qed1/rc; fi
+sym_priv=$(find "$TMPDIR_REAL" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null)
+sym_link_priv=$(find "$PWD/$D/symlink-tmp" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null)
+if [ "$(cat $D/symlink-qed1/rc)" = ok ] && [ -z "$sym_priv" ] && [ -z "$sym_link_priv" ]; then
+  pass "B_symlink: TMPDIR through a symlink creates and cleans up under the resolved path"
+else
+  bad "B_symlink ($(cat $D/symlink-qed1/rc)): real='$sym_priv' link='$sym_link_priv': $(tr '\n' ' ' < $D/symlink-qed1/out | cut -c1-300)"
+fi
+rm -f $D/symlink-tmp; rmdir "$TMPDIR_REAL" 2>/dev/null
+# B_trailingspace: a TMPDIR whose name ends in a space, next to a same-named
+# directory without the space. Each must be judged on its own bytes.
+TMPDIR_SPACE=$(mktemp -d "/tmp/bodyread-sp -XXXXXXXXXX")
+TMPDIR_NOSPACE="${TMPDIR_SPACE% }"
+# If the no-space version doesn't exist, create one with different security.
+if [ ! -d "$TMPDIR_NOSPACE" ]; then mkdir -m 0777 "$TMPDIR_NOSPACE"; fi
+mkdir -p $D/space-qed1; cp $D/parany/B.v $D/space-qed1/B.v
+if TMPDIR="$TMPDIR_SPACE" comp -R $D/qed1 A -R $D/space-qed1 Bdep $D/space-qed1/B.v \
+     > $D/space-qed1/out 2>&1
+then echo ok > $D/space-qed1/rc; else echo failed > $D/space-qed1/rc; fi
+space_left=$(find "$TMPDIR_SPACE" -mindepth 1 -print -quit 2>/dev/null)
+if [ "$(cat $D/space-qed1/rc)" = ok ] && [ -z "$space_left" ]; then
+  pass "B_trailingspace: a TMPDIR with a trailing space is judged on its own bytes (not trimmed)"
+else
+  bad "B_trailingspace ($(cat $D/space-qed1/rc)): left='$space_left': $(tr '\n' ' ' < $D/space-qed1/out | cut -c1-300)"
+fi
+rmdir "$TMPDIR_SPACE" "$TMPDIR_NOSPACE" 2>/dev/null
 # Each compile's log is private and removed at exit: this fixture's TMPDIR is empty.
 left=$(find "$TMPDIR" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
 if [ -z "$left" ]; then
   pass "this fixture's TMPDIR ($TMPDIR) is empty: every opacity log was removed"
-  rmdir "$TMPDIR"
+  rmdir "$TMPDIR" 2>/dev/null || true
 else
   bad "opacity logs left in $TMPDIR: $left"
 fi

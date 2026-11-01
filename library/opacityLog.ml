@@ -209,15 +209,16 @@ let write_whole d s =
   try Unix.write_substring d s 0 (String.length s) = String.length s
   with Unix.Unix_error _ -> false
 
+type checked_path = {
+  canonical : string;
+  stable : bool;
+}
 
-(* Secure-path walk: whether every directory from / down to [root] (resolved
-   through [realpath]) is owned by this uid or root and is either not
-   group/other-writable or has the sticky bit. A symlink in any component is
-   resolved by [realpath]; the walk lstat's the resolved path. Where any
-   component fails, cleanup leaves the log and its directory in place: a
-   small leak beats deleting the wrong file. Same-uid code can replace any
-   part of the process state already; the purpose of this check is to avoid
-   removing a file another uid put at a swapped pathname. *)
+(* Secure-path walk: resolve [root] once, then lstat every directory from /
+   down to that exact canonical path. Each directory must be owned by this uid
+   or root and either not group/other-writable or sticky. When realpath fails,
+   creation refuses; when the walk fails, creation still uses the canonical
+   path but cleanup leaves the log and directory in place. *)
 let path_secure root =
   let uid = Unix.getuid () in
   let component_ok p =
@@ -229,24 +230,19 @@ let path_secure root =
       mine_or_root && (no_other_write || sticky)
     | _ | exception Unix.Unix_error _ -> false
   in
-  (* Resolve symlinks once, then walk every prefix of the real path. *)
-  match
-    let ic = Unix.open_process_in (Printf.sprintf "realpath -- %s" (Filename.quote root)) in
-    let rp = String.trim (In_channel.input_all ic) in
-    (match Unix.close_process_in ic with Unix.WEXITED 0 -> Some rp | _ -> None)
-  with
-  | Some rp when Filename.is_relative rp -> false
-  | Some rp ->
-    let parts = String.split_on_char '/' rp in
+  match Unix.realpath root with
+  | exception Unix.Unix_error _ -> None
+  | canonical when Filename.is_relative canonical -> None
+  | canonical ->
+    let parts = String.split_on_char '/' canonical in
     let rec walk prefix = function
       | [] -> true
-      | "" :: rest -> walk prefix rest  (* leading / or trailing / *)
+      | "" :: rest -> walk prefix rest
       | comp :: rest ->
         let dir = if prefix = "/" then "/" ^ comp else prefix ^ "/" ^ comp in
         component_ok dir && walk dir rest
     in
-    component_ok "/" && walk "/" parts
-  | None | exception _ -> false
+    Some { canonical; stable = component_ok "/" && walk "/" parts }
 
 (* A directory that only this uid can enter. [mkdir] makes its name atomically
    and retries a collision; the log's fixed name is then private to it. *)
@@ -267,24 +263,34 @@ let make_private_dir root =
   in
   make 128
 
-(* Create the log inside [dir]. Returns [(fd, log_id)] on success. *)
-let create_log dir =
+type log_creation =
+  | Open_failed
+  | Opened_failed of string * (int * int)
+  | Opened of Unix.file_descr * string * (int * int)
+
+let create_log_result dir =
   let p = Filename.concat dir "log" in
   match Unix.openfile p
           [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_APPEND; Unix.O_CLOEXEC] 0o600 with
-  | exception Unix.Unix_error _ -> None
+  | exception Unix.Unix_error _ -> Open_failed
   | d ->
     let close () = try Unix.close d with Unix.Unix_error _ -> () in
     match Unix.fstat d with
-    | exception Unix.Unix_error _ -> close (); None
+    | exception Unix.Unix_error _ -> close (); Open_failed
     | { Unix.st_dev; st_ino; _ } ->
       let log_id = (st_dev, st_ino) in
-      if write_whole d header then Some (d, p, log_id)
-      else begin close (); None end
+      if write_whole d header then Opened (d, p, log_id)
+      else begin close (); Opened_failed (p, log_id) end
 
-(* Remove the log and its private directory when the path is secure and
-   lstat still matches the recorded identity. [stable] was computed at
-   creation over every component of TMPDIR. When it is false, or lstat
+(* Create the log inside [dir]. Returns [(fd, path, log_id)] on success. *)
+let create_log dir =
+  match create_log_result dir with
+  | Opened (d, p, log_id) -> Some (d, p, log_id)
+  | Open_failed | Opened_failed _ -> None
+
+(* Remove the log and its private directory when the path was secure and lstat
+   still matches each recorded identity. [stable] was computed over every
+   component of canonical TMPDIR at creation. When it is false, or lstat
    disagrees, nothing is removed: a small leak, never the wrong file. *)
 let cleanup_log ~stable dir dir_id p log_id =
   if stable then begin
@@ -358,20 +364,18 @@ let set_enabled b =
     match
       let root = Filename.get_temp_dir_name () in
       let root = if Filename.is_relative root then Filename.concat (Sys.getcwd ()) root else root in
-      let stable = path_secure root in
-      (make_private_dir root, stable)
+      path_secure root
     with
-    | (dir, stable) ->
+    | Some { canonical; stable } ->
+      let dir = make_private_dir canonical in
       let dir_id = match Unix.lstat dir with
         | { Unix.st_dev; st_ino; _ } -> Some (st_dev, st_ino)
         | exception Unix.Unix_error _ -> None
       in
-      (match create_log dir with
-       | None ->
-         (* Creation or header write failed. Remove the private directory
-            only when path was secure and its dev:ino matches; rmdir also
-            refuses a non-empty one. Never unlink the file: O_EXCL may not
-            have created it. *)
+      (match create_log_result dir with
+       | Open_failed ->
+         (* O_EXCL may have failed because another file was there. Remove
+            only the empty private dir, after the same stable/dev:ino rule. *)
          (match stable, dir_id with
           | true, Some did ->
             (match Unix.lstat dir with
@@ -380,14 +384,19 @@ let set_enabled b =
              | _ | exception Unix.Unix_error _ -> ())
           | _ -> ());
          failed ()
-       | Some (d, p, log_id) ->
+       | Opened_failed (p, log_id) ->
+         (match dir_id with
+          | Some did -> cleanup_log ~stable dir did p log_id
+          | None -> ());
+         failed ()
+       | Opened (d, p, log_id) ->
          identity := Some log_id; path := Some p; fd := Some d;
          at_exit (fun () ->
              if owner () then
                match dir_id with
                | Some did -> cleanup_log ~stable dir did p log_id
                | None -> ()))
-    | exception (Sys_error _ | Unix.Unix_error _) -> failed ()
+    | None -> failed ()
   end
 
 let worker_env_value () =
