@@ -62,6 +62,11 @@
 #   qed1's proofs, and the read is recorded;
 # - B_parfork: a par: worker's tactic reads A.c only in a child it forks, before the
 #   worker has opened the log itself: the child's record reaches B;
+# - B_workerreplace: the compiling process replaces its log with another file,
+#   a par: worker makes its first body read there, and the worker restores the
+#   owner's log before the save. The worker gets the owner log's device and
+#   inode with its path and refuses the substitute, so the compile fails
+#   rather than save a proper subset of the worker's records;
 # - the log read back is the file the compile made, with what was written to it:
 #   B_ident (a copy of the log's bytes put at its path before the save), B_empty (an
 #   empty file put there) and B_trunc (the log emptied in place) compile and have no
@@ -207,6 +212,38 @@ let () =
          let forged = Names.Constant.make1 (Names.KerName.make mp (Names.Label.of_id id)) in
          OpacityLog.record forged (Global.lookup_constant cst); 0
        | _ -> -1)
+
+(* Put a substitute at the owner's log path. A [par:] worker later makes its
+   first record there; it restores the owner file before the compilation can
+   save the library. The worker must reject that substitute by identity. *)
+let () = str_ext "log_worker_substitute" (fun _ ->
+    let p = log_path () in
+    Sys.rename p (p ^ ".owner");
+    Out_channel.with_open_bin p (fun oc -> output_string oc "worker substitute\n");
+    0)
+
+let worker_shape_restore c sigma =
+  let p = log_path () in
+  Fun.protect
+    ~finally:(fun () ->
+        let owner = p ^ ".owner" in
+        if Sys.file_exists owner then begin
+          let substitute = p ^ ".substitute." ^ string_of_int (Unix.getpid ()) in
+          Sys.rename p substitute;
+          Fun.protect
+            ~finally:(fun () -> if Sys.file_exists substitute then Sys.remove substitute)
+            (fun () -> Sys.rename owner p)
+        end)
+    (fun () ->
+       match EConstr.kind sigma c with
+       | Constr.Const (cst, _) -> ignore (shape cst); 0
+       | _ -> -1)
+
+let () =
+  Tac2externals.define
+    { Tac2expr.mltac_plugin = "kfpeek"; mltac_tactic = "worker_shape_restore" }
+    Tac2externals.(Tac2ffi.constr @-> eret Tac2ffi.int)
+    (fun c _env sigma -> worker_shape_restore c sigma)
 EOF
 ( cd $D/pkg/kfpeek && ocamlfind ocamlopt -thread -shared -package rocq-runtime.plugins.ltac2 -o p.cmxs p.ml > build.log 2>&1 ) ||
   { echo "FAIL cannot build the test plugin kfpeek"; cat $D/pkg/kfpeek/build.log; exit 1; }
@@ -235,7 +272,9 @@ Ltac2 @ external log_env_set : string -> int := "kfpeek" "log_env_set".
 Ltac2 @ external in_worker : unit -> int := "kfpeek" "in_worker".
 Ltac2 @ external env_is_1 : string -> int := "kfpeek" "env_is_1".
 Ltac2 @ external log_replace : string -> int := "kfpeek" "log_replace".
-Ltac2 @ external record_forged : constr -> int := "kfpeek" "record_forged".'
+Ltac2 @ external record_forged : constr -> int := "kfpeek" "record_forged".
+Ltac2 @ external log_worker_substitute : string -> int := "kfpeek" "log_worker_substitute".
+Ltac2 @ external worker_shape_restore : constr -> int := "kfpeek" "worker_shape_restore".'
 # b NAME BODY: the B file NAME, whose goal True is closed after BODY.
 b() {
   mkdir -p $D/$1
@@ -367,6 +406,18 @@ then echo ok > $D/asyncenv-qed1/rc; else echo failed > $D/asyncenv-qed1/rc; fi
 # worker itself has opened the log (the child opens it from the variable it inherited).
 parb parfork 'let _ := fork_body_shape constr:(A.c) in ().'
 build parfork adm; build parfork qed1
+# B_workerreplace: the compiling process puts a substitute at its log path;
+# a par: worker makes its first body read there and puts the owner's file back
+# before the save. The worker must refuse the substitute, so the compile fails
+# instead of saving the restored owner's log with the worker's query missing.
+mkdir -p $D/workerreplace
+{ printf '%s\n' "$head"
+  printf '%s\n' 'Ltac2 Eval (log_worker_substitute "").' \
+    'Ltac2 check () := let _ := worker_shape_restore constr:(A.c) in ().' \
+    'Set Default Proof Mode "Classic".' 'Goal True /\ True.' '  split.' \
+    '  par: (ltac2:(check ()); exact I).' 'Qed.'
+} > $D/workerreplace/B.v
+build workerreplace qed1
 # B_forge: a par: worker records, through the log, a constant whose name holds tabs
 # and a newline (kfpeek's record_forged).
 parb forge 'let _ := record_forged constr:(A.c) in ().'
@@ -520,6 +571,13 @@ if [ "$(cat $D/parfork-adm/rc)" = ok ] && [ "$(cat $D/parfork-qed1/rc)" = ok ] &
   pass "B_parfork: the records of a child a par: worker forks reach the library: $qpf against the Admitted A, $qpfq against the proved A"
 else
   bad "B_parfork ($(cat $D/parfork-adm/rc) $(cat $D/parfork-qed1/rc)): opacity_queries '$qpf' (Admitted A), '$qpfq' (proved A): $(tr '\n' ' ' < $D/parfork-qed1/out | cut -c1-300)"
+fi
+if [ "$(cat $D/workerreplace-qed1/rc)" = failed ] \
+   && grep -q "Cannot write a record to the keep rule's opacity log" $D/workerreplace-qed1/out \
+   && [ ! -e $D/workerreplace-qed1/B.vo ]; then
+  pass "B_workerreplace: a worker refuses a substitute log even after the owner log returns before the save"
+else
+  bad "B_workerreplace ($(cat $D/workerreplace-qed1/rc)): $(tr '\n' ' ' < $D/workerreplace-qed1/out | cut -c1-400)"
 fi
 qr=$(field $D/reltmp-qed1/B.vo opacity_queries)
 leftr=$(find "$D/tmprel" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')

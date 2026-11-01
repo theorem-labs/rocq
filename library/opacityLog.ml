@@ -80,25 +80,29 @@ open Names
    later [Cd] does not change which file a worker, the read-back or the
    removal names. It never writes its records into a log it
    did not create (one named by an outer process, or a sink such as
-   /dev/null, would lose them). A spawned worker gets the log's path from the
-   worker pool, which sets [ROCQ_OPACITYLOG_FILE] to the value
-   [worker_env_value] gives, whatever the inherited environment or
+   /dev/null, would lose them). A spawned worker gets the log's path and its
+   device and inode from the worker pool, which sets [ROCQ_OPACITYLOG_FILE]
+   and [ROCQ_OPACITYLOG_IDENTITY] to the values [worker_env_value] and
+   [worker_identity_env_value] give, whatever the inherited environment or
    [-async-proofs-private-flags] say ([AsyncTaskQueue.spawn]): the log the
    spawning process has open (the owner's, a worker's or a forked child's),
-   in a worker that has not opened it yet the value it inherited, and
+   in a worker that has not opened it yet the values it inherited, and
    otherwise empty, so the workers of a coqc without [-location-free-label]
-   record nothing. The compiling process also
-   sets the variable in its own environment (empty when no log was made), but
-   nothing in this tree reads it there: it is kept only so a tool running in
+   record nothing. A worker opens the path at its first record and keeps the
+   descriptor only when its device and inode are those it was given; another
+   file at the path, even one put there only while the worker opens it, is
+   refused like a missing one. The compiling process also
+   sets both variables in its own environment (empty when no log was made), but
+   nothing in this tree reads them there: they are kept only so a tool running in
    the same process can find the live log (the test plugin of
    misc/library-label-bodyread.sh reads it to damage the log on purpose), and
    so such a tool never finds an inherited path. Workers are not given
    [-location-free-label], so they never call [set_enabled true]. Only a
-   worker ([Flags.async_proofs_is_worker]) reads the variable; a forked child
+   worker ([Flags.async_proofs_is_worker]) reads the variables; a forked child
    inherits the open descriptor instead, and any other process ignores the
-   variable, so a coqc without the flag never writes to, or fails on, a log
+   variables, so a coqc without the flag never writes to, or fails on, a log
    an outer process named. Only these append: the owner, a worker (through
-   the variable) and a forked child of either (through the descriptor). A
+   the variables) and a forked child of either (through the descriptor). A
    process outside them -- a separate rocq process a plugin starts by its own
    means, rather than through the worker pool -- is outside the log; no plugin
    of the audited plugin set starts one, and nothing here keeps a plugin
@@ -130,8 +134,8 @@ open Names
    that keeps its first line and drops or replaces records: only a process
    that can write the file (one of this user) can make one, the processes
    above only append, and nothing in this tree or the audited plugin set
-   writes to the log otherwise. A worker that cannot open the log
-   the variable names, or a worker or child that cannot write a record to
+   writes to the log otherwise. A worker that cannot open the log the
+   variables name, or a worker or child that cannot write a record to
    it, raises an error before the caller gets the answer it records
    ([record], [record_body_read]), so its tactic fails having used nothing
    unrecorded. *)
@@ -142,8 +146,6 @@ type query = {
   opaque : bool;
   table : string option;
 }
-
-let env_var = "ROCQ_OPACITYLOG_FILE"
 
 let enabled = ref false
 
@@ -164,6 +166,18 @@ let tried_env = ref false
    among them, is not a log. Its number names the line format below. *)
 let header = "rocq-opacity-log 2\n"
 
+let env_var = "ROCQ_OPACITYLOG_FILE"
+let identity_env_var = "ROCQ_OPACITYLOG_IDENTITY"
+
+let string_of_identity (dev, ino) = Printf.sprintf "%d:%d" dev ino
+
+let identity_of_string = function
+  | s ->
+    (match String.split_on_char ':' s with
+     | [dev; ino] ->
+       (try Some (int_of_string dev, int_of_string ino) with Failure _ -> None)
+     | _ -> None)
+
 let open_append p =
   try Some (Unix.openfile p [Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CLOEXEC] 0o600)
   with Unix.Unix_error _ -> None
@@ -177,7 +191,18 @@ let owner () = match !owner_pid with Some p -> p = Unix.getpid () | None -> fals
 
 (* A worker opens the log its environment names, once, on its first record;
    a forked child of a process with a log has its descriptor already; no other
-   process reads the variable. *)
+   process reads the variables. The worker gets the device and inode of the
+   log its parent has open and accepts an opened path only when it names that
+   same file. *)
+let open_worker_log p expected =
+  match open_append p with
+  | None -> None
+  | Some d ->
+    (match Unix.fstat d with
+     | { Unix.st_dev; st_ino; _ } when expected = (st_dev, st_ino) -> Some d
+     | _ -> (try Unix.close d with Unix.Unix_error _ -> ()); None
+     | exception Unix.Unix_error _ -> (try Unix.close d with Unix.Unix_error _ -> ()); None)
+
 let current_fd () =
   match !fd with
   | Some _ as d -> d
@@ -185,9 +210,16 @@ let current_fd () =
     if not !tried_env then begin
       tried_env := true;
       if Flags.async_proofs_is_worker () then
-        match Sys.getenv_opt env_var with
-        | Some p when p <> "" -> path := Some p; fd := open_append p
-        | Some _ | None -> ()
+        match Sys.getenv_opt env_var, Sys.getenv_opt identity_env_var with
+        | Some p, Some expected when p <> "" ->
+          path := Some p;
+          (match identity_of_string expected with
+           | Some expected ->
+             (match open_worker_log p expected with
+              | Some d -> identity := Some expected; fd := Some d
+              | None -> ())
+           | None -> ())
+        | _ -> ()
     end;
     !fd
 
@@ -202,31 +234,46 @@ let set_enabled b =
        misc/library-label-bodyread.sh, and clear an inherited path. *)
     tried_env := true;
     fd := None;
+    identity := None;
     owner_pid := Some (Unix.getpid ());
-    let failed () = path := None; broken := true; Unix.putenv env_var "" in
+    let failed () =
+      path := None; identity := None; broken := true;
+      Unix.putenv env_var ""; Unix.putenv identity_env_var ""
+    in
+    (* Removes [p] only while it is the file [id] names. *)
+    let remove_if_same p id =
+      match Unix.lstat p with
+      | { Unix.st_dev; st_ino; _ } when id = (st_dev, st_ino) ->
+        (try Sys.remove p with Sys_error _ -> ())
+      | _ -> ()
+      | exception Unix.Unix_error _ -> ()
+    in
     match
       let dir = Filename.get_temp_dir_name () in
       let dir = if Filename.is_relative dir then Filename.concat (Sys.getcwd ()) dir else dir in
       Filename.temp_file ~temp_dir:dir "rocq-opacitylog" ".log"
     with
     | p ->
-      (* At exit, the file it made, not another file put at its path since. *)
-      at_exit (fun () ->
-          if owner () then
-            match Unix.lstat p with
-            | { Unix.st_dev; st_ino; _ }
-              when Option.cata (fun id -> id = (st_dev, st_ino)) true !identity ->
-              (try Sys.remove p with Sys_error _ -> ())
-            | _ -> ()
-            | exception Unix.Unix_error _ -> ());
       (match open_append p with
        | None -> failed ()
        | Some d ->
-         match if write_whole d header then Some (Unix.fstat d) else None with
-         | Some { Unix.st_dev; st_ino; _ } ->
-           identity := Some (st_dev, st_ino); path := Some p; fd := Some d; Unix.putenv env_var p
-         | None -> (try Unix.close d with Unix.Unix_error _ -> ()); failed ()
-         | exception Unix.Unix_error _ -> (try Unix.close d with Unix.Unix_error _ -> ()); failed ())
+         let close () = try Unix.close d with Unix.Unix_error _ -> () in
+         match Unix.fstat d with
+         | exception Unix.Unix_error _ -> close (); failed ()
+         | { Unix.st_dev; st_ino; _ } ->
+           let id = (st_dev, st_ino) in
+           if write_whole d header then begin
+             identity := Some id; path := Some p; fd := Some d;
+             Unix.putenv env_var p;
+             Unix.putenv identity_env_var (string_of_identity id);
+             (* Registered only after [id] exists: at exit, the file it
+                made, never another file put at [p] after creation. *)
+             at_exit (fun () -> if owner () then remove_if_same p id)
+           end else begin
+             (* A failed creation removes the file it opened, not another
+                file at [p]. *)
+             remove_if_same p id; close (); failed ()
+           end)
     | exception Sys_error _ -> failed ()
   end
 
@@ -234,6 +281,14 @@ let worker_env_value () =
   match !fd, !path with
   | Some _, Some p -> p
   | _ -> if Flags.async_proofs_is_worker () then Option.default "" (Sys.getenv_opt env_var) else ""
+
+let worker_identity_env_value () =
+  match !fd, !identity with
+  | Some _, Some id -> string_of_identity id
+  | _ ->
+    if Flags.async_proofs_is_worker () then
+      Option.default "" (Sys.getenv_opt identity_env_var)
+    else ""
 
 let queries : query list ref = ref []
 

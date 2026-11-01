@@ -32,6 +32,12 @@ val env_var : string
 (** ["ROCQ_OPACITYLOG_FILE"]: the path of the log file, which worker
     processes read ({!worker_env_value}); no other process reads it. *)
 
+val identity_env_var : string
+(** ["ROCQ_OPACITYLOG_IDENTITY"]: the device and inode, as decimal numbers
+    separated by [:], of the log file {!env_var} names. The worker pool sets
+    it with the path, and removes either variable from inherited and extra
+    environments. *)
+
 val set_enabled : bool -> unit
 (** [set_enabled true]: collect the queries of this compilation.
     [Library.set_location_free_label] calls it, before any tactic runs: the
@@ -40,15 +46,18 @@ val set_enabled : bool -> unit
     named by an absolute path even when TMPDIR is relative, so a later change
     of directory does not change which file the path names, and records the
     device and inode it was made with; if the log cannot be made, {!get}
-    answers [None]. It also sets {!env_var}
-    in its own environment to the log's path (empty when none was made),
-    which nothing in this tree reads there: the worker pool gives workers
-    {!worker_env_value} instead. It is kept only so a tool running in this
+    answers [None], and only a file at the log's path with that device and
+    inode is ever removed. It also sets {!env_var} and {!identity_env_var}
+    in its own environment to the log's path and identity (empty when none
+    was made), which nothing in this tree reads there: the worker pool gives
+    workers {!worker_env_value} and {!worker_identity_env_value} instead.
+    They are kept only so a tool running in this
     process can find the live log (the test plugin of
     misc/library-label-bodyread.sh). Worker processes are not given the flag,
     so they never call [set_enabled true]; a worker
     ([Flags.async_proofs_is_worker]) instead opens the log {!env_var} names
-    on its first record. *)
+    on its first record, only when its device and inode equal those in
+    {!identity_env_var}. *)
 
 val worker_env_value : unit -> string
 (** The value of {!env_var} a worker this process spawns must get: the log
@@ -57,6 +66,11 @@ val worker_env_value : unit -> string
     [""] (no log: the worker records nothing) otherwise.
     [AsyncTaskQueue.spawn] sets it in place of any inherited or extra-env
     entry. *)
+
+val worker_identity_env_value : unit -> string
+(** The value of {!identity_env_var} that accompanies {!worker_env_value}:
+    the device and inode of its open log, or, in a worker that has not opened
+    it yet, the inherited value, and [""] otherwise. *)
 
 val reset : unit -> unit
 (** Forget the queries logged so far, and, if this process created the log
