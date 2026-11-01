@@ -2,7 +2,7 @@
 excuse (BET-84).
 
 The `.vo` comparison follows lane R1's rule
-(`scripts/speed_loop/lanes/r1/segcmp_norm.ml` in a the grading harness
+(`scripts/speed_loop/lanes/r1/segcmp_norm.ml` in a grading-harness
 checkout): the `vmlibrary` segment by value, every other segment by bytes.
 Two stock compiles of one source can write equal `vmlibrary` values with a
 different Marshal sharing, so bytes do not decide that segment.  With

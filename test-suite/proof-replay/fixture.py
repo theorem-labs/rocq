@@ -267,7 +267,7 @@ class Fixture:
         # sharing difference alone made a mixed tree refuse to load
         # (2026-10-25). The segment compare below normalises sharing, so a
         # raw cmp runs first and no fixture passes without it. The lane's own
-        # compare went value-based in the grading harness #1403; this
+        # compare went value-based in the grading harness on 2026-10-25; this
         # suite does not follow it.
         for src in both:
             va, vb = vo_src(a, src), vo_src(b, src)

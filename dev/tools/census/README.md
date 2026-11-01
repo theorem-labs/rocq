@@ -39,7 +39,7 @@ entry whose site is gone reports `STALE`.
 Exit status: 0 when every site is ruled, 1 when a site is `UNMAPPED` or a ruling is `STALE` or
 `INVALID` (one line each on stdout), 2 on a usage or read error. `--list` prints every site with its
 disposition. Python 3.8+, standard library only. The fork's CI runs the Rocq check and the tests
-(`.github/workflows/ci-github.yml`, job `census`). the grading harness's `test-scripts` job runs the
+(`.github/workflows/ci-github.yml`, job `census`). The grading harness's `test-scripts` job runs the
 three plugin checks against the pins in `harness/toolchains/9.2/rocq-verify-harness.opam` and
 `Dockerfile`.
 
