@@ -54,9 +54,9 @@ cp|m_cpoly|universes-undecided|accepted'
 #   [bc]'s [b <= c] contradict [c < a]. The report is still complete, [cp]
 #   reading universes-undecided and [bc] match, because only the statements
 #   that read match are in the check. A reader that pays [bc] on this report
-#   pays what a check loading every sealing refuses. The Lean grade's V9b
-#   fallback closes it: when a statement reads universes-undecided, it
-#   compiles every sealing and loads them all together.
+#   pays what a check loading every sealing refuses. A reader closes it by
+#   compiling every sealing and loading them all together when a statement
+#   reads universes-undecided.
 # <case>|<rows, in request order>|<expected report>|[diverges]
 cases='ab|ab|complete
 bc|bc|complete
@@ -71,11 +71,12 @@ cp_bc|cp bc|complete|diverges'
 
 # rocqchk -j N checks only opaque proofs in worker processes and builds the
 # report in the main process after every worker is reaped, so the report must
-# not depend on N. Releases carry rocqchk -j, and the grade runs rocqchk at
-# widths 4 to 16. Each case runs at -j 1, the sequential reference, and at -j 4
-# and -j 16, the ends of that range: at both, the opaque proofs of Defs.v go to
-# worker processes (checked below). Each width must pass every check, and must
-# give, for each case, the report output byte for byte and the load result
+# not depend on N. Releases carry rocqchk -j, and the verification harness
+# runs rocqchk at widths 4 to 16. Each case runs at -j 1, the sequential
+# reference, and at -j 4 and -j 16, the ends of that range: at both, the
+# opaque proofs of Defs.v go to worker processes (checked below). Each
+# width must pass every check, and must give, for each case, the report
+# output byte for byte and the load result
 # that -j 1 gives.
 widths='1 4 16'
 

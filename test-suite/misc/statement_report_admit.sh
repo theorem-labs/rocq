@@ -8,7 +8,7 @@
 # (StmtAdmit.Model)" and aborted the whole run, costing every statement its
 # verdict. This is the shape a -statement-report run produces: the model
 # library is referenced by constant name, not Require'd by the checked
-# statement library. Found by S4 (BET-257), 2026-10-28.
+# statement library.
 #
 # The report must complete with a verdict, with the vm_compute machine off
 # (default) and on.

@@ -656,9 +656,9 @@ end
    The walk carries the nodes it has still to read in a list and stops by returning. It calls
    nothing on the machine stack, because it runs inside [lambda_of_app], one step of this module's
    recursion over a term, and that recursion is as deep as the term: the list literal of
-   test-suite/primitive/float/specs.v is 19,000 cells deep and leaves 68 KiB of the 8 MiB stack the
-   grader gives. A walk that recursed would put the depth of a body on top of the depth of the
-   term. *)
+   test-suite/primitive/float/specs.v is 19,000 cells deep and leaves 68 KiB of the 8 MiB stack
+   the check harness gives. A walk that recursed would put the depth of a body on top of the depth
+   of the term. *)
 let inline_node_budget = 100_000
 
 let inlinable_body ~limit body =

@@ -88,20 +88,21 @@
 #   answers as it is (N) and with that regression (R, the cap the regression
 #   needs). Builds used -native-compiler no and ran as uid 1000 in the image
 #   rocq/rocq-prover@sha256:0e83cc10f2677223c5d87c6f469f53aca38dc324a5d9801209a291dd368e7e8a
-#   (jobs speed8-replay-memo-cap-measure and speed8-replay-memo-cap-repeat).
+#   over two runs of the measurement.
 #   In KiB, dev profile (dune's default) and release profile (dune build -p):
 #                   dev                    release
 #                   N          R           N          R
 #     00ae038342      910,000  1,100,000   1,000,000  1,140,000
 #     74a48d05e5    (no dev build)         1,000,000  1,140,000
-#     adf55baeaa      970,000  1,110,000   1,010,000  1,150,000
-#   00ae038342 is this cache alone; 74a48d05e5 and adf55baeaa add other
-#   changes of the fork to it. 74a48d05e5 has no dev build: it lacks
+#     with replay     970,000  1,110,000   1,010,000  1,150,000
+#   00ae038342 is this cache alone and 74a48d05e5 the whole fork around it;
+#   the third is 74a48d05e5 with the per-proof replay work added, a tree
+#   this history does not carry. 74a48d05e5 has no dev build: it lacks
 #   vernac/assumptionsShared.mli, which the dev profile requires. The cap
-#   is at least 30,000 KiB over every N and at least 60,000 KiB under
-#   every R. One earlier run (job speed8-replay-memo-cap-verify) gave R
-#   1,060,000 for 00ae038342's release build, which seven later runs did
-#   not reproduce; the cap is 20,000 KiB under that too.
+#   is at least 30,000 KiB over every N and at least 60,000 KiB under every
+#   R. One earlier run gave R 1,060,000 for 00ae038342's release build,
+#   which seven later runs did not reproduce; the cap is 20,000 KiB under
+#   that too.
 # - AxChain3000: z(k) : idT (z(k-1) 0 p) -> BIG = 0 -> nat for 3,000 axioms,
 #   BIG naming 3,000 definitions, queried twice, under -v 800000. The second
 #   query replays the chain, and runs out of memory when the replay queues

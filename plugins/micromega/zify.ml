@@ -912,7 +912,7 @@ let rec exact_eq c1 c2 =
     The injection reduces the term it injects, and a proof script's lia calls inject the same
     terms over and over: on speed lane R2's RtLgTopA the two call sites ([interp_prf] on a term
     built from constructors, [conv_of_term] on an operator applied to an argument) reduced
-    123,406 terms, 46 of them distinct (dispatch://INFRA-217).
+    123,406 terms, 46 of them distinct.
 
     Why a reused result is the reduction's. [Tacred.compute] is call by value with every flag
     ([RedFlags.all], whose transparency state is full): it reads the term and, of the environment,

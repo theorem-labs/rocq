@@ -2,10 +2,11 @@
    An axiom is named where it is declared, which for a functor's field is the
    module each application makes: App.in_f. That is the name Print
    Assumptions prints for it too; the functor's own F.in_f appears in
-   neither account, which is what a reader that joins the two by name, as the
-   BET grader does, needs. Where this summary has only a type to read, it
-   cannot tell an assumption from a definition and names nothing, so no shape
-   below is named one way here and another way by Print Assumptions. *)
+   neither account, which is what a reader that joins the two by name, as
+   the verification harness does, needs. Where this summary has only a type
+   to read, it cannot tell an assumption from a definition and names
+   nothing, so no shape below is named one way here and another way by
+   Print Assumptions. *)
 
 Module Type S. Parameter n : nat. End S.
 Module Type T. Parameter tgt : 1 = 2. End T.
