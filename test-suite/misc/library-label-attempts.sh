@@ -2,7 +2,7 @@
 # Attempted-resolution records (vernac/attempts.ml) and the library label.
 #
 # Under -location-free-label, library Test.A attempts a resolution that leaves no dependency behind: a
-# Require under Fail (binary-equivalence #861's reproduction: the library is
+# Require under Fail (the .vo reuse study's reproduction: the library is
 # absent when A is compiled and present later), a Require under Succeed
 # (rolled back), a Load under Succeed, a plain Load, a Declare ML Module
 # under Fail (no such plugin) and one under Succeed. Each case checks that

@@ -10,7 +10,7 @@
 
 open Names
 
-(** Records of attempted resolutions (design D18, dispatch://INFRA-361,
+(** Records of attempted resolutions (design D18, the location-free library label,
     spec item 3).
 
     A [Require], [Load] or [Declare ML Module] that a library attempted can

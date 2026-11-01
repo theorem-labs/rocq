@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(** The location-free label of a library (design D18, dispatch://INFRA-361).
+(** The location-free label of a library (design D18).
 
     [coqc] stores the label as the digest of a library's [library] segment,
     in place of the MD5 of that segment's bytes ([Library.save_library_to]).
