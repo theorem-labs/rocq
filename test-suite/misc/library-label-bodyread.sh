@@ -409,6 +409,14 @@ build wenv qed1
 mkdir -p $D/notmp-qed1; cp $D/print/B.v $D/notmp-qed1/B.v
 if TMPDIR="$PWD/$D/nodir" comp -R $D/qed1 A -R $D/notmp-qed1 Bdep $D/notmp-qed1/B.v > $D/notmp-qed1/out 2>&1
 then echo ok > $D/notmp-qed1/rc; else echo failed > $D/notmp-qed1/rc; fi
+# B_readonly: TMPDIR exists but is mode 0555 (unwritable). The compile must
+# succeed with no keepfacts (the .mli promises get answers None).
+mkdir -p $D/readonly-tmp; chmod 0555 $D/readonly-tmp
+mkdir -p $D/readonly-qed1; cp $D/print/B.v $D/readonly-qed1/B.v
+if TMPDIR="$PWD/$D/readonly-tmp" comp -R $D/qed1 A -R $D/readonly-qed1 Bdep $D/readonly-qed1/B.v \
+     > $D/readonly-qed1/out 2>&1
+then echo ok > $D/readonly-qed1/rc; else echo failed > $D/readonly-qed1/rc; fi
+chmod 0755 $D/readonly-tmp
 
 # envbuild NAME A ENV...: compile B NAME (copied to NAME-A) against A's variant
 # with the environment ENV and -location-free-label; rc in NAME-A/rc.
@@ -609,6 +617,7 @@ else
 fi
 nulls bad "B_bad: a log with a line that is not a record"
 nulls notmp "B_notmp: TMPDIR is a missing directory"
+nulls readonly "B_readonly: TMPDIR is mode 0555 (unwritable)"
 cantwrite() { # NAME TEXT: the compile fails with the opacity log's write error
   local d=$D/$1-qed1
   if [ "$(cat $d/rc)" = failed ] && grep -q "Cannot write a record to the keep rule's opacity log" $d/out; then
@@ -725,8 +734,10 @@ if [ "$(cat $D/unstable-qed1/rc)" = ok ] && [ -n "$ul" ]; then
 else
   bad "B_unstable ($(cat $D/unstable-qed1/rc)): unstable-tmp='$(find $D/unstable-tmp -mindepth 1 | head -3 | tr '\n' ' ')': $(tr '\n' ' ' < $D/unstable-qed1/out | cut -c1-300)"
 fi
-# B_symlink: TMPDIR given through a symlink. The private directory is created
-# under the resolved path, not the symlink spelling.
+# B_symlink: TMPDIR given through a symlink. Unix.realpath resolves it, and
+# the private directory is created and cleaned up under the resolved path.
+# This does not discriminate against the parent code (lstat follows the link
+# there too); it guards against a future change that might resolve differently.
 TMPDIR_REAL=$(mktemp -d /tmp/bodyread-sym-XXXXXXXXXX)
 ln -s "$TMPDIR_REAL" $D/symlink-tmp
 mkdir -p $D/symlink-qed1; cp $D/parany/B.v $D/symlink-qed1/B.v
@@ -741,12 +752,14 @@ else
   bad "B_symlink ($(cat $D/symlink-qed1/rc)): real='$sym_priv' link='$sym_link_priv': $(tr '\n' ' ' < $D/symlink-qed1/out | cut -c1-300)"
 fi
 rm -f $D/symlink-tmp; rmdir "$TMPDIR_REAL" 2>/dev/null
-# B_trailingspace: a TMPDIR whose name ends in a space, next to a same-named
-# directory without the space. Each must be judged on its own bytes.
-TMPDIR_SPACE=$(mktemp -d "/tmp/bodyread-sp -XXXXXXXXXX")
-TMPDIR_NOSPACE="${TMPDIR_SPACE% }"
-# If the no-space version doesn't exist, create one with different security.
-if [ ! -d "$TMPDIR_NOSPACE" ]; then mkdir -m 0777 "$TMPDIR_NOSPACE"; fi
+# B_trailingspace: a TMPDIR whose name ends in a space, next to a
+# same-named directory without the space that has different security (0777,
+# non-sticky). The compile must judge the actual path, with its trailing
+# space, and clean up there.
+TMPDIR_SP_ROOT=$(mktemp -d /tmp/bodyread-sp-XXXXXXXXXX)
+TMPDIR_SPACE="$TMPDIR_SP_ROOT/x "
+mkdir "$TMPDIR_SPACE"
+mkdir -m 0777 "$TMPDIR_SP_ROOT/x"
 mkdir -p $D/space-qed1; cp $D/parany/B.v $D/space-qed1/B.v
 if TMPDIR="$TMPDIR_SPACE" comp -R $D/qed1 A -R $D/space-qed1 Bdep $D/space-qed1/B.v \
      > $D/space-qed1/out 2>&1
@@ -757,7 +770,7 @@ if [ "$(cat $D/space-qed1/rc)" = ok ] && [ -z "$space_left" ]; then
 else
   bad "B_trailingspace ($(cat $D/space-qed1/rc)): left='$space_left': $(tr '\n' ' ' < $D/space-qed1/out | cut -c1-300)"
 fi
-rmdir "$TMPDIR_SPACE" "$TMPDIR_NOSPACE" 2>/dev/null
+rmdir "$TMPDIR_SPACE" "$TMPDIR_SP_ROOT/x" "$TMPDIR_SP_ROOT" 2>/dev/null || true
 # Each compile's log is private and removed at exit: this fixture's TMPDIR is empty.
 left=$(find "$TMPDIR" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
 if [ -z "$left" ]; then

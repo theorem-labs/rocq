@@ -366,37 +366,38 @@ let set_enabled b =
       let root = if Filename.is_relative root then Filename.concat (Sys.getcwd ()) root else root in
       path_secure root
     with
-    | Some { canonical; stable } ->
-      let dir = make_private_dir canonical in
-      let dir_id = match Unix.lstat dir with
-        | { Unix.st_dev; st_ino; _ } -> Some (st_dev, st_ino)
-        | exception Unix.Unix_error _ -> None
-      in
-      (match create_log_result dir with
-       | Open_failed ->
-         (* O_EXCL may have failed because another file was there. Remove
-            only the empty private dir, after the same stable/dev:ino rule. *)
-         (match stable, dir_id with
-          | true, Some did ->
-            (match Unix.lstat dir with
-             | { Unix.st_dev; st_ino; _ } when (st_dev, st_ino) = did ->
-               (try Unix.rmdir dir with Unix.Unix_error _ -> ())
-             | _ | exception Unix.Unix_error _ -> ())
-          | _ -> ());
-         failed ()
-       | Opened_failed (p, log_id) ->
-         (match dir_id with
-          | Some did -> cleanup_log ~stable dir did p log_id
-          | None -> ());
-         failed ()
-       | Opened (d, p, log_id) ->
-         identity := Some log_id; path := Some p; fd := Some d;
-         at_exit (fun () ->
-             if owner () then
-               match dir_id with
-               | Some did -> cleanup_log ~stable dir did p log_id
-               | None -> ()))
+    | exception Sys_error _ -> failed ()
     | None -> failed ()
+    | Some { canonical; stable } ->
+      (match make_private_dir canonical with
+       | exception Unix.Unix_error _ -> failed ()
+       | dir ->
+         let dir_id = match Unix.lstat dir with
+           | { Unix.st_dev; st_ino; _ } -> Some (st_dev, st_ino)
+           | exception Unix.Unix_error _ -> None
+         in
+         (match create_log_result dir with
+          | Open_failed ->
+            (match stable, dir_id with
+             | true, Some did ->
+               (match Unix.lstat dir with
+                | { Unix.st_dev; st_ino; _ } when (st_dev, st_ino) = did ->
+                  (try Unix.rmdir dir with Unix.Unix_error _ -> ())
+                | _ | exception Unix.Unix_error _ -> ())
+             | _ -> ());
+            failed ()
+          | Opened_failed (p, log_id) ->
+            (match dir_id with
+             | Some did -> cleanup_log ~stable dir did p log_id
+             | None -> ());
+            failed ()
+          | Opened (d, p, log_id) ->
+            identity := Some log_id; path := Some p; fd := Some d;
+            at_exit (fun () ->
+                if owner () then
+                  match dir_id with
+                  | Some did -> cleanup_log ~stable dir did p log_id
+                  | None -> ())))
   end
 
 let worker_env_value () =
