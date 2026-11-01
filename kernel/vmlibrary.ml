@@ -145,7 +145,7 @@ let vm_segment : compiled_library ObjFile.id = ObjFile.make_id segment_name
    so a process that does not have the opcodes the writer emitted jumps where
    its own table sends that word, and dies with no message: a library written by
    a Rocq whose VM has instructions this one lacks made the reader dump core
-   (SIGABRT, dispatch://BET-241).
+   (SIGABRT).
 
    The segment therefore starts with its own format version, a 32-bit big-endian
    word (the integer form the rest of the container uses, lib/objFile.ml),

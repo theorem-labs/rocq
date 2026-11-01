@@ -2,7 +2,7 @@
 # The vmlibrary segment of a .vo holds VM bytecode: instruction words the C
 # interpreter of the READING process dispatches on. A reader whose VM does not
 # have an opcode the writer emitted used to jump wherever its own table sends
-# that word and die with no message (dispatch://BET-241: a library written by a
+# that word and die with no message (the cofix guard audit: a library written by a
 # later Rocq made the reader dump core, SIGABRT).
 #
 # The segment now starts with its own format version (kernel/vmlibrary.ml), read

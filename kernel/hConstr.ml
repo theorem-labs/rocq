@@ -128,8 +128,7 @@ module Tbl = struct
      a primitive integer literal is the literal plus 126 ([hash_kind] below,
      [Uint63.hash], [Hashset.Combine.combinesmall]), so a .v file can hold
      them; the cross-family review of speed-6 measured 65,536 such hashes at
-     4.62 s against 0.095 s for the tree this table replaced, 48.6 times
-     (dispatch://BET-241).
+     4.62 s against 0.095 s for the tree this table replaced, 48.6 times.
 
      So a probe walks a hash's home slot and at most [max_probe] slots after
      it, and a hash with no free slot among them is kept in [spill], an
