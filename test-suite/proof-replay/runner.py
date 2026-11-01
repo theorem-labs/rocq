@@ -24,7 +24,7 @@ For one fixture the runner does, in order:
 5.  **coqchk.**  `rocqchk` over the replay run's objects must accept them.
 
 The `.vo` comparison follows lane R1's rule
-(`scripts/speed_loop/lanes/r1/segcmp_norm.ml` in a the grading harness
+(`scripts/speed_loop/lanes/r1/segcmp_norm.ml` in a grading-harness
 checkout): the `vmlibrary` segment by value, every other segment by bytes.
 Two stock compiles of one source can write equal `vmlibrary` values with a
 different Marshal sharing, so bytes do not decide that segment.  With
@@ -853,7 +853,7 @@ class Fixture:
         # sharing difference alone made a mixed tree refuse to load
         # (2026-10-25). The segment compare below normalises sharing, so a
         # raw cmp runs first and no fixture passes without it. The lane's own
-        # compare went value-based in the grading harness #1403; this
+        # compare went value-based in the grading harness on 2026-10-25; this
         # suite does not follow it.
         for src in both:
             va, vb = vo_src(a, src), vo_src(b, src)
