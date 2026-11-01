@@ -1,5 +1,5 @@
 {
-  "doc": "the grade uses -skip-qed-typecheck: replay writes the grade's unchecked mark and later uses the opaque",
+  "doc": "the check run uses -skip-qed-typecheck: replay writes the check run's unchecked mark and later uses the opaque",
   "files": ["A.v"],
   "grade_flags": ["-skip-qed-typecheck"],
   "summaries": {

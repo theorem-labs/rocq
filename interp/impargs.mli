@@ -27,7 +27,7 @@ val refresh_flags : unit -> unit
     A declaration puts the record itself into the lib object it adds, so
     two declarations that read one record share it in the written [.vo].
     A replayed proof skips the path that replaces it in a full compile, so
-    replay calls this to leave the same structure behind (BET-84 P3). *)
+    replay calls this to leave the same structure behind (replay part P3). *)
 
 val is_implicit_args : unit -> bool
 val is_strict_implicit_args : unit -> bool

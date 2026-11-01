@@ -686,7 +686,7 @@ let init () =
   Summary.Synterp.init_summaries ();
   Summary.Interp.init_summaries ()
 
-(* BET-84 P3: the reference a kernel name printed by [Names.*.to_string]
+(* Replay part P3: the reference a kernel name printed by [Names.*.to_string]
    names now, for the replay evaluators that read a recorded key back. Its
    absolute path is the printed name, except while sections are open: the
    nametab binds an object declared in an open section under a path that
@@ -719,7 +719,7 @@ let global_of_kernel_string s =
        go (Libnames.dirpath_of_path (cwd ()))
      | _ -> raise Not_found)
 
-(* BET-84 P3: a kernel name as a recorded key, and back.
+(* Replay part P3: a kernel name as a recorded key, and back.
    [KerName.to_string] is not a key: it drops a bound module's number, and
    ["A.B.c"] is both the label [c] of the file [A.B] and the label [c] of the
    module [B] of the file [A]. So each part is written with its length
@@ -799,7 +799,7 @@ let kername_of_key key =
   | Some (kn, e) when e = String.length key && String.equal (kername_key kn) key -> Some kn
   | Some _ | None -> None
 
-(* BET-84: a constant as a recorded key: its user and canonical kernel
+(* Per-proof replay: a constant as a recorded key: its user and canonical kernel
    names, each as [kername_key] writes it. Two constants with the same user
    name and different canonical names (an alias of a module) get different
    keys. *)

@@ -1,5 +1,5 @@
 {
-  "doc": "core.eq.type is rebound after a congruence proof: every proof that opens before the rebinding runs, so stock's cached eq is the same in the grade; the rebinding trips the Rocqlib fence, so the proof after it runs too",
+  "doc": "core.eq.type is rebound after a congruence proof: every proof that opens before the rebinding runs, so stock's cached eq is the same in the check run; the rebinding trips the Rocqlib fence, so the proof after it runs too",
   "files": ["A.v"],
   "records": {"A.v": {"PR.A.untouched": {"eligible": true}, "PR.A.p": {"eligible": true}, "PR.A.q": {"eligible": true}}},
   "summaries": {

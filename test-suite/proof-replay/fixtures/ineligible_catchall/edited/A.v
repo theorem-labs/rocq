@@ -12,7 +12,7 @@
 
    The hint below reduces a one-million-deep term.  Reading the result back
    recurses once per constructor, so it overflows the 8 MB stack the fixture
-   pins, which is the stack a grade runs under.  The handler catches it, marks
+   pins, which is the stack a check run runs under. The handler catches it, marks
    the open proof `catchall`, and returns None; `rewrite` then takes its
    fallback (`gen_elim`, `equality.ml:526`), which builds the rewriting scheme
    for `myeq`, so the proof still closes and the compile still succeeds.

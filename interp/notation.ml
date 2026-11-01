@@ -185,7 +185,7 @@ let scope_item_eq s1 s2 = match s1, s2 with
 
 let scope_stack = ref []
 
-(* BET-84 census row 11: the open scopes, as one value under a fixed key.
+(* Census row 11: the open scopes, as one value under a fixed key.
    ONE value function, called by the record site and by the replay
    evaluator (dev/tools/census/replay_channels.py). *)
 let recorded_scope_stack () =
@@ -270,7 +270,7 @@ let remove_delimiters scope =
          (* XXX info *)
          CErrors.anomaly ~info (str "A delimiter for scope [scope] should exist")
 
-(* BET-84 census row 11: the scope a delimiting key names, read by its key.
+(* Census row 11: the scope a delimiting key names, read by its key.
    ONE value function, called by the record site and by the replay evaluator
    (dev/tools/census/replay_channels.py). The key is the delimiter itself. *)
 let recorded_delimiters_scope key =
@@ -564,7 +564,7 @@ let find_prim_token check_allowed ?loc p sc =
   check_allowed pat;
   pat
 
-(* BET-84 census row 11: the key of a notation or number query. Every part
+(* Census row 11: the key of a notation or number query. Every part
    is written with its length and a custom entry by [Lib.kername_key], so a
    key determines its query and [notation_query_of_key] reads it back. *)
 let notation_query_key (entry, text) scopes =
@@ -635,7 +635,7 @@ let notation_query_of_key key =
        | Some _ | None -> None)
   | Some _ | None -> None
 
-(* BET-84 census row 11: each number or string notation the proof reads,
+(* Census row 11: each number or string notation the proof reads,
    with the scopes it was read in and the query's mode.
 
    ONE value function, called by the record site and by the replay
@@ -805,7 +805,7 @@ let () = CErrors.register_handler @@ function
   | UnknownInterp (ntn,scopes) -> Some (explain_unknown_interp ntn scopes)
   | _ -> None
 
-(* BET-84 census row 11: each notation the proof reads, with the scopes it
+(* Census row 11: each notation the proof reads, with the scopes it
    was read in, because the same notation means different things in
    different scopes. The key holds the whole query, so the interpretation is
    a function of the key and of the scope table alone.
@@ -1364,7 +1364,7 @@ let declare_arguments_scope local r scl =
      re-computations and keep these manually given scopes. *)
   declare_arguments_scope_gen req r (scl,[])
 
-(* BET-84 census row 11: the argument scopes of each global the proof
+(* Census row 11: the argument scopes of each global the proof
    reads. The value is computed once, for the recorder at the lookup and
    for the replay evaluator that checks the record again
    (dev/tools/census/replay_channels.py). The lookup re-computes a stale

@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(** BET-84: the same tactic with every source location set to [None].
+(** Per-proof replay: the same tactic with every source location set to [None].
 
     A location only places an error message: two tactics that differ only
     in their locations run the same way and build the same terms. The proof

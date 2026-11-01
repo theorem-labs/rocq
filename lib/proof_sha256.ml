@@ -9,7 +9,7 @@
 (************************************************************************)
 
 (* SHA-256 (FIPS 180-4), for one use: binding a proof record to the digest
-   the grading engine took from the registration's manifest (BET-84 P3).
+   the checking engine took from the registration's manifest (replay part P3).
    OCaml 4.14's [Digest] is MD5 only. Words are held in native ints and
    masked to 32 bits, which needs a 63-bit int. *)
 

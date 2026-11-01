@@ -129,7 +129,7 @@ let warn { Msg.tag; warning } ?loc v =
   let tag = DMap.tag_of_onetag tag in
   let w = W (loc,tag,v) in
   let status = warning_status warning in
-  (* BET-84: a proof that raises a warning is not replayed. Raising its
+  (* Per-proof replay: a proof that raises a warning is not replayed. Raising its
      warning again after a replay is not what stock does: the status that
      decides is the one when the warning came, which a sentence's warnings
      attribute can set for that sentence only (fixture
@@ -150,7 +150,7 @@ let flags = ref ""
 
 let get_flags () = !flags
 
-(* BET-84: what a later command can see of the registry of warnings and
+(* Per-proof replay: what a later command can see of the registry of warnings and
    categories: each one by name, with its parents' names, and a warning's
    default status and whether it is also a category. Its current status is
    a function of these and of the flags, which are read on their own
@@ -175,7 +175,7 @@ let registry_view =
 let iter_warnings f =
   !graph |> String.Map.iter (fun _ w -> Option.iter f w.warning)
 
-(* BET-84: runs [f] with every enabled warning disabled, then restores
+(* Per-proof replay: runs [f] with every enabled warning disabled, then restores
    them, also when [f] raises. A warning that is an error stays one, so [f]
    still fails where it would fail; only what it would print is left out. *)
 let with_enabled_silenced f =
@@ -370,7 +370,7 @@ let all = create_category ~from:[] ~name:"all" ()
 
 let default_cat = create_category ~from:[all] ~name:"default" ()
 
-(* BET-84: a warning or category created while a proof is recorded, the
+(* Per-proof replay: a warning or category created while a proof is recorded, the
    first time it is needed (a deprecated reference's version warning), is
    state the proofs after it see: a later warnings flag can name it
    (fixture warning_lazy_registration). A replay would not create it, so

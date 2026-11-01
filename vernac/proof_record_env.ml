@@ -351,7 +351,7 @@ let drop_universe_frames () =
   | _ :: _ -> set_universe_frames []
 
 (* Reads taken once, at each proof's start, for the channels that have no
-   single read point (BET-84, census rows 2, 3, 4, 13, M3, M7). They are
+   single read point (census rows 2, 3, 4, 13, M3, M7). They are
    recorded as ordinary reads, so the matcher treats them like the rest.
    Replay evaluates the same list at the proof it is about to replay
    (`Proof_replay_env`), so the two sides can never drift apart. *)

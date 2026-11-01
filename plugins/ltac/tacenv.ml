@@ -51,7 +51,7 @@ let alias_map = Summary.ref ~name:"tactic-alias"
 let register_alias key tac =
   alias_map := KerName.Map.add key tac !alias_map
 
-(* BET-84 census row 9: each Ltac alias and definition the proof reads.
+(* Census row 9: each Ltac alias and definition the proof reads.
    The value comes from the one function per channel below. *)
 let record_hook : (string -> KerName.t -> string option) ref = ref (fun _ _ -> None)
 
@@ -105,11 +105,11 @@ let pr_tacname t =
 
 let tac_tab = ref MLTacMap.empty
 
-(* BET-84: [~overwrite:true] puts another closure under a name that is
+(* Per-proof replay: [~overwrite:true] puts another closure under a name that is
    already registered, possibly the name of one of this tree's plugins, which
    [Tacinterp.fence_ml_tactic] trusts by name. Rocq never overwrites, so a
    replacement makes every later proof of the process ineligible
-   (Proof_recorder.closure_setter; Claude review of 467292ce69, finding 2). *)
+   (Proof_recorder.closure_setter; review of 467292ce69, finding 2). *)
 let ml_tactic_overwritten =
   Proof_recorder.closure_setter ~what:"Tacenv.register_ml_tactic ~overwrite" ~stock:0
 
@@ -172,7 +172,7 @@ let is_ltac_for_ml_tactic r =
     record "tactic_definition" r None;
     raise Not_found
 
-(* BET-84: ONE value for each of the two Ltac channels. The record sites
+(* Per-proof replay: ONE value for each of the two Ltac channels. The record sites
    above and the replay evaluators below call these, so a read's value is
    never computed two ways (dev/tools/census/replay_channels.py).
 

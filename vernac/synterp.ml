@@ -326,7 +326,7 @@ let require_locate from qidl =
       | Error LibNotFound -> Loc.raise ?loc:qid.loc (NotFoundLibrary (root, qid)))
     qidl
 
-(* BET-84 measurement: whether a Require loads anything (Proof_replay.note_require). *)
+(* Measurement: whether a Require loads anything (Proof_replay.note_require). *)
 let note_require modrefl =
   Proof_replay.note_require
     ~already_loaded:(List.for_all (fun (_, dir) -> Library.library_is_loaded dir) modrefl)

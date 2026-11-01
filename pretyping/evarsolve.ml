@@ -1784,7 +1784,7 @@ let rec invert_definition unify flags choose imitate_defs
           map_constr_with_full_binders env' !evdref (fun d (env,k) -> push_rel d env, k+1)
                                         imitate envk t
         with e ->
-          (* BET-84: a critical exception here takes the fallback path, so
+          (* Per-proof replay: a critical exception here takes the fallback path, so
              the term can differ; the proof is never replayed. *)
           if not (CErrors.noncritical e) then
             Proof_recorder.ineligible ~reason:"catchall" ~detail:"pretyping/evarsolve.ml:1786";

@@ -35,11 +35,11 @@ type behavior = {
 }
 
 let behaviors = Hashtbl.create 4
-(* BET-84: Rocq registers its two behaviours when this module loads. A plugin
+(* Per-proof replay: Rocq registers its two behaviours when this module loads. A plugin
    that registers another, or replaces one under its name ("Strict Subproofs"),
    installs a closure that every bullet runs, and the options digest records
    only the behaviour's name: every later proof of the process is ineligible
-   (Proof_recorder.closure_setter; Claude review of 23b37e36fb, finding 3). *)
+   (Proof_recorder.closure_setter; review of 23b37e36fb, finding 3). *)
 let behavior_registered =
   Proof_recorder.closure_setter ~what:"Proof_bullet.register_behavior" ~stock:2
 

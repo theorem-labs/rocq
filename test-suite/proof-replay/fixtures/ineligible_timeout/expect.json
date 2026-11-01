@@ -1,5 +1,5 @@
 {
-  "doc": "Timeout routes through Control.timeout: registration stores no replay term and grade runs it as stock",
+  "doc": "Timeout routes through Control.timeout: registration stores no replay term and check run runs it as stock",
   "files": ["A.v"],
   "records": {"A.v": {"PR.A.control": {"eligible": true},
                        "PR.A.timeout_proof": {"ineligible": ["timeout"], "stores_no_term": true}}},

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-# BET-84 P3. Replay must refuse a stored term when a plugin's closure could
+# replay part P3. Replay must refuse a stored term when a plugin's closure could
 # have decided the proof, in each of the three ways the recorder knows:
 # - the proof asked an ACTIVE typeclass solver, coercion hook or
 #   canonical-solution hook: the recorder marks it ineligible (reason
 #   plugin_hook), and replay never uses it;
 # - the registration's proof asked the hooks when none was active, and the
-#   grade activates one: the recorded read of the active list (the digest of
+# check run activates one: the recorded read of the active list (the digest of
 #   its names) differs, and the proof misses on that channel;
 # - a plugin installs a closure over Rocq's own (Evarconv.set_evar_conv and
 #   the other fenced setters): the process-wide fence trips, and no proof of
@@ -21,7 +21,7 @@
 # TestHookActivate and TestSetClosures; each variant comments some out. Every
 # compile is of out/w/Probe.v under the logical name PluginHooks, in a new
 # process; a registration's record is moved to out/rec, made read-only, and
-# given to the grade compile with its SHA-256.
+# given to the check compile with its SHA-256.
 
 set -e
 

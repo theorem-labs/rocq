@@ -19,7 +19,7 @@ module NamedDecl = Context.Named.Declaration
 let all_collection_id = Id.of_string "All"
 let known_names = Summary.ref [] ~name:"proofusing-nameset"
 
-(* BET-84 census row 19: each named collection the proof looks up, keyed
+(* Census row 19: each named collection the proof looks up, keyed
    by its name. ONE value function, called by the record site and by the
    replay evaluator (dev/tools/census/replay_channels.py): the digest of
    the collection's expression, or absent. *)

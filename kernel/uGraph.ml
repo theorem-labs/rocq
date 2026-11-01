@@ -52,7 +52,7 @@ type 'a check_function = t -> 'a -> 'a -> bool
 
 let set_type_in_type b g = {g with type_in_type=b}
 
-(* BET-84: a proof's universe input is the part of the global graph its
+(* Per-proof replay: a proof's universe input is the part of the global graph its
    queries actually inspect. The recorder installs this hook only while a
    proof is open; regular Rocq runs pay one branch and allocate nothing. *)
 type query =

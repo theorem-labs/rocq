@@ -2120,7 +2120,7 @@ let (forward_subst_one, subst_one) = Hook.make ()
 
 let intro_decomp_eq_function = ref (fun _ -> failwith "Not implemented")
 
-(* BET-84: tactics/equality.ml installs Rocq's own once, when it loads; a
+(* Per-proof replay: tactics/equality.ml installs Rocq's own once, when it loads; a
    later one is a plugin's (Proof_recorder.closure_setter). *)
 let intro_decomp_eq_set =
   Proof_recorder.closure_setter ~what:"Tactics.declare_intro_decomp_eq" ~stock:1

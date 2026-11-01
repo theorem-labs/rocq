@@ -330,7 +330,7 @@ let rewtab =
 
 let raw_find_base bas = String.Map.find bas !rewtab
 
-(* BET-84 census row 15: each rewrite base a proof looks up, with the digest
+(* Census row 15: each rewrite base a proof looks up, with the digest
    of the base, or absent. Every lookup a tactic makes goes through here:
    autorewrite, and the [hints] strategy of rewrite_strat through
    [find_matches] (Claude gate at 0f8d815732, finding 2). An absent base is
@@ -472,7 +472,7 @@ let () =
       [Proof_record.{ row = "18"; channel = "counter_start"; key = "REWHINT-COUNTER";
                       value = Some (string_of_int !rewrite_hint_counter) }])
 
-(* BET-84 P3: see the hint counter in [Hints]. *)
+(* Replay part P3: see the hint counter in [Hints]. *)
 let () = Proof_replay.register_summary_counter "rewrite_hint_counter"
 
 let fresh_key () =

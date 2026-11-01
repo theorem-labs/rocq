@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# BET-84 P2. With async proofs the proofs of a file run in worker processes,
+# replay part P2. With async proofs the proofs of a file run in worker processes,
 # and the recorder's counters, caches and fences count per process: a record
 # made in the master describes the master only. [rocq compile -proof-record]
 # must therefore mark EVERY proof of such a file ineligible

@@ -43,7 +43,7 @@ type t =
   (** [-proof-replay FILE] or [-proof-replay-dir DIR]: the registration's
       record this compile replays from. *)
   ; proof_replay_ratio : float option
-  (** [-proof-replay-ratio R]: the grade-to-registration ratio of per-file
+  (** [-proof-replay-ratio R]: the check-to-registration ratio of per-file
       wall time, at the top of its measured spread. Required with a
       source, refused without one: there is no default charge. *)
   ; proof_replay_budget : float option
@@ -54,7 +54,7 @@ type t =
       resident set was above this compiles without replay. *)
   ; proof_replay_digest : string option
   (** [-proof-replay-digest SHA256]: the record's SHA-256, which the
-      grading engine takes from the registration's root-owned manifest. A
+      checking engine takes from the registration's root-owned manifest. A
       record whose bytes hash to anything else is refused for the whole
       file. *)
 

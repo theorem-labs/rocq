@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(** What a recorded read is worth now (BET-84, part P3). *)
+(** What a recorded read is worth now (part P3). *)
 
 val init : unit -> unit
 (** Registers this layer's read evaluators with {!Proof_replay}. Call it

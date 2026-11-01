@@ -1,5 +1,5 @@
 {
-  "doc": "opening a proof inside a proof makes the outer record ineligible for nested_proof; the inner proof belongs to the outer one on both sides, so the grade counts one proof",
+  "doc": "opening a proof inside a proof makes the outer record ineligible for nested_proof; the inner proof belongs to the outer one on both sides, so the check run counts one proof",
   "files": ["A.v"],
   "records": {"A.v": {"PR.A.outer": {"ineligible": ["nested_proof", "command_in_proof"], "stores_no_term": true}}},
   "summaries": {"A.v": {"proofs": 1, "hits": 0,

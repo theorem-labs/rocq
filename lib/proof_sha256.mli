@@ -9,7 +9,7 @@
 (************************************************************************)
 
 (** SHA-256 (FIPS 180-4), for binding a proof record to the digest the
-    grading engine took from the registration's manifest (BET-84 P3). *)
+    checking engine took from the registration's manifest (replay part P3). *)
 
 val digest_hex : string -> string
 (** The SHA-256 of a string, as 64 lowercase hex digits. *)

@@ -8,7 +8,7 @@
 (*         *     (see LICENSE file for the text of the license)         *)
 (************************************************************************)
 
-(* BET-84: see the interface. Each function rebuilds its value with the same
+(* Per-proof replay: see the interface. Each function rebuilds its value with the same
    constructor and the same non-location fields, and with [None] for every
    location; a field of a type that holds no location is kept as it is. *)
 

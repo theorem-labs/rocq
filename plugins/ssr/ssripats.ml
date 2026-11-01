@@ -378,7 +378,7 @@ let () =
       [ Proof_record.{ row = "18"; channel = "counter_start"; key = "ssr_abstract_id";
                        value = Some (Proof_recorder.digest ~what:"ssr_abstract_id" !ssr_abstract_id) } ])
 
-(* BET-84 P3: a Summary counter, which the STM rolls back when a proof
+(* Replay part P3: a Summary counter, which the STM rolls back when a proof
    closes; replay leaves it alone ([Proof_replay.register_summary_counter]). *)
 let () = Proof_replay.register_summary_counter "ssr_abstract_id"
 

@@ -396,7 +396,7 @@ let table_cache = ref ConstrMap.empty
 let saturate_cache = ref ConstrMap.empty
 let specs_cache = ref ConstrMap.empty
 
-(* BET-84 census row 15: the three registration tables, each read whole
+(* Census row 15: the three registration tables, each read whole
    under its Summary name before [init_cache] copies it. ONE value function,
    called by the record site and by the replay evaluator
    (dev/tools/census/replay_channels.py). *)

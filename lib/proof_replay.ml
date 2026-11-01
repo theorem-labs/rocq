@@ -226,7 +226,7 @@ let read_file path =
 (* A compile that ran under a limit which can end an allocation before the
    cgroup kill is not replayed, in either direction: under such a limit a
    proof can fail where the other run's did not, and a stored term would
-   hide it (BET-84 spec, "When a stored term is used"). A value that could
+   hide it (the replay design, "When a stored term is used"). A value that could
    not be read ("unknown", a sandbox that masks /proc/sys) refuses too: a
    guard that cannot see is not a guard (review P3Deep F6). *)
 let overcommit_refuses v = v <> "0" && v <> "1"
@@ -249,7 +249,7 @@ let own_limits_refusal () =
    from it. So the record is used only when it is bound to this compile
    (reviews P3Deep F1, P3Bugs):
    - its bytes hash (SHA-256) to an expected digest, which is mandatory:
-     [-proof-replay-digest], which the grading engine takes from the
+     [-proof-replay-digest], which the checking engine takes from the
      registration's root-owned manifest, or with [-proof-replay-dir] a
      [<record>.sha256] file beside each record, as unwritable as it;
    - nobody but its owner can write it, and the compiling user cannot
@@ -295,7 +295,7 @@ let binding_refusal ~library ~path ~bytes (h : R.header) =
     else if not h.R.tables_at_start then Some "format"
     else None
 
-(* A file whose registration needed more memory than the share this grade
+(* A file whose registration needed more memory than the share this check run
    can give one compile runs without replay: all the build's jobs share one
    cgroup, so stock's own memory failures depend on what else runs. *)
 let peak_refusal opts (t : R.trailer) =
@@ -329,7 +329,7 @@ let toolchain_refusal ~(now : R.toolchain) (h : R.header) =
    they would have installed is not installed. A later command that rebinds
    a Rocqlib name, or loads code, then makes a later proof see what stock
    would not have seen: stock's lazy holds the old answer, replay's is forced
-   after the rebinding (Claude review of c2190e74e0, P1). Which lazies are
+   after the rebinding (review of c2190e74e0, P1). Which lazies are
    already forced when a proof starts is an input no read records: a proof
    whose registration found a lazy forced reads nothing, and the same proof
    in an edited file can be the one that forces it. So the hazard is decided
@@ -510,7 +510,7 @@ let scan_late_events ?(imports_late = true) text =
     else if !at_start && c = '#' && !i + 1 < n && text.[!i + 1] = '[' then begin
       (* An attribute before the command word: skip to its matching ']',
          skipping comments and strings inside it, so a ']' in either does
-         not end it (Claude review of 951eb445f9, P1-1). *)
+         not end it (review of 951eb445f9, P1-1). *)
       i := !i + 2;
       let depth = ref 1 in
       while !depth > 0 && !i < n do
@@ -618,13 +618,13 @@ let plugin_audit : (string -> bool) ref = ref (fun _ -> false)
 (* Plugins from outside this tree that the replay audit has read, by exact
    findlib package name (Main's ruling, 2026-10-26).
    - [rocq-read-file.plugin]: theorem-labs/rocq-read-file at 68887ad, the
-     commit the grading harness's Dockerfile pins. Every BET memory
+     commit the verification harness's Dockerfile pins. Every verification
      image loads it ([Declare ML Module "rocq-read-file.plugin"] in
      ReadFile.v). Audited 2026-10-26 (Claude delta review of a158379eb4,
      P2-1): it adds side-effect vernacular commands only (g_read_file.mlg),
      and no tactic, hook, closure setter, [register_ref], module import or
      cached [lib_ref].
-   If BET's Dockerfile moves that pin, this audit must be redone before the
+   If the verification image's Dockerfile moves that pin, this audit must be redone before the
    entry is kept. *)
 let audited_outside_tree = [ "rocq-read-file.plugin" ]
 
@@ -675,7 +675,7 @@ let sentence_offset () = match !sentence_loc with Some l -> l.Loc.bp | None -> -
 
 let at_sentence loc = sentence_loc := Some loc
 
-(* Measurement (BET-84, ReplayFine): each [Require] run while replay is on,
+(* Measurement (ReplayFine): each [Require] run while replay is on,
    with its sentence's offset and whether every library it names was
    already loaded before it ran. A [Require] of loaded libraries loads
    nothing; the summary lists them so the share of the late-command rule
@@ -976,7 +976,7 @@ and decide_once ~sentences ~closer =
       None
     | None ->
     (* The closer is part of key item 1: a registered [Qed] is never an
-       [Admitted] or a [Defined] now (GRADE's review, case V5). *)
+       [Admitted] or a [Defined] now (a cross-model review, case V5). *)
     if closer <> p.R.closer || (closer <> "Qed" && closer <> "Save") then (miss_key name; None)
     else if R.digest_value sentences <> p.R.sentences then (miss_key name; None)
     else

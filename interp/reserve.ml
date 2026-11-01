@@ -105,7 +105,7 @@ let declare_reserved_type idl t =
   let env = Global.env () in
   List.iter (fun id -> declare_reserved_type_binding env id t) (List.rev idl)
 
-(* BET-84 row M2: each reserved type ([Implicit Types]) the proof reads,
+(* Row M2: each reserved type ([Implicit Types]) the proof reads,
    keyed by the root of the identifier, which is the table's own key. ONE
    value function, called by the record site and by the replay evaluator
    (dev/tools/census/replay_channels.py). *)

@@ -9,7 +9,7 @@
 (************************************************************************)
 
 (** Per-proof records: what each opaque proof of a compiled file read and
-    wrote (BET-84, part P2).
+    wrote (part P2).
 
     [rocq compile -proof-record] writes one record file beside each [.vo]
     (see {!path_of_vo}). The file is JSON Lines, UTF-8, one JSON object per
@@ -148,7 +148,7 @@ type proof = {
       proof has no single source span (a closer the STM delayed, a
       statement with no location). A consumer that cuts a proof out of a
       shipped record keeps an entry only when these bytes still appear in
-      the source it ships (BET-84 P4). *)
+      the source it ships (replay part P4). *)
   replay : string option;
   (** The stored proof term and what replay needs to declare it, base64 of
       a Marshal blob that only this Rocq reads (see {!Proof_replay}), or

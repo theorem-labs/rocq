@@ -74,9 +74,9 @@ DEFAULTS = {
     "replay_extra_flags": [],
     "ratio": "1",
     # Lane R1 measured that the stack limit changes the bytes of a `.vo`, so a
-    # fixture's compiles must all run under the limit a grade runs under, and
+    # fixture's compiles must all run under the limit a check run runs under, and
     # not under whatever the caller's shell happens to have.  8192 kB is the
-    # limit the grading engine sets (BET-84 spec, "Resource limits").
+    # limit the checking engine sets (the replay design, "Resource limits").
     "stack_kb": 8192,
     "record_layout": "both",
     "compile_fails": [],
@@ -336,7 +336,7 @@ def compare_trees_segcmp(segcmp, listing, a, b, work):
 
 
 #: The only fixtures whose object difference may be excused, named one by
-#: one. GRADE retired byte identity as a correctness gate on 2026-10-26, so
+#: one. The programme retired byte identity as a correctness gate on 2026-10-26, so
 #: a Marshal sharing difference is a reuse-rate item; everything else is a
 #: failure, and an unlisted fixture is never excused whatever its
 #: `expect.json` says. channels_unchanged replays five proofs whose terms
@@ -566,12 +566,12 @@ class Fixture:
             both.append(src)
         if not both:
             return []
-        # The contract GRADE settled is BYTES: the engine's object store,
+        # The contract the review settled is BYTES: the engine's object store,
         # carry-over and registration key all match on the .vo digest, and a
         # sharing difference alone made a mixed tree refuse to load
         # (2026-10-25). The segment compare below normalises sharing, so a
         # raw cmp runs first and no fixture passes without it. The lane's own
-        # compare went value-based in the grading harness #1403; this
+        # compare went value-based in the .vo reuse study; this
         # suite does not follow it.
         for src in both:
             va, vb = vo_src(a, src), vo_src(b, src)

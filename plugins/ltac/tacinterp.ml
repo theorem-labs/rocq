@@ -75,7 +75,7 @@ let audited_ml_tactic_plugins =
          (String.Set.add ("rocq-runtime.plugins." ^ suffix) set))
     String.Set.empty audited_ml_tactic_plugin_suffixes
 
-(* BET-84 P3: the same list decides which loaded plugins replay trusts. *)
+(* Replay part P3: the same list decides which loaded plugins replay trusts. *)
 let () = Proof_replay.register_plugin_audit (fun name -> String.Set.mem name audited_ml_tactic_plugins)
 
 let fence_ml_tactic { mltac_plugin; mltac_tactic } =
@@ -557,7 +557,7 @@ let extract_ids ids lfun accu =
 
 let default_fresh_id = Id.of_string "H"
 
-(* BET-84 census row 17: [fresh "s"] gives [s0] when [s] is a keyword, and a
+(* Census row 17: [fresh "s"] gives [s0] when [s] is a keyword, and a
    [Reserved Notation] that makes [s] one leaves the parsed sentences
    unchanged, since the string literal is not reparsed (Claude gate at
    0f8d815732, finding 3). ONE keyword test and ONE value for the keyword

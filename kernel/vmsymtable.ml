@@ -265,7 +265,7 @@ let envcache_of_rel i envcache = {
   rel_adjust = envcache.rel_adjust + i
 }
 
-(* BET-84 census row 1, as the machine reads a global. What a constant
+(* Census row 1, as the machine reads a global. What a constant
    computes on the machine is its bytecode, not its stored body: a constant
    marked [Register Inline] is compiled into the code of the constants that
    use it, so an unchanged body can run changed code (fixtures
@@ -335,7 +335,7 @@ let rec record_vm_global env kn =
   Proof_recorder.read_by ~row:"1" ~channel:"vm_global" ~id:kn ~key:(fun () -> Constant.to_string kn)
     ~value:(fun () -> recorded_vm_global ~on_call:(record_vm_global env) env kn)
 
-(* BET-84: a value the machine computes for a global closes over the
+(* Per-proof replay: a value the machine computes for a global closes over the
    section variables its code names, as they were in the environment that
    filled its slot, and the machine keeps it for the compile. Two things
    follow that no read can describe. The walk above reads the CURRENT

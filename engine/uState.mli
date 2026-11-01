@@ -59,7 +59,7 @@ val hcons_univs : t -> t
     library with its sharing, so without it a replayed proof writes two
     equal copies of a level where a full compile writes one, and a library
     compiled against the one object refuses to load against the other
-    (BET-84 P3, measured 2026-10-25). *)
+    (replay part P3, measured 2026-10-25). *)
 
 (** {5 Projections and other destructors} *)
 
@@ -74,7 +74,7 @@ type replay_view
 val replay_view : t -> replay_view
 (** The local levels and constraints, the unification variables, the local
     qualities and the minimization hints, without the universe graphs: what a
-    proof's statement key digests of its starting state (BET-84). *)
+    proof's statement key digests of its starting state. *)
 
 type universe_opt_subst = UnivFlex.t
 (* Reexport because UnivSubst is private *)
@@ -330,5 +330,5 @@ end
 
 val add_template_default_univs : Environ.env -> MutInd.t -> unit
 
-(** The default levels of template-polymorphic inductives (BET-84, M7). *)
+(** The default levels of template-polymorphic inductives (row M7). *)
 val template_default_univs : unit -> Univ.Level.Set.t

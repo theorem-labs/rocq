@@ -41,7 +41,7 @@ let add kn fpa =
 let fold f acc =
   KerName.Map.fold f !abbrev_table acc
 
-(* BET-84 row M1: each abbreviation the proof reads, keyed by its kernel name
+(* Row M1: each abbreviation the proof reads, keyed by its kernel name
    as [Lib.kername_key] writes it ([KerName.to_string] is not injective).
    ONE value function, called by the record site and by the replay
    evaluator (dev/tools/census/replay_channels.py). *)

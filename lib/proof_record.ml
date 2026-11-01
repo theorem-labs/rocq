@@ -289,7 +289,7 @@ let digest_json add v =
   add b v;
   Digest.to_hex (Digest.string (Buffer.contents b))
 
-(* Key item 2 is the load ORDER of the required libraries (BET-84 spec, key
+(* Key item 2 is the load ORDER of the required libraries (the replay design, key
    item 2): their logical names, not their contents. A library's contents
    reach a proof only through reads, which the record holds one by one, so
    a changed library makes a proof miss only when the proof read what

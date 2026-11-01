@@ -27,7 +27,7 @@ val warn : 'a msg -> ?loc:Loc.t -> 'a -> unit
 (** Emit a message in some warning. *)
 
 val with_enabled_silenced : (unit -> 'a) -> 'a
-(** BET-84: runs [f] with every enabled warning disabled, and restores them
+(** Per-proof replay: runs [f] with every enabled warning disabled, and restores them
     afterwards, also when [f] raises. A warning that is an error stays an
     error, so [f] fails where it would fail; only what it prints is left
     out. *)
@@ -77,7 +77,7 @@ val get_flags : unit -> string
 val set_flags : string -> unit
 
 val registry_view : unit -> (string * string list * (status * bool) option) list
-(** BET-84: the registry of warnings and categories as a later command can
+(** Per-proof replay: the registry of warnings and categories as a later command can
     see it: each name, its parents' names, and for a warning its default
     status and whether it is also a category. The same list (physically)
     until the registry changes. *)

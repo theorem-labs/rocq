@@ -1,5 +1,5 @@
 #!/bin/bash
-# run.sh -- the per-proof replay fixtures (BET-84 gate part 2, dispatch://BET-119).
+# run.sh -- the per-proof replay fixtures (gate part 2).
 #
 #   run.sh --list
 #   run.sh [--only FIXTURE]... [--slow] [--segcmp PATH] BINDIR OUTDIR

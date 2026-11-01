@@ -35,7 +35,7 @@ let inPropButDefaultDepElim : inductive -> Libobject.obj =
 let declare_prop_but_default_dependent_elim i =
   Lib.add_leaf (inPropButDefaultDepElim i)
 
-(* BET-84 row N3: inductives in Prop whose case analysis is dependent by
+(* Row N3: inductives in Prop whose case analysis is dependent by
    default. [destruct] and [case] read it. ONE value function, called by
    the record site here and by the replay evaluator
    (dev/tools/census/replay_channels.py). *)

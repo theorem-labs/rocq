@@ -28,6 +28,6 @@
     }
   },
   "vo_exempt": {
-    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of a shared identifier string. GRADE retired byte identity as a correctness gate on 2026-10-26 (no engine or harness path compares an agent-built .vo's bytes against a stock build or keys a trust decision on them: proof_staging.py:675-688 and :739-744 check pristine TRUSTED objects; trusted_objects.sha256.json covers trusted objects only; grade.py:2036-2040 compares SOURCE bytes; object_store.py:578-582 keys on source digest and prerequisite keys; snapshot_check.py:475 compares against the digest the same engine recorded). The contract is value equality; byte identity is a reuse-rate target for D18."
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of a shared identifier string. The programme retired byte identity as a correctness gate on 2026-10-26 (no engine or harness path compares an agent-built .vo's bytes against a stock build or keys a trust decision on them: proof_staging.py:675-688 and :739-744 check pristine TRUSTED objects; trusted_objects.sha256.json covers trusted objects only; the engine's driver:2036-2040 compares SOURCE bytes; object_store.py:578-582 keys on source digest and prerequisite keys; snapshot_check.py:475 compares against the digest the same engine recorded). The contract is value equality; byte identity is a reuse-rate target for D18."
   }
 }

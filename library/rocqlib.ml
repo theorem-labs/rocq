@@ -29,7 +29,7 @@ let () = Proof_recorder.register_tables (fun () ->
     [ Proof_record.{ row = "15"; channel = "rocqlib_table"; key = "";
                      value = Some (Proof_recorder.digest_cached ~what:"rocqlib_table" !table) } ])
 
-(* BET-84, cross-model delta review D4. About 120 process-wide [lazy] values
+(* Per-proof replay, delta review D4. About 120 process-wide [lazy] values
    cache a [lib_ref] result once and never ask again, and [register_ref]
    replaces a binding without telling them. A table that is the same at a
    proof's start therefore does not prove that the caches agree with it: a
@@ -42,7 +42,7 @@ let () = Proof_recorder.register_tables (fun () ->
    a restore) trips the fence, and every proof from then on is ineligible.
    This is coarse, and sound; the start-of-proof table read stays, for the
    proofs before the fence trips. *)
-(* BET-84: ONE value for the lib_ref channel. The record site below and the
+(* Per-proof replay: ONE value for the lib_ref channel. The record site below and the
    replay evaluator call this, so the value is never computed two ways
    (dev/tools/census/replay_channels.py). *)
 let recorded_lib_ref s =
@@ -76,7 +76,7 @@ let () = Proof_recorder.register_fence_check (fun () ->
           Proof_recorder.trip_fence ~reason:"rocqlib_rebound" ~detail:s)
       !observed)
 
-(* BET-84 P3: a replayed proof's tactics do not run, so the lookups its
+(* Replay part P3: a replayed proof's tactics do not run, so the lookups its
    record holds never reach [observe]. Treat them as looked up, with the
    answer they have now (the read matched, so it is the registration's): a
    later rebinding of one of these keys then trips the fence, and no later
@@ -93,7 +93,7 @@ let record_ref s res =
     Proof_recorder.read ~row:"15" ~channel:"lib_ref" ~key:(fun () -> s)
       ~value:(fun () -> ignore res; recorded_lib_ref s)
 
-(* BET-84: ONE value for the lib_ref_domain channel, read under the fixed key
+(* Per-proof replay: ONE value for the lib_ref_domain channel, read under the fixed key
    "" as one digest of the whole table. The record site below and this
    replay evaluator call the same function, so the value is never computed
    two ways (dev/tools/census/replay_channels.py). *)
@@ -140,7 +140,7 @@ let () = CErrors.register_handler (function
     | NotFoundRef s -> Some Pp.(str "not found in table: " ++ str s)
     | _ -> None)
 
-(* BET-84 census row 15: each registered reference the proof reads. *)
+(* Census row 15: each registered reference the proof reads. *)
 let lib_ref s =
   if Proof_recorder.tracking () then begin
     let res = CString.Map.find_opt s !table in
@@ -162,7 +162,7 @@ let add_ref s c =
 let cache_ref (s,c) =
   add_ref s c
 
-(* BET-84: an export-locality registration acts when its module is opened,
+(* Per-proof replay: an export-locality registration acts when its module is opened,
    so replay treats [Import] as a late command once one is loaded or
    declared (Proof_replay.note_export_register). Otherwise the object is
    [object_with_locality]'s: SuperGlobal acts at load, Export at open. *)

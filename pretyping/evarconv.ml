@@ -267,7 +267,7 @@ let activate_hook ~name =
   deactivate_hook ~name;
   active_hooks := name :: !active_hooks
 
-(* BET-84 census row 14: the ordered list of active canonical-solution hooks.
+(* Census row 14: the ordered list of active canonical-solution hooks.
    A plugin enables or disables a hook with no other recorded change, and a
    unification problem only that hook solves then changes acceptance (delta
    review D5). A hook is a closure, and what it returns can depend on state
@@ -275,7 +275,7 @@ let activate_hook ~name =
    the elpi program that [Elpi CS] names (Claude gate at 0f8d815732, finding
    4). Rocq registers no hook, so a stock proof reads the empty list, and a
    proof that asks an active hook stores no term. *)
-(* BET-84: ONE value for the canonical_hooks channel, read under the fixed key
+(* Per-proof replay: ONE value for the canonical_hooks channel, read under the fixed key
    "" as the digest of the active names. The record site below and this
    replay evaluator call the same function, so the value is never computed
    two ways (dev/tools/census/replay_channels.py). A registration that read
@@ -310,7 +310,7 @@ let decompose_proj ?metas env sigma (t1, sk1) =
     | (Names.GlobRef.ConstRef proji, u), arg -> (proji, u), arg
     | _ -> raise Not_found
     | exception e ->
-      (* BET-84: a critical exception here takes the fallback path, so the
+      (* Per-proof replay: a critical exception here takes the fallback path, so the
          term can differ; the proof is never replayed. *)
       if not (CErrors.noncritical e) then
         Proof_recorder.ineligible ~reason:"catchall" ~detail:"pretyping/evarconv.ml:282";
@@ -1554,7 +1554,7 @@ let evar_conv_hook = ref evar_conv_x
 
 let evar_conv_x flags = !evar_conv_hook flags
 
-(* BET-84: Rocq never calls this; a plugin's unifier makes every later proof
+(* Per-proof replay: Rocq never calls this; a plugin's unifier makes every later proof
    of the process ineligible (Proof_recorder.closure_setter). *)
 let evar_conv_set = Proof_recorder.closure_setter ~what:"Evarconv.set_evar_conv" ~stock:0
 
@@ -1687,7 +1687,7 @@ let filter_possible_projections evd i0 c ty ctxt args =
 
 let solve_evars = ref (fun _ -> failwith "solve_evars not installed")
 
-(* BET-84: pretyping/typing.ml installs Rocq's own once, when it loads. *)
+(* Per-proof replay: pretyping/typing.ml installs Rocq's own once, when it loads. *)
 let solve_evars_set = Proof_recorder.closure_setter ~what:"Evarconv.set_solve_evars" ~stock:1
 
 let set_solve_evars f = solve_evars_set (); solve_evars := f

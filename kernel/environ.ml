@@ -215,7 +215,7 @@ let fold_inductives f env acc =
 
 (* Global constants *)
 
-(* BET-84 census row 1. These lookups are on the reduction path, so when a
+(* Census row 1. These lookups are on the reduction path, so when a
    proof is open each key is recorded once: [seen] holds the keys of the
    open proof, and is emptied when the recorder opens the next one. A
    compile without -proof-record pays one boolean test per lookup. *)
@@ -296,7 +296,7 @@ module Recorded = struct
     | Some v -> Some (Proof_recorder.digest_cached ~what:"rewrite_rules" v)
 end
 
-(* BET-84: ONE value per channel. The recorder's call sites below and the
+(* Per-proof replay: ONE value per channel. The recorder's call sites below and the
    replay evaluators (vernac/proof_replay_env.ml) both call these, so a
    read's value is never computed two ways. A second implementation of a
    channel is the defect class that would let a replay accept a changed
@@ -307,7 +307,7 @@ let recorded_constant kn env =
   | Some (cb, _, _) ->
     (* The constant's value as a proof sees it, for the file's own constants
        and a required library's alike. A required library's .vo digest
-       changed whenever the grade rebuilt the library, even with every value
+       changed whenever the check run rebuilt the library, even with every value
        equal (a replayed proof's term shares differently), and every reader
        of every constant of it missed.
 

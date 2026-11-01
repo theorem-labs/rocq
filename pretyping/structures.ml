@@ -86,7 +86,7 @@ let rebuild env s =
   let nparams = mib.Declarations.mind_nparams in
   { s with nparams }
 
-(* BET-84 census row 14: the record structures a proof reads. ONE value
+(* Census row 14: the record structures a proof reads. ONE value
    function per channel, called by the record sites here and by the replay
    evaluators registered beside them
    (dev/tools/census/replay_channels.py). *)
@@ -289,7 +289,7 @@ let object_table =
   Summary.ref (GlobRefMap.empty : (constr * obj_typ) PatMap.t GlobRefMap.t)
     ~name:"record-canonical-structs"
 
-(* BET-84 census row 14: the canonical solutions of a projection, read by
+(* Census row 14: the canonical solutions of a projection, read by
    the projection. ONE value function, called by the record sites and by
    the replay evaluator (dev/tools/census/replay_channels.py): the digest
    of the projection's whole table of solutions, or absent. *)
@@ -479,7 +479,7 @@ type t = {
   cvalue_arguments : EConstr.t list;
 }
 
-(* BET-84 census row 14: the canonical-structure table a proof reads. *)
+(* Census row 14: the canonical-structure table a proof reads. *)
 let find env sigma (proj,pat) =
   record_canonical_structure env proj;
   let t', { o_DEF = c; o_CTX = ctx; o_INJ=n; o_TABS = bs;
@@ -525,7 +525,7 @@ let rec decompose_projection ?metas env sigma c args =
      let _ = GlobRefMap.find env (GlobRef.ConstRef c) !object_table in
      get_nth n args
   | Proj (p, _, c) ->
-     (* BET-84: this test of the table decides how unification goes, so it
+     (* Per-proof replay: this test of the table decides how unification goes, so it
         is a read too (census row 14). *)
      let proj = GlobRef.ConstRef (Names.Projection.constant p) in
      record_canonical_structure env proj;
@@ -591,7 +591,7 @@ let prim_table =
 let register p c =
   prim_table := Cmap_env.add c p !prim_table
 
-(* BET-84 census row 14: whether a constant is a primitive projection.
+(* Census row 14: whether a constant is a primitive projection.
    The value is computed once, for the recorder at the lookup and for the
    replay evaluator (dev/tools/census/replay_channels.py). *)
 let recorded_primitive_projection v =

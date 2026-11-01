@@ -73,7 +73,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
             ~skip_qed_typecheck:!Opaques.skip_qed_typecheck
             ~tables_at_start:true
       in
-      (* BET-84 P3: the registration's record for this library, and the
+      (* Replay part P3: the registration's record for this library, and the
          charged clock. A record that is missing or was made under a limit
          this compile cannot match leaves the file to its tactics, which
          the summary says. *)
@@ -105,7 +105,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       let state =
         try Vernac.load_vernac ~echo ~check ~state ~source long_f_dot_in with
         | Proof_replay.Budget_exhausted ->
-          (* BET-84 P3: the real time plus the charge for the proofs replay
+          (* Replay part P3: the real time plus the charge for the proofs replay
              did not run has reached the file's budget. The file ends as
              stock's own timeout ends it: no .vo, and the exit code the
              engine's wrapper records as a per-file kill. *)

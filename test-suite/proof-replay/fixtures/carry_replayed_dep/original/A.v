@@ -1,4 +1,4 @@
-(* The carry-over case (GRADE, through R1P3, 2026-10-25): a grade REUSES one
+(* The carry-over case (through R1P3, 2026-10-25): a check run REUSES one
    registered object and REPLAYS the object it was compiled against.
 
    `p`'s statement elaborates a fresh universe level, which is the proof shape
