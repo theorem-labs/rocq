@@ -18,6 +18,9 @@
 #      holds an ill-typed proof. The refusal wins, as it does when every
 #      library is read first: same exit code, same output, and no type
 #      error is reported.
+#  (c) A checked library refused for its own name (a label that is not an
+#      identifier) is never checked: the main process does not start its
+#      check and no worker reads its table, and the output is the same.
 #
 # ROCQCHK_WORKER_WINDOW=0 deals the checks of a library as soon as it is
 # checked, so that a library of a few hundred proofs forks a worker before
@@ -26,16 +29,18 @@
 # stops the main process before it reads the refused library, and
 # ROCQCHK_OPAQUE_AT=before:C:dir makes a process that reads C's table create
 # dir/before-PID; the test lets the main process go on only after that.
-# Before the refusal only a worker reads it (the main process reads no table when it has workers, and the
-# worker that reads every table starts only once every library is read,
-# which a refused library never is); after the refusal the main process
-# reads it to report a table error first, so the test leaves out the
-# marker with the main process's pid, and only the streaming run gets the
-# marker, in a directory of its own.
+# Before the refusal only a worker reads it (the main process reads no
+# table when it has workers, and the worker that reads every table starts
+# only once every library is read, which a refused library never is);
+# after the refusal the main process reads it to report a table error
+# first, so the test leaves out the marker with the main process's pid, and
+# only the streaming run gets the marker, in a directory of its own. In (c)
+# ROCQCHK_CHECK_AT=before:C:dir makes the main process mark the start of
+# C's check.
 set -eu
 export PATH="$BIN:$PATH"
 export ROCQCHK_WORKER_WINDOW=0
-unset ROCQCHK_OPAQUE_AT ROCQCHK_INTERN_AT
+unset ROCQCHK_OPAQUE_AT ROCQCHK_INTERN_AT ROCQCHK_CHECK_AT
 
 VO=misc/vo_segments.py
 RENAME=misc/rocqchk_names/rename.ml
@@ -116,11 +121,12 @@ ocaml "$RENAME" "$d/b/Forged.vo" library zqxlbl $'zqx\nbl'
 # Read order: C (and A and B inside its reading), then X, which reads
 # Forged. The streaming run stops before it reads Forged
 # (ROCQCHK_INTERN_AT), and goes on only once a worker has marked that it
-# reads C's table (ROCQCHK_OPAQUE_AT), so a worker is always running when
-# the refusal comes, with no timing. Only this run gets the markers, in
-# directories of its own, and its own pid is known: after the refusal the
-# main process reads C's table itself, to report a table error first, so
-# its marker does not count.
+# reads C's table (ROCQCHK_OPAQUE_AT), so a worker has read C's table
+# before the refusal, with no timing (it may have ended by then: its batch
+# holds the ill-typed c7). Only this run gets the markers, in directories
+# of its own, and its own pid is known: after the refusal the main process
+# reads C's table itself, to report a table error first, so its marker
+# does not count.
 mi=$d/intern-b; m=$d/marks-b; mkdir "$mi" "$m"; touch "$m/go"
 r1=0
 ( ROCQCHK_INTERN_AT="before:Forged:$mi" ROCQCHK_OPAQUE_AT="before:C:$m" \
@@ -164,34 +170,40 @@ if grep -q -E 'Type error|while checking the opaque proof' "$d/s.cmp"; then
 fi
 
 # (c) A CHECKED library refused for its own name: C, named with -norec, has
-# a label that is not an identifier; A and B, read inside its reading, are
-# admitted, so no proof of theirs takes a worker slot. With the window at 0
-# C's 300 proofs would be dealt the moment C were checked, so if C were
-# checked before its names were, a worker would read its table; none may,
-# so no marker other than the main process's may appear. The control, the
-# same run with the intact C, must leave markers of at least two processes
-# other than the main one: the worker that reads every table once the
-# libraries are read, and at least one worker dealt C's proofs. So the
-# absence of a marker is not an instrument that sees nothing.
+# a label that is not an identifier. It must not start to be checked: the
+# main process marks the start of each library's check
+# (ROCQCHK_CHECK_AT), and the refused C must leave no such marker, while
+# the control, the same run with the intact C, must leave one. That sees
+# the main process's own order, whatever happens to a worker it would have
+# forked. A and B, read inside C's reading, are admitted, so no proof of
+# theirs takes a worker slot; with the window at 0 C's 300 proofs would be
+# dealt the moment C were checked, so the test also requires that no
+# process but the main one read C's table, where the control sees two or
+# more (the worker that reads every table once the libraries are read, and
+# a worker dealt C's proofs).
 mkdir "$d/c"
 cp "$d/good/A.vo" "$d/good/B.vo" "$d/good/C.vo" "$d/c/"
-m=$d/marks-control; mkdir "$m"; touch "$m/go"
+m=$d/marks-control; mc=$d/check-control; mkdir "$m" "$mc"; touch "$m/go" "$mc/go"
 r1=0
-( ROCQCHK_OPAQUE_AT="before:C:$m" exec rocqchk -j 4 -R "$d/c" "" -norec C > /dev/null 2>&1 ) &
+( ROCQCHK_OPAQUE_AT="before:C:$m" ROCQCHK_CHECK_AT="before:C:$mc" \
+    exec rocqchk -j 4 -R "$d/c" "" -norec C > /dev/null 2>&1 ) &
 main=$!
 wait "$main" || r1=$?
 [ "$r1" = 0 ] || { echo "(c) control: the intact C was not accepted (exit code $r1)"; fail=1; }
+[ -e "$mc/before-$main" ] ||
+  { echo "(c) control: the main process did not mark the start of C's check"; fail=1; }
 others=$(find "$m" -name 'before-*' ! -name "before-$main" | wc -l)
 if [ "$others" -ge 2 ]; then
-  echo "(c) control: $others processes other than the main one read C's table"
+  echo "(c) control: the check of C started, and $others processes other than the main one read C's table"
 else
   echo "(c) control: $others processes other than the main one read C's table, expected 2 or more"; fail=1
 fi
 ocaml "$RENAME" "$d/c/C.vo" library c100 $'c\n00'
-m=$d/marks-c; mkdir "$m"
-touch "$m/go"  # go exists already: a process marks itself and does not wait
+m=$d/marks-c; mc=$d/check-c; mkdir "$m" "$mc"
+touch "$m/go" "$mc/go"  # go exists already: a process marks itself and does not wait
 r1=0
-( ROCQCHK_OPAQUE_AT="before:C:$m" exec rocqchk -j 4 -R "$d/c" "" -norec C > "$d/s.out" 2> "$d/s.err" ) &
+( ROCQCHK_OPAQUE_AT="before:C:$m" ROCQCHK_CHECK_AT="before:C:$mc" \
+    exec rocqchk -j 4 -R "$d/c" "" -norec C > "$d/s.out" 2> "$d/s.err" ) &
 main=$!
 wait "$main" || r1=$?
 r2=0
@@ -205,7 +217,11 @@ if [ "$r1" != 0 ] && [ "$r1" = "$r2" ] && cmp -s "$d/s.cmp" "$d/f.cmp"; then
 else
   echo "(c) differs (exit codes $r1 and $r2)"; diff "$d/f.cmp" "$d/s.cmp" | head -20 || true; fail=1
 fi
-[ -s "$d/s.cmp" ] || { echo "(c) expected C to be refused when it is read"; fail=1; }
+grep -q 'not an identifier' "$d/s.cmp" ||
+  { echo "(c) expected C to be refused for its label when it is read"; fail=1; }
+if find "$mc" -name 'before-*' | grep -q .; then
+  echo "(c) the check of C started, though the intern refuses C"; fail=1
+fi
 if find "$m" -name 'before-*' ! -name "before-$main" | grep -q .; then
   echo "(c) a worker read the table of C, which the intern refuses"; fail=1
 fi

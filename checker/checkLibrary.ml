@@ -178,11 +178,13 @@ let marshal_in_at (type a) ~validate ~value ~pos ~hash f ch : a =
     ()
 
 (* Test only. ROCQCHK_OPAQUE_AT=before:lib:dir stops the process that reads
-   the table of the library [lib] before it reads it, and
+   the table of the library [lib] before it reads it,
    ROCQCHK_INTERN_AT=before:lib:dir stops the main process before it reads
-   the library [lib] itself, so that a test can open a race window on
-   purpose, with no timing. The process creates [dir/before-pid] and waits
-   for [dir/go], for at most a minute. *)
+   the library [lib] itself, and ROCQCHK_CHECK_AT=before:lib:dir stops the
+   main process before it starts to check [lib], so that a test can open a
+   race window on purpose, or see that a point was reached, with no timing.
+   The process creates [dir/before-pid] and waits for [dir/go], for at most
+   a minute. *)
 let test_at var point dp =
   match Sys.getenv_opt var with
   | None | Some "" -> ()
@@ -309,6 +311,7 @@ let raise_first_table_error () =
     (List.rev !hashed_tables)
 
 let check_one_lib admit senv (dir,m) =
+  test_at "ROCQCHK_CHECK_AT" "before" dir;
   let md = m.library_compiled in
   let dig = m.library_digest in
   (* Stock parses the table of opaque proofs of every library it interns,
