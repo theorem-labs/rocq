@@ -24,15 +24,22 @@ let source ldir file = Loc.InFile {
 (* -record-timeouts: count the timeouts this compilation arms and the ones
    that fire, so that a build driver can tell an object a timeout could have
    changed from one it could not. The record names the object by the SHA-256
-   of its bytes, read back from the disk after the compilation wrote them, so
-   that a record beside another object does not vouch for it; a compilation
-   that wrote no output file records a null hash. A record of an earlier
+   of its bytes, read back from the disk after this compilation wrote them,
+   so that a record beside another object does not vouch for it; a
+   compilation that wrote no output file records a null hash, even where a
+   file of an earlier compilation is still at that path, since this
+   compilation does not vouch for those bytes. A record of an earlier
    compilation is removed before this one starts, and the new one is written
    by an [at_exit] handler, hence after the output file on success and after
    the error on failure; a compilation killed by a signal Rocq does not catch
    leaves none. A tactic worker of par: sends its counts back with each answer
    (Partac), and -async-proofs and -vos, whose delegated proofs do not, are
    refused (Coqc.check_countable_timeouts). *)
+
+(* Set to [true] by the compilation that writes the output file, and read by
+   the [at_exit] handler below. *)
+let wrote_target = ref false
+
 let record_timeouts_at_exit ~target =
   let file = safe_chop_extension target ^ ".timeouts.json" in
   let () = try Sys.remove file with Sys_error _ -> () in
@@ -40,14 +47,17 @@ let record_timeouts_at_exit ~target =
       let { Control.armed; fired } = Control.timeout_counts () in
       try
         let object_sha256 =
-          if Sys.file_exists target then "\"" ^ Sha256.file target ^ "\""
+          if !wrote_target then "\"" ^ Sha256.file target ^ "\""
           else "null" in
         let ch = open_out file in
         Printf.fprintf ch
           "{\"format\":2,\"armed\":%d,\"fired\":%d,\"object_sha256\":%s}\n"
           armed fired object_sha256;
         close_out ch
-      with Sys_error msg -> prerr_endline ("Error: cannot write " ^ file ^ ": " ^ msg))
+      with Sys_error msg ->
+        (* Either the object could not be read or the record could not be
+           written, so the message names neither file alone. *)
+        prerr_endline ("Error: cannot record timeouts in " ^ file ^ ": " ^ msg))
 
 (* Compile a vernac file *)
 let compile opts stm_options injections copts ~echo ~f_in ~f_out =
@@ -94,8 +104,10 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       let () = Stm.join ~doc:state.doc in
       let wall_clock2 = Unix.gettimeofday () in
       (* In .vo production, dump a complete .vo file. *)
-      let () = if mode = BuildVo then
-          Library.save_library_to ~output_native_objects Library.ProofsTodoNone ldir long_f_dot_out
+      let () = if mode = BuildVo then begin
+          Library.save_library_to ~output_native_objects Library.ProofsTodoNone ldir long_f_dot_out;
+          wrote_target := true
+        end
       in
       let () = Aux_file.record_in_aux_at "vo_compile_time"
           (Printf.sprintf "%.3f" (wall_clock2 -. wall_clock1))
@@ -117,6 +129,7 @@ let compile opts stm_options injections copts ~echo ~f_in ~f_out =
       let state = Stm.finish ~doc:state.doc in
       ensure_no_pending_proofs state ~filename:long_f_dot_in;
       let () = Stm.snapshot_vos ~doc ~output_native_objects ldir long_f_dot_out in
+      let () = wrote_target := true in
       Stm.reset_task_queue ();
       ()
 

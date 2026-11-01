@@ -8,7 +8,8 @@
 # under the par: selector, which a tactic worker runs and reports back, the
 # refusal of -async-proofs and -vos, whose delegated proofs do not report, a
 # timeout that fires, a file with no timeout, a failing compilation, which
-# records a null hash, one killed
+# records a null hash, a failing compilation beside the output file of an
+# earlier one, which records a null hash too, one killed
 # by SIGKILL, and that without the option nothing is removed or written and the
 # .vo is unchanged.
 
@@ -157,6 +158,27 @@ EOF
 if compile failing -record-timeouts; then fail "failing: compilation succeeded"; fi
 [ -f "$D/failing.vo" ] && fail "failing: a .vo was written"
 check failing 1 0
+
+# 10b. A compilation that fails beside the output file of an earlier one
+#      records a null hash: it did not write those bytes, so its counts say
+#      nothing about them.
+cat > "$D/stale.v" <<'EOF'
+Definition zero := 0.
+EOF
+compile stale -record-timeouts || fail "stale: the first compilation failed"
+[ -f "$D/stale.vo" ] || fail "stale: the first compilation wrote no .vo"
+cp "$D/stale.vo" "$D/stale-first.vo"
+cat > "$D/stale.v" <<'EOF'
+Timeout 3600 Check nat.
+Check no_such_constant.
+EOF
+if compile stale -record-timeouts; then fail "stale: the second compilation succeeded"; fi
+cmp "$D/stale-first.vo" "$D/stale.vo" \
+  || fail "stale: the .vo of the first compilation is not the one still there"
+[ "$(key stale 3)" = null ] \
+  || fail "stale: the failing compilation vouches for an earlier .vo: $(key stale 3)"
+[ "$(key stale 1)" -ge 1 ] 2> /dev/null \
+  || fail "stale: the failing compilation armed no timeout: $(key stale 1)"
 
 # 11. A compilation killed by SIGKILL leaves no record, not even a stale one.
 cat > "$D/killed.v" <<'EOF'

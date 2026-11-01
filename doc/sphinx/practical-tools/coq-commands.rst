@@ -462,8 +462,11 @@ and ``rocq repl``, unless stated otherwise:
   :opt:`Default Timeout` and the Ltac2 ``Control.timeout`` and
   ``Control.timeoutf``), ``F`` counts those that expired, and ``H`` is the
   SHA-256 of the bytes of the output file, as 64 lowercase hexadecimal
-  characters in a string, or ``null`` when the compilation wrote no output
-  file. The hash binds the record to the object, so a reader can refuse a
+  characters in a string, or ``null`` when this compilation wrote no output
+  file. A failing compilation therefore records ``null`` even where the
+  output file of an earlier compilation is still at that path: it did not
+  write those bytes, so its counts do not describe them.
+  The hash binds the record to the object, so a reader can refuse a
   record that sits beside another object. A record of an
   earlier compilation is removed before the compilation starts, and the new one
   is written at exit, after the output file on success and after the error
@@ -474,7 +477,9 @@ and ``rocq repl``, unless stated otherwise:
   never reports zero; the
   option refuses ``-async-proofs`` and ``-vos``, whose delegated proofs send
   nothing back. The record is named after the base name of the output file, so
-  a ``.vo`` and a ``.vok`` compilation of one file share it. Without the
+  a ``.vo`` and a ``.vok`` compilation of one file share it, and a ``-vok``
+  compilation, which writes no output file, records ``null`` over whatever the
+  ``.vo`` compilation recorded. Without the
   option nothing is removed or written.
 :-w (all|none|w₁,…,wₙ): Configure the display of warnings. This
   option expects all, none or a comma-separated list of warning names or

@@ -110,8 +110,6 @@ let feed t b pos len =
     t.block_len <- !len
   end
 
-let hex_digits = "0123456789abcdef"
-
 let finish t =
   let bits = Int64.mul t.len 8L in
   (* One 1 bit, then zeroes up to eight bytes short of a block, then the
@@ -122,14 +120,9 @@ let finish t =
   Bytes.set_int64_be pad (1 + zeroes) bits;
   feed t pad 0 (1 + zeroes + 8);
   assert (t.block_len = 0);
-  let out = Bytes.create 64 in
-  Array.iteri (fun i x ->
-      for j = 0 to 7 do
-        let nibble = Int32.to_int (shr x ((7 - j) * 4) &% 0xFl) in
-        Bytes.set out ((i * 8) + j) hex_digits.[nibble]
-      done)
-    t.h;
-  Bytes.unsafe_to_string out
+  (* [%08lx] prints an [int32] unsigned, so a word with its top bit set comes
+     out as the eight hexadecimal digits of its two's complement. *)
+  String.concat "" (Array.to_list (Array.map (Printf.sprintf "%08lx") t.h))
 
 let string s =
   let t = create () in
