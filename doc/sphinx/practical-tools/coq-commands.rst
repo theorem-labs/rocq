@@ -762,6 +762,16 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   plus the time of its last proof. Workers share the memory of the main process
   and copy more of it the longer they live, so a smaller budget bounds the
   memory they use. ``0`` makes a worker check a single proof.
+:-cost-hints *file*: With ``-j``, the expected cost of each library's checks,
+  one ``library seconds`` pair per line, the library by its full name; a later
+  line for a library replaces an earlier one. The queued proofs of costlier
+  libraries are given to workers first, and a worker checks them first in its
+  batch, so a long proof does not wait behind cheaper ones. The costs only
+  decide that order: the same libraries are accepted and rejected with or
+  without them, but when several proofs are wrong, which one is reported, and
+  so the exit code, can differ, as it can between two runs with ``-j``. Lines
+  that are not such a pair are skipped; anything but a regular file of at most
+  16 MiB that can be read to its end is ignored with a warning.
 :-statement-report *file*: After checking, print a report on named
   constants, before the summary of ``-o``. Each line of *file* is a
   request ``name model trusted``, its tokens separated by single spaces:

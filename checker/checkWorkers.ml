@@ -164,6 +164,24 @@ let end_window () = last_dispatch := neg_infinity
    library's walk calls before its own checks, opens the next group. *)
 let current_group = ref 0
 
+(* The expected cost of each library's checks, by library name, from
+   [set_cost_hints]; and the cost of each group, the one of the library that
+   opened it. A group with no cost costs 0. Costs only decide which queued
+   jobs are dealt first, and in which order a worker runs them: costly
+   libraries first, so that a long proof neither waits behind the queue nor
+   is given back for the cheaper ones before it in its batch. *)
+let cost_hints : (string, float) Hashtbl.t = Hashtbl.create 0
+let group_costs : (int, float) Hashtbl.t = Hashtbl.create 0
+
+let set_cost_hints hints = List.iter (fun (lib, c) -> Hashtbl.replace cost_hints lib c) hints
+
+let group_cost g = Option.default 0. (Hashtbl.find_opt group_costs g)
+
+(* [tasks] costliest group first; tasks of the same cost keep their order. *)
+let by_cost tasks =
+  if Int.equal (Hashtbl.length group_costs) 0 then tasks
+  else List.stable_sort (fun t1 t2 -> Float.compare (group_cost t2.group) (group_cost t1.group)) tasks
+
 (* Running workers. *)
 let running : worker list ref = ref []
 
@@ -1026,6 +1044,19 @@ let deal ?(walk = false) k size =
   let all = List.rev (Queue.fold (fun acc t -> t :: acc) [] queue) in
   let open_group = if walk then Some !current_group else None in
   let ps = Array.of_list (List.concat_map (pieces ?open_group size) (runs all)) in
+  (* Costliest libraries first, so they take the first lanes and stay first
+     in what is left; pieces of equal cost keep their order. The library
+     still deferring jobs stays last, where its next jobs join it, so that
+     its jobs stay together and its pieces fill up as before. *)
+  if Hashtbl.length group_costs > 0 then begin
+    let key (_, p) =
+      let g = (List.hd p).group in
+      match open_group with
+      | Some og when Int.equal g og -> neg_infinity
+      | _ -> group_cost g
+    in
+    Array.stable_sort (fun a b -> Float.compare (key b) (key a)) ps
+  end;
   let n = Array.fold_left (fun n (ok, p) -> if ok then n + List.length p else n) 0 ps in
   let s = max k (n / size) in
   let filled = Array.make k 0 in
@@ -1095,7 +1126,8 @@ let deal ?(walk = false) k size =
       (fun () ->
          Array.iteri (fun j b ->
              if not (CList.is_empty b) then
-               spawn ?prepared:prepared.(j) (Array.of_list (if walk then b else List.rev b)))
+               spawn ?prepared:prepared.(j)
+                 (Array.of_list (by_cost (if walk then b else List.rev b))))
            batches)
 
 (* Hands out the batches a new job makes possible, at most once every
@@ -1167,6 +1199,10 @@ let validator_progress () =
 
 let defer_table dp read =
   incr current_group;
+  if Hashtbl.length cost_hints > 0 then
+    (match Hashtbl.find_opt cost_hints (DirPath.to_string dp) with
+     | Some c -> Hashtbl.replace group_costs !current_group c
+     | None -> ());
   if !max_workers = 0 then begin incr tables_deferred; read (); incr tables_done end
   else if not !tables_validated then begin
     incr tables_deferred;
