@@ -22,9 +22,11 @@
 # ROCQCHK_WORKER_WINDOW=0 deals the checks of a library as soon as it is
 # checked, so that a library of a few hundred proofs forks a worker before
 # the next library is read, whatever the speed of the machine. In (b) the
-# test also sees it: ROCQCHK_OPAQUE_AT=before:C:dir makes a process that
-# reads C's table create dir/before-PID. Before the refusal only a worker
-# reads it (the main process reads no table when it has workers, and the
+# test also sees it, with no timing: ROCQCHK_INTERN_AT=before:Forged:dir
+# stops the main process before it reads the refused library, and
+# ROCQCHK_OPAQUE_AT=before:C:dir makes a process that reads C's table create
+# dir/before-PID; the test lets the main process go on only after that.
+# Before the refusal only a worker reads it (the main process reads no table when it has workers, and the
 # worker that reads every table starts only once every library is read,
 # which a refused library never is); after the refusal the main process
 # reads it to report a table error first, so the test leaves out the
@@ -33,7 +35,7 @@
 set -eu
 export PATH="$BIN:$PATH"
 export ROCQCHK_WORKER_WINDOW=0
-unset ROCQCHK_OPAQUE_AT
+unset ROCQCHK_OPAQUE_AT ROCQCHK_INTERN_AT
 
 VO=misc/vo_segments.py
 RENAME=misc/rocqchk_names/rename.ml
@@ -111,41 +113,55 @@ echo "Lemma zqxlbl : True. Proof. exact I. Qed." > "$d/b/Forged.v"
 echo "Require Import Forged." > "$d/b/X.v"
 ( cd "$d/b" && rocq c -native-compiler no -R . "" Forged.v && rocq c -native-compiler no -R . "" X.v )
 ocaml "$RENAME" "$d/b/Forged.vo" library zqxlbl $'zqx\nbl'
-seen=0
-for try in 1 2 3; do
-  # Read order: C (and A and B inside its reading), then X, which reads
-  # Forged. Only this run gets the marker, in a directory of its own, and
-  # its own pid is known: after the refusal the main process reads C's
-  # table itself, to report a table error first, so its marker does not
-  # count. A marker of another process is a worker that read C's table,
-  # and a worker of this run can only have started before the refusal.
-  m=$d/marks-$try; mkdir "$m"; touch "$m/go"
-  r1=0
-  ( ROCQCHK_OPAQUE_AT="before:C:$m" exec rocqchk -j 4 -R "$d/b" "" -norec X -norec C \
-      > "$d/s.out" 2> "$d/s.err" ) &
-  main=$!
-  wait "$main" || r1=$?
-  r2=0
-  rocqchk -j 4 -R "$d/b" "" -norec X -norec C -admit "$leaf" > "$d/f.out" 2> "$d/f.err" || r2=$?
-  for f in s f; do
-    grep -h -E 'Fatal Error|Error:|Type error|while checking the opaque proof|not an identifier' \
-      "$d/$f.out" "$d/$f.err" | sed -e 's/Worker process [0-9]*/Worker process PID/' | sort -u > "$d/$f.cmp"
-  done
-  if [ "$r1" != 0 ] && [ "$r1" = "$r2" ] && cmp -s "$d/s.cmp" "$d/f.cmp"; then
-    echo "(b) refused name read after early workers, try $try: same (exit code $r1)"
-  else
-    echo "(b) try $try: differs (exit codes $r1 and $r2)"; diff "$d/f.cmp" "$d/s.cmp" | head -20 || true; fail=1
-  fi
-  grep -q 'not an identifier' "$d/s.cmp" ||
-    { echo "(b) expected the name to be refused"; fail=1; }
-  if grep -q -E 'Type error|while checking the opaque proof' "$d/s.cmp"; then
-    echo "(b) the ill-typed proof was reported, not the refused name"; fail=1
-  fi
-  workers=$(find "$m" -name 'before-*' ! -name "before-$main" | wc -l)
-  [ "$workers" -gt 0 ] && seen=$((seen + 1))
+# Read order: C (and A and B inside its reading), then X, which reads
+# Forged. The streaming run stops before it reads Forged
+# (ROCQCHK_INTERN_AT), and goes on only once a worker has marked that it
+# reads C's table (ROCQCHK_OPAQUE_AT), so a worker is always running when
+# the refusal comes, with no timing. Only this run gets the markers, in
+# directories of its own, and its own pid is known: after the refusal the
+# main process reads C's table itself, to report a table error first, so
+# its marker does not count.
+mi=$d/intern-b; m=$d/marks-b; mkdir "$mi" "$m"; touch "$m/go"
+r1=0
+( ROCQCHK_INTERN_AT="before:Forged:$mi" ROCQCHK_OPAQUE_AT="before:C:$m" \
+    exec rocqchk -j 4 -R "$d/b" "" -norec X -norec C > "$d/s.out" 2> "$d/s.err" ) &
+main=$!
+worker=no
+for _ in $(seq 1 600); do
+  if find "$m" -name 'before-*' ! -name "before-$main" | grep -q .; then worker=yes; break; fi
+  kill -0 "$main" 2> /dev/null || break
+  sleep 0.1
 done
-echo "(b) a worker read C's table before the refusal in $seen of 3 tries"
-[ "$seen" -gt 0 ] || { echo "(b) no worker started before the refusal: nothing was tested"; fail=1; }
+# The main process cannot read Forged before go exists, so a worker marker
+# seen until now was left before the refusal; the main process must also
+# have reached its stop.
+for _ in $(seq 1 600); do
+  [ -e "$mi/before-$main" ] && break
+  kill -0 "$main" 2> /dev/null || break
+  sleep 0.1
+done
+[ -e "$mi/before-$main" ] ||
+  { echo "(b) the main process did not stop before reading Forged"; fail=1; }
+touch "$mi/go"
+wait "$main" || r1=$?
+[ "$worker" = yes ] ||
+  { echo "(b) no worker read C's table while Forged was not read yet: nothing was tested"; fail=1; }
+r2=0
+rocqchk -j 4 -R "$d/b" "" -norec X -norec C -admit "$leaf" > "$d/f.out" 2> "$d/f.err" || r2=$?
+for f in s f; do
+  grep -h -E 'Fatal Error|Error:|Type error|while checking the opaque proof|not an identifier' \
+    "$d/$f.out" "$d/$f.err" | sed -e 's/Worker process [0-9]*/Worker process PID/' | sort -u > "$d/$f.cmp"
+done
+if [ "$r1" != 0 ] && [ "$r1" = "$r2" ] && cmp -s "$d/s.cmp" "$d/f.cmp"; then
+  echo "(b) refused name read while a worker checks C: same (exit code $r1)"
+else
+  echo "(b) differs (exit codes $r1 and $r2)"; diff "$d/f.cmp" "$d/s.cmp" | head -20 || true; fail=1
+fi
+grep -q 'not an identifier' "$d/s.cmp" ||
+  { echo "(b) expected the name to be refused"; fail=1; }
+if grep -q -E 'Type error|while checking the opaque proof' "$d/s.cmp"; then
+  echo "(b) the ill-typed proof was reported, not the refused name"; fail=1
+fi
 
 # (c) A CHECKED library refused for its own name: C, named with -norec, has
 # a label that is not an identifier; A and B, read inside its reading, are

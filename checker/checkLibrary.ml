@@ -176,11 +176,13 @@ let marshal_in_at (type a) ~validate ~value ~pos ~hash f ch : a =
     ()
 
 (* Test only. ROCQCHK_OPAQUE_AT=before:lib:dir stops the process that reads
-   the table of the library [lib] before it reads it, so that a test can
-   open a race window on purpose, with no timing. The process creates
-   [dir/before-pid] and waits for [dir/go], for at most a minute. *)
-let opaque_test_at point dp =
-  match Sys.getenv_opt "ROCQCHK_OPAQUE_AT" with
+   the table of the library [lib] before it reads it, and
+   ROCQCHK_INTERN_AT=before:lib:dir stops the main process before it reads
+   the library [lib] itself, so that a test can open a race window on
+   purpose, with no timing. The process creates [dir/before-pid] and waits
+   for [dir/go], for at most a minute. *)
+let test_at var point dp =
+  match Sys.getenv_opt var with
   | None | Some "" -> ()
   | Some v ->
     match String.split_on_char ':' v with
@@ -194,6 +196,8 @@ let opaque_test_at point dp =
         (try Unix.sleepf 0.01 with Unix.Unix_error _ -> ())
       done
     | _ -> ()
+
+let opaque_test_at point dp = test_at "ROCQCHK_OPAQUE_AT" point dp
 
 (* Reads one library's table, in two passes over one channel. The first
    reads the range the main process hashed, sequentially, in a fixed
@@ -540,6 +544,7 @@ let summary_seg : summary_disk ObjFile.id = ObjFile.make_id "summary"
 let library_seg : library_disk ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 
+
 (* [validated] is the set of libraries which must be validated when read even
    if they are interned as a dependency, namely those named on the command
    line and not admitted. *)
@@ -547,6 +552,7 @@ let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
    bytecode itself from the declarations it checks (see [Safe_checking]), so the
    serialized bytecode is neither trusted nor needed. *)
 let intern_from_file ~intern_mode ~validated (dir, f) =
+  test_at "ROCQCHK_INTERN_AT" "before" dir;
   let validate = intern_mode <> Dep || LibrarySet.mem dir validated in
   Flags.if_verbose chk_pp (str"[intern "++str f++str" ...");
   let (sd,md,src,digest) =
