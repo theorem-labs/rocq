@@ -669,13 +669,13 @@ done
 # call (System.marshal_in; at -j 1 where stock reads it, with workers in
 # Dep's table task), and whether the process then dies depends on the heap
 # the binary happens to have: on the release base it ended 0 there, five
-# times of five, at -j 1 and -j 2 (dispatch://INFRA-211, the port's
+# times of five, at -j 1 and -j 2 (the port's
 # compatibility review). No verdict depends on those bytes in either
 # checker: Dep is an unchecked dependency here, so neither checks its
 # opaque bodies, and the kernel never unfolds an opaque body in
 # conversion. Stock never completes the run, so this is a call decided
 # where stock crashes, which Sami's ruling allows
-# (dispatch://INFRA-213/ask/0dfa81b0), ledger L8. Nothing is asserted
+# ledger L8. Nothing is asserted
 # about -norec Use. What is asserted is the bound: where the damaged table
 # belongs to a library that is checked, Dep itself, it is validated, and
 # both refuse it, with the same exit code and output at every -j.
