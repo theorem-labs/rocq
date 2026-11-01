@@ -33,8 +33,10 @@
 #   (library/opacityLog.ml): the same records as in-process;
 # - B_modpar (`Module M. Require A. End M.`, then a par: body read)
 #   records it; B_torn (a record appended with no newline), B_bad (a line that is not a
-#   record) and B_notmp (TMPDIR a missing directory) compile and have no keepfacts
-#   (null/null), while B_whole (B_torn's record with its newline) reads as a record;
+#   record), B_notmp (TMPDIR a missing directory) and B_notdir (TMPDIR a regular
+#   file, so the private directory's mkdir fails for any uid) compile and have no
+#   keepfacts (null/null), while B_whole (B_torn's record with its newline) reads as
+#   a record;
 #   B_wmissing (the log's directory moved away before the par:) and
 #   B_wmoved (the log moved away before the par:) fail with the opacity log's write
 #   error;
@@ -410,13 +412,32 @@ mkdir -p $D/notmp-qed1; cp $D/print/B.v $D/notmp-qed1/B.v
 if TMPDIR="$PWD/$D/nodir" comp -R $D/qed1 A -R $D/notmp-qed1 Bdep $D/notmp-qed1/B.v > $D/notmp-qed1/out 2>&1
 then echo ok > $D/notmp-qed1/rc; else echo failed > $D/notmp-qed1/rc; fi
 # B_readonly: TMPDIR exists but is mode 0555 (unwritable). The compile must
-# succeed with no keepfacts (the .mli promises get answers None).
+# succeed with no keepfacts (the .mli promises get answers None). A process
+# that writes into a 0555 directory anyway (a process with CAP_DAC_OVERRIDE,
+# which is what a root run of this suite has) does not meet the case's
+# precondition, so probe the directory first and skip the case there.
 mkdir -p $D/readonly-tmp; chmod 0555 $D/readonly-tmp
-mkdir -p $D/readonly-qed1; cp $D/print/B.v $D/readonly-qed1/B.v
-if TMPDIR="$PWD/$D/readonly-tmp" comp -R $D/qed1 A -R $D/readonly-qed1 Bdep $D/readonly-qed1/B.v \
-     > $D/readonly-qed1/out 2>&1
-then echo ok > $D/readonly-qed1/rc; else echo failed > $D/readonly-qed1/rc; fi
+readonly_skip=
+if ( : > $D/readonly-tmp/probe ) 2>/dev/null; then
+  rm -f $D/readonly-tmp/probe
+  readonly_skip=1
+  echo "SKIP B_readonly: TMPDIR is writable despite mode 0555 (running as root)"
+fi
+if [ -z "$readonly_skip" ]; then
+  mkdir -p $D/readonly-qed1; cp $D/print/B.v $D/readonly-qed1/B.v
+  if TMPDIR="$PWD/$D/readonly-tmp" comp -R $D/qed1 A -R $D/readonly-qed1 Bdep $D/readonly-qed1/B.v \
+       > $D/readonly-qed1/out 2>&1
+  then echo ok > $D/readonly-qed1/rc; else echo failed > $D/readonly-qed1/rc; fi
+fi
 chmod 0755 $D/readonly-tmp
+# B_notdir: TMPDIR is a regular file, so the private directory's mkdir fails
+# with ENOTDIR. No privilege defeats that, so this case covers the same
+# creation-failure handling as B_readonly on a run that skips it.
+mkdir -p $D/notdir-qed1; cp $D/print/B.v $D/notdir-qed1/B.v
+: > $D/notdir-tmp
+if TMPDIR="$PWD/$D/notdir-tmp" comp -R $D/qed1 A -R $D/notdir-qed1 Bdep $D/notdir-qed1/B.v \
+     > $D/notdir-qed1/out 2>&1
+then echo ok > $D/notdir-qed1/rc; else echo failed > $D/notdir-qed1/rc; fi
 
 # envbuild NAME A ENV...: compile B NAME (copied to NAME-A) against A's variant
 # with the environment ENV and -location-free-label; rc in NAME-A/rc.
@@ -617,7 +638,8 @@ else
 fi
 nulls bad "B_bad: a log with a line that is not a record"
 nulls notmp "B_notmp: TMPDIR is a missing directory"
-nulls readonly "B_readonly: TMPDIR is mode 0555 (unwritable)"
+[ -n "$readonly_skip" ] || nulls readonly "B_readonly: TMPDIR is mode 0555 (unwritable)"
+nulls notdir "B_notdir: TMPDIR is a regular file (the private directory cannot be made)"
 cantwrite() { # NAME TEXT: the compile fails with the opacity log's write error
   local d=$D/$1-qed1
   if [ "$(cat $d/rc)" = failed ] && grep -q "Cannot write a record to the keep rule's opacity log" $d/out; then

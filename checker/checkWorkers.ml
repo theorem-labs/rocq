@@ -235,10 +235,11 @@ let rec waitpid_non_intr flags pid =
    comparing two release builds, speed-3 against speed-4 which contains
    this setting, on six trees at -j 8 under 44 GB the worst worker grows
    from 4.1-4.7 to 6.8-11.8 GB), and a cap that the default fits can then
-   kill a worker, which fails the run (r160 -j 8 under 22 GB). Production
-   runs -j 16 for a final grade (124 GB) and -j 5 or -j 8 for a mid-run
-   check, whose memory cap sets its width, so the lazier GC is used only
-   when [!max_workers], which is -j minus 1, is at least
+   kill a worker, which fails the run (r160 -j 8 under 22 GB). The
+   deployment this fork is built for runs -j 16 for a final check (124 GB)
+   and -j 5 or -j 8 for a check made while a proof is still being written,
+   whose memory cap sets its width, so the lazier GC is
+   used only when [!max_workers], which is -j minus 1, is at least
    [lazy_gc_min_max_workers] (-j 10 and wider): narrower runs keep the
    default space overhead, the setting their width was sized with; no
    width from -j 10 to -j 15 has been measured. In a wide run

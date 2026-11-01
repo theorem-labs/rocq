@@ -15,7 +15,7 @@
    clause is dropped. Distributing a disjunction over a conjunction meets the same pairs of
    literals in many clauses, and every meeting computes [deduce] again (a polynomial sum). On the
    files of speed lane R2's fast set these checks were 11-16% of the samples of the CNF at tactic
-   time and nearly all of the extracted checker's (dispatch://INFRA-217).
+   time and nearly all of the extracted checker's.
 
    Here the conversion runs on literals that carry an identifier, the same for structurally equal
    literals, and the check of a pair of identifiers is computed once for the whole process: a
@@ -69,8 +69,8 @@ module Make (L : Literal) = struct
      that an earlier conversion computed. A proof script calls lia on many goals that share their
      atoms, and each call converts its own formula, so the same pair of literals is met by many
      conversions: on speed lane R2's RtLgTopA, one table per conversion computed 8,108,668 of the
-     12,629,302 checks the conversions asked for, and one table for the process computes 82,359
-     (dispatch://INFRA-217). The identifiers are those of every literal the process has tagged.
+     12,629,302 checks the conversions asked for, and one table for the process computes 82,359.
+     The identifiers are those of every literal the process has tagged.
 
      [max_lits] bounds what the table keeps alive: the literals of the identifier table, which no
      conversion holds after it ends. Past it the table starts again, which costs the checks of the

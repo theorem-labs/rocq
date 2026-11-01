@@ -2,11 +2,11 @@
    environment: a field T declares as a parameter has no body there even where
    E defines it. The summary read that as an axiom and named it, while
    Print Assumptions resolves the field through the implementation and reads a
-   proof that uses it closed (dispatch://BET-245). No shape below whose
-   expression defines the field is listed here, each whose expression assumes
-   it is, under the name Print Assumptions prints for the proof beside it,
-   and the three it keeps that no proof's Print Assumptions names say so
-   where they are declared: OfType.Asc.p, and Assumes.p and
+   proof that uses it closed. No shape below whose expression defines the
+   field is listed here, each whose expression assumes it is, under the name
+   Print Assumptions prints for the proof beside it, and the three it keeps
+   that no proof's Print Assumptions names say so where they are declared:
+   OfType.Asc.p, and Assumes.p and
    AssumesInside.Asc.p, which the environment holds in their own right and
    the fold over it always listed, whether a proof reaches them or not.
    misc/rocqchk_ascribed_axiom_summary.sh reads the two accounts against each

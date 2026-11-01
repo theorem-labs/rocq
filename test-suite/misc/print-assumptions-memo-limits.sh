@@ -67,7 +67,8 @@
 #   970,000 and BlockRetain64 940,000 / 970,000;
 # - with a cache that keeps every entry until the environment changes,
 #   1,240,000 to 1,280,000 KiB, which runs out here.
-# The cap above leaves 80,000 KiB over the largest of the first three.
+# The cap above leaves 80,000 KiB over the largest of the first three. Builds
+# of the check harness bound memory by their cgroup, not by address space.
 #
 # Constants without a body (axioms, parameters, Admitted lemmas) whose types
 # name many objects. The walk without reuse keeps no reference of such a type
@@ -79,9 +80,29 @@
 # - AxMod2000: 2,000 modules A(k) : S, S holding Parameter a : T, T naming
 #   2,000 definitions through BIG; one query, under -v 1000000. AxOne2000 and
 #   AdmOne1300: 2,000 Axioms, or 1,300 Lemmas proved by Admitted, of type
-#   BIG = 0, BIG naming as many definitions; one query, under -v 1000000.
-#   They run out of memory when each constant keeps a set of the references
-#   of its type.
+#   BIG = 0, BIG naming as many definitions; one query, AxOne2000 under
+#   -v 1000000 and AdmOne1300 under -v 1040000. They run out of memory when
+#   each constant without a body keeps a set of the references of its type.
+#   AdmOne1300's cap, 1,040,000 KiB, sits between N and R below: the
+#   smallest address space (ulimit -v, 10,000 KiB steps) at which it
+#   answers as it is (N) and with that regression (R, the cap the regression
+#   needs). Builds used -native-compiler no and ran as uid 1000 in the image
+#   rocq/rocq-prover@sha256:0e83cc10f2677223c5d87c6f469f53aca38dc324a5d9801209a291dd368e7e8a
+#   over two runs of the measurement.
+#   In KiB, dev profile (dune's default) and release profile (dune build -p):
+#                   dev                    release
+#                   N          R           N          R
+#     00ae038342      910,000  1,100,000   1,000,000  1,140,000
+#     74a48d05e5    (no dev build)         1,000,000  1,140,000
+#     with replay     970,000  1,110,000   1,010,000  1,150,000
+#   00ae038342 is this cache alone and 74a48d05e5 the whole fork around it;
+#   the third is 74a48d05e5 with the per-proof replay work added, a tree
+#   this history does not carry. 74a48d05e5 has no dev build: it lacks
+#   vernac/assumptionsShared.mli, which the dev profile requires. The cap
+#   is at least 30,000 KiB over every N and at least 60,000 KiB under every
+#   R. One earlier run gave R 1,060,000 for 00ae038342's release build,
+#   which seven later runs did not reproduce; the cap is 20,000 KiB under
+#   that too.
 # - AxChain3000: z(k) : idT (z(k-1) 0 p) -> BIG = 0 -> nat for 3,000 axioms,
 #   BIG naming 3,000 definitions, queried twice, under -v 800000. The second
 #   query replays the chain, and runs out of memory when the replay queues
@@ -385,12 +406,13 @@ axmod 2000 > AxMod2000.v
 axone 2000 Axiom > AxOne2000.v
 axone 1300 Admitted > AdmOne1300.v
 for f in AxMod2000 AxOne2000 AdmOne1300; do
+  cap=1000000
   case $f in
     AxMod*) want=$({ echo "Axioms:"; seq -f 'A%g.a : (fun _ : nat => nat) BIG' 1 2000; } | sort) ;;
-    AdmOne*) want=$({ echo "Axioms:"; seq -f 'a%g : BIG = 0' 1 1300; } | sort) ;;
+    AdmOne*) want=$({ echo "Axioms:"; seq -f 'a%g : BIG = 0' 1 1300; } | sort); cap=1040000 ;;
     *) want=$({ echo "Axioms:"; seq -f 'a%g : BIG = 0' 1 2000; } | sort) ;;
   esac
-  out=$(ulimit -s 8192; ulimit -v 1000000; rocq c -q -R . P "$f.v" 2>&1 | sort) || true
+  out=$(ulimit -s 8192; ulimit -v "$cap"; rocq c -q -R . P "$f.v" 2>&1 | sort) || true
   expect "$f" "$out" "$want"
 done
 

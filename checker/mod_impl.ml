@@ -14,9 +14,9 @@
     [Module M : T := E] and [Module M : T. ... End M] put T in the
     environment, so a field T declares as a parameter has no body there even
     where E or the structure defines it. The summary's Axioms section reads
-    "no body" as "assumed", and so reported a definition as an axiom
-    (dispatch://BET-245): for [Module Asc : U := Plain] with
-    [Definition q := Asc.p], [rocqchk -o] printed Seal2.Asc.p while
+    "no body" as "assumed", and so reported a definition as an axiom: for
+    [Module Asc : U := Plain] with [Definition q := Asc.p], [rocqchk -o]
+    printed Seal2.Asc.p while
     [Print Assumptions] on a proof that uses it reads "Closed under the
     global context".
 
