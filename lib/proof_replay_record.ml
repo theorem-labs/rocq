@@ -123,10 +123,20 @@ let expected_digest path =
    a new digest file there, each made read-only, and both pass the file
    tests. So [DIR] and each directory below it on the way to the record
    must be as unwritable as the record (reviewer round 2 of e560ab16e4,
-   X4). With [-proof-replay-digest] the command line binds the bytes, and
+   X4). A symbolic link below [DIR] (a directory on the way, the record or
+   its digest file) is refused too: [Unix.stat] follows it, so the file
+   tests check its target, and the directory that holds the target, which
+   this walk does not see, can be writable (cross-family review of
+   e560ab16e4..a9b6e11f28, CF2-X4). [DIR] itself comes from the command
+   line. With [-proof-replay-digest] the command line binds the bytes, and
    the directories decide nothing. [path] is the one {!record_path} built,
    [Filename.concat dir place] with [place] relative; any other path is
    refused. *)
+let is_link path =
+  match Unix.lstat path with
+  | st -> st.Unix.st_kind = Unix.S_LNK
+  | exception Unix.Unix_error _ -> true
+
 let record_dirs_writable path =
   match !options with
   | Some { o_source = Record_dir dir; o_digest = None; _ } ->
@@ -135,8 +145,9 @@ let record_dirs_writable path =
     if String.length path < n || not (String.equal (String.sub path 0 n) prefix) then true
     else
       let rec below d = function
-        | [] | [ _ ] -> false
-        | c :: rest -> let d = Filename.concat d c in writable_by_us d || below d rest
+        | [] -> false
+        | [ file ] -> let f = Filename.concat d file in is_link f || is_link (f ^ ".sha256")
+        | c :: rest -> let d = Filename.concat d c in is_link d || writable_by_us d || below d rest
       in
       writable_by_us dir
       || below dir (String.split_on_char '/' (String.sub path n (String.length path - n)))

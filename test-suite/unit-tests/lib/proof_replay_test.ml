@@ -358,12 +358,55 @@ let sidecar_dir_refuses =
   Unix.chmod dir 0o755;
   remove slashed;
   Sys.rmdir sub;
+  (* The record and its digest file as links, in a DIR that nobody can
+     write, to read-only files in a directory the compiling user can write:
+     the file tests follow the links (cross-family review of
+     e560ab16e4..a9b6e11f28, CF2-X4). *)
+  let outside = Filename.temp_file "proof-replay" ".out" in
+  Sys.remove outside;
+  Sys.mkdir outside 0o755;
+  let target = Filename.concat outside "File.proof-record.jsonl" in
+  put target;
+  Unix.symlink target dotted;
+  Unix.symlink (target ^ ".sha256") (dotted ^ ".sha256");
+  Unix.chmod dir 0o555;
+  let file_link = attempt dir in
+  Unix.chmod dir 0o755;
+  remove dotted;
+  (* The record a plain read-only file, and only its digest file a link. *)
+  let oc = open_out_bin dotted in
+  output_string oc bytes;
+  close_out oc;
+  Unix.chmod dotted 0o444;
+  Unix.symlink (target ^ ".sha256") (dotted ^ ".sha256");
+  Unix.chmod dir 0o555;
+  let sidecar_link = attempt dir in
+  Unix.chmod dir 0o755;
+  remove dotted;
+  (* A directory on the way as a link to a directory that nobody can
+     write, inside one the compiling user can write. *)
+  let real = Filename.concat outside "Top" in
+  Sys.mkdir real 0o755;
+  let in_real = Filename.concat real "File.proof-record.jsonl" in
+  put in_real;
+  Unix.chmod real 0o555;
+  Unix.symlink real sub;
+  Unix.chmod dir 0o555;
+  let dir_link = attempt dir in
+  Unix.chmod dir 0o755;
+  Sys.remove sub;
+  Unix.chmod real 0o755;
+  remove in_real;
+  Sys.rmdir real;
+  remove target;
+  Sys.rmdir outside;
   Sys.rmdir dir;
   let refused (r, d) = r = Some "writable" && d = None in
   let hit (r, d) = r = None && d <> None in
   mk_bool_test "proof-replay-sidecar-dir"
-    "with -proof-replay-dir and no digest option, a record under a directory the compiling user can write is refused"
-    (refused dotted_writable && hit dotted_closed && refused slashed_writable && hit slashed_closed)
+    "with -proof-replay-dir and no digest option, a record under a directory the compiling user can write, or behind a link, is refused"
+    (refused dotted_writable && hit dotted_closed && refused slashed_writable && hit slashed_closed
+     && refused file_link && refused sidecar_link && refused dir_link)
 
 (* The SHA-256 the binding uses is the standard one: FIPS 180-4's own
    test vectors. *)

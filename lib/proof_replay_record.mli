@@ -23,7 +23,8 @@
     library. With a [Record_dir] and no [digest], the digest comes from the
     [<record>.sha256] file beside the record, and the same write rule holds
     for that file, for [DIR] and for each directory between [DIR] and the
-    record. *)
+    record; none of those below [DIR], the record and its digest file
+    included, can be a symbolic link. *)
 
 type source =
   | Record_file of string  (** one record file, for this compile only *)
