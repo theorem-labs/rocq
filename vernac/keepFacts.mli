@@ -16,7 +16,22 @@ open Names
     or opaque body its compilation observed (a strategy command, an
     extraction, a [Functional Scheme], a plugin's [Global.body_of_constant],
     the closure walk). [Library] computes them while the library is saved and
-    stores them in a [keepfacts] segment the label does not cover. *)
+    stores them in a [keepfacts] segment the label does not cover.
+
+    {b Only from the build that wrote them.} The set of commands that log a
+    query has grown while the label's layout stayed at version 6
+    ([LibkeyObjects.version]) and this segment's shape stayed the same: a
+    [Functional Scheme], a plugin's [Global.body_of_constant], and the
+    records of [par:] and [-async-proofs] workers and of forked children
+    are logged only by the later builds. A segment an earlier build wrote
+    can therefore lack a query a later build would have stored, and nothing
+    in the segment, the label or its version tells the two apart. A reader
+    must trust these facts only from the build that wrote them: a caller
+    that keeps compiled files compares the compiler that wrote a file (its
+    executables and its plugins, not its version number) with the one now
+    running, and rebuilds on any difference. That comparison, which lives in
+    the caller, is what keeps the facts of a build with fewer observers from
+    reading as complete; the layout version does not. *)
 
 type query = {
   constant : string;  (** its user name, as [LibkeyObjects.axiom_report] lists it *)

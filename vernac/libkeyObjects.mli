@@ -127,7 +127,16 @@ open Names
     proof's body. A compile can read printed output only through [Redirect]
     (a command's output into a file) and a [Load] of that file, which a
     caller's source rule may refuse; that route is outside the label's
-    guarantee. Every other constant the compiled form holds -- in a
+    guarantee. So is time: [Timeout] turns how long a command takes into
+    success or failure, and a command can take longer on an opaque proof
+    than on an axiom ([Print] reads and shows the proof's body, and logs
+    nothing). A caller that keeps compiled files must keep such sources out
+    itself (a timed command, a printed output read back), or rebuild their
+    dependents; neither this label nor [KeepFacts] covers them. The
+    guarantee is therefore not that every source compiles alike against an
+    axiom and an opaque proof, but that a dependent tells them apart only
+    through what the keep rule reads beside the label and through these
+    routes. Every other constant the compiled form holds -- in a
     functor's body, in a functor parameter's module type, in a module type,
     in the implementation of a sealed module -- keeps an opaque proof
     distinct from an axiom, read as one fixed opaque body with no table
@@ -190,7 +199,12 @@ open Names
     changed its query shape (a table field) with no new version, and a file
     of the older shape stays safe to read, since [coqc] takes only its
     [assumptions], whose shape did not change, and rocq-library-label
-    validates the segment before it reads the queries.
+    validates the segment before it reads the queries. Nor does a version
+    move when the commands that log a query become more (later builds log a
+    [Functional Scheme], [Global.body_of_constant] and the records of workers
+    and forked children, in the same shape): an older build's segment can
+    lack what a newer build records, and only a caller that compares the
+    two builds themselves tells them apart ([KeepFacts]).
 
     What that payload printing does not reach it names rather than drops,
     and the head of checker/vo_payloads.ml is the one place that list is
