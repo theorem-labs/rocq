@@ -136,7 +136,13 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
 
    Exactness. A dependent of this library never observes the difference the
    blinding erases, except through what the keep rule reads beside the label
-   for exactly the constants [axiom_report] lists. The kernel's conversion
+   for exactly the constants [axiom_report] lists, and through two routes no
+   label covers, which the caller that keeps compiled files must exclude
+   itself: printed output read back ([Redirect], then [Load]), and time
+   ([Timeout] turns how long a command takes into success or failure, and
+   [Print] of an opaque proof reads and shows its body and logs nothing); see
+   libkeyObjects.mli. This is not a claim that every source compiles alike
+   against both forms. The kernel's conversion
    gets no body for either form ([Environ.constant_value_in] raises the
    identical [NotEvaluableConst NoBody] for both [OpaqueDef] and [Undef], so
    not even an escaping exception's text tells them apart, and
