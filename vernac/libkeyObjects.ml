@@ -11,19 +11,19 @@
 open Names
 open Libobject
 
-(* Version 3 (S1b): the label blinds a constant's axiom-or-opaque-proof
+(* Version 3: the label first blinds a constant's axiom-or-opaque-proof
    distinction (see [blind_constant]); versions 2 and 3 therefore never
    produce the same label for a library that has an opaque constant.
-   Version 4 (BET-342): the plugin file digests of an ML-MODULE object and
+   Version 4 (plugins): the plugin file digests of an ML-MODULE object and
    of an [ml_module] attempt are out of the key (vernac/mltop.ml,
    vernac/attempts.ml), so a plugin rebuilt from the same sources leaves
    the label of the libraries that declare it unchanged.
-   Version 5 (D18 F1): the blinding covers only the constants of the
+   Version 5 (scoped): the blinding covers only the constants of the
    library's own signature (the ones [axiom_report] lists); in a functor
    body, a module type and every other place an opaque proof stays one,
    distinct from an axiom, with its table index erased ([blind_compiled]),
    so an [Admitted -> Qed] edit there moves the label.
-   Version 6 (speed-8): the key covers [vmlibrary_format_version], the
+   Version 6 (VM code): the key covers [vmlibrary_format_version], the
    format version of the VM-bytecode segment of the files this build reads
    and writes, so an object written under one VM format is never reused by
    a build that reads another. *)
@@ -101,8 +101,8 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
   let warn = List.map (fun ({ UserWarn.note; cats } : UserWarn.warn) -> (note, cats)) warn in
   (name, Array.to_list deps, DirPath.Set.elements safe_deps, (depr, warn))
 
-(* The axiom-or-opaque-proof blinding (design S1b, dispatch://INFRA-361;
-   restricted to the library's own signature in version 5, D18 F1).
+(* The axiom-or-opaque-proof blinding (in label versions 3 and later;
+   restricted to the library's own signature in versions 5 and later).
 
    [blind_constant] maps a constant whose body is [Undef None] (an axiom or
    parameter with no body, as [Admitted] and [Axiom] make) and one whose body
@@ -130,8 +130,8 @@ let[@warning "@9"] summary_view { name; deps; safe_deps; info = { UserWarn.depr;
    Module M : T] and [Module X : T := ...] copy a module type's), where they
    decide whether the dependent compiles ([Transparent R.c] fails on an opaque
    proof) and what its [Print Assumptions] says, while no report lists them,
-   so the keep rule could not see an [Admitted -> Qed] edit there (review
-   gate 1, F1). Such an edit therefore moves the label; a shift of the opaque
+   so the keep rule could not see an [Admitted -> Qed] edit there (for
+   copied bodies). Such an edit therefore moves the label; a shift of the opaque
    table index alone still does not.
 
    Exactness. A dependent of this library never observes the difference the
@@ -229,7 +229,7 @@ let blind_compiled (compiled : Safe_typing.compiled_library) : Safe_typing.compi
   let sign = map_own_signature (fun _ cb -> blind_constant cb) self (Mod_declarations.mod_type mb) in
   Safe_typing.replace_module_of_library compiled (Mod_declarations.set_signature sign mb)
 
-(* The report the keep rule needs beside the label (C1): per library, the
+(* The report that the keep rule needs beside the label: per library, the
    constants whose contribution the label blinded, each with its current
    assumption status, and the other libraries this one holds a foreign opaque
    reference into. *)

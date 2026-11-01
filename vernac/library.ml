@@ -224,8 +224,8 @@ let add_opaque_table dp st =
    table from them on first use ([stored_opaque]). [fetch_delayed]
    unmarshals the segment and then compares the digest stored after it with
    the one recorded when the library was loaded, so a file rebuilt since with
-   other opaque proofs is refused, never used. (Design D18,
-   dispatch://INFRA-361: the keep rule's records from a worker reach the
+   other opaque proofs is refused, never used. (This holds for
+   every worker, too: the keep rule's records from a worker reach the
    library through the opacity log, and the read they record must then
    succeed there as in the compiling process.)
 
@@ -380,7 +380,7 @@ let mk_library sd md digests vm =
    example a copy of that library's file built with other proofs, at another
    logical path) replaced the loaded library's entries with that file's: its
    stored closures, which the next save of a dependent took as the loaded
-   library's, and its opaque proofs. (Design D18, dispatch://INFRA-361.) *)
+   library's, and its opaque proofs. (A failed Require now leaves them.) *)
 let interned_pending : (library_t * (unit -> unit)) option ref = ref None
 
 (* The table writes of [m]'s intern, or nothing for a library this process

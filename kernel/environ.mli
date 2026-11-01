@@ -195,7 +195,7 @@ val type_in_type_constant : Constant.t -> env -> bool
 
 (** {6 ... } *)
 (** [constant_value env c] raises [NotEvaluableConst NoBody] if [c] has no
-   body or is an opaque proof (the two are not told apart, design D18:
+   body or is an opaque proof (the two are not told apart, on purpose:
    an error text that showed the difference would let a dependent observe
    whether a foreign constant is an axiom or an opaque proof, which the
    library label does not cover), [NotEvaluableConst (IsPrimitive p)] if [c]

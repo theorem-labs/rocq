@@ -36,8 +36,8 @@
 #   reads a sealed module's implementation --, a Proof-using change
 #   that discharges one more section binder (secbind), and the two
 #   parts of the library's summary: the Require made Require (safe), which
-#   changes only which dependencies the summary lists as safe (Astra review,
-#   section 3.1), and the note of the library's attribute): both refuse,
+#   changes only which dependencies the summary lists as safe, and the note
+#   of the library's attribute): both refuse,
 #   with their "inconsistent assumptions" messages.
 # rocq-library-label --check confirms that every A.vo stores the label
 # recomputed from its content ("label2" and the 32 bytes of the label, of

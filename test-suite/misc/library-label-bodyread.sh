@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# D18 (dispatch://INFRA-361), review gate 14: a plugin's Global.body_of_constant on a
-# foreign constant is recorded.
+# A plugin's Global.body_of_constant on a foreign constant is recorded.
 #
 # Global.body_of_constant answers None for an axiom and the forced body for an opaque
 # proof, so a plugin tactic that calls it (coq-hammer-tactics' sauto does, through
@@ -25,20 +24,20 @@
 # - B_shape1 (fails unless body_shape A.c = 1) compiles against qed1 and fails against
 #   qed2: a body-only edit of a foreign proof, which the record's table (A) makes the
 #   keep rule check;
-# - outside the compiling process (review gate 15): B_par runs B_axiom's check under
+# - outside the compiling process: B_par runs B_axiom's check under
 #   `par:` over two goals, which coqc runs in rocqworker processes, and B_parany reads
 #   A.c there; B_fork reads A.c in a child the plugin forks (kfpeek's
 #   fork_body_shape, as coq-hammer's best forks its candidates; the child leaves through
 #   `exit 0`, so the owner check that keeps it from removing the parent's log is
 #   exercised). Their records reach B's keepfacts through the opacity log file
 #   (library/opacityLog.ml): the same records as in-process;
-# - review gate 16: B_modpar (`Module M. Require A. End M.`, then a par: body read)
+# - B_modpar (`Module M. Require A. End M.`, then a par: body read)
 #   records it; B_torn (a record appended with no newline), B_bad (a line that is not a
 #   record) and B_notmp (TMPDIR a missing directory) compile and have no keepfacts
 #   (null/null); B_wmissing (the log's directory moved away before the par:) and
 #   B_wmoved (the log moved away before the par:) fail with the opacity log's write
 #   error;
-# - review gate 17: B_devnull (B_parany with ROCQ_OPACITYLOG_FILE=/dev/null outside:
+# - B_devnull (B_parany with ROCQ_OPACITYLOG_FILE=/dev/null outside:
 #   the compiling process ignores it) records the read; B_wenv (the compiling process
 #   points the variable at a missing file before the par:: the worker pool still gives
 #   the workers its own log) records it; B_parnotmp (B_parany with TMPDIR a missing
@@ -46,7 +45,7 @@
 #   (`Section S. Require A. End S.`, then a par: body read) records it; a coqc without
 #   -location-free-label and with ROCQ_OPACITYLOG_FILE=/nonexistent/x compiles a
 #   Transparent on an axiom (B_stock) and a par: body read (B_stockpar);
-# - review gate 18: B_asyncenv, a proof delegated to a proof worker (-async-proofs on)
+# - B_asyncenv, a proof delegated to a proof worker (-async-proofs on)
 #   that reads A.c's body there, with -async-proofs-private-flags
 #   extra-env=KFPEEK_EXTRA_ENV=1;ROCQ_OPACITYLOG_FILE=/dev/null: the worker pool gives
 #   the worker the compile's own log anyway, so the read is recorded. The pool spawns
@@ -55,7 +54,7 @@
 #   second proof runs in a replacement. The proof reads the body only after it checks
 #   that it runs in a worker and that its environment has KFPEEK_EXTRA_ENV=1, so a
 #   master, or a worker that did not get extra-env, fails the compile;
-# - review gate 19: B_modfail, `Module M. Require A. Fail Require Y.X. End M.` where
+# - B_modfail, `Module M. Require A. Fail Require Y.X. End M.` where
 #   Y.X's file is qed2's A.vo (it holds the name A.A, so its Require fails), then a par:
 #   worker checks that A.c's body is qed1's (shape 1): the failed Require leaves the
 #   loaded A's opaque-proof handle in place, so the replay at End M gives the workers
@@ -221,7 +220,7 @@ parb parany 'let _ := body_shape constr:(A.c) in ().'
 b fork 'let _ := fork_body_shape constr:(A.c) in ().'
 build par adm; build par qed1; build parany qed1; build fork adm; build fork qed1
 
-# Round 16. B_modpar: A is required inside a module (the summary is rolled back at
+# B_modpar: A is required inside a module (the summary is rolled back at
 # End M and the REQUIRE-SYNTAX object replayed), then a par: worker reads A.c's body.
 mkdir -p $D/modpar
 printf '%s\n' 'Require Import Ltac2.Ltac2.' 'Declare ML Module "kfpeek".' 'Module M. Require A. End M.' \
@@ -235,7 +234,7 @@ b bad 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "garbage~" in
 build torn qed1; build bad qed1
 # B_wmissing: the log's directory is moved away before the par:, so the workers' path
 # names a file in a missing directory; B_wmoved: the log itself is moved away. Either
-# way the workers cannot open it. B_wenv (round 17): the compiling process points the
+# way the workers cannot open it. B_wenv: the compiling process points the
 # variable at a missing file before the par:; the worker pool still gives the workers the
 # compile's own log, so their reads are recorded.
 parx() { # NAME PRE: B_parany with the toplevel command PRE before the goal
@@ -257,7 +256,7 @@ mkdir -p $D/notmp-qed1; cp $D/print/B.v $D/notmp-qed1/B.v
 if TMPDIR="$PWD/$D/nodir" comp -R $D/qed1 A -R $D/notmp-qed1 Bdep $D/notmp-qed1/B.v > $D/notmp-qed1/out 2>&1
 then echo ok > $D/notmp-qed1/rc; else echo failed > $D/notmp-qed1/rc; fi
 
-# Round 17. envbuild NAME A ENV...: compile B NAME (copied to NAME-A) against A's variant
+# envbuild NAME A ENV...: compile B NAME (copied to NAME-A) against A's variant
 # with the environment ENV and -location-free-label; rc in NAME-A/rc.
 envbuild() {
   local name=$1 a=$2 d=$D/$1-$2; shift 2
@@ -276,7 +275,7 @@ printf '%s\n' 'Require Import Ltac2.Ltac2.' 'Declare ML Module "kfpeek".' 'Secti
   'Ltac2 check () := let _ := body_shape constr:(A.c) in ().' 'Set Default Proof Mode "Classic".' \
   'Goal True /\ True.' '  split.' '  par: (ltac2:(check ()); exact I).' 'Qed.' > $D/secpar/B.v
 build secpar qed1
-# Round 19. B_modfail: a failed Require, inside the module, of a file that holds A's
+# B_modfail: a failed Require, inside the module, of a file that holds A's
 # name (qed2's A.vo as Y.X), then a par: worker that needs qed1's body (shape 1).
 mkdir -p $D/modfail-qed1 $D/xq2
 cp $D/qed2/A.vo $D/xq2/X.vo
@@ -298,7 +297,7 @@ for nd in stock-adm:adm stockpar-qed1:qed1; do
   if ROCQ_OPACITYLOG_FILE=/nonexistent/x rocq c -q -R $D/$a A -R $d Bdep $d/B.v > $d/out 2>&1
   then echo ok > $d/rc; else echo failed > $d/rc; fi
 done
-# Round 18. B_asyncenv: a delegated proof whose worker's variable extra-env points at
+# B_asyncenv: a delegated proof whose worker's variable extra-env points at
 # /dev/null. One proof worker (-async-proofs-j 1): l0 runs in the first one, which the
 # pool spawned before it parsed extra-env, and l in its replacement, which gets
 # extra-env (KFPEEK_EXTRA_ENV=1 shows it did).
@@ -374,7 +373,7 @@ else
   bad "B_fork ($(cat $D/fork-adm/rc)) opacity_queries from a forked child: '$qf' (Admitted A), '$qfq' (proved A): $(tr '\n' ' ' < $D/fork-adm/out | cut -c1-300)"
 fi
 
-# Round 16: a broken log never gives an incomplete record.
+# A broken log never gives an incomplete record.
 qm=$(field $D/modpar-qed1/B.vo opacity_queries)
 if [ "$(cat $D/modpar-qed1/rc)" = ok ] && [ "$qm" = "$q_qed" ]; then
   pass "B_modpar: after Module M. Require A. End M., a par: worker reads A.c's body and records it: $qm"
@@ -404,7 +403,7 @@ cantwrite() { # NAME TEXT: the compile fails with the opacity log's write error
 cantwrite wmissing "B_wmissing: a worker whose log is in a missing directory"
 cantwrite wmoved "B_wmoved: a worker whose log was moved away"
 
-# Round 17.
+# Inherited log variables, sections, failed Requires and stock builds.
 qw=$(field $D/wenv-qed1/B.vo opacity_queries)
 if [ "$(cat $D/wenv-qed1/rc)" = ok ] && [ "$qw" = "$q_qed" ]; then
   pass "B_wenv: the compiling process pointed the variable at a missing file, and its workers still record into its log: $qw"

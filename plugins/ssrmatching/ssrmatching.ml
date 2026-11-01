@@ -1136,7 +1136,7 @@ let pr_rpattern = pr_pattern pr_cpattern pr_cpattern
 
 let wit_rpatternty = add_genarg "rpatternty" (fun env sigma -> pr_pattern pr_cpattern pr_cpattern)
 
-(* Interface key (D18): location strippers of the glob values. A glob
+(* The interface key's location strippers for the glob values. A glob
    cpattern has no interpretation closure; one with a closure cannot be
    stripped by type. *)
 let strip_cpattern ({ kind; pattern; interpretation } : cpattern) : cpattern =

@@ -11,7 +11,7 @@
 open Names
 
 (** The keep rule's facts about a saved library that a [.vo] file's segments
-    cannot carry on their own (design D18, dispatch://INFRA-361): its
+    cannot carry on their own (the library label omits them all): its
     assumption closure, and the foreign constants whose axiom-or-opaque status
     or opaque body its compilation observed (a strategy command, an
     extraction, a [Functional Scheme], a plugin's [Global.body_of_constant],

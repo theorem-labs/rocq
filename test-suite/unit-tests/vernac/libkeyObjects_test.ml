@@ -3,7 +3,7 @@ open Utest
 open Names
 
 (* Unit tests of LibkeyObjects: the location-free label of a library, which
-   coqc stores as the digest of its library segment (design D18). *)
+   coqc stores as the digest of its library segment. *)
 
 let tests = ref []
 let add_test name f = tests := mk_test name (TestCase f) :: !tests
@@ -142,7 +142,7 @@ let () = add_test "layout" (fun () ->
     let label = objects_exn (vector_input (Some (at 3 10 11)) (Some (at 7 40 41))) in
     assert_equal ~printer:hex (Libkey.label (layout_value ())) label)
 
-(* M12 (BET-342): the layout version is part of the encoded value, so a
+(* The layout version is part of the encoded value, so a
    label made by an older layout is never a label of this one. A reader
    that keeps a library across two builds must require the version it
    knows ([rocq-library-label --layout-version]). *)
@@ -153,7 +153,7 @@ let () = add_test "a label of another layout version is another label" (fun () -
           (not (String.equal (Libkey.label (layout_value ~version ())) current)))
       [1; 2; 3; 4; 5])
 
-(* Version 6 (speed-8): the vmlibrary format is part of the encoded value
+(* Version 6: the vmlibrary format is part of the encoded value
    too, so a library compiled by a build whose VM segment is in another
    format never has the label of this one, whatever its source, objects and
    summary are (the version-6 paragraph of vernac/libkeyObjects.mli). The
@@ -207,8 +207,8 @@ let () = add_test "every other field counts" (fun () ->
       (with_objs [Libobject.ModuleObject (Id.of_string "M", ([], Libobject.Objs []))])
       (with_objs [Libobject.ModuleObject (Id.of_string "N", ([], Libobject.Objs []))]))
 
-(* Each field of the summary counts (Astra review, section 3.1: the safe/full
-   modes of the dependencies change what a dependent's compile does). *)
+(* Each field of the summary counts (the safe/full modes of the
+   dependencies change what a dependent's compile does). *)
 let () = add_test "every field of the summary counts" (fun () ->
     let input = vector_input None None in
     let summary_differs msg s1 s2 =
@@ -306,7 +306,7 @@ let () = add_test "registered generic argument, in a list" (fun () ->
     assert_equal ~printer:(fun x -> x) "a b"
       (String.concat " " (List.map (fun x -> Id.to_string x.CAst.v) l)))
 
-(* The axiom-or-opaque-proof blinding (S1b): [Undef None] (an axiom) and
+(* The axiom-or-opaque-proof blinding: [Undef None] (an axiom) and
    [OpaqueDef _] (an opaque proof) collapse to the canonical [Undef None], so
    [Admitted <-> Qed] does not change the label; [Def] (a transparent body
    conversion unfolds) and [Undef (Some _)] (an inlinable parameter) stay

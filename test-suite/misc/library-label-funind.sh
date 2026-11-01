@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# D18 (dispatch://INFRA-361), Astra review 3 N1: `Functional Scheme` reads whether a
-# foreign equation lemma is an axiom or an opaque proof, and the keepfacts record it.
+# `Functional Scheme` reads whether a foreign equation lemma is an axiom or an
+# opaque proof, and the keepfacts record it.
 #
 # plugins/funind/gen_principle.ml (make_scheme) makes the generated principle an opaque
 # proof when the function's equation lemma (`<f>_equation`, found by its short name in

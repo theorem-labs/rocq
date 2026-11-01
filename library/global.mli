@@ -169,7 +169,7 @@ val body_of_constant : indirect_accessor -> Constant.t ->
     it lives in. For monomorphic constant, the latter is empty, and for
     polymorphic constants, the term contains De Bruijn universe variables that
     need to be instantiated. Under [-location-free-label] it also logs, for
-    the keep rule ([OpacityLog], design D18), whether the constant was an
+    the keep rule (see [OpacityLog] for how), whether the constant was an
     axiom or an opaque proof, and for an opaque proof the table its body is
     read from: the answer tells the two apart, and neither is in the label of
     the library holding the constant. *)

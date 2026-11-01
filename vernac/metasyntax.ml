@@ -1727,7 +1727,7 @@ let subst_notation (subst, nobj) =
 let classify_notation nobj =
   if nobj.notobj_local then Dispose else Substitute
 
-(* The interpretation of a notation holds the locations slice 0 found in
+(* The interpretation of a notation holds the locations parsing found in
    this kind ([notobj_interp], a [Notation_term.interpretation] over
    [glob_constr]); the specific printing rules hold the locations of
    their boxes. The remaining fields are flags, scope names, notation

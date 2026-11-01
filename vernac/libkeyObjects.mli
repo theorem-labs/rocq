@@ -10,7 +10,7 @@
 
 open Names
 
-(** The location-free label of a library (design D18, dispatch://INFRA-361).
+(** The location-free label of a library (a digest that coqc stores for it).
 
     [coqc -location-free-label] stores the first 16 bytes of the label as
     the digest of a library's [library] segment, in place of the MD5 of that
@@ -61,7 +61,7 @@ open Names
     Version 1 had no [summary']: two builds of a library that differed only
     in a [Require] made [Require (safe)] had the same label, although a
     dependent that also requires the dependency fully compiles against one
-    and fails against the other (Astra review of version 1, section 3.1).
+    and fails against the other (a difference which version 1 never saw).
 
     Universe names and bound-module counters are read as they are: they
     escape into the dependents (a dependent that applies a functor stores
@@ -82,8 +82,8 @@ open Names
     reaching a new field), so that labels made by different views never
     match.
 
-    {b The axiom-or-opaque-proof blinding (version 3, S1b; restricted in
-    version 5, D18 F1).} A constant of the library's own signature (its
+    {b The axiom-or-opaque-proof blinding (version 3; restricted from
+    version 5, see below).} A constant of the library's own signature (its
     structure and, recursively, the signature of each of its submodules:
     exactly the constants [axiom_report] lists) whose body is [Undef None]
     (an axiom or parameter with no body, as [Admitted] and [Axiom] make) and
@@ -125,8 +125,8 @@ open Names
     [About] prints a declaration's location, [Search is:<kind>] filters on
     its documentation kind, and [Print] shows its status and an opaque
     proof's body. A compile can read printed output only through [Redirect]
-    (a command's output into a file) and a [Load] of that file, which the
-    grading source policy refuses; that route is outside the label's
+    (a command's output into a file) and a [Load] of that file, which a
+    caller's source rule may refuse; that route is outside the label's
     guarantee. Every other constant the compiled form holds -- in a
     functor's body, in a functor parameter's module type, in a module type,
     in the implementation of a sealed module -- keeps an opaque proof
@@ -134,11 +134,11 @@ open Names
     index: a functor application, [Declare Module M : T] or [Module X : T :=
     ...] copies such a form into the dependent's own declarations, where it
     decides whether the dependent compiles ([Transparent R.c]) and what its
-    [Print Assumptions] says (review gate 1, F1). So an [Admitted -> Qed]
+    [Print Assumptions] says (version 5 onwards). So an [Admitted -> Qed]
     edit there moves the label, and a shift of the opaque table index alone
     does not.
 
-    {b Plugin files out of the key (version 4, BET-342).} A [Declare ML
+    {b Plugin files out of the key (version 4, by name).} A [Declare ML
     Module] contributes the plugin names, each with whether it is an
     implicit dependency (the ML-MODULE object), and the files findlib
     resolved it to (an [ATTEMPTS] record of a rolled-back one), not the
@@ -147,7 +147,7 @@ open Names
     compiled against: between two builds of this fork whose [plugins/] trees
     are identical, 26 of 27 installed [.cmxs] files differ, so a key that
     read those digests moved for every library that declares a plugin and,
-    through the dependency digests, for every library above it (BET-342,
+    through the dependency digests, for every library above it (this was
     measured: 1 of 691 Corelib, Ltac2 and Stdlib labels equal across one such
     move; with version 4, 691 of 691).
 
@@ -231,7 +231,7 @@ open Names
     elaboration of a file that uses its objects goes -- is a property of
     the build that compiles that file, not of this library.
 
-    {b The VM segment's format version in the key (version 6, speed-8).}
+    {b The VM segment's format version in the key (version 6, VM code).}
     The [vmlibrary] segment of a [.vo] holds VM bytecode: instruction words
     the C interpreter of the READING process dispatches on. A process whose
     VM lacks the opcodes the writer emitted jumps where its own table sends
@@ -327,7 +327,7 @@ val label :
 val blind_constant : Declarations.constant_body -> Declarations.constant_body
 (** A constant whose body is [Undef None] or [OpaqueDef _] replaced by the
     canonical [Undef None], every other field kept; [Def], [Primitive],
-    [Symbol] and [Undef (Some _)] left as they are (S1b). *)
+    [Symbol] and [Undef (Some _)] left just as they were. *)
 val blind_compiled :
   Safe_typing.compiled_library -> Safe_typing.compiled_library
 (** The compiled library as the label reads it: every constant of its own
@@ -342,7 +342,7 @@ val blind_compiled :
 type assumption_status = Axiom | Proof
 
 (** What the keep rule reads beside the label to apply its monotone axiom
-    condition and its foreign-opaque-reference check (C1, dispatch://INFRA-361).
+    condition and its foreign-opaque-reference check (both from [axiom_report]).
     Both are computed from the current compiled form, never recorded. *)
 type axiom_report = {
   blinded : (Constant.t * assumption_status) list;

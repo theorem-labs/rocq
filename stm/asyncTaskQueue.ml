@@ -128,7 +128,7 @@ module Make(T : Task) () = struct
            CoqworkmgrApi.(string_of_priority priority)]
         in
         Array.of_list (wselect :: spawn_args @ worker_opts) in
-      (* The keep rule's opacity log (D18, dispatch://INFRA-361): the worker
+      (* The keep rule's opacity log (in each compiling process): the worker
          gets exactly the value [OpacityLog.worker_env_value] gives, so neither
          an inherited entry nor one from -async-proofs-private-flags can
          redirect its records, and the workers of a coqc that owns no log

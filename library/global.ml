@@ -214,7 +214,7 @@ let body_of_constant_body access cb =
    ([None]) from an opaque proof (its forced body), and gives that body. The
    library label gives an axiom and an opaque proof of a library's own
    signature the same label and does not cover an opaque body, so both are
-   logged for the keep rule (design D18, dispatch://INFRA-361; [OpacityLog]):
+   logged for the keep rule ([OpacityLog], in each process of a compilation):
    the status seen, and for an opaque proof the table its body is read from.
    [cst] is the name the caller gives, as [LibkeyObjects.axiom_report] lists
    it for a constant of the holder's signature; a copy whose user and

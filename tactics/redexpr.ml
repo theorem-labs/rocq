@@ -121,7 +121,7 @@ let check_not_fully_opaque l ref =
     if Environ.mem_constant sp (Global.env ()) then begin
       let cb = Global.lookup_constant sp in
       (* Record whether this non-opaque strategy command saw an axiom or an
-         opaque proof, so the keep rule (D18, dispatch://INFRA-361) rebuilds a
+         opaque proof, so the keep rule (of any downstream checker) rebuilds a
          dependent whose unchanged source would now meet, or no longer meet,
          the error below once the constant's body form changes between the two
          (an edit the label hides). The record is kept in the error branch too:

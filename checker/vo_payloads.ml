@@ -9,7 +9,7 @@
 (************************************************************************)
 
 (* The OCaml type of what every object kind of this build stores in a .vo
-   (BET-342, the payload part of [rocq-library-label --vo-representation]).
+   (that is, the payload part of [rocq-library-label --vo-representation]).
 
    An object segment of a .vo holds, per object, the name of its kind and
    the marshalled payload of that kind ([Libobject.Dyn]). The name is

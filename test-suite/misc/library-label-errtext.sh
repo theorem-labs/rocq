@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# D18 (dispatch://INFRA-361), round 13 observer sweep: an error text must not tell a
-# foreign opaque proof from an axiom.
+# An error text must not tell a foreign opaque proof from an axiom.
 #
 # Environ.constant_value_in (and EConstr's, and CClosure's) raised
 # NotEvaluableConst Opaque for an opaque proof and NotEvaluableConst NoBody for an

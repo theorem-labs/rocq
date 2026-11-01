@@ -952,7 +952,7 @@ let argument_extend (type a b c) ~plugin ~name ~ignore_kw ?strip (arg : (a, b, c
   | Some (ArgStripFun f) -> Genstrip.register_strip0 wit f
   | Some (ArgStripWit w) -> Genstrip.register_strip0 wit (fun v -> Genstrip.strip w v)
   | None ->
-    (* No stripper given (a plugin written before D18): the value as it is,
+    (* No stripper given (by a plugin written earlier): the value as it is,
        locations included, so a moved location changes the key. *)
     Genstrip.register_strip0 wit (fun v -> v)
   in

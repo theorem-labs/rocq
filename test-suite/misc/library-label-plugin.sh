@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Plugin files and the library label (label version 4, BET-342).
+# Plugin files and the library label (label version 4).
 #
 # Up to label version 3 the key held the digest of each plugin file a
 # library declares, through the ML-MODULE object (vernac/mltop.ml) and
@@ -112,9 +112,9 @@ printf 'Declare ML Module "labelplugin2".\nDefinition a := 0.\n' > _test/renamed
 comp renamed
 check "another plugin name: another label" test "$(label declare)" != "$(label renamed)"
 
-# 4. The layout version the labels above are made by (6 since speed-8, which
-#    put the vmlibrary format version in the key; 5 since D18 F1, which
-#    restricted the axiom-or-opaque blinding to the library's own signature).
+# 4. The layout version the labels above are made by (6 since the key
+#    covers the vmlibrary format version; 5 since the axiom-or-opaque
+#    blinding is restricted to the library's own signature).
 v=$("$TOOL" --layout-version || echo "no --layout-version")
 check "--layout-version prints the layout version (got '$v')" test "$v" = "6"
 

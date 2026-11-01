@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# The keepfacts closures of a whole Stdlib build, computed over the
-# dependencies' stored closures and by every root's own walk
-# (ROCQ_KEEPFACTS_FULL_WALK=1), must be equal, and what each costs
-# (vernac/keepFacts.ml; design D18, dispatch://INFRA-361).
+# The stored and fully walked keepfacts closures of a whole Stdlib build
+# must be equal, and the script reports their cost.
 #
 # Usage: dev/tools/keepfacts-stdlib-equivalence.sh PREFIX STDLIB_SRC OUT [LABEL_PREFIX]
 #   PREFIX        the install prefix of a build of this tree (bin/rocq,

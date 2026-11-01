@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# D18 (dispatch://INFRA-361), Astra review 2 blockers 1 and 3: the [keepfacts]
-# segment that -location-free-label writes, read through
+# The [keepfacts] segment that -location-free-label writes, read through
 # `rocq-library-label --axiom-report-json` (schema version 4).
 #
-# B3 (assumption closure). A's lemma `l` is a Qed proof in both variants; in `use`
+# Assumption closure. A's lemma `l` is a Qed proof in both variants; in `use`
 # its proof starts to use A's existing axiom `ax`. The label blinds the opaque body,
 # so A's label is equal across the edit, and every declaration status is unchanged,
 # so only a real closure tells the edits apart: A's "assumptions" gain `ax`, and so do
@@ -17,7 +16,7 @@
 # type over an axiom: each closure by its own walk, equal to the full walk's); and a
 # closure reached only through a foreign inductive's constructor.
 #
-# B1 (opacity a command saw). A's `c` is Admitted in `adm` and a Qed proof in `qed`;
+# Opacity a command saw. A's `c` is Admitted in `adm` and a Qed proof in `qed`;
 # the label is equal across. B runs `Transparent A.c.`: it compiles against `adm` and
 # records (c, opaque=false), and it fails against `qed`. B2 runs
 # `Fail Transparent A.c.` against `qed` and records (c, opaque=true): a rolled-back
@@ -71,7 +70,7 @@ field() { report "$1" | sed -n "s/.*\"$2\":\(\[[^]]*\]\|{[^}]*}\|null\).*/\1/p";
 # The closure the report lists for declaration $2 of file $1 ("" when empty).
 closure() { field "$1" assumptions | sed -n "s/.*\"[^\"]*\.$2\":\(\[[^]]*\]\).*/\1/p"; }
 
-# --- B3 ---
+# --- Assumption closure ---
 printf 'Axiom ax : True.\nLemma l : True.\nProof. exact I. Qed.\n' > _kfacts/noax/A.v
 printf 'Axiom ax : True.\nLemma l : True.\nProof. exact ax. Qed.\n' > _kfacts/use/A.v
 printf 'Require A.\nLemma d : True.\nProof. exact A.l. Qed.\n' > _kfacts/dnoax/D.v
@@ -241,7 +240,7 @@ else
   bad "B3, functor application: D.R.t '$fr', E.e '$fe', full walk '$ff', debug '$(cat $FN/e/debug)'"
 fi
 
-# --- B1 ---
+# --- Opacity a command saw ---
 printf 'Lemma c : True.\nAdmitted.\n' > _kfacts/adm/A.v
 printf 'Lemma c : True.\nProof. exact I. Qed.\n' > _kfacts/qed/A.v
 printf 'Require A.\nTransparent A.c.\n' > _kfacts/badm/B.v

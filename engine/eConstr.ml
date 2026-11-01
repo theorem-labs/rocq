@@ -1230,8 +1230,8 @@ let constant_value_in env sigma (kn, u) =
   | Def l_body ->
     of_constr (CVars.subst_instance_constr u l_body)
   | OpaqueDef _ | Undef _ ->
-    (* Not told apart, as in [Environ.constant_value_in] (design D18): an
-       escaping exception's text would show the difference. *)
+    (* Not told apart, as in [Environ.constant_value_in] (see there): an
+       escaping exception's text would show the difference.  *)
     raise (NotEvaluableConst NoBody)
   | Primitive p -> raise (NotEvaluableConst (IsPrimitive (u ,p)))
   | Symbol b ->

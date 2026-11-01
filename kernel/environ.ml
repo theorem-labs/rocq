@@ -652,7 +652,7 @@ let constant_type_in env (kn,u) =
   subst_instance_constr u cb.const_type
 
 (* An opaque proof raises [NotEvaluableConst NoBody], as an axiom does, not
-   [NotEvaluableConst Opaque] (design D18, dispatch://INFRA-361). No caller
+   [NotEvaluableConst Opaque] (for the reason given right below). No caller
    tells the two payloads apart, but a caller that lets the exception escape
    a tactic shows it in the error text ("Uncaught exception
    Environ.NotEvaluableConst(1)" against "(0)"), which Ltac2 can read

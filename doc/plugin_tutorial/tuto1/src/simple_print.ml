@@ -14,7 +14,7 @@ let simple_body_access ~opaque_access gref =
     (* most commands should not use body_of_constant and opaque accessors,
        but for printing it's ok. [Global.body_of_constant] rather than
        [body_of_constant_body], because only [body_of_constant] logs what it
-       reads for the keep rule (D18): its answer tells an axiom from an
+       reads for the keep rule: its answer tells an axiom apart from an
        opaque proof, and [MyPrint] fails on the first, so a [Fail MyPrint c]
        observes it. *)
     match Global.body_of_constant opaque_access cst with

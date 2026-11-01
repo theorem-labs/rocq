@@ -11,8 +11,8 @@
 open Names
 
 (* The facts the keep rule reads beside the library label that cannot be
-   recomputed from a [.vo] file's segments alone (design D18,
-   dispatch://INFRA-361, Astra review 2 blockers 1 and 3). [Library] computes
+   recomputed from a [.vo] file's segments alone: assumption closures and
+   foreign statuses and bodies a compile read. [Library] computes
    them while a library is saved, when the whole environment is loaded, and
    stores them in a [keepfacts] segment that the label does not cover (so an
    [Admitted -> Qed] edit, which the label hides on purpose, does not move
@@ -176,15 +176,15 @@ module SSet = CString.Set
    that state (a keep round): there the stored closure can differ from a walk
    of the current bodies, and the keep rule makes it a superset of it.
 
-   The premise: every kept object is a registration object, and a
-   registration never keeps: each library it stages it either compiles, or
-   takes from the registration object store as an object an earlier
-   registration compiled from identical inputs, against the same
-   prerequisite objects. So every record a registration wrote is exact for
-   its library's own declarations against the objects it was compiled with.
+   The premise: every kept object was compiled by a full build, and a full
+   build never keeps: each library it builds it either compiles, or takes
+   from a store of objects that an earlier full build compiled from identical
+   inputs, against the same prerequisite objects. So every record a full
+   build wrote is exact for its library's own declarations against the
+   objects it was compiled with, however it got them.
    The keep rule keeps a library only when no declaration's closure in any
-   library of its transitive in-tree closure grew (its monotone condition,
-   s1b) AND every table named in its own body-read queries is
+   library of its transitive in-tree closure grew (its monotone condition)
+   AND also every table named in its own body-read queries is
    byte-identical: the growth check alone is not enough, since a copy whose
    body sits in another library's table can gain an axiom while that
    library's label and every closure it stores stay the same

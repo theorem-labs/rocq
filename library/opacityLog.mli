@@ -15,8 +15,8 @@ open Names
     non-opaque [Strategy]/[Transparent] command, an extraction, a
     [Functional Scheme], a plugin's [Global.body_of_constant]), and which
     opaque table a proof body was read from (an extraction,
-    [Global.body_of_constant], the keepfacts closure walk) (design D18,
-    dispatch://INFRA-361), from every process that compiles it: the
+    [Global.body_of_constant], the keepfacts closure walk) (all of them
+    kept in one log file), from every process that compiles it: the
     compiling one, its [par:] and [-async-proofs] workers, and the children
     a plugin forks. See [opacityLog.ml] for why and how. *)
 

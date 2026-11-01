@@ -1339,7 +1339,7 @@ let make_scheme evd (fas : (Constant.t EConstr.puniverses * UnivGen.QualityOrSet
          [Transparent] on it, or any reduction through it, observes. An
          admitted equation lemma ([Undef None]) and a proved one
          ([OpaqueDef]) give the lemma's library the same label, so the
-         status seen is logged for the keep rule (D18, dispatch://INFRA-361;
+         status seen is logged for the keep rule (in each compiling process,
          [OpacityLog], as [Redexpr.check_not_fully_opaque] does). *)
       OpacityLog.record equation cb;
       if Declareops.is_opaque cb then

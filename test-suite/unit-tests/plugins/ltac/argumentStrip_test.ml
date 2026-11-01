@@ -3,10 +3,10 @@ open Utest
 open Names
 open Ltac_plugin
 
-(* Tacentries.argument_extend's optional [?strip] (design D18): an argument
-   declared without a stripper (a plugin written before D18) is read by the
-   interface key as it is, locations included, so the library that stores
-   such a value is not keyless, and a moved location changes its key. *)
+(* Tacentries.argument_extend's optional [?strip]: an argument declared
+   without a stripper is read by the interface key as it is, locations
+   included, so the library that stores such a value is not keyless, and a
+   moved location changes its key. *)
 
 let tests = ref []
 let add_test name f = tests := mk_test name (TestCase f) :: !tests

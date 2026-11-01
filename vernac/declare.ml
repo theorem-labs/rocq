@@ -448,8 +448,8 @@ let discharge_constant obj = Some obj
 
 let classify_constant cst = Libobject.Substitute
 
-(* The label view of a constant object (design D18; version 3 blinds the
-   axiom-or-opaque-proof distinction, dispatch://INFRA-361).
+(* The label view of a constant object (label versions 3 and up blind the
+   axiom-or-opaque-proof distinction of a constant's body).
    - [cst_loc] is the declaration's source location ([Nametab.set_cci_src_loc]):
      stripped, like every location.
    - [cst_kind] is the documentation kind ([Dumpglob.add_constant_kind]): an
@@ -459,8 +459,8 @@ let classify_constant cst = Libobject.Substitute
      glob output and vernacular output ([Search is:<kind>] filters on it,
      vernac/search.ml:85-91), never the [.vo] the dependent writes, and a
      compile can read printed output only through [Redirect] (a command's
-     output into a file) and a [Load] of that file, which the grading source
-     policy refuses. It is the one place, besides the compiled body, where an
+     output into a file) and a [Load] of that file, which a caller's source
+     rule may refuse. It is the one place, besides the compiled body, where an
      [Admitted] axiom and a [Qed] proof of the same statement differ (the
      body the label blinds in [LibkeyObjects.blind_constant]). So the view
      reads a single canonical kind, which is what makes [Admitted <-> Qed]

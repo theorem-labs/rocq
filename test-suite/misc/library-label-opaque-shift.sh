@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# S3 (D18, dispatch://INFRA-361; Astra review 2 §1.2, Claude review S3): a foreign
-# opaque reference survives a functor APPLICATION (a functor application,
-# `Module R := F A0`, and an Include of one, `Include F A0`, keep an Indirect into that
-# library's opaque table, as Astra §3.3 noted, while an Include of a module whose
+# A foreign opaque reference survives a functor APPLICATION (a functor
+# application, `Module R := F A0`, and an Include of one, `Include F A0`, keep
+# an Indirect into that library's opaque table, while an Include of a module whose
 # fields are plain constants, like BM's below, strengthens them to transparent aliases
-# with none). Label v2b drops the
+# with none). Label version 3 drops the
 # opaque table index that reference carries, so an edit that shifts the index leaves
 # the owner's label equal -- which the keep rule's byte-identity guard over the
 # referenced owner has to catch, because the label cannot.
@@ -19,9 +18,9 @@
 # A as a foreign opaque owner too, BM's does not (the Include strengthens R3.p, a plain
 # constant of A.P, to a transparent alias of A.P.p, with no opaque reference).
 #
-# Under label v2b (version 3) A's label is EQUAL across that edit (the blinding drops
-# the body form AND the index): this asserts that equality (RED on a pre-v2b build,
-# where the edit changes A's label; GREEN on v2b), shows A's object bytes DIFFER, and
+# Under label version 3 A's label is EQUAL across that edit (the blinding drops
+# the body form AND the index): this asserts that equality (RED on an earlier build,
+# where the edit changes A's label; GREEN on version 3), shows A's object bytes DIFFER, and
 # shows B's --axiom-report-json names A as a foreign opaque owner -- the evidence the
 # keep rule uses to deny keeping B (A is referenced and not byte-identical). Since
 # label version 5, F.t in F's body stays an opaque proof in the label (no longer

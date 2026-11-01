@@ -12,7 +12,7 @@ open Names
 
 (* Records of whether a constant was an axiom or an opaque proof when a
    command whose outcome depends on that distinction ran while a library was
-   compiled (design D18, dispatch://INFRA-361, Astra review 2 blocker 1).
+   compiled, and also of the opaque table that a proof body is read from.
 
    The observers, each of which logs here before it decides:
    - [Tactics.Redexpr.check_not_fully_opaque] rejects a non-opaque strategy
@@ -27,8 +27,8 @@ open Names
      otherwise ([Gen_principle.make_scheme]);
    - [Global.body_of_constant], the plugin API for a constant's body, answers
      [None] for an axiom and the forced body for an opaque proof.
-   (The sweep of every other reader in the tree and in the plugins the BET
-   image installs is design D18's observer sweep.) The library label
+   (Every other reader in this tree and in the plugins installed beside it
+   was checked for this distinction the same way.) The library label
    ([Vernac.LibkeyObjects]) deliberately gives an axiom and an opaque proof
    of the library's own signature the same label, so an edit that completes
    an admitted dependency constant with a [Qed] proof keeps the dependency's
@@ -90,7 +90,7 @@ open Names
    the variable) and a forked child of either (through the descriptor). A
    process outside them -- a separate rocq process a plugin starts by its own
    means, rather than through the worker pool -- is outside the log; no plugin
-   the BET image installs starts one (design D18's observer sweep). Each of
+   installed beside the tree starts one (each of them was checked). Each of
    them appends each record to that file as one line with one write on an
    [O_APPEND] descriptor, so the lines of several processes do not
    interleave, besides keeping it in memory. The compiling process reads the
