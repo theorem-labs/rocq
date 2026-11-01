@@ -11,7 +11,7 @@
 open Names
 
 (** The keep rule's facts about a saved library that a [.vo] file's segments
-    cannot carry on their own (design D18, dispatch://INFRA-361): its
+    cannot carry on their own (design D18): its
     assumption closure, and the foreign opacities its strategy commands saw.
     [Library] computes them while the library is saved and stores them in a
     [keepfacts] segment the label does not cover. *)

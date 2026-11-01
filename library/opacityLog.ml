@@ -11,8 +11,8 @@
 open Names
 
 (* Records of the opacity a [Strategy]/[Transparent] command saw on a
-   constant while a library is compiled (design D18, dispatch://INFRA-361,
-   Astra review 2 blocker 1).
+   constant while a library is compiled (design D18, the location-free library label,
+   review blocker 1).
 
    [Tactics.Redexpr.check_not_fully_opaque] rejects a non-opaque strategy
    command (`Transparent c.`, `Strategy expand [c].`) on a constant [c] whose

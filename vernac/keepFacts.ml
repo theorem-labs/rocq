@@ -12,7 +12,7 @@ open Names
 
 (* The facts the keep rule reads beside the library label that cannot be
    recomputed from a [.vo] file's segments alone (design D18,
-   dispatch://INFRA-361, Astra review 2 blockers 1 and 3). [Library] computes
+   the location-free library label). [Library] computes
    them while a library is saved, when the whole environment is loaded, and
    stores them in a [keepfacts] segment that the label does not cover (so an
    [Admitted -> Qed] edit, which the label hides on purpose, does not move

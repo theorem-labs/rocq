@@ -121,7 +121,7 @@ let check_not_fully_opaque l ref =
     if Environ.mem_constant sp (Global.env ()) then begin
       let opaque = Declareops.is_opaque (Global.lookup_constant sp) (* FIXME *) in
       (* Record the opacity this non-opaque strategy command saw, so the keep
-         rule (D18, dispatch://INFRA-361) rebuilds a dependent whose unchanged
+         rule (D18) rebuilds a dependent whose unchanged
          source would now meet, or no longer meet, the error below once the
          constant's body form changes between an axiom and an opaque proof (an
          edit v2b's label hides). The record is kept in the error branch too: a

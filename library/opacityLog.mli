@@ -11,7 +11,7 @@
 open Names
 
 (** The opacity a non-opaque [Strategy]/[Transparent] command saw on a
-    constant while a library was compiled (design D18, dispatch://INFRA-361).
+    constant while a library was compiled (design D18).
     See [opacityLog.ml] for why. *)
 
 val set_enabled : bool -> unit
