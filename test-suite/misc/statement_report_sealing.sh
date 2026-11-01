@@ -2,7 +2,7 @@
 
 # rocqchk -statement-report's type verdict is the sealing it stands for: for
 # each row, [Definition f := <model>] ([Polymorphic] for a polymorphic
-# statement), the spelling a grader's checker uses, is compiled by coqc in a
+# statement), the spelling a harness's checker uses, is compiled by coqc in a
 # module sealed by the row's module type. [match] must be accepted, and
 # [mismatch] and [universes-differ] refused. [universes-undecided] is the
 # verdict for a model whose universe context elaboration can minimize: the
