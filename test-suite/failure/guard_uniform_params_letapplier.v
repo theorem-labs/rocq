@@ -1,5 +1,5 @@
 (* A closed proof of False that the 9.2 release accepts today, found while
-   measuring this branch (the grading harness, dispatch://BET-214,
+   measuring this branch (
    2026-10-25). It uses no axiom and no typing flag: before this branch it
    compiles, Print Assumptions says "Closed under the global context", and
    coqchk -o reports no axiom and no unsafe fixpoint.

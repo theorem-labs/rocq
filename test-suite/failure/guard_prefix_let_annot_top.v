@@ -5,7 +5,7 @@
    overflows the stack, because cbv computes x although only a type reads it
    (Port90's bug-finder file f4). The prefix walk now erases let
    annotations, so x is dead and its value is checked. Ported from
-   9.0/guard-cofix-prefix ebe9febceafe. dispatch://BET-214 *)
+   9.0/guard-cofix-prefix ebe9febceafe. *)
 Definition top_annot : nat -> nat.
 Proof.
   fix f 1.

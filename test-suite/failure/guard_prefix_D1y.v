@@ -1,7 +1,7 @@
 (* A definition whose raw binder prefix carries a call to the ENCLOSING
    fixpoint. The scan that catches calls to the inner block s own members
    missed this one, and this branch's earlier head accepted it with a clean
-   coqchk; Eval cbv overflows the stack. dispatch://BET-214 *)
+   coqchk; Eval cbv overflows the stack. *)
 
 (* D1y — the D1 carrier under cbv only. *)
 Definition outerD1 : nat -> nat.
