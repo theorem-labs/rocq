@@ -3,7 +3,7 @@
    functor, and the state a failed command leaves behind. Each evaluation below must see the value
    of the global as the table holds it at that point.
 
-   These are r2-b's adversarial inputs for the cache of global values (dispatch://INFRA-217), kept
+   These are r2-b's adversarial inputs for the cache of global values kept
    as tests. Every global they read is of a shape the interpreter may keep (a closure or an
    integer), so they fail on a cache that keeps a value across a write to the tables: without the
    test of the globals table's identity, the module, section, Reset and functor tests below all
