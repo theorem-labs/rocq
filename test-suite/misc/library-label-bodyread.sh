@@ -62,17 +62,27 @@
 #   qed1's proofs, and the read is recorded;
 # - B_parfork: a par: worker's tactic reads A.c only in a child it forks, before the
 #   worker has opened the log itself: the child's record reaches B;
+# - B_workerreplace: the compiling process replaces its log with another file,
+#   a par: worker makes its first body read there, and the worker restores the
+#   owner's log before the save. The worker gets the owner log's device and
+#   inode with its path and refuses the substitute, so the compile fails
+#   rather than save a proper subset of the worker's records;
+# - B_missingidentity: a worker's plugin removes the identity environment
+#   variable before its first tactic; it uses the identity it captured at
+#   startup and records the read. The environment carries no log path or
+#   identity after startup;
 # - the log read back is the file the compile made, with what was written to it:
 #   B_ident (a copy of the log's bytes put at its path before the save), B_empty (an
 #   empty file put there) and B_trunc (the log emptied in place) compile and have no
-#   keepfacts (null/null), and the files B_ident and B_empty put there are still there
-#   after the compile; B_reltmp (TMPDIR relative, and a Cd before the par:) records
-#   the workers' read and leaves no log behind;
+#   keepfacts (null/null); a substitute stays in the private directory when its
+#   dev:ino differs from the owner log. B_reltmp (TMPDIR relative, and a Cd before
+#   the par:) records the workers' read and leaves no log behind; B_unstable (TMPDIR
+#   non-sticky 0777) leaves the log and its directory;
 # - B_forge: a par: worker records a constant whose name holds tabs and a newline,
 #   spelled so that a log that wrote names as they are would read two records: it
 #   reads back as one record, with its own name;
-# - this fixture's compiles use their own TMPDIR, which is empty at the end (B_ident
-#   and B_empty use two others).
+# - this fixture's compiles use their own TMPDIR, which is empty at the end (B_ident,
+#   B_empty and B_unstable use their own).
 
 set -e
 export PATH=$BIN:$PATH
@@ -85,11 +95,18 @@ done
 
 cd misc
 rm -rf _bodyread
-mkdir -p _bodyread/{pkg/kfpeek,adm,qed1,qed2,client,tmp}
+# Fix the umask so that directories this fixture creates have the modes the
+# cleanup checks expect (the same compile runs under both 022 and 002).
+umask 022
+mkdir -p _bodyread/{pkg/kfpeek,adm,qed1,qed2,client}
 D=_bodyread
-# This fixture's compiles make their opacity logs here, so that the check at the end
-# that none is left cannot see another test's (make -j).
-export TMPDIR="$PWD/$D/tmp"
+# This fixture's opacity logs go into a TMPDIR whose path is secure (every
+# component owned by root or this uid and either not group/other-writable or
+# sticky): /tmp qualifies on every standard system. A path under the build
+# tree may not, because a parent can be group-writable without the sticky
+# bit. The check at the end that none is left cannot see another test's
+# (make -j) because each process makes a private directory under TMPDIR.
+export TMPDIR=$(mktemp -d /tmp/bodyread-XXXXXXXXXX)
 
 fail=0
 pass() { echo "PASS $*"; }
@@ -106,6 +123,19 @@ plugin(native) = "p.cmxs"
 EOF
 cat > $D/pkg/kfpeek/p.ml <<'EOF'
 open Ltac2_plugin
+
+(* This marker verifies that a worker captured and cleared both log values
+   before loading plugins, then clears the identity again before its first
+   tactic. The body read below must still reach the owner's log. *)
+let () =
+  if Flags.async_proofs_is_worker () &&
+     Sys.getenv_opt "KFPEEK_DROP_OPACITY_IDENTITY" = Some "1"
+  then begin
+    if Sys.getenv_opt OpacityLog.env_var <> Some "" ||
+       Sys.getenv_opt OpacityLog.identity_env_var <> Some ""
+    then failwith "the worker opacity-log environment was not cleared";
+    Unix.putenv OpacityLog.identity_env_var ""
+  end
 
 let shape c =
   match Global.body_of_constant Library.indirect_accessor c with
@@ -139,8 +169,9 @@ let () =
        | Constr.Const (cst, _) -> fork_shape cst
        | _ -> -1)
 
-(* Tamper with the live opacity log, to test what a broken log does. *)
-let log_path () = Option.default "" (Sys.getenv_opt "ROCQ_OPACITYLOG_FILE")
+(* The worker environment is cleared at startup. The log module retains the
+   path it captured then, and this plugin asks it for the live path. *)
+let log_path () = OpacityLog.worker_env_value ()
 
 let str_ext name f =
   Tac2externals.define
@@ -207,10 +238,71 @@ let () =
          let forged = Names.Constant.make1 (Names.KerName.make mp (Names.Label.of_id id)) in
          OpacityLog.record forged (Global.lookup_constant cst); 0
        | _ -> -1)
+
+(* Put a substitute at the owner's log path. A [par:] worker later makes its
+   first record there; it restores the owner file before the compilation can
+   save the library. The worker must reject that substitute by identity. *)
+let () = str_ext "log_worker_substitute" (fun _ ->
+    let p = log_path () in
+    Sys.rename p (p ^ ".owner");
+    Out_channel.with_open_bin p (fun oc -> output_string oc "worker substitute\n");
+    0)
+
+(* Race-safe restore: rename .owner back first. ENOENT means another worker
+   already restored it. One goal avoids a split-then-par: race entirely, but
+   the handler is safe regardless. *)
+let worker_shape_restore c sigma =
+  let p = log_path () in
+  Fun.protect
+    ~finally:(fun () ->
+        let owner = p ^ ".owner" in
+        (try Sys.rename owner p with Sys_error _ -> ()))
+    (fun () ->
+       match EConstr.kind sigma c with
+       | Constr.Const (cst, _) -> ignore (shape cst); 0
+       | _ -> -1)
+
+let () =
+  Tac2externals.define
+    { Tac2expr.mltac_plugin = "kfpeek"; mltac_tactic = "worker_shape_restore" }
+    Tac2externals.(Tac2ffi.constr @-> eret Tac2ffi.int)
+    (fun c _env sigma -> worker_shape_restore c sigma)
 EOF
 ( cd $D/pkg/kfpeek && ocamlfind ocamlopt -thread -shared -package rocq-runtime.plugins.ltac2 -o p.cmxs p.ml > build.log 2>&1 ) ||
   { echo "FAIL cannot build the test plugin kfpeek"; cat $D/pkg/kfpeek/build.log; exit 1; }
 export OCAMLPATH="$PWD/$D/pkg${OCAMLPATH:+:$OCAMLPATH}"
+
+# The worker's path and identity are captured by OpacityLog itself before a
+# tactic runs. Compile that exact source as a second module with no .mli, so
+# this small probe can call its private append_to_log directly: a worker with
+# a path but no or malformed identity must refuse before it can return from a
+# record. This uses the same ocamlfind command as the local test plugin.
+cp ../../library/opacityLog.ml $D/xfOpacityLog.ml
+cat > $D/worker_env_probe.ml <<'EOF'
+let () =
+  let path = Sys.argv.(1) and identity = Sys.argv.(2) in
+  Flags.async_proofs_worker_id := "worker-env-probe";
+  Unix.putenv XfOpacityLog.env_var path;
+  if not (String.equal identity "absent") then
+    Unix.putenv XfOpacityLog.identity_env_var identity;
+  XfOpacityLog.set_enabled false;
+  let q = { XfOpacityLog.constant = "A.A.c"; library = Some "A.A";
+            opaque = true; table = Some "A.A" } in
+  match XfOpacityLog.append_to_log q with
+  | () -> print_endline "RETURNED"
+  | exception _ -> print_endline "REFUSED"
+EOF
+( cd $D && ocamlfind ocamlopt -thread -linkpkg -package rocq-runtime.library \
+    -o worker-env-probe xfOpacityLog.ml worker_env_probe.ml > worker-env-build.log 2>&1 ) ||
+  { echo "FAIL cannot build the opacity-log worker probe"; cat $D/worker-env-build.log; exit 1; }
+: > $D/worker-env.log
+env -u ROCQ_OPACITYLOG_IDENTITY "$PWD/$D/worker-env-probe" "$PWD/$D/worker-env.log" absent > $D/worker-env.out
+"$PWD/$D/worker-env-probe" "$PWD/$D/worker-env.log" malformed >> $D/worker-env.out
+if [ "$(tr '\n' ' ' < $D/worker-env.out)" = "REFUSED REFUSED " ]; then
+  pass "worker capture: a nonempty path with an absent or malformed identity refuses before a record returns"
+else
+  bad "worker capture: expected two refusals for absent and malformed identities, got '$(tr '\n' ' ' < $D/worker-env.out)'"
+fi
 
 printf 'Lemma c : True.\nAdmitted.\n' > $D/adm/A.v
 printf 'Lemma c : True.\nProof. exact I. Qed.\n' > $D/qed1/A.v
@@ -235,7 +327,9 @@ Ltac2 @ external log_env_set : string -> int := "kfpeek" "log_env_set".
 Ltac2 @ external in_worker : unit -> int := "kfpeek" "in_worker".
 Ltac2 @ external env_is_1 : string -> int := "kfpeek" "env_is_1".
 Ltac2 @ external log_replace : string -> int := "kfpeek" "log_replace".
-Ltac2 @ external record_forged : constr -> int := "kfpeek" "record_forged".'
+Ltac2 @ external record_forged : constr -> int := "kfpeek" "record_forged".
+Ltac2 @ external log_worker_substitute : string -> int := "kfpeek" "log_worker_substitute".
+Ltac2 @ external worker_shape_restore : constr -> int := "kfpeek" "worker_shape_restore".'
 # b NAME BODY: the B file NAME, whose goal True is closed after BODY.
 b() {
   mkdir -p $D/$1
@@ -297,16 +391,32 @@ parx() { # NAME PRE: B_parany with the toplevel command PRE before the goal
 parx wmissing "Ltac2 Eval (log_dir_move_to \"$PWD/$D/tmpw-gone\")."
 parx wmoved "Ltac2 Eval (log_move_to \"$PWD/$D/moved.log\")."
 parx wenv "Ltac2 Eval (log_env_set \"$PWD/$D/missing/x.log\")."
-mkdir -p $D/tmpw
+# B_wmissing and B_wmoved use a TMPDIR under the build tree (the rename-based
+# plugin helpers need the log on the same filesystem as the build tree);
+# their compiles fail, so cleanup is not tested here.
+mkdir -p $D/tmpw; chmod 755 $D/tmpw
 mkdir -p $D/wmissing-qed1; cp $D/wmissing/B.v $D/wmissing-qed1/B.v
 if TMPDIR="$PWD/$D/tmpw" comp -R $D/qed1 A -R $D/wmissing-qed1 Bdep $D/wmissing-qed1/B.v > $D/wmissing-qed1/out 2>&1
 then echo ok > $D/wmissing-qed1/rc; else echo failed > $D/wmissing-qed1/rc; fi
 rm -rf $D/tmpw $D/tmpw-gone
-build wmoved qed1; build wenv qed1
+mkdir -p $D/tmpwm; chmod 755 $D/tmpwm
+mkdir -p $D/wmoved-qed1; cp $D/wmoved/B.v $D/wmoved-qed1/B.v
+if TMPDIR="$PWD/$D/tmpwm" comp -R $D/qed1 A -R $D/wmoved-qed1 Bdep $D/wmoved-qed1/B.v > $D/wmoved-qed1/out 2>&1
+then echo ok > $D/wmoved-qed1/rc; else echo failed > $D/wmoved-qed1/rc; fi
+rm -rf $D/tmpwm
+build wenv qed1
 # B_notmp: TMPDIR is a missing directory, so the log cannot be made.
 mkdir -p $D/notmp-qed1; cp $D/print/B.v $D/notmp-qed1/B.v
 if TMPDIR="$PWD/$D/nodir" comp -R $D/qed1 A -R $D/notmp-qed1 Bdep $D/notmp-qed1/B.v > $D/notmp-qed1/out 2>&1
 then echo ok > $D/notmp-qed1/rc; else echo failed > $D/notmp-qed1/rc; fi
+# B_readonly: TMPDIR exists but is mode 0555 (unwritable). The compile must
+# succeed with no keepfacts (the .mli promises get answers None).
+mkdir -p $D/readonly-tmp; chmod 0555 $D/readonly-tmp
+mkdir -p $D/readonly-qed1; cp $D/print/B.v $D/readonly-qed1/B.v
+if TMPDIR="$PWD/$D/readonly-tmp" comp -R $D/qed1 A -R $D/readonly-qed1 Bdep $D/readonly-qed1/B.v \
+     > $D/readonly-qed1/out 2>&1
+then echo ok > $D/readonly-qed1/rc; else echo failed > $D/readonly-qed1/rc; fi
+chmod 0755 $D/readonly-tmp
 
 # envbuild NAME A ENV...: compile B NAME (copied to NAME-A) against A's variant
 # with the environment ENV and -location-free-label; rc in NAME-A/rc.
@@ -367,6 +477,26 @@ then echo ok > $D/asyncenv-qed1/rc; else echo failed > $D/asyncenv-qed1/rc; fi
 # worker itself has opened the log (the child opens it from the variable it inherited).
 parb parfork 'let _ := fork_body_shape constr:(A.c) in ().'
 build parfork adm; build parfork qed1
+# B_missingidentity: a worker's plugin clears its inherited identity before
+# its first tactic. The worker must have captured it at startup, so the body
+# read still reaches the log.
+parb missingidentity 'let _ := body_shape constr:(A.c) in ().'
+mkdir -p $D/missingidentity-qed1; cp $D/missingidentity/B.v $D/missingidentity-qed1/B.v
+if KFPEEK_DROP_OPACITY_IDENTITY=1 comp -R $D/qed1 A -R $D/missingidentity-qed1 Bdep \
+     $D/missingidentity-qed1/B.v > $D/missingidentity-qed1/out 2>&1
+then echo ok > $D/missingidentity-qed1/rc; else echo failed > $D/missingidentity-qed1/rc; fi
+# B_workerreplace: the compiling process puts a substitute at its log path;
+# a par: worker makes its first body read there and puts the owner's file back
+# before the save. The worker must refuse the substitute, so the compile fails
+# instead of saving the restored owner's log with the worker's query missing.
+mkdir -p $D/workerreplace $D/tmp-wr; chmod 755 $D/tmp-wr
+{ printf '%s\n' "$head"
+  printf '%s\n' 'Ltac2 Eval (log_worker_substitute "").' \
+    'Ltac2 check () := let _ := worker_shape_restore constr:(A.c) in ().' \
+    'Set Default Proof Mode "Classic".' 'Goal True /\ True.' '  split.' \
+    '  par: (ltac2:(check ()); exact I).' 'Qed.'
+} > $D/workerreplace/B.v
+TMPDIR="$PWD/$D/tmp-wr" build workerreplace qed1
 # B_forge: a par: worker records, through the log, a constant whose name holds tabs
 # and a newline (kfpeek's record_forged).
 parb forge 'let _ := record_forged constr:(A.c) in ().'
@@ -374,8 +504,8 @@ build forge adm
 # pard NAME POST: B_parany with the toplevel command POST after the proof, before the
 # library is saved. B_ident puts a copy of the log's bytes at its path, B_empty an
 # empty file, and B_trunc empties the log itself: the workers' records are in none.
-# B_ident and B_empty use their own TMPDIR: the file put at the log's path is not the
-# compile's, so it must stay there after the compile.
+# Cleanup removes the log and directory only when TMPDIR's path was secure and
+# lstat matches; a substitute with a different dev:ino stays.
 pard() {
   mkdir -p $D/$1
   printf '%s\nLtac2 check () := let _ := body_shape constr:(A.c) in ().\nSet Default Proof Mode "Classic".\nGoal True /\\ True.\n  split.\n  par: (ltac2:(check ()); exact I).\nQed.\n%s\n' \
@@ -384,16 +514,19 @@ pard() {
 pard ident 'Ltac2 Eval (log_replace "copy").'
 pard empty 'Ltac2 Eval (log_replace "empty").'
 pard trunc 'Ltac2 Eval (log_replace "truncate").'
-mkdir -p $D/tmp-ident $D/tmp-empty
-TMPDIR="$PWD/$D/tmp-ident" build ident qed1
-TMPDIR="$PWD/$D/tmp-empty" build empty qed1
+TMPDIR_ID=$(mktemp -d /tmp/bodyread-id-XXXXXXXXXX)
+TMPDIR_EM=$(mktemp -d /tmp/bodyread-em-XXXXXXXXXX)
+TMPDIR="$TMPDIR_ID" build ident qed1
+TMPDIR="$TMPDIR_EM" build empty qed1
 build trunc qed1
 # B_reltmp: TMPDIR is relative (the compile runs in misc/), and B changes directory
 # (Cd) before a par: body read; every path of the compile is absolute, so only the
 # log's path could depend on the directory.
 parx reltmp "Cd \"$PWD/$D/cdhere\"."
-mkdir -p $D/cdhere $D/tmprel $D/reltmp-qed1; cp $D/reltmp/B.v $D/reltmp-qed1/B.v
-if TMPDIR="$D/tmprel" comp -R "$PWD/$D/qed1" A -R "$PWD/$D/reltmp-qed1" Bdep "$PWD/$D/reltmp-qed1/B.v" \
+TMPDIR_REL=$(mktemp -d /tmp/bodyread-rel-XXXXXXXXXX)
+TMPDIR_REL_RELATIVE=$(realpath --relative-to="$PWD" "$TMPDIR_REL")
+mkdir -p $D/cdhere $D/reltmp-qed1; cp $D/reltmp/B.v $D/reltmp-qed1/B.v
+if TMPDIR="$TMPDIR_REL_RELATIVE" comp -R "$PWD/$D/qed1" A -R "$PWD/$D/reltmp-qed1" Bdep "$PWD/$D/reltmp-qed1/B.v" \
      > $D/reltmp-qed1/out 2>&1
 then echo ok > $D/reltmp-qed1/rc; else echo failed > $D/reltmp-qed1/rc; fi
 
@@ -484,6 +617,7 @@ else
 fi
 nulls bad "B_bad: a log with a line that is not a record"
 nulls notmp "B_notmp: TMPDIR is a missing directory"
+nulls readonly "B_readonly: TMPDIR is mode 0555 (unwritable)"
 cantwrite() { # NAME TEXT: the compile fails with the opacity log's write error
   local d=$D/$1-qed1
   if [ "$(cat $d/rc)" = failed ] && grep -q "Cannot write a record to the keep rule's opacity log" $d/out; then
@@ -497,14 +631,16 @@ cantwrite wmoved "B_wmoved: a worker whose log was moved away"
 nulls ident "B_ident: the log replaced, before the save, by a copy of its bytes (another file)"
 nulls empty "B_empty: the log replaced, before the save, by an empty file"
 nulls trunc "B_trunc: the log emptied in place before the save"
-# The files put at the log's path stay: one file each, the copy holding the log's
-# first line, the empty one empty.
-li=$(find $D/tmp-ident -type f); le=$(find $D/tmp-empty -type f)
-if [ "$(printf '%s\n' "$li" | grep -c .)" = 1 ] && head -1 "$li" | grep -q '^rocq-opacity-log ' \
-   && [ "$(printf '%s\n' "$le" | grep -c .)" = 1 ] && [ ! -s "$le" ]; then
-  pass "B_ident, B_empty: the file put at the log's path is still there after the compile (it removes only the file it made)"
+# With verified cleanup, the substitute has a different dev:ino from the
+# owner's log, so the owner's at_exit leaves the directory (it does not
+# remove a file it cannot verify). The substitute stays inside it.
+li=$(find "$TMPDIR_ID" -mindepth 2 -name 'log' -print -quit)
+le=$(find "$TMPDIR_EM" -mindepth 2 -name 'log' -print -quit)
+if [ -n "$li" ] && [ -n "$le" ]; then
+  pass "B_ident, B_empty: the substitute stays in the private directory (cleanup refused the different dev:ino)"
+  rm -rf "$TMPDIR_ID" "$TMPDIR_EM"
 else
-  bad "B_ident, B_empty: left in $D/tmp-ident: '$li', in $D/tmp-empty: '$le'"
+  bad "B_ident, B_empty: expected substitutes left, got '$li' '$le'"
 fi
 
 # The log's encoding, a worker's forked child, and a relative TMPDIR.
@@ -521,12 +657,27 @@ if [ "$(cat $D/parfork-adm/rc)" = ok ] && [ "$(cat $D/parfork-qed1/rc)" = ok ] &
 else
   bad "B_parfork ($(cat $D/parfork-adm/rc) $(cat $D/parfork-qed1/rc)): opacity_queries '$qpf' (Admitted A), '$qpfq' (proved A): $(tr '\n' ' ' < $D/parfork-qed1/out | cut -c1-300)"
 fi
+qmi=$(field $D/missingidentity-qed1/B.vo opacity_queries)
+if [ "$(cat $D/missingidentity-qed1/rc)" = ok ] && [ "$qmi" = "$q_qed" ]; then
+  pass "B_missingidentity: a worker uses the identity it captured at startup after its environment is cleared: $qmi"
+else
+  bad "B_missingidentity ($(cat $D/missingidentity-qed1/rc)): opacity_queries '$qmi': $(tr '\n' ' ' < $D/missingidentity-qed1/out | cut -c1-300)"
+fi
+if [ "$(cat $D/workerreplace-qed1/rc)" = failed ] \
+   && grep -q "Cannot write a record to the keep rule's opacity log" $D/workerreplace-qed1/out \
+   && [ ! -e $D/workerreplace-qed1/B.vo ]; then
+  pass "B_workerreplace: a worker refuses a substitute log; no B.vo saved"
+else
+  bad "B_workerreplace ($(cat $D/workerreplace-qed1/rc)): $(tr '\n' ' ' < $D/workerreplace-qed1/out | cut -c1-400)"
+fi
+rm -rf $D/tmp-wr
 qr=$(field $D/reltmp-qed1/B.vo opacity_queries)
-leftr=$(find "$D/tmprel" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
+leftr=$(find "$TMPDIR_REL" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
 if [ "$(cat $D/reltmp-qed1/rc)" = ok ] && [ "$qr" = "$q_qed" ] && [ -z "$leftr" ]; then
   pass "B_reltmp: with a relative TMPDIR and a Cd before the par:, the workers' read is recorded and the log removed: $qr"
+  rm -rf "$TMPDIR_REL"
 else
-  bad "B_reltmp ($(cat $D/reltmp-qed1/rc)): opacity_queries '$qr', left in $D/tmprel: '$leftr': $(tr '\n' ' ' < $D/reltmp-qed1/out | cut -c1-400)"
+  bad "B_reltmp ($(cat $D/reltmp-qed1/rc)): opacity_queries '$qr', left in $TMPDIR_REL: '$leftr': $(tr '\n' ' ' < $D/reltmp-qed1/out | cut -c1-400)"
 fi
 
 # Inherited log variables, sections, failed Requires and stock builds.
@@ -569,10 +720,62 @@ if [ "$(cat $D/asyncenv-qed1/rc)" = ok ] && [ "$qa18" = "$q_qed" ]; then
 else
   bad "B_asyncenv ($(cat $D/asyncenv-qed1/rc)): opacity_queries '$qa18': $(tr '\n' ' ' < $D/asyncenv-qed1/out | cut -c1-400)"
 fi
+# B_unstable: a non-sticky, other-writable TMPDIR leaves the log and its private
+# directory in place at exit (the parent is not stable against rename).
+mkdir -p $D/unstable-tmp; chmod 0777 $D/unstable-tmp
+mkdir -p $D/unstable-qed1; cp $D/parany/B.v $D/unstable-qed1/B.v
+if TMPDIR="$PWD/$D/unstable-tmp" comp -R $D/qed1 A -R $D/unstable-qed1 Bdep $D/unstable-qed1/B.v \
+     > $D/unstable-qed1/out 2>&1
+then echo ok > $D/unstable-qed1/rc; else echo failed > $D/unstable-qed1/rc; fi
+ul=$(find $D/unstable-tmp -mindepth 1 -type d -print -quit)
+if [ "$(cat $D/unstable-qed1/rc)" = ok ] && [ -n "$ul" ]; then
+  pass "B_unstable: a non-sticky other-writable TMPDIR leaves the log and its directory: $ul"
+  rm -rf $D/unstable-tmp
+else
+  bad "B_unstable ($(cat $D/unstable-qed1/rc)): unstable-tmp='$(find $D/unstable-tmp -mindepth 1 | head -3 | tr '\n' ' ')': $(tr '\n' ' ' < $D/unstable-qed1/out | cut -c1-300)"
+fi
+# B_symlink: TMPDIR given through a symlink. Unix.realpath resolves it, and
+# the private directory is created and cleaned up under the resolved path.
+# This does not discriminate against the parent code (lstat follows the link
+# there too); it guards against a future change that might resolve differently.
+TMPDIR_REAL=$(mktemp -d /tmp/bodyread-sym-XXXXXXXXXX)
+ln -s "$TMPDIR_REAL" $D/symlink-tmp
+mkdir -p $D/symlink-qed1; cp $D/parany/B.v $D/symlink-qed1/B.v
+if TMPDIR="$PWD/$D/symlink-tmp" comp -R $D/qed1 A -R $D/symlink-qed1 Bdep $D/symlink-qed1/B.v \
+     > $D/symlink-qed1/out 2>&1
+then echo ok > $D/symlink-qed1/rc; else echo failed > $D/symlink-qed1/rc; fi
+sym_priv=$(find "$TMPDIR_REAL" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null)
+sym_link_priv=$(find "$PWD/$D/symlink-tmp" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null)
+if [ "$(cat $D/symlink-qed1/rc)" = ok ] && [ -z "$sym_priv" ] && [ -z "$sym_link_priv" ]; then
+  pass "B_symlink: TMPDIR through a symlink creates and cleans up under the resolved path"
+else
+  bad "B_symlink ($(cat $D/symlink-qed1/rc)): real='$sym_priv' link='$sym_link_priv': $(tr '\n' ' ' < $D/symlink-qed1/out | cut -c1-300)"
+fi
+rm -f $D/symlink-tmp; rmdir "$TMPDIR_REAL" 2>/dev/null
+# B_trailingspace: a TMPDIR whose name ends in a space, next to a
+# same-named directory without the space that has different security (0777,
+# non-sticky). The compile must judge the actual path, with its trailing
+# space, and clean up there.
+TMPDIR_SP_ROOT=$(mktemp -d /tmp/bodyread-sp-XXXXXXXXXX)
+TMPDIR_SPACE="$TMPDIR_SP_ROOT/x "
+mkdir "$TMPDIR_SPACE"
+mkdir -m 0777 "$TMPDIR_SP_ROOT/x"
+mkdir -p $D/space-qed1; cp $D/parany/B.v $D/space-qed1/B.v
+if TMPDIR="$TMPDIR_SPACE" comp -R $D/qed1 A -R $D/space-qed1 Bdep $D/space-qed1/B.v \
+     > $D/space-qed1/out 2>&1
+then echo ok > $D/space-qed1/rc; else echo failed > $D/space-qed1/rc; fi
+space_left=$(find "$TMPDIR_SPACE" -mindepth 1 -print -quit 2>/dev/null)
+if [ "$(cat $D/space-qed1/rc)" = ok ] && [ -z "$space_left" ]; then
+  pass "B_trailingspace: a TMPDIR with a trailing space is judged on its own bytes (not trimmed)"
+else
+  bad "B_trailingspace ($(cat $D/space-qed1/rc)): left='$space_left': $(tr '\n' ' ' < $D/space-qed1/out | cut -c1-300)"
+fi
+rmdir "$TMPDIR_SPACE" "$TMPDIR_SP_ROOT/x" "$TMPDIR_SP_ROOT" 2>/dev/null || true
 # Each compile's log is private and removed at exit: this fixture's TMPDIR is empty.
 left=$(find "$TMPDIR" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
 if [ -z "$left" ]; then
   pass "this fixture's TMPDIR ($TMPDIR) is empty: every opacity log was removed"
+  rmdir "$TMPDIR" 2>/dev/null || true
 else
   bad "opacity logs left in $TMPDIR: $left"
 fi

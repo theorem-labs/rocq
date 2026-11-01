@@ -93,10 +93,12 @@ let read p = In_channel.with_open_bin p In_channel.input_all
 let write p s = Out_channel.with_open_bin p (fun oc -> output_string oc s)
 
 (* One test: the log is made once per process. [set_enabled] sets the log's
-   variable in this process's environment, which the test framework checks
-   is unchanged by a test: it is set (empty) before the tests run and set
+   variables in this process's environment, which the test framework checks
+   are unchanged by a test: they are set (empty) before the tests run and set
    back after this one. *)
-let () = Unix.putenv OpacityLog.env_var ""
+let () =
+  Unix.putenv OpacityLog.env_var "";
+  Unix.putenv OpacityLog.identity_env_var ""
 
 let () = add_test "the log read back is the file this process made" (fun () ->
     let cwd = Sys.getcwd () in
@@ -105,7 +107,9 @@ let () = add_test "the log read back is the file this process made" (fun () ->
     rm_rf base;
     Sys.mkdir base 0o700;
     Fun.protect ~finally:(fun () ->
-        Sys.chdir cwd; rm_rf base; Unix.putenv OpacityLog.env_var "") @@ fun () ->
+        Sys.chdir cwd; rm_rf base;
+        Unix.putenv OpacityLog.env_var "";
+        Unix.putenv OpacityLog.identity_env_var "") @@ fun () ->
     Sys.chdir base;
     Sys.mkdir "tmp" 0o700; Sys.mkdir "elsewhere" 0o700;
     (* A relative TMPDIR. *)
@@ -113,7 +117,13 @@ let () = add_test "the log read back is the file this process made" (fun () ->
     OpacityLog.set_enabled true;
     let p = OpacityLog.worker_env_value () in
     assert_bool ("the log's path is absolute: " ^ p) (p <> "" && not (Filename.is_relative p));
-    assert_equal ~msg:"in TMPDIR" ~printer:Fun.id (Filename.concat base "tmp") (Filename.dirname p);
+    let log_dir = Filename.dirname p in
+    assert_equal ~msg:"the private directory is in TMPDIR" ~printer:Fun.id
+      (Filename.concat base "tmp") (Filename.dirname log_dir);
+    assert_equal ~msg:"the private directory mode" ~printer:string_of_int 0o700
+      ((Unix.stat log_dir).Unix.st_perm land 0o777);
+    assert_equal ~msg:"the log file mode" ~printer:string_of_int 0o600
+      ((Unix.stat p).Unix.st_perm land 0o777);
     let get () = OpacityLog.get () in
     assert_equal ~msg:"a new log" ~printer:show_get (Some []) (get ());
     (* A worker's record. *)
@@ -128,22 +138,52 @@ let () = add_test "the log read back is the file this process made" (fun () ->
     Sys.rename p (p ^ ".moved");
     write p bytes;
     assert_equal ~msg:"a copy of the log's bytes" ~printer:show_get None (get ());
+    (* [reset] must truncate the owner descriptor, not the file now at [p]. *)
+    OpacityLog.reset ();
+    assert_equal ~msg:"the replacement survives reset" ~printer:Fun.id bytes (read p);
+    assert_equal ~msg:"the owner log reset through its descriptor" ~printer:Fun.id
+      "rocq-opacity-log 2\n" (read (p ^ ".moved"));
     write p "";
     assert_equal ~msg:"an empty file" ~printer:show_get None (get ());
     Sys.remove p;
     assert_equal ~msg:"no file" ~printer:show_get None (get ());
     Sys.rename (p ^ ".moved") p;
-    assert_equal ~msg:"the log put back" ~printer:show_get (Some [r]) (get ());
-    (* The log emptied in place. *)
+    assert_equal ~msg:"the reset log put back" ~printer:show_get (Some []) (get ());
+    append p (OpacityLog.encode_line r);
+    assert_equal ~msg:"a record after the reset log is put back" ~printer:show_get
+      (Some [r]) (get ());
     Unix.truncate p 0;
-    assert_equal ~msg:"the log emptied" ~printer:show_get None (get ());
-    (* [reset] starts the log afresh. *)
+    assert_equal ~msg:"the log emptied in place" ~printer:show_get None (get ());
+    (* A wrong header in the owner file, with the same length as the right one. *)
+    write p ("rocq-opacity-log 1\n" ^ OpacityLog.encode_line r);
+    assert_equal ~msg:"a wrong header in the owner file" ~printer:show_get None (get ());
     OpacityLog.reset ();
-    assert_equal ~msg:"after reset" ~printer:show_get (Some []) (get ());
+    assert_equal ~msg:"after reset from the wrong header" ~printer:show_get (Some []) (get ());
     append p (OpacityLog.encode_line r);
     assert_equal ~msg:"a record after reset" ~printer:show_get (Some [r]) (get ());
     (* A torn last line. *)
     append p (line r);
     assert_equal ~msg:"a torn last line" ~printer:show_get None (get ()))
+
+let () = add_test "create_log on a directory that already holds 'log'" (fun () ->
+    let cwd = Sys.getcwd () in
+    let base = Filename.concat cwd "opacitylog_create_test.tmp" in
+    let rm_rf d = ignore (Sys.command (Filename.quote_command "rm" ["-rf"; d])) in
+    rm_rf base;
+    Sys.mkdir base 0o700;
+    Fun.protect ~finally:(fun () -> Sys.chdir cwd; rm_rf base) @@ fun () ->
+    (* First create_log succeeds. *)
+    (match OpacityLog.create_log base with
+     | Some (d, p, _id) ->
+       assert_equal ~msg:"path" ~printer:Fun.id (Filename.concat base "log") p;
+       assert_bool "header written" (read p = "rocq-opacity-log 2\n");
+       Unix.close d
+     | None -> assert_failure "first create_log failed");
+    (* Second create_log fails (O_EXCL) and does not change the file. *)
+    let before = read (Filename.concat base "log") in
+    assert_equal ~msg:"O_EXCL" ~printer:string_of_bool false
+      (match OpacityLog.create_log base with Some _ -> true | None -> false);
+    assert_equal ~msg:"file unchanged" ~printer:Fun.id before
+      (read (Filename.concat base "log")))
 
 let _ = run_tests __FILE__ (open_log_out_ch __FILE__) (List.rev !tests)

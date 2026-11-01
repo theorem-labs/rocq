@@ -29,34 +29,53 @@ type query = {
 }
 
 val env_var : string
-(** ["ROCQ_OPACITYLOG_FILE"]: the path of the log file, which worker
-    processes read ({!worker_env_value}); no other process reads it. *)
+(** ["ROCQ_OPACITYLOG_FILE"]: the path of the log file, which a worker
+    captures at startup and clears from its environment. The worker pool sets
+    it again only when it starts another Rocq worker. *)
+
+val identity_env_var : string
+(** ["ROCQ_OPACITYLOG_IDENTITY"]: the device and inode, as decimal numbers
+    separated by [:], of the log file {!env_var} names. It is an integrity
+    check, not a secret: in-process native code is not an isolation boundary.
+    A worker captures it with {!env_var}, clears both variables, and forwards
+    them explicitly only to another Rocq worker. The worker pool removes both
+    variables from inherited and extra environments. *)
 
 val set_enabled : bool -> unit
 (** [set_enabled true]: collect the queries of this compilation.
     [Library.set_location_free_label] calls it, before any tactic runs: the
     queries are collected only under [-location-free-label]. This process
-    then creates its own log (it never writes into a log it did not create),
-    named by an absolute path even when TMPDIR is relative, so a later change
-    of directory does not change which file the path names, and records the
-    device and inode it was made with; if the log cannot be made, {!get}
-    answers [None]. It also sets {!env_var}
-    in its own environment to the log's path (empty when none was made),
-    which nothing in this tree reads there: the worker pool gives workers
-    {!worker_env_value} instead. It is kept only so a tool running in this
-    process can find the live log (the test plugin of
-    misc/library-label-bodyread.sh). Worker processes are not given the flag,
-    so they never call [set_enabled true]; a worker
-    ([Flags.async_proofs_is_worker]) instead opens the log {!env_var} names
-    on its first record. *)
+    then creates its log inside a private 0700 directory in TMPDIR, through
+    an [O_CREAT|O_EXCL] descriptor (it never reopens a temporary path). Its
+    path is absolute even when TMPDIR is relative, so a later change of
+    directory does not change which file the path names. It records the
+    device and inode of that descriptor; if the log cannot be made, {!get}
+    answers [None]. At exit it removes the log and its private directory
+    only when every component of TMPDIR was secure at creation (each
+    directory owned by this uid or root and either not group/other-writable
+    or sticky) and lstat of each still matches the recorded dev:ino; a
+    substitute at the log name or an insecure parent leaves both. The
+    compiling process clears any inherited values of
+    {!env_var} and {!identity_env_var}; the worker pool gives workers
+    {!worker_env_value} and {!worker_identity_env_value} from this process's
+    retained descriptor instead. Worker processes are not
+    given the flag, so they never call [set_enabled true]; a worker
+    ([Flags.async_proofs_is_worker]) uses the values it captured at startup
+    when it opens the log on its first record, only when its device and inode
+    equal those in {!identity_env_var}. *)
 
 val worker_env_value : unit -> string
 (** The value of {!env_var} a worker this process spawns must get: the log
     this process has open (the owner's, a worker's, or a forked child's),
-    else, in a worker that has not opened it yet, the inherited value, and
-    [""] (no log: the worker records nothing) otherwise.
+    else, in a worker that has not opened it yet, the value it captured at
+    startup, and [""] (no log: the worker records nothing) otherwise.
     [AsyncTaskQueue.spawn] sets it in place of any inherited or extra-env
     entry. *)
+
+val worker_identity_env_value : unit -> string
+(** The value of {!identity_env_var} that accompanies {!worker_env_value}:
+    the device and inode of its open log, or, in a worker that has not opened
+    it yet, the value it captured at startup, and [""] otherwise. *)
 
 val reset : unit -> unit
 (** Forget the queries logged so far, and, if this process created the log
@@ -109,3 +128,10 @@ val decode_line : string -> query option
     a line that {!encode_line} does not write: [decode_line] is the inverse
     of {!encode_line} and refuses every other spelling, an empty constant
     included. *)
+
+val create_log : string -> (Unix.file_descr * string * (int * int)) option
+(** [create_log dir] creates a log file named ["log"] inside [dir] with
+    [O_CREAT|O_EXCL|O_APPEND], writes the header, and returns [(fd, path,
+    (dev, ino))]. Returns [None] when the file already exists (O_EXCL), the
+    open, fstat or header write fails; on failure it closes the descriptor
+    if it was opened. *)
