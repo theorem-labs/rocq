@@ -1,7 +1,7 @@
 (* A terminating definition that this toolchain REFUSES, where Rocq 9.2.0,
    Rocq 9.3.0 and upstream master DIE with
    Anomaly "Uncaught exception Failure("List.skipn")"
-   (measured 2026-10-25, the grading harness, dispatch://BET-214).
+   (measured 2026-10-25, the verification harness).
 
    The inner fixpoint [inner] is handed to the let-bound [invoke] without being
    applied. The uniform-parameter analysis folds over the arguments of a

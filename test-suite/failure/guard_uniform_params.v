@@ -6,8 +6,8 @@
    later call, and a non-decreasing outer recursive call went through.
 
    The three definitions below are the three known counterexamples: the first
-   was produced by a model under evaluation (the grading harness,
-   dispatch://BET-214), the second and third are the counterexamples of
+   was produced by a model under evaluation (the verification harness,
+   the guard-condition audit), the second and third are the counterexamples of
    rocq-prover/rocq#21797 and rocq-prover/rocq#22382. Each of them yields a
    closed proof of False that uses no axiom and no typing flag. *)
 
