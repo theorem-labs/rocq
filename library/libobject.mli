@@ -91,7 +91,11 @@ type open_filter
 (** How the location-free interface key of a library reads an object of a
     given kind. The key is the label [coqc] stores as the digest of a
     library's [library] segment ([LibkeyObjects]): a digest of the library
-    in which source locations do not count (in any way). *)
+    that a moved source location leaves unchanged, for each kind whose view
+    erases its locations. A kind can keep them: a plugin argument registered
+    with no stripper of its own enters the key as it is, locations included
+    (plugins/ltac/tacentries.ml, [argument_extend]), so a moved location
+    there changes the key, which can only make a dependent rebuild. *)
 type 'a interface_key =
   | Not_in_key
   (** The default. The key does not know this kind: a library that holds

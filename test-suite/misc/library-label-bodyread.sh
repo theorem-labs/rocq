@@ -34,7 +34,8 @@
 # - B_modpar (`Module M. Require A. End M.`, then a par: body read)
 #   records it; B_torn (a record appended with no newline), B_bad (a line that is not a
 #   record) and B_notmp (TMPDIR a missing directory) compile and have no keepfacts
-#   (null/null); B_wmissing (the log's directory moved away before the par:) and
+#   (null/null), while B_whole (B_torn's record with its newline) reads as a record;
+#   B_wmissing (the log's directory moved away before the par:) and
 #   B_wmoved (the log moved away before the par:) fail with the opacity log's write
 #   error;
 # - B_devnull (B_parany with ROCQ_OPACITYLOG_FILE=/dev/null outside:
@@ -59,7 +60,19 @@
 #   worker checks that A.c's body is qed1's (shape 1): the failed Require leaves the
 #   loaded A's opaque-proof handle in place, so the replay at End M gives the workers
 #   qed1's proofs, and the read is recorded;
-# - this fixture's compiles use their own TMPDIR, which is empty at the end.
+# - B_parfork: a par: worker's tactic reads A.c only in a child it forks, before the
+#   worker has opened the log itself: the child's record reaches B;
+# - the log read back is the file the compile made, with what was written to it:
+#   B_ident (a copy of the log's bytes put at its path before the save), B_empty (an
+#   empty file put there) and B_trunc (the log emptied in place) compile and have no
+#   keepfacts (null/null), and the files B_ident and B_empty put there are still there
+#   after the compile; B_reltmp (TMPDIR relative, and a Cd before the par:) records
+#   the workers' read and leaves no log behind;
+# - B_forge: a par: worker records a constant whose name holds tabs and a newline,
+#   spelled so that a log that wrote names as they are would read two records: it
+#   reads back as one record, with its own name;
+# - this fixture's compiles use their own TMPDIR, which is empty at the end (B_ident
+#   and B_empty use two others).
 
 set -e
 export PATH=$BIN:$PATH
@@ -161,6 +174,39 @@ let () =
     { Tac2expr.mltac_plugin = "kfpeek"; mltac_tactic = "in_worker" }
     Tac2externals.(Tac2ffi.unit @-> ret Tac2ffi.int)
     (fun () -> if Flags.async_proofs_is_worker () then 1 else 0)
+
+(* Replace the live log, before the library is saved: "copy", a copy of its
+   bytes in another file put at its path; "empty", an empty file put at its
+   path; "truncate", the log itself emptied. *)
+let () = str_ext "log_replace" (fun how ->
+    let p = log_path () in
+    let put s = Out_channel.with_open_bin (p ^ ".new") (fun oc -> output_string oc s);
+      Sys.rename (p ^ ".new") p in
+    (match how with
+     | "copy" -> put (In_channel.with_open_bin p In_channel.input_all)
+     | "empty" -> put ""
+     | "truncate" -> Unix.truncate p 0
+     | _ -> invalid_arg how);
+    0)
+
+(* Record [c]'s status, through the log, for a constant of [c]'s library
+   whose name holds tabs and a newline (a plugin can make one,
+   Id.of_string_soft), spelled so that a log that wrote names as they are
+   would read it as two records: its own, cut short, and one for a constant
+   [<library>.forged]. *)
+let () =
+  Tac2externals.define
+    { Tac2expr.mltac_plugin = "kfpeek"; mltac_tactic = "record_forged" }
+    Tac2externals.(Tac2ffi.constr @-> eret Tac2ffi.int)
+    (fun c _env sigma ->
+       match EConstr.kind sigma c with
+       | Constr.Const (cst, _) ->
+         let mp = Names.Constant.modpath cst in
+         let lib = Names.ModPath.to_string mp in
+         let id = Names.Id.of_string_soft (Printf.sprintf "x\t%s\t0\t-\nR\t%s.forged" lib lib) in
+         let forged = Names.Constant.make1 (Names.KerName.make mp (Names.Label.of_id id)) in
+         OpacityLog.record forged (Global.lookup_constant cst); 0
+       | _ -> -1)
 EOF
 ( cd $D/pkg/kfpeek && ocamlfind ocamlopt -thread -shared -package rocq-runtime.plugins.ltac2 -o p.cmxs p.ml > build.log 2>&1 ) ||
   { echo "FAIL cannot build the test plugin kfpeek"; cat $D/pkg/kfpeek/build.log; exit 1; }
@@ -187,7 +233,9 @@ Ltac2 @ external log_move_to : string -> int := "kfpeek" "log_move_to".
 Ltac2 @ external log_dir_move_to : string -> int := "kfpeek" "log_dir_move_to".
 Ltac2 @ external log_env_set : string -> int := "kfpeek" "log_env_set".
 Ltac2 @ external in_worker : unit -> int := "kfpeek" "in_worker".
-Ltac2 @ external env_is_1 : string -> int := "kfpeek" "env_is_1".'
+Ltac2 @ external env_is_1 : string -> int := "kfpeek" "env_is_1".
+Ltac2 @ external log_replace : string -> int := "kfpeek" "log_replace".
+Ltac2 @ external record_forged : constr -> int := "kfpeek" "record_forged".'
 # b NAME BODY: the B file NAME, whose goal True is closed after BODY.
 b() {
   mkdir -p $D/$1
@@ -228,10 +276,14 @@ printf '%s\n' 'Require Import Ltac2.Ltac2.' 'Declare ML Module "kfpeek".' 'Modul
   'Ltac2 check () := let _ := body_shape constr:(A.c) in ().' 'Set Default Proof Mode "Classic".' \
   'Goal True /\ True.' '  split.' '  par: (ltac2:(check ()); exact I).' 'Qed.' > $D/modpar/B.v
 build modpar qed1
-# B_torn: a valid record with no newline appended last; B_bad: a line that is not a record.
-b torn 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "R|A.A.c|A.A|1|A.A" in ().'
+# B_torn: a valid record (A.A.d, library A.A, an axiom, its names in hexadecimal) with
+# no newline appended last; B_whole: the same record with its newline (a control: it
+# reads as a record, beside the one the read itself made); B_bad: a line that is not a
+# record.
+b torn 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "R|412e412e64|+412e41|0|-" in ().'
+b whole 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "R|412e412e64|+412e41|0|-~" in ().'
 b bad 'let _ := body_shape constr:(A.c) in let _ := log_append_raw "garbage~" in ().'
-build torn qed1; build bad qed1
+build torn qed1; build whole qed1; build bad qed1
 # B_wmissing: the log's directory is moved away before the par:, so the workers' path
 # names a file in a missing directory; B_wmoved: the log itself is moved away. Either
 # way the workers cannot open it. B_wenv: the compiling process points the
@@ -311,6 +363,39 @@ if comp -async-proofs on -async-proofs-j 1 -async-proofs-delegation-threshold 0 
      -async-proofs-private-flags "extra-env=KFPEEK_EXTRA_ENV=1;ROCQ_OPACITYLOG_FILE=/dev/null" \
      -R $D/qed1 A -R $D/asyncenv-qed1 Bdep $D/asyncenv-qed1/B.v > $D/asyncenv-qed1/out 2>&1
 then echo ok > $D/asyncenv-qed1/rc; else echo failed > $D/asyncenv-qed1/rc; fi
+# B_parfork: a par: worker's tactic reads A.c only in a child it forks, before the
+# worker itself has opened the log (the child opens it from the variable it inherited).
+parb parfork 'let _ := fork_body_shape constr:(A.c) in ().'
+build parfork adm; build parfork qed1
+# B_forge: a par: worker records, through the log, a constant whose name holds tabs
+# and a newline (kfpeek's record_forged).
+parb forge 'let _ := record_forged constr:(A.c) in ().'
+build forge adm
+# pard NAME POST: B_parany with the toplevel command POST after the proof, before the
+# library is saved. B_ident puts a copy of the log's bytes at its path, B_empty an
+# empty file, and B_trunc empties the log itself: the workers' records are in none.
+# B_ident and B_empty use their own TMPDIR: the file put at the log's path is not the
+# compile's, so it must stay there after the compile.
+pard() {
+  mkdir -p $D/$1
+  printf '%s\nLtac2 check () := let _ := body_shape constr:(A.c) in ().\nSet Default Proof Mode "Classic".\nGoal True /\\ True.\n  split.\n  par: (ltac2:(check ()); exact I).\nQed.\n%s\n' \
+    "$head" "$2" > $D/$1/B.v
+}
+pard ident 'Ltac2 Eval (log_replace "copy").'
+pard empty 'Ltac2 Eval (log_replace "empty").'
+pard trunc 'Ltac2 Eval (log_replace "truncate").'
+mkdir -p $D/tmp-ident $D/tmp-empty
+TMPDIR="$PWD/$D/tmp-ident" build ident qed1
+TMPDIR="$PWD/$D/tmp-empty" build empty qed1
+build trunc qed1
+# B_reltmp: TMPDIR is relative (the compile runs in misc/), and B changes directory
+# (Cd) before a par: body read; every path of the compile is absolute, so only the
+# log's path could depend on the directory.
+parx reltmp "Cd \"$PWD/$D/cdhere\"."
+mkdir -p $D/cdhere $D/tmprel $D/reltmp-qed1; cp $D/reltmp/B.v $D/reltmp-qed1/B.v
+if TMPDIR="$D/tmprel" comp -R "$PWD/$D/qed1" A -R "$PWD/$D/reltmp-qed1" Bdep "$PWD/$D/reltmp-qed1/B.v" \
+     > $D/reltmp-qed1/out 2>&1
+then echo ok > $D/reltmp-qed1/rc; else echo failed > $D/reltmp-qed1/rc; fi
 
 s0=$(sed -n 's/^SHAPE //p' $D/print-adm/out); s1=$(sed -n 's/^SHAPE //p' $D/print-qed1/out); s2=$(sed -n 's/^SHAPE //p' $D/print-qed2/out)
 if [ "$s0/$s1/$s2" = "0/1/2" ]; then
@@ -390,6 +475,13 @@ nulls() { # NAME TEXT: rc ok, and the report has no keepfacts (assumptions and o
   fi
 }
 nulls torn "B_torn: a log whose last line has no newline"
+q_whole="[{\"constant\":\"$alib.c\",\"library\":\"$alib\",\"opaque\":true,\"table\":\"$alib\"},{\"constant\":\"$alib.d\",\"library\":\"$alib\",\"opaque\":false,\"table\":null}]"
+qwh=$(field $D/whole-qed1/B.vo opacity_queries)
+if [ "$(cat $D/whole-qed1/rc)" = ok ] && [ "$qwh" = "$q_whole" ]; then
+  pass "B_whole: the same record with its newline reads as a record, beside the read's own: $qwh"
+else
+  bad "B_whole ($(cat $D/whole-qed1/rc)): opacity_queries '$qwh', expected '$q_whole': $(tr '\n' ' ' < $D/whole-qed1/out | cut -c1-300)"
+fi
 nulls bad "B_bad: a log with a line that is not a record"
 nulls notmp "B_notmp: TMPDIR is a missing directory"
 cantwrite() { # NAME TEXT: the compile fails with the opacity log's write error
@@ -402,6 +494,40 @@ cantwrite() { # NAME TEXT: the compile fails with the opacity log's write error
 }
 cantwrite wmissing "B_wmissing: a worker whose log is in a missing directory"
 cantwrite wmoved "B_wmoved: a worker whose log was moved away"
+nulls ident "B_ident: the log replaced, before the save, by a copy of its bytes (another file)"
+nulls empty "B_empty: the log replaced, before the save, by an empty file"
+nulls trunc "B_trunc: the log emptied in place before the save"
+# The files put at the log's path stay: one file each, the copy holding the log's
+# first line, the empty one empty.
+li=$(find $D/tmp-ident -type f); le=$(find $D/tmp-empty -type f)
+if [ "$(printf '%s\n' "$li" | grep -c .)" = 1 ] && head -1 "$li" | grep -q '^rocq-opacity-log ' \
+   && [ "$(printf '%s\n' "$le" | grep -c .)" = 1 ] && [ ! -s "$le" ]; then
+  pass "B_ident, B_empty: the file put at the log's path is still there after the compile (it removes only the file it made)"
+else
+  bad "B_ident, B_empty: left in $D/tmp-ident: '$li', in $D/tmp-empty: '$le'"
+fi
+
+# The log's encoding, a worker's forked child, and a relative TMPDIR.
+q_forge="[{\"constant\":\"$alib.x\\u0009$alib\\u00090\\u0009-\\u000aR\\u0009$alib.forged\",\"library\":\"$alib\",\"opaque\":false,\"table\":null}]"
+qg=$(field $D/forge-adm/B.vo opacity_queries)
+if [ "$(cat $D/forge-adm/rc)" = ok ] && [ "$qg" = "$q_forge" ]; then
+  pass "B_forge: a name with tabs and a newline reads back as itself, one record: $qg"
+else
+  bad "B_forge ($(cat $D/forge-adm/rc)): opacity_queries '$qg', expected '$q_forge': $(tr '\n' ' ' < $D/forge-adm/out | cut -c1-300)"
+fi
+qpf=$(field $D/parfork-adm/B.vo opacity_queries); qpfq=$(field $D/parfork-qed1/B.vo opacity_queries)
+if [ "$(cat $D/parfork-adm/rc)" = ok ] && [ "$(cat $D/parfork-qed1/rc)" = ok ] && [ "$qpf" = "$q_adm" ] && [ "$qpfq" = "$q_qed" ]; then
+  pass "B_parfork: the records of a child a par: worker forks reach the library: $qpf against the Admitted A, $qpfq against the proved A"
+else
+  bad "B_parfork ($(cat $D/parfork-adm/rc) $(cat $D/parfork-qed1/rc)): opacity_queries '$qpf' (Admitted A), '$qpfq' (proved A): $(tr '\n' ' ' < $D/parfork-qed1/out | cut -c1-300)"
+fi
+qr=$(field $D/reltmp-qed1/B.vo opacity_queries)
+leftr=$(find "$D/tmprel" -mindepth 1 2>/dev/null | head -3 | tr '\n' ' ')
+if [ "$(cat $D/reltmp-qed1/rc)" = ok ] && [ "$qr" = "$q_qed" ] && [ -z "$leftr" ]; then
+  pass "B_reltmp: with a relative TMPDIR and a Cd before the par:, the workers' read is recorded and the log removed: $qr"
+else
+  bad "B_reltmp ($(cat $D/reltmp-qed1/rc)): opacity_queries '$qr', left in $D/tmprel: '$leftr': $(tr '\n' ' ' < $D/reltmp-qed1/out | cut -c1-400)"
+fi
 
 # Inherited log variables, sections, failed Requires and stock builds.
 qw=$(field $D/wenv-qed1/B.vo opacity_queries)

@@ -488,7 +488,11 @@ let mk_library sd md digests vm =
    example a copy of that library's file built with other proofs, at another
    logical path) replaced the loaded library's entries with that file's: its
    stored closures, which the next save of a dependent took as the loaded
-   library's, and its opaque proofs. (A failed Require now leaves them.) *)
+   library's, and its opaque proofs. A failed Require now leaves a loaded
+   library's entries as they were. It is not free of effects: when a
+   library of its closure passed the name check and a later one failed, the
+   entries of the first stay, under a name that is not loaded, until a
+   later intern of that name fills them again. *)
 let interned_pending : (library_t * (unit -> unit)) option ref = ref None
 
 (* The table writes of [m]'s intern, or nothing for a library this process

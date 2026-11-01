@@ -18,7 +18,8 @@ open Names
     [Global.body_of_constant], the keepfacts closure walk) (all of them
     kept in one log file), from every process that compiles it: the
     compiling one, its [par:] and [-async-proofs] workers, and the children
-    a plugin forks. See [opacityLog.ml] for why and how. *)
+    a plugin forks, for the records a child writes before the library is
+    saved. See [opacityLog.ml] for why and how. *)
 
 type query = {
   constant : string;  (** the constant's user name *)
@@ -35,8 +36,11 @@ val set_enabled : bool -> unit
 (** [set_enabled true]: collect the queries of this compilation.
     [Library.set_location_free_label] calls it, before any tactic runs: the
     queries are collected only under [-location-free-label]. This process
-    then creates its own log (it never writes into a log it did not create);
-    if the log cannot be made, {!get} answers [None]. It also sets {!env_var}
+    then creates its own log (it never writes into a log it did not create),
+    named by an absolute path even when TMPDIR is relative, so a later change
+    of directory does not change which file the path names, and records the
+    device and inode it was made with; if the log cannot be made, {!get}
+    answers [None]. It also sets {!env_var}
     in its own environment to the log's path (empty when none was made),
     which nothing in this tree reads there: the worker pool gives workers
     {!worker_env_value} instead. It is kept only so a tool running in this
@@ -55,8 +59,9 @@ val worker_env_value : unit -> string
     entry. *)
 
 val reset : unit -> unit
-(** Forget the queries logged so far, and empty the log file if this
-    process created it. *)
+(** Forget the queries logged so far, and, if this process created the log
+    file, empty it through its own descriptor and write the log's first line
+    again. *)
 
 val record : Constant.t -> Declarations.constant_body -> unit
 (** [record c cb]: such a command told [c], whose body is [cb], apart as an
@@ -80,6 +85,27 @@ val record_body_read : Constant.t -> Opaqueproof.opaque -> unit
 val get : unit -> query list option
 (** The queries logged so far, with repeats: those the log file holds (every
     process's) and those of this process. [None] when the log could not be
-    created, opened, written or read back, holds a line that is not a record,
-    or does not end with a newline (a torn last line): the caller then stores
-    no opacity queries at all, never an empty list. *)
+    created, opened, written or read back, when the file its path names now
+    is not the one this process created (another device or inode: another
+    file put there, even an empty one or a copy of its bytes), when it does
+    not start with the log's first line (it was emptied), holds a line that
+    is not a record, or does not end with a newline (a torn last line): the
+    caller then stores no opacity queries at all. These checks do not detect
+    a rewrite of the log's own file that keeps its first line (only a
+    process that can write the file can make one; the processes that log
+    only append), see [opacityLog.ml]. *)
+
+val encode_line : query -> string
+(** The line, newline included, a query is written to the log as: tab
+    separated, ["R"], the constant, the library, ["1"] or ["0"] for
+    [opaque], the table; each name in hexadecimal (two lowercase digits a
+    byte), an absent library or table as ["-"] and a present one as ["+"]
+    followed by its digits. A name can therefore hold any byte, a tab or a
+    newline among them (an identifier made by [Names.Id.of_string_soft]),
+    and distinct queries give distinct lines. *)
+
+val decode_line : string -> query option
+(** The query a line (without its newline) of the log holds, or [None] for
+    a line that {!encode_line} does not write: [decode_line] is the inverse
+    of {!encode_line} and refuses every other spelling, an empty constant
+    included. *)
