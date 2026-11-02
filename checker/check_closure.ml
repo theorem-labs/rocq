@@ -763,14 +763,17 @@ let type_verdict env model trusted =
 (* One message per line, so that a long report never builds one [Pp.t]. *)
 let line fmt = Printf.ksprintf (fun s -> Feedback.msg_notice (Pp.str s)) fmt
 
-(* Test-only seam: a test sets this for one process to exercise the public
-   incomplete-report contract. It has no effect unless the test variable is
-   explicitly set. *)
+(* Test-only seam: with the test variable set, print how many objects the
+   report's walks entered, so a test can tell one shared walk from one walk
+   per request. It has no effect unless the test variable is explicitly set. *)
 let test_walk_count () =
   match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_WALK" with
   | Some "1" -> line "walk %d" !walk_visits
   | None | Some _ -> ()
 
+(* Test-only seam: a test sets this for one process to exercise the public
+   incomplete-report contract. It has no effect unless the test variable is
+   explicitly set. *)
 let test_fault () =
   match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_FAILURE" with
   | Some "1" -> CErrors.user_err Pp.(str "test statement-report failure")
