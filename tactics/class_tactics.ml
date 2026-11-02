@@ -1221,12 +1221,22 @@ let activate_solver ~name =
    the empty list, and a proof whose resolution asks an active solver stores
    no term. Recording the solver a call chose would not do: the choice is a
    closure's answer (cross-model delta review D6). *)
+let recorded_typeclass_solvers () =
+  Some (Proof_recorder.digest ~what:"typeclass_solver" !active_solvers)
+
+let () =
+  Proof_replay.register_evaluator "typeclass_solver" (fun key ->
+      if not (String.equal key "active") then Proof_replay.Unknown
+      else match recorded_typeclass_solvers () with
+        | v -> Proof_replay.Value v
+        | exception _ -> Proof_replay.Unknown)
+
 let find_solver env evd (s : Intpart.set) =
   let active = !active_solvers in
   if Proof_recorder.active () then begin
     Proof_recorder.read ~row:"8" ~channel:"typeclass_solver"
       ~key:(fun () -> "active")
-      ~value:(fun () -> Some (Proof_recorder.digest ~what:"typeclass_solver" active));
+      ~value:recorded_typeclass_solvers;
     if not (List.is_empty active) then
       Proof_recorder.ineligible ~reason:"plugin_hook"
         ~detail:("typeclass_solver: " ^ String.concat ", " active)

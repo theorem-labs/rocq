@@ -1,0 +1,18 @@
+{
+  "doc": "a .lia.cache the registration did not have: the grade's micromega_cache fence trips at the first proof, so neither proof replays, and the registration, whose cache paths are directories, keeps both proofs eligible",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.same": {"eligible": true}, "PR.A.changed": {"eligible": true}}},
+  "tree_dirs": {"original": [".nia.cache", ".lia.cache"], "edited": [".nia.cache"]},
+  "tree_files": {"edited": {".lia.cache": "lia-cache.bin"}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 2, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": "micromega_cache: .lia.cache",
+      "outcomes": [["PR.A.same", "ineligible"], ["PR.A.changed", "ineligible"]]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "doc": "the kernel's registry of primitive types gains an entry between two proofs that type an int63 literal: the proof after it misses on the retroknowledge read, and the proof before it replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.same": {"eligible": true}, "PR.A.changed": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.same", "hit"], ["PR.A.changed", "read", "retroknowledge", "changed"]]
+    }
+  }
+}

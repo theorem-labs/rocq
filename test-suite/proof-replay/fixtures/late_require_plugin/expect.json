@@ -1,0 +1,17 @@
+{
+  "doc": "a Require of a library that loads a plugin is late, so the proof before it runs; a second Require of it loads no plugin, so the proof between the two replays",
+  "files": ["Plug.v", "A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}, "PR.A.q": {"eligible": true}, "PR.A.r": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 2,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "refused_detail": "Require at line 6; no proof run; then 2 Requires, each late if it loads a library",
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.p", "ineligible", "rebind", "before_late_command"], ["PR.A.q", "hit"], ["PR.A.r", "hit"]]
+    }
+  }
+}

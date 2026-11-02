@@ -229,8 +229,8 @@ module Recorded = struct
   let cst_rules = ref Cmap_env.empty
   let minds = ref Mindmap_env.empty
   let minds_exists = ref Mindmap_env.empty
-  let modules = ref MPmap.empty
-  let modtypes = ref MPmap.empty
+  let modules = ref ModPath.Map.empty
+  let modtypes = ref ModPath.Map.empty
 
   let fresh () =
     let g = Proof_recorder.generation () in
@@ -241,8 +241,8 @@ module Recorded = struct
       cst_rules := Cmap_env.empty;
       minds := Mindmap_env.empty;
       minds_exists := Mindmap_env.empty;
-      modules := MPmap.empty;
-      modtypes := MPmap.empty
+      modules := ModPath.Map.empty;
+      modtypes := ModPath.Map.empty
     end
 
   let once tbl mem add print key ~channel value =
@@ -256,13 +256,17 @@ module Recorded = struct
 
   let constant tbl = once tbl Cmap_env.mem Cmap_env.add Constant.to_string
   let mind tbl = once tbl Mindmap_env.mem Mindmap_env.add MutInd.to_string
-  let mpath tbl = once tbl MPmap.mem MPmap.add ModPath.to_string
+  let mpath tbl = once tbl ModPath.Map.mem ModPath.Map.add ModPath.to_string
 
-  (* The library of a kernel name, and that library's .vo digest. A constant
-     of a REQUIRED library is recorded by the digest and not by its body: the
-     digest pins every object the library holds, and one body can be a
-     megabyte of term (a memory image a registration file requires). Only the
-     objects of the library being compiled are digested. *)
+  (* The library of a kernel name, and the digest that library's .vo stores
+     for itself. A module or module type of a REQUIRED library is recorded
+     by that digest and not by its body. A proof step reads only a module's
+     field names, whether it is a functor, and whether it exists (Ltac2
+     Module primitives, Rocqlib), and the stored digest covers those. It
+     does not cover every value: under -location-free-label it is a label
+     that leaves out whether a constant is an axiom or an opaque proof, and
+     the opaque bodies. So no evaluator reads a constant through this digest:
+     constants and inductives are recorded by value ([recorded_constant]). *)
   let lib_digests = ref DirPath.Map.empty
 
   let rec root_lib = function
@@ -296,6 +300,56 @@ module Recorded = struct
     | Some v -> Some (Proof_recorder.digest_cached ~what:"rewrite_rules" v)
 end
 
+(* BET-84: ONE value per channel. The recorder's call sites below and the
+   replay evaluators (vernac/proof_replay_env.ml) both call these, so a
+   read's value is never computed two ways. A second implementation of a
+   channel is the defect class that would let a replay accept a changed
+   input, and dev/tools/census/replay_channels.py fails on one. *)
+let recorded_constant kn env =
+  match Cmap_env.find_opt kn env.env_constants with
+  | None -> None
+  | Some (cb, _, _) ->
+    (* The constant's value as a proof sees it, for the file's own constants
+       and a required library's alike. A required library's .vo digest
+       changed whenever the grade rebuilt the library, even with every value
+       equal (a replayed proof's term shares differently), and every reader
+       of every constant of it missed.
+
+       Two fields are positions in the library, not values: the bytecode
+       field indexes the library's VM code table, and an opaque body indexes
+       its opaque table, so a definition added or deleted earlier in the file
+       moves both (fixture const_deleted). The bytecode is a function of the
+       body, and the kernel never unfolds an opaque body, so a proof sees an
+       opaque constant only through its type: a changed proof of an
+       unchanged statement is the same input (fixture lib_opaque_proof_changed). *)
+    Some (Proof_recorder.digest_cached_by ~what:"constant" ~key:cb (fun () ->
+        let body = match cb.const_body with
+          | Undef inline -> `Undef inline
+          | Def c -> `Def c
+          | OpaqueDef _ -> `Opaque
+          | Primitive p -> `Primitive p
+          | Symbol rules -> `Symbol rules
+        in
+        (cb.const_hyps, cb.const_univ_hyps, body, cb.const_type, cb.const_relevance,
+         cb.const_universes, cb.const_inline_code, cb.const_typing_flags)))
+
+let recorded_constant_exists kn env = Some (string_of_bool (Cmap_env.mem kn env.env_constants))
+
+let recorded_rewrite_rules kn env = Recorded.of_rules (Cmap_env.find_opt kn env.symb_pats)
+
+(* An inductive's value, for the file's own and a required library's alike
+   (see [recorded_constant]): its body holds no position in its library. *)
+let recorded_inductive kn env =
+  match Mindmap_env.find_opt kn env.env_inductives with
+  | None -> None
+  | Some (mb, _, _) -> Some (Proof_recorder.digest_cached ~what:"inductive" mb)
+
+let recorded_inductive_exists kn env = Some (string_of_bool (Mindmap_env.mem kn env.env_inductives))
+
+let recorded_module mp env = Recorded.of_value "module" mp (ModPath.Map.find_opt mp env.env_modules)
+
+let recorded_modtype mp env = Recorded.of_value "modtype" mp (ModPath.Map.find_opt mp env.env_modtypes)
+
 let lookup_constant_opt kn env =
   let res = match Cmap_env.find_opt kn env.env_constants with
     | None -> None
@@ -303,19 +357,20 @@ let lookup_constant_opt kn env =
   in
   if Proof_recorder.active () then
     Recorded.constant Recorded.cst_body kn ~channel:"constant"
-      (fun () -> Recorded.of_value "constant" (Constant.modpath kn) res);
+      (fun () -> recorded_constant kn env);
   res
 
 let lookup_constant_key kn env =
   match Cmap_env.find_opt kn env.env_constants with
-  | Some ((cb, _, _) as v) ->
+  | Some v ->
     if Proof_recorder.active () then
       Recorded.constant Recorded.cst_body kn ~channel:"constant"
-        (fun () -> Recorded.of_value "constant" (Constant.modpath kn) (Some cb));
+        (fun () -> recorded_constant kn env);
     v
   | None ->
     if Proof_recorder.active () then
-      Recorded.constant Recorded.cst_body kn ~channel:"constant" (fun () -> None);
+      Recorded.constant Recorded.cst_body kn ~channel:"constant"
+        (fun () -> recorded_constant kn env);
     anomaly Pp.(str "Constant " ++ Constant.print kn ++ str" does not appear in the environment.")
 
 let lookup_constant kn env =
@@ -325,7 +380,7 @@ let mem_constant kn env =
   let res = Cmap_env.mem kn env.env_constants in
   if Proof_recorder.active () then
     Recorded.constant Recorded.cst_exists kn ~channel:"constant_exists"
-      (fun () -> Some (string_of_bool res));
+      (fun () -> recorded_constant_exists kn env);
   res
 
 let add_rewrite_rules l env =
@@ -342,21 +397,21 @@ let lookup_rewrite_rules cst env =
   if Proof_recorder.active () then begin
     let res = Cmap_env.find_opt cst env.symb_pats in
     Recorded.constant Recorded.cst_rules cst ~channel:"rewrite_rules"
-      (fun () -> Recorded.of_rules res);
+      (fun () -> recorded_rewrite_rules cst env);
     (match res with Some rs -> rs | None -> raise Not_found)
   end else Cmap_env.find cst env.symb_pats
 
 (* Mutual Inductives *)
 let lookup_mind_key kn env =
   match Mindmap_env.find_opt kn env.env_inductives with
-  | Some ((mb, _, _) as v) ->
+  | Some v ->
     if Proof_recorder.active () then
       Recorded.mind Recorded.minds kn ~channel:"inductive"
-        (fun () -> Recorded.of_value "inductive" (MutInd.modpath kn) (Some mb));
+        (fun () -> recorded_inductive kn env);
     v
   | None ->
     if Proof_recorder.active () then
-      Recorded.mind Recorded.minds kn ~channel:"inductive" (fun () -> None);
+      Recorded.mind Recorded.minds kn ~channel:"inductive" (fun () -> recorded_inductive kn env);
     anomaly Pp.(str "Inductive " ++ MutInd.print kn ++ str" does not appear in the environment.")
 
 let lookup_mind kn env =
@@ -427,7 +482,7 @@ let mem_mind kn env =
   let res = Mindmap_env.mem kn env.env_inductives in
   if Proof_recorder.active () then
     Recorded.mind Recorded.minds_exists kn ~channel:"inductive_exists"
-      (fun () -> Some (string_of_bool res));
+      (fun () -> recorded_inductive_exists kn env);
   res
 
 let mind_context env mind =
@@ -996,7 +1051,7 @@ let lookup_module mp env =
   if Proof_recorder.active () then begin
     let res = ModPath.Map.find_opt mp env.env_modules in
     Recorded.mpath Recorded.modules mp ~channel:"module"
-      (fun () -> Recorded.of_value "module" mp res);
+      (fun () -> recorded_module mp env);
     (match res with Some m -> m | None -> raise Not_found)
   end else ModPath.Map.find mp env.env_modules
 
@@ -1004,7 +1059,7 @@ let lookup_modtype mp env =
   if Proof_recorder.active () then begin
     let res = ModPath.Map.find_opt mp env.env_modtypes in
     Recorded.mpath Recorded.modtypes mp ~channel:"modtype"
-      (fun () -> Recorded.of_value "modtype" mp res);
+      (fun () -> recorded_modtype mp env);
     (match res with Some m -> m | None -> raise Not_found)
   end else ModPath.Map.find mp env.env_modtypes
 

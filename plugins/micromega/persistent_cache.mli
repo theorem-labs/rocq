@@ -28,10 +28,14 @@ module type PHashtable = sig
   val add : 'a t -> key -> 'a -> unit
 
   (** [memo cache f] returns a memo function for [f] using file [cache] as persistent table.
-          Note that the cache will only be loaded when the function is used for the first time *)
+          Note that the cache will only be loaded when the function is used for the first time.
+          While a proof is recorded or replayed, a table that loaded entries of its file
+          when it opened, or a file at [cache] while the table is not open, trips the
+          process-wide fence (BET-84 census row 23, reason [micromega_cache]). *)
   val memo : string -> (key -> 'a) -> key -> 'a
 
-  (** [memo cache cond f] only use the cache if [cond k] holds for the key [k].  *)
+  (** [memo cache cond f] only use the cache if [cond k] holds for the key [k].
+          The fence of {!memo} applies to its table too. *)
   val memo_cond : string -> (key -> bool) -> (key -> 'a) -> key -> 'a
 end
 

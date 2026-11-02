@@ -1,0 +1,18 @@
+{
+  "doc": "Requires of a loaded library in the forms the Require reader read with a lexer of its own (a nested comment holding a string, a sentence over lines, an attribute then Export, an import filter): the source scan reads each in full, none is late, and every proof replays",
+  "files": ["Lib.v", "A.v"],
+  "records": {"A.v": {"PR.A.p1": {"eligible": true}, "PR.A.p2": {"eligible": true}, "PR.A.p3": {"eligible": true},
+                       "PR.A.p4": {"eligible": true}, "PR.A.p5": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 5,
+      "hits": 5,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "refused_detail": "Require at line 13; no proof run; then 4 Requires, each late if it loads a library (byte 956 after an export Register)",
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.p1", "hit"], ["PR.A.p2", "hit"], ["PR.A.p3", "hit"], ["PR.A.p4", "hit"], ["PR.A.p5", "hit"]]
+    }
+  }
+}

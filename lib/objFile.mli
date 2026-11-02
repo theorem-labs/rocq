@@ -40,3 +40,8 @@ val marshal_out_binary : out_handle -> segment:'a id -> out_channel * (unit -> u
     [Stdlib.output_*] APIs should be used on [oc]. [stop ()] must be invoked in
     order to signal that all data was written to [oc] (which should not be used
     afterwards). Only after calling [stop] the other API can be used on [oh]. *)
+
+val segment_of_string : string -> segment:'a id -> (int * int) option
+(** In the bytes of a whole object file, the position and the length of a
+    segment, its hash left out. [None] when the bytes are not an object file
+    of this version or hold no such segment. *)

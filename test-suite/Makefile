@@ -207,7 +207,7 @@ PREREQUISITELOG = $(addsuffix .log,$(wildcard prerequisite/*.v)) .csdp.cache
 #######################################################################
 
 .DELETE_ON_ERROR:
-.PHONY: all run clean $(SUBSYSTEMS)
+.PHONY: all run clean $(SUBSYSTEMS) proof-replay
 
 ifeq ($(COQLIB_NOT_FOUND),true)
 all:
@@ -241,6 +241,7 @@ run: $(SUBSYSTEMS)
 clean:
 	rm -f trace .csdp.cache .nia.cache .lia.cache
 	rm -f misc/universes/all_stdlib.v
+	rm -rf proof-replay/out
 	$(SHOW) 'RM        <**/*.stamp> <**/*.vo> <**/*.log> <**/*.glob> <**/*.aux> <**/*.time>'
 	$(HIDE)find . \( \
 	  -name '*.stamp' -o -name '*.vo' -o -name '*.vos' -o -name '*.vok' -o -name '*.log' -o -name '*.glob' -o -name '*.aux' -o -name '*.time' \
@@ -295,6 +296,7 @@ summary:
 	  $(call summary_dir, "tools/ tests", tools); \
 	  $(call summary_dir, "Unit tests", unit-tests); \
 	  $(call summary_dir, "Ltac2 tests", ltac2); \
+	  $(call summary_dir, "Proof replay fixtures", proof-replay/fixtures); \
 	  nb_success=`grep -e $(log_success) -r . -l --include="*.log" --exclude-dir=logs | wc -l`; \
 	  nb_failure=`grep -e $(log_failure) -r . -l --include="*.log" --exclude-dir=logs | wc -l`; \
 	  nb_tests=`expr $$nb_success + $$nb_failure`; \
@@ -801,3 +803,63 @@ tools/%.log : tools/%/run.sh
 	    $(FAIL); \
 	  fi; \
 	) > "$@"
+
+#######################################################################
+# Per-proof replay fixtures
+#######################################################################
+
+# proof-replay/README.md: a fixture is proof-replay/fixtures/<name>/ and
+# its log is proof-replay/fixtures/<name>.log.  `make proof-replay` runs
+# every fixture, the slow ones too, prints the counts, and fails when a
+# fixture fails or does not run.  It is not in SUBSYSTEMS: one fixture
+# needs a Rocq configured with -native-compiler ondemand, three load
+# Stdlib (`make -f Makefile.ci ci-stdlib`), and two take minutes.  CI
+# runs it in its own job.
+
+PROOF_REPLAY_FIXTURES := $(patsubst proof-replay/fixtures/%/expect.json,%,$(wildcard proof-replay/fixtures/*/expect.json))
+PROOF_REPLAY_LOGS := $(PROOF_REPLAY_FIXTURES:%=proof-replay/fixtures/%.log)
+
+# A fixture's log depends on every file of the fixture: expect.json, the
+# files beside it (a cache file that `tree_files` copies), and its trees.
+define proof_replay_deps
+proof-replay/fixtures/$(1).log: $(wildcard proof-replay/fixtures/$(1)/*.* proof-replay/fixtures/$(1)/*/*.v)
+endef
+$(foreach F,$(PROOF_REPLAY_FIXTURES),$(eval $(call proof_replay_deps,$(F))))
+
+# A budget fixture measures wall time, so it runs after every other
+# fixture, with no other fixture beside it.
+PROOF_REPLAY_TIMED := $(patsubst %/expect.json,%.log,$(shell grep -l '"mode": *"budget"' proof-replay/fixtures/*/expect.json))
+$(PROOF_REPLAY_TIMED): | $(filter-out $(PROOF_REPLAY_TIMED),$(PROOF_REPLAY_LOGS))
+
+proof-replay: $(PROOF_REPLAY_LOGS)
+	$(HIDE)tail -q -n1 $^ | sort; \
+	  passed=`tail -q -n1 $^ | grep -c ' \.\.\. Ok$$'`; \
+	  notrun=`tail -q -n1 $^ | grep -c ' (did not run)$$'`; \
+	  failed=`expr $(words $^) - $$passed - $$notrun`; \
+	  echo "proof-replay: $(words $^) fixtures, $$passed passed, $$failed failed, $$notrun did not run"; \
+	  if [ $$passed != $(words $^) ]; then \
+	    if [ -n "$$CI" ] || [ -n "$$PRINT_LOGS" ]; then \
+	      for f in `grep -l -F 'Error!' $^`; do printf '%s\n' "$$f"; cat "$$f"; printf '\n'; done; \
+	    fi; \
+	    false; \
+	  fi
+
+$(PROOF_REPLAY_LOGS): proof-replay/fixtures/%.log: proof-replay/run.sh $(wildcard proof-replay/*.py)
+	$(SHOW) "TEST      proof-replay/fixtures/$*"
+	$(HIDE){ \
+	  echo $(call log_intro,proof-replay/fixtures/$*); \
+	  $(call WITH_TIMER,$@,proof-replay/run.sh --slow --only $* $(BIN) proof-replay/out/$* 2>&1); R=$$?; times; \
+	  if [ $$R != 0 ]; then \
+	    echo $(log_failure); \
+	    echo "    proof-replay/fixtures/$* ... Error!"; \
+	    $(FAIL); \
+	  elif grep -q "^SKIP $*:" "$@"; then \
+	    echo $(log_failure); \
+	    echo "    proof-replay/fixtures/$* ... Error! (did not run)"; \
+	    $(FAIL); \
+	  else \
+	    echo $(log_success); \
+	    echo "    proof-replay/fixtures/$* ... Ok"; \
+	  fi; \
+	} > "$@"
+	$(HIDE)$(call REPORT_TIMER,$@)

@@ -1,0 +1,9 @@
+{
+  "doc": "three measured slow proofs: two replays charge their recorded time, then the changed third proof is killed INSIDE its tactic when the charged clock reaches the budget, which the runner sets from the registration's recorded times",
+  "mode": "budget",
+  "slow": true,
+  "files": ["A.v"],
+  "ratio": "1",
+  "summaries": {"A.v": {"proofs": 3, "hits": 2,
+    "misses": {"key": 1, "read": 0, "ineligible": 0, "missing_record": 0}, "refused": null, "killed": true}}
+}

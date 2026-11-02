@@ -1,0 +1,7 @@
+{
+  "doc": "a proof types an int63 literal, and the edited tree registers the primitive type as float64 instead of int63: stock fails to type the literal, so replay must fail too",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.target": {"eligible": true}}},
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}

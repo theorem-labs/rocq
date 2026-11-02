@@ -1,0 +1,17 @@
+{
+  "doc": "an Import inside a plain module after the first proof, no export-locality registration loaded: every proof replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}, "PR.A.M.q": {"eligible": true}, "PR.A.r": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 3,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "refused_detail": "Import at line 7; no proof run (byte 292 after an export Register)",
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.p", "hit"], ["PR.A.M.q", "hit"], ["PR.A.r", "hit"]]
+    }
+  }
+}

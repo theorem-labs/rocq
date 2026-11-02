@@ -17,3 +17,8 @@ open Vmvalues
 val val_of_constr : env -> Genlambda.evars -> constr -> Vmvalues.values
 
 val vm_interp : tcode -> values -> vm_env -> int -> values
+
+val recorded_vm_global : ?on_call:(Names.Constant.t -> unit) -> env -> Names.Constant.t -> string option
+(** BET-84: the value of a [vm_global] read of a constant: a digest of its
+    bytecode without its place in the library's code table, or absent.
+    [on_call] receives each constant that code calls. *)

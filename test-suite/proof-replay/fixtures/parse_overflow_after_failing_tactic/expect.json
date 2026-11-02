@@ -1,0 +1,10 @@
+{
+  "doc": "a tactic fails and parsing the next sentence of the proof overflows the stack: stock reports the tactic's error, and replay, which parses a candidate's sentences ahead, must report the same error",
+  "note": "1 MB stack, term 30000 levels deep. Under 1 MB the parser overflowed at about 900 levels in a dune release build merged on 466ade627a, and a term 3000 levels deep did not overflow in a make-world build of the branch (both 2026-10-31). 1 MB holds 30000 levels only if the parser takes less than 35 bytes of stack for each level. Fixture parse_overflow_control shows that this term overflows.",
+  "files": ["A.v"],
+  "stack_kb": 1024,
+  "records": {"A.v": {"PR.A.target": {"eligible": true}}},
+  "compile_fails": ["A.v"],
+  "compare_stderr": ["A.v"],
+  "coqchk": false
+}

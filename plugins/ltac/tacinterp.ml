@@ -75,6 +75,9 @@ let audited_ml_tactic_plugins =
          (String.Set.add ("rocq-runtime.plugins." ^ suffix) set))
     String.Set.empty audited_ml_tactic_plugin_suffixes
 
+(* BET-84 P3: the same list decides which loaded plugins replay trusts. *)
+let () = Proof_replay.register_plugin_audit (fun name -> String.Set.mem name audited_ml_tactic_plugins)
+
 let fence_ml_tactic { mltac_plugin; mltac_tactic } =
   if Proof_recorder.active () &&
      not (String.Set.mem mltac_plugin audited_ml_tactic_plugins)
@@ -554,6 +557,22 @@ let extract_ids ids lfun accu =
 
 let default_fresh_id = Id.of_string "H"
 
+(* BET-84 census row 17: [fresh "s"] gives [s0] when [s] is a keyword, and a
+   [Reserved Notation] that makes [s] one leaves the parsed sentences
+   unchanged, since the string literal is not reparsed (Claude gate at
+   0f8d815732, finding 3). ONE keyword test and ONE value for the keyword
+   channel: the record site in [interp_fresh_id] and the replay evaluator
+   below call the same two functions (dev/tools/census/replay_channels.py). *)
+let fresh_is_keyword s = CLexer.is_keyword (Procq.get_keyword_state ()) s
+
+let recorded_keyword kw = Some (string_of_bool kw)
+
+let () =
+  Proof_replay.register_evaluator "keyword" (fun s ->
+      match recorded_keyword (fresh_is_keyword s) with
+      | v -> Proof_replay.Value v
+      | exception _ -> Proof_replay.Unknown)
+
 let interp_fresh_id ist env sigma l =
   let extract_ident ist env sigma id =
     try try_interp_ltac_var (coerce_to_ident_not_fresh sigma)
@@ -572,14 +591,10 @@ let interp_fresh_id ist env sigma l =
         String.concat "" (List.map (function
           | ArgArg s -> s
           | ArgVar {v=id} -> Id.to_string (extract_ident ist env sigma id)) l) in
-      let kw = CLexer.is_keyword (Procq.get_keyword_state()) s in
-      (* BET-84 census row 17: [fresh "s"] gives [s0] when [s] is a keyword,
-         and a [Reserved Notation] that makes [s] one leaves the parsed
-         sentences unchanged, since the string literal is not reparsed (Claude
-         gate at 0f8d815732, finding 3). *)
+      let kw = fresh_is_keyword s in
       if Proof_recorder.active () then
         Proof_recorder.read ~row:"17" ~channel:"keyword" ~key:(fun () -> s)
-          ~value:(fun () -> Some (string_of_bool kw));
+          ~value:(fun () -> recorded_keyword kw);
       let s = if kw then s^"0" else s in
       Id.of_string s in
   Tactics.fresh_id_in_env avoid id env

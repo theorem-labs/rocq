@@ -1,0 +1,16 @@
+{
+  "doc": "a proof that fills the VM slot of a constant closing over a section Let itself (no warm cache) is ineligible: a replay would not fill the slot for the commands after it",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.S.target": {"ineligible": ["vm_section_closure"], "stores_no_term": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.S.target", "ineligible"]]
+    }
+  }
+}

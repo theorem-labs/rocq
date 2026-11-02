@@ -1,0 +1,20 @@
+{
+  "doc": "a sealed module and a functor after the first proof stay late, their End included: every proof before the functor's End runs, the proofs after it replay",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}, "PR.A.M.m_inner": {"eligible": true}, "PR.A.F.f_inner": {"eligible": true}, "PR.A.q": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 4,
+      "hits": 1,
+      "misses": {"key": 0, "read": 0, "ineligible": 3, "missing_record": 0},
+      "refused": null,
+      "refused_detail": "Module at line 8; proofs before byte 385 run",
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.p", "ineligible", "rebind", "before_late_command"],
+                   ["PR.A.M.m_inner", "ineligible", "rebind", "before_late_command"],
+                   ["PR.A.F.f_inner", "ineligible", "rebind", "before_late_command"],
+                   ["PR.A.q", "hit"]]
+    }
+  }
+}

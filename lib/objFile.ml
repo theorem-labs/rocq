@@ -205,3 +205,34 @@ let close_out { out_channel = ch; out_segments = seg } =
   let () = output_int64 ch pos in
   let () = flush ch in
   close_out ch
+
+(* BET-84: a segment of an object file read whole into memory, so that a
+   caller can hash exactly the bytes it then unmarshals. *)
+let segment_of_string data ~segment =
+  let n = String.length data in
+  let int32_at i = if i + 4 > n then None else Some (String.get_int32_be data i) in
+  let int64_at i = if i + 8 > n then None else Some (String.get_int64_be data i) in
+  let ( let* ) = Option.bind in
+  let* magic = int32_at 0 in
+  let* version = int32_at 4 in
+  if not (Int32.equal magic magic_number && Int32.equal version Coq_config.vo_version) then None
+  else
+    let* summary = int64_at 8 in
+    let summary = Int64.to_int summary in
+    let* count = int32_at summary in
+    let rec find k at =
+      if k = 0 then None
+      else
+        let* nlen = int32_at at in
+        let nlen = Int32.to_int nlen in
+        if nlen < 0 || at + 4 + nlen > n then None
+        else
+          let name = String.sub data (at + 4) nlen in
+          let* pos = int64_at (at + 4 + nlen) in
+          let* len = int64_at (at + 12 + nlen) in
+          let pos = Int64.to_int pos and len = Int64.to_int len in
+          if String.equal name segment.id then
+            if pos < 0 || len < 0 || pos + len > n then None else Some (pos, len)
+          else find (k - 1) (at + 12 + nlen + 8 + 16)
+    in
+    if summary < 0 then None else find (Int32.to_int count) (summary + 4)

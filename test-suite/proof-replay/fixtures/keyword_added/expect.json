@@ -1,0 +1,16 @@
+{
+  "doc": "a Reserved Notation makes fresh's string a keyword: the proof that asked fresh about it misses on the keyword read, the one that asked about another string hits",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.lfresh": {"eligible": true}, "PR.A.lbar": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.lfresh", "read", "keyword", "changed"], ["PR.A.lbar", "hit"]]
+    }
+  }
+}

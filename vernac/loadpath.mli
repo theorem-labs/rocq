@@ -63,9 +63,12 @@ module Error : sig
 end
 
 val locate_qualified_library
-  :  ?root:DirPath.t
+  :  ?warn:bool
+  -> ?root:DirPath.t
   -> Libnames.qualid
   -> (DirPath.t * CUnix.physical_path, Error.t) Result.t
+(** [~warn:false]: no deprecation warning when a name without a root is
+    found under [Stdlib]. *)
 
 (** Locates a library by implicit name.
 

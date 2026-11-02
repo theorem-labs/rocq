@@ -32,6 +32,32 @@ rocq compile specific options:\
 \n  -vok                   process the file by loading .vos instead of .vo files for\
 \n                         dependencies, and produce an empty .vok file on success\
 \n  -proof-record          write a per-proof record of reads and writes beside each .vo\
+\n  -proof-record-no-graph with -proof-record: store no global universe graph;\
+\n                         replay rebuilds it from its own\
+\n  -proof-record-vo-ref   with -proof-record: store a proof term as a reference into\
+\n                         the .vo beside the record when the term there is the same\
+\n                         replay needs that .vo (see rocq proof-record-inline)\
+\n  -proof-replay FILE     replay a proof's stored term from that record file\
+\n                         (not with -async-proofs on or lazy, or -vos)\
+\n  -proof-replay-digest SHA256\
+\n                         the record's SHA-256, as 64 hex digits (required with\
+\n                         -proof-replay FILE); a record with another SHA-256\
+\n                         is not used\
+\n  -proof-replay-dir DIR  the same, from the record of this library L in DIR: the\
+\n                         first that exists of DIR/L.proof-record.jsonl,\
+\n                         DIR/L'.proof-record.jsonl (L' is L with dots made\
+\n                         slashes) and DIR/V.proof-record.jsonl (V is the output\
+\n                         .vo path without .vo, if relative and with no ..);\
+\n                         its SHA-256 is -proof-replay-digest if given, else the\
+\n                         first 64 characters of the file <record>.sha256 beside\
+\n                         it; with no such file, or one that group, others or the\
+\n                         compiling user can write, or such a directory from DIR\
+\n                         down to the record, the record is not used\
+\n  -proof-replay-ratio R  the grade-to-registration ratio of per-file wall time,\
+\n                         at the top of its spread (required with -proof-replay)\
+\n  -proof-replay-budget S the per-file wall budget the charged clock runs against\
+\n  -proof-replay-peak-limit-kb K\
+\n                         no replay in a file whose registered peak was above K\
 \n"
 }
 
@@ -84,6 +110,8 @@ let custom_coqc : ((Coqcargs.t * Colors.color) * Stm.AsyncOpts.stm_opt, 'b) Coqt
     let stm_opts, extras = Stmargs.parse_args opts extras in
     let coqc_opts = Coqcargs.parse extras in
     let stm_opts = fix_stm_opts coqc_opts stm_opts in
+    Coqcargs.check_async_proofs coqc_opts
+      ~async_proofs:Stm.AsyncOpts.(stm_opts.async_proofs_mode <> APoff);
     ((coqc_opts, color_mode), stm_opts), []);
   usage = coqc_specific_usage;
   init_extra = coqc_init;

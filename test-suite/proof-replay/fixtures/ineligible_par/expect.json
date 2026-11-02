@@ -1,0 +1,18 @@
+{
+  "doc": "par: runs the tactic in a worker process, so its proof is ineligible and never replayed, though the tactic it ran changed",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.lpar": {"ineligible": ["par"], "stores_no_term": true},
+                       "PR.A.lall": {"eligible": true}, "PR.A.control": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 3,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.lpar", "ineligible"], ["PR.A.lall", "read", "tactic_definition"],
+                   ["PR.A.control", "hit"]]
+    }
+  }
+}

@@ -35,6 +35,58 @@ end
 open Hashtbl
 open System
 
+(* BET-84 census row 23. A lookup gives what the prover computes, or an
+   entry of the cache file. [open_in] loads only each entry's hash and
+   position, and [find] reads the entry from the file at the first lookup
+   that needs it. That read can come long after the table opened, and the
+   file can change between the two (a command that writes a file truncates
+   it), so nothing that the opening saw fixes what a later lookup gets. An
+   entry that this process adds is kept in memory and is never read back.
+
+   So a table that opened with no entry gives only what this process's
+   prover computed, and a table that never opens reads no file. Replay can
+   rely on a table only in these cases. The fence check below trips the
+   process-wide fence (reason [micromega_cache], detail the file) in the
+   two other cases:
+   - a table loaded entries from its file when it opened;
+   - no table has opened a cache path, and that path holds a file (not a
+     directory). A replayed proof does not open the table where stock
+     opens it, so a file there could give stock an entry that the
+     registration never read.
+   The check runs at each recorded proof's start and end and at each
+   replay decision (Proof_recorder.register_fence_check). The grading
+   engine makes each cache path a directory, so the table cannot open, the
+   check finds no file, and no proof loses its replay. *)
+type table =
+  | Unopened
+  | Fresh (* opened with no entry, or its file could not be opened *)
+  | Loaded (* opened with entries of its file *)
+
+(* Each memo function's file and the state of its table. *)
+let caches : (string * (unit -> table)) list ref = ref []
+
+let register_cache file table = caches := (file, table) :: !caches
+
+(* Whether [path] holds something other than a directory. A stat that fails
+   for another reason than an absent path counts as a file. *)
+let holds_file path =
+  match Unix.stat path with
+  | { Unix.st_kind = Unix.S_DIR; _ } -> false
+  | _ -> true
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false
+  | exception Unix.Unix_error _ -> true
+
+let () =
+  Proof_recorder.register_fence_check (fun () ->
+      List.iter (fun (file, table) ->
+          let trip = match table () with
+            | Loaded -> true
+            | Fresh -> false
+            | Unopened -> holds_file file
+          in
+          if trip then Proof_recorder.trip_fence ~reason:"micromega_cache" ~detail:file)
+        !caches)
+
 module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
   open Unix
 
@@ -46,6 +98,7 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
     val empty : 'a t
     val add : int -> 'a -> 'a t -> 'a t
     val find : int -> 'a t -> 'a list
+    val is_empty : 'a t -> bool
   end =
   struct
     type 'a t = 'a list Int.Map.t
@@ -55,12 +108,14 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
       with Not_found -> Int.Map.add h [pos] tab
 
     let find h tab = Int.Map.find h tab
+    let is_empty = Int.Map.is_empty
   end
   (* A mapping key hash -> file position *)
 
   type 'a data = { pos : int option ; mutable obj : (Key.t * 'a) option }
 
-  type 'a t = {outch : out_channel; mutable htbl : 'a data Table.t; file : string }
+  type 'a t = {outch : out_channel; mutable htbl : 'a data Table.t; file : string;
+               loaded : bool (* BET-84: the table loaded entries of [file] *) }
 
   let skip_blob ch =
     let hd = Bytes.create Marshal.header_size in
@@ -147,7 +202,8 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
         ) in
       let () = close_in_noerr inch in
       let outch = out_channel_of_descr (openfile f [O_WRONLY; O_APPEND; O_CREAT] 0o666) in
-      { outch ; file = f; htbl = Option.default Table.empty htbl }
+      let htbl = Option.default Table.empty htbl in
+      { outch ; file = f; htbl; loaded = not (Table.is_empty htbl) }
     with InvalidTableFormat ->
       let () = close_in_noerr inch in
       let flags = [O_WRONLY; O_TRUNC; O_APPEND; O_CREAT] in
@@ -155,7 +211,7 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
       let outch = out_channel_of_descr out in
       output_int32 outch ObjFile.magic_number;
       output_int32 outch pcache_version;
-      {outch; htbl=Table.empty; file = f}
+      {outch; htbl=Table.empty; file = f; loaded = false}
 
   let add t k e =
     let {outch} = t in
@@ -207,8 +263,19 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
       | Some (Some v) -> v
       | None | Some None -> raise Not_found
 
-  let memo cache f =
+  (* The table [cache] names, opened at the first lookup. The fence check
+     reads its state (BET-84 census row 23). *)
+  let lazy_table cache =
     let tbl = lazy (try Some (open_in cache) with e when CErrors.noncritical e -> None) in
+    register_cache cache (fun () ->
+        if not (Lazy.is_val tbl) then Unopened
+        else match Lazy.force tbl with
+          | Some { loaded = true; _ } -> Loaded
+          | Some { loaded = false; _ } | None -> Fresh);
+    tbl
+
+  let memo cache f =
+    let tbl = lazy_table cache in
     fun x ->
       match Lazy.force tbl with
       | None -> f x
@@ -219,7 +286,7 @@ module PHashtable (Key : HashedType) : PHashtable with type key = Key.t = struct
           add tbl x res; res )
 
   let memo_cond cache cond f =
-    let tbl = lazy (try Some (open_in cache) with e when CErrors.noncritical e -> None) in
+    let tbl = lazy_table cache in
     fun x ->
       match Lazy.force tbl with
       | None -> f x

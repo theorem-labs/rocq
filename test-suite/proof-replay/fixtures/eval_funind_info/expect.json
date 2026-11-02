@@ -1,0 +1,16 @@
+{
+  "doc": "one function loses its funind table entry: the proof that runs functional induction on it misses on the funind_info read, the proof on the other function replays",
+  "files": ["Lib.v", "B.v"],
+  "records": {"B.v": {"PR.B.same": {"eligible": true}, "PR.B.changed": {"eligible": true}}},
+  "summaries": {
+    "B.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.B.same", "hit"], ["PR.B.changed", "read", "funind_info", "changed"]]
+    }
+  }
+}

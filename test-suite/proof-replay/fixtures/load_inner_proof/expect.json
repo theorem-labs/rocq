@@ -1,0 +1,21 @@
+{
+  "doc": "a proof of a Load-ed file is ineligible and is never a replay candidate, also when its record is eligible",
+  "files": ["A.v", "B.v"],
+  "records": {
+    "A.v": {"PR.A.inner": {"ineligible": ["load"], "stores_no_term": true}},
+    "B.v": {"PR.B.inner": {"eligible": true}}
+  },
+  "summaries": {
+    "A.v": {
+      "proofs": 1,
+      "hits": 0,
+      "misses": {"key": 0, "read": 0, "ineligible": 1, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.inner", "ineligible", "load", "inside_load"]]
+    }
+  },
+  "compile_fails": ["B.v"],
+  "compare_stderr": ["B.v"]
+}

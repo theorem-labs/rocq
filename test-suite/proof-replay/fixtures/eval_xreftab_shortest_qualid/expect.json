@@ -1,0 +1,16 @@
+{
+  "doc": "proofs print a constant, and the printer asks the nametab for its shortest name: the one whose shortest name the edited tree changes (an imported module defines another c) misses on the xreftab/shortest_qualid read, and the one whose shortest name does not change replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.same": {"eligible": true}, "PR.A.changed": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.same", "hit"], ["PR.A.changed", "read", "xreftab/shortest_qualid", "changed"]]
+    }
+  }
+}

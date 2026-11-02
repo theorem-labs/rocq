@@ -1,0 +1,17 @@
+{
+  "doc": "Requires after the first proof that name only loaded libraries (one loaded by the file, one by the prelude) load nothing: they are not late, and the proof before them replays",
+  "files": ["Lib.v", "A.v"],
+  "records": {"A.v": {"PR.A.p": {"eligible": true}, "PR.A.q": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 2,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "refused_detail": "Require at line 8; no proof run; then 2 Requires, each late if it loads a library (byte 369 after an export Register)",
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.p", "hit"], ["PR.A.q", "hit"]]
+    }
+  }
+}

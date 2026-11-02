@@ -1,0 +1,6 @@
+{
+  "doc": "a Hint Extern's tactic changes in the same file: the proof that searched it must miss, and fail as stock fails",
+  "note": "review P3Bugs P0. The hint database digest held only each hint's uid, minted per command, not what the hint does; replay reused a proof stock cannot finish (stock rc 1, replay rc 0 with a .vo).",
+  "files": ["A.v"],
+  "compile_fails": ["A.v"]
+}

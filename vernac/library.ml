@@ -154,8 +154,7 @@ let library_full_filename dir =
   with Not_found -> "<unavailable filename>"
 
 let library_is_loaded dir =
-  try let _ = find_library dir in true
-  with Not_found -> false
+  Option.has_some (find_library dir)
 
   (* If a library is loaded several time, then the first occurrence must
      be performed first, thus the libraries_loaded_list ... *)
@@ -334,6 +333,39 @@ let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 let vm_seg : seg_vm ObjFile.id = Vmlibrary.vm_segment
+
+(* BET-84: a proof record that refers to the opaque proofs of the
+   registration's own object, instead of holding a copy of each term. The
+   record carries the SHA-256 of that segment's bytes; the object is read
+   once into memory, so the bytes hashed are the bytes unmarshalled, and
+   [Marshal] never reads bytes the record did not bind. *)
+let read_whole_file file =
+  let ic = open_in_bin file in
+  Fun.protect ~finally:(fun () -> close_in_noerr ic)
+    (fun () -> really_input_string ic (in_channel_length ic))
+
+let opaques_of_bytes data =
+  match ObjFile.segment_of_string data ~segment:opaques_seg with
+  | None -> None
+  | Some (pos, len) -> Some (pos, String.sub data pos len)
+
+let opaques_segment_sha256 file =
+  match read_whole_file file with
+  | exception (Sys_error _ | End_of_file) -> None
+  | data -> Option.map (fun (_, seg) -> Proof_sha256.digest_hex seg) (opaques_of_bytes data)
+
+let registered_opaques ~file ~sha256 =
+  match read_whole_file file with
+  | exception (Sys_error _ | End_of_file) -> Error "missing"
+  | data ->
+    match opaques_of_bytes data with
+    | None -> Error "changed"
+    | Some (pos, seg) ->
+      if not (String.equal (Proof_sha256.digest_hex seg) sha256) then Error "changed"
+      else
+        match (Marshal.from_string data pos : seg_proofs) with
+        | t -> Ok t
+        | exception _ -> Error "changed"
 
 module Intern = struct
   module Provenance = struct

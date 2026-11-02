@@ -1,0 +1,6 @@
+{
+  "doc": "a warm VM cache holds an unchanged constant that calls a changed one of a required library: stock rejects the proof that runs it, and replay must reject it too",
+  "files": ["A.v", "B.v"],
+  "compile_fails": ["B.v"],
+  "coqchk": false
+}

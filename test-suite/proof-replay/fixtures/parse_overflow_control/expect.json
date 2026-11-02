@@ -1,0 +1,10 @@
+{
+  "doc": "the control of parse_overflow_after_failing_tactic: the same nested term with no failing tactic before it overflows the stack in both compiles",
+  "files": ["A.v"],
+  "stack_kb": 1024,
+  "records": {"A.v": {"PR.A.control": {"eligible": true}}},
+  "compile_fails": ["A.v"],
+  "compare_stderr": ["A.v"],
+  "stderr_contains": {"A.v": ["Stack overflow"]},
+  "coqchk": false
+}

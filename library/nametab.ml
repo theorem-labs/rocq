@@ -595,11 +595,18 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
   let ch_of_path = SI.summary_name ^ "/of_path"
   let ch_exists = SI.summary_name ^ "/exists"
 
+  (* BET-84: ONE value for each of this nametab's channels. The record sites
+     below and the replay evaluators at the end of this module both call it,
+     so a lookup's value is never computed two ways
+     (dev/tools/census/replay_channels.py). A lookup that finds nothing
+     records [None], which is a value the record can hold. *)
+  let recorded_lookup lookup =
+    match lookup () with
+    | v -> Some (Proof_recorder.digest ~what:SI.summary_name v)
+    | exception Not_found -> None
+
   let record ~channel ~id key value =
-    Proof_recorder.read_by ~row:"6" ~channel ~id ~key
-      ~value:(fun () -> match value () with
-          | v -> Some (Proof_recorder.digest ~what:SI.summary_name v)
-          | exception Not_found -> None)
+    Proof_recorder.read_by ~row:"6" ~channel ~id ~key ~value:(fun () -> recorded_lookup value)
 
   (* The qualid's location is not part of its identity: one name read twice
      in a proof is one read. *)
@@ -658,6 +665,45 @@ module MakeImperative (Tab:Functional_NAMETAB) (SI:StateInfo) ()
     if Proof_recorder.active () then
       record ~channel:ch_exists ~id:v (fun () -> Libnames.string_of_path v) (fun () -> res);
     res
+
+  (* BET-84 P3: the same lookups, evaluated again from the key the record
+     holds. A qualid and a path print and parse back to themselves, so each
+     key names the lookup the proof made. A key that does not parse back
+     answers [Unknown], and the proof runs its tactics. *)
+  let () =
+    let value f =
+      (* The same function the record sites call, so the two sides cannot
+         drift apart. A value this nametab cannot digest answers Unknown,
+         and the proof runs its tactics. *)
+      match recorded_lookup f with
+      | v -> Proof_replay.Value v
+      | exception Proof_record.Unhashable _ -> Proof_replay.Unknown
+    in
+    let qualid key =
+      let qid = Libnames.qualid_of_string key in
+      if String.equal (Libnames.string_of_qualid qid) key then Some qid else None
+    in
+    let path key =
+      let p = Libnames.path_of_string key in
+      if String.equal (Libnames.string_of_path p) key then Some p else None
+    in
+    let on parse f key = match parse key with
+      | Some k -> value (fun () -> f k)
+      | None -> Proof_replay.Unknown
+      | exception _ -> Proof_replay.Unknown
+    in
+    Proof_replay.register_evaluator ch_locate (on qualid (fun qid -> Tab.locate qid !the_tab));
+    Proof_replay.register_evaluator ch_locate_all (on qualid (fun qid -> Tab.locate_all qid !the_tab));
+    Proof_replay.register_evaluator ch_of_path (on path (fun p -> Tab.of_path p !the_tab));
+    Proof_replay.register_evaluator ch_exists (on path (fun p -> Tab.exists p !the_tab));
+    Proof_replay.register_evaluator ch_locate_upto (fun key ->
+        match String.rindex_opt key '#' with
+        | None -> Proof_replay.Unknown
+        | Some i ->
+          (match int_of_string_opt (String.sub key (i + 1) (String.length key - i - 1)) with
+           | None -> Proof_replay.Unknown
+           | Some limit ->
+             on qualid (fun qid -> Tab.locate_upto ~limit qid !the_tab) (String.sub key 0 i)))
 end
 
 module type WarnedTab = sig
@@ -782,7 +828,109 @@ module XRefWarn = struct
   let summary_name = "xrefwarntab"
 end
 
-module XRefs = MakeWarned(XRefNoWarn)(XRefWarn)()
+(* BET-84 census row 6, the reverse lookups of the global nametab: from a
+   reference or an abbreviation to its absolute name ([to_path]) and to its
+   shortest name ([shortest_qualid_gen], [shortest_qualid], [pr]). A tactic
+   turns both into data. Ltac2 [Env.path] returns the absolute name
+   (plugins/ltac2/tac2core.ml), [Namegen] names hypotheses after the
+   basename ([hdchar], [head_name]), and it renames binders away from the
+   short names of the globals in a term ([visible_ids]). A definition that
+   moves into a section, or an import that shadows a name, changes these
+   answers and keeps the kernel name, which is all that the forward lookups
+   and the kernel reads hold (cross-family review of 079bc4cb71, finding
+   CF2). So each answer is a read, keyed by the reference, with the value
+   the caller gets, or absent. A variable's name is its path, and no table
+   is read for it. *)
+module XRefs = struct
+  include MakeWarned(XRefNoWarn)(XRefWarn)()
+
+  let ch_to_path = XRefV.summary_name ^ "/to_path"
+  let ch_shortest_qualid = XRefV.summary_name ^ "/shortest_qualid"
+
+  (* The reference as a key that the replay reads back without the nametab:
+     [G] and [Libnames.globref_key], or [A] and the abbreviation's
+     [Libnames.kername_key]. *)
+  let xref_key = function
+    | TrueGlobal r -> "G" ^ Libnames.globref_key r
+    | Abbrev kn -> "A" ^ Libnames.kername_key kn
+
+  let xref_of_key key =
+    let n = String.length key in
+    if n = 0 then None
+    else
+      let rest = String.sub key 1 (n - 1) in
+      match key.[0] with
+      | 'G' -> Option.map (fun r -> TrueGlobal r) (Libnames.globref_of_key rest)
+      | 'A' -> Option.map (fun kn -> Abbrev kn) (Libnames.kername_of_key rest)
+      | _ -> None
+
+  (* The shortest name depends on the caller's names to avoid only through
+     one test, of the basename ([hidden]), so the key holds that answer
+     and the [force_short] flag. *)
+  let shortest_qualid_key ~force_short ~hidden v =
+    (if force_short then "F" else "f") ^ (if hidden then "H" else "h") ^ xref_key v
+
+  let shortest_qualid_of_key key =
+    let n = String.length key in
+    let flag c ~on ~off =
+      if Char.equal c on then Some true else if Char.equal c off then Some false else None
+    in
+    if n < 2 then None
+    else match flag key.[0] ~on:'F' ~off:'f', flag key.[1] ~on:'H' ~off:'h' with
+      | Some force_short, Some hidden ->
+        Option.map (fun v -> (force_short, hidden, v)) (xref_of_key (String.sub key 2 (n - 2)))
+      | _, _ -> None
+
+  (* ONE value for each channel: the record sites and the replay evaluators
+     below both call it (dev/tools/census/replay_channels.py). *)
+  let recorded_path v =
+    match XRefNoWarn.to_path v with
+    | sp -> Some (Proof_recorder.digest ~what:ch_to_path (repr_path sp))
+    | exception Not_found -> None
+
+  let recorded_shortest_qualid ~force_short ~hidden v =
+    match XRefNoWarn.shortest_qualid_gen ~force_short (fun _ -> hidden) v with
+    | qid -> Some (Proof_recorder.digest ~what:ch_shortest_qualid (repr_qualid qid))
+    | exception Not_found -> None
+
+  let reads_table v = Option.is_empty (XRefV.is_var v)
+
+  let to_path v =
+    if Proof_recorder.active () && reads_table v then
+      Proof_recorder.read_by ~row:"6" ~channel:ch_to_path ~id:v
+        ~key:(fun () -> xref_key v) ~value:(fun () -> recorded_path v);
+    XRefNoWarn.to_path v
+
+  let shortest_qualid_gen ?loc ?(force_short=false) avoid v =
+    if Proof_recorder.active () && reads_table v then begin
+      let hidden =
+        match XRefNoWarn.to_path v with
+        | sp -> avoid (basename sp)
+        | exception Not_found -> false
+      in
+      Proof_recorder.read_by ~row:"6" ~channel:ch_shortest_qualid ~id:(v, force_short, hidden)
+        ~key:(fun () -> shortest_qualid_key ~force_short ~hidden v)
+        ~value:(fun () -> recorded_shortest_qualid ~force_short ~hidden v)
+    end;
+    XRefNoWarn.shortest_qualid_gen ?loc ~force_short avoid v
+
+  let shortest_qualid ?loc ?force_short avoid v =
+    shortest_qualid_gen ?loc ?force_short (fun id -> Id.Set.mem id avoid) v
+
+  let pr v = pr_qualid (shortest_qualid Id.Set.empty v)
+
+  (* A key that does not read back is a miss. *)
+  let () =
+    Proof_replay.register_evaluator ch_to_path (fun key ->
+        match xref_of_key key with
+        | None -> Proof_replay.Unknown
+        | Some v -> Proof_replay.Value (recorded_path v));
+    Proof_replay.register_evaluator ch_shortest_qualid (fun key ->
+        match shortest_qualid_of_key key with
+        | None -> Proof_replay.Unknown
+        | Some (force_short, hidden, v) ->
+          Proof_replay.Value (recorded_shortest_qualid ~force_short ~hidden v))
+end
 
 module UnivsV = struct
   include Univ.UGlobal

@@ -1,6 +1,7 @@
 (* misc/proof-record-async.sh compiles this file with -proof-record twice: once
    as an ordinary compile, once with -async-proofs on. Two opaque proofs, so
-   the driver can require the SAME entries in both records. *)
+   the driver can require the SAME entries in both records.
+   misc/proof-replay-async.sh registers this file and replays it. *)
 
 Lemma first : 10 * 10 = 100.
 Proof. reflexivity. Qed.

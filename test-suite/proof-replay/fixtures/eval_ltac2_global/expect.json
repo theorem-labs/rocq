@@ -1,0 +1,19 @@
+{
+  "doc": "the body of an Ltac2 definition a proof runs changes: that proof misses on the ltac2_global read, and the proof that runs an unchanged definition replays",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.same": {"eligible": true}, "PR.A.changed": {"eligible": true}}},
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 1,
+      "misses": {"key": 0, "read": 1, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.same", "hit"], ["PR.A.changed", "read", "ltac2_global", "changed"]]
+    }
+  },
+  "vo_exempt": {
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of the identifier string \"Logic\" in the library segment (vodiff on 2026-10-31, built from 481ab9697f with 9.2/library-is-loaded: 0 value differences and 2 sharing differences, opaques and vmlibrary equal). The sharing depends on the Corelib .vo files and the load path: the same rocq writes equal bytes with the Corelib of the lane switch (466ade62 base), and with Stdlib installed beside a Corelib built from this tree (the CI job); with that Corelib and no Stdlib it does not. GRADE retired byte identity as a correctness gate on 2026-10-26; the contract is value equality."
+  }
+}

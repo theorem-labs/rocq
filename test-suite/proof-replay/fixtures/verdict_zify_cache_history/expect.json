@@ -1,0 +1,6 @@
+{
+  "doc": "a proof reads zify's spec-table copy that an earlier proof filled from a changed table: the stock script fails, so the replay compile must fail too",
+  "files": ["A.v"],
+  "compile_fails": ["A.v"],
+  "coqchk": false
+}

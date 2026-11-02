@@ -1,0 +1,23 @@
+{
+  "doc": "the four micromega cache paths are directories in both trees, as the grading engine makes them: the nia and lia proofs replay",
+  "files": ["A.v"],
+  "records": {"A.v": {"PR.A.by_nia": {"eligible": true}, "PR.A.by_lia": {"eligible": true}}},
+  "tree_dirs": {
+    "original": [".lia.cache", ".nia.cache", ".nra.cache", ".csdp.cache"],
+    "edited": [".lia.cache", ".nia.cache", ".nra.cache", ".csdp.cache"]
+  },
+  "summaries": {
+    "A.v": {
+      "proofs": 2,
+      "hits": 2,
+      "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+      "refused": null,
+      "killed": false,
+      "fence": null,
+      "outcomes": [["PR.A.by_nia", "hit"], ["PR.A.by_lia", "hit"]]
+    }
+  },
+  "vo_exempt": {
+    "A.v": "known reuse-rate item, not a correctness failure: equal segment VALUES, different OCaml Marshal sharing of the identifier string \"BinInt\" in the library segment, as in vm_lia_hit (vodiff on 2026-10-31: 0 value differences and 2 sharing differences, opaques and vmlibrary equal). GRADE retired byte identity as a correctness gate on 2026-10-26; the contract is value equality."
+  }
+}

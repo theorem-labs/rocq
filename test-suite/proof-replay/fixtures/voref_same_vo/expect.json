@@ -1,0 +1,12 @@
+{
+  "doc": "the proofs replay to the same .vo bytes from a record of references into the registered .vo as from a record of inline terms",
+  "files": ["A.v"],
+  "register_flags": ["-proof-record-vo-ref"],
+  "alt_register_flags": [],
+  "record_trailers": {"A.v": {"vo_opaques": true}},
+  "summaries": {
+    "A.v": {"proofs": 5, "hits": 5,
+              "misses": {"key": 0, "read": 0, "ineligible": 0, "missing_record": 0},
+              "refused": null, "killed": false}
+  }
+}
