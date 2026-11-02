@@ -8,8 +8,12 @@
 #
 # rocqchk reads the -norec libraries from the last named to the first, so
 # the library named last is read, and checked, first.
+# ROCQCHK_WORKER_WINDOW=0 deals a library's checks as soon as it is checked,
+# so that workers start while the next libraries are being read, however
+# fast this machine reads them (misc/rocqchk_reorder.sh sees one start).
 set -eu
 export PATH="$BIN:$PATH"
+export ROCQCHK_WORKER_WINDOW=0
 
 d=$(mktemp -d)
 mkdir "$d/src" "$d/good" "$d/bad"
@@ -38,53 +42,8 @@ rocq c -native-compiler no -R "$d/bad" "" "$d/bad/Bad.v"
 # segment of the bad one, so its proof of l1 does not have the type it
 # claims (see rocqchk_parallel.sh). Magic.vo: a wrong magic number, which
 # rocqchk refuses when it reads the file.
-python3 - "$d" <<'PY'
-import hashlib, struct, sys
-d = sys.argv[1]
-MAGIC = 0x436F7121
-def parse(p):
-    b = open(p, "rb").read()
-    magic, ver = struct.unpack_from(">II", b, 0)
-    assert magic == MAGIC, "bad magic"
-    (sp,) = struct.unpack_from(">Q", b, 8)
-    off = sp
-    (n,) = struct.unpack_from(">I", b, off); off += 4
-    segs = {}
-    for _ in range(n):
-        (nl,) = struct.unpack_from(">I", b, off); off += 4
-        name = b[off:off+nl].decode(); off += nl
-        pos, ln = struct.unpack_from(">QQ", b, off); off += 16
-        h = b[off:off+16]; off += 16
-        data = b[pos:pos+ln]
-        assert hashlib.md5(data).digest() == h, name + ": bad segment MD5"
-        segs[name] = data
-    return ver, segs
-def write(p, ver, by):
-    out = bytearray()
-    out += struct.pack(">II", MAGIC, ver)
-    out += struct.pack(">Q", 0)
-    summ = []
-    for name in sorted(by):
-        data = by[name]; pos = len(out); out += data
-        h = hashlib.md5(data).digest(); out += h
-        summ.append((name, pos, len(data), h))
-    sp = len(out)
-    out += struct.pack(">I", len(summ))
-    for name, pos, ln, h in summ:
-        nb = name.encode()
-        out += struct.pack(">I", len(nb)); out += nb
-        out += struct.pack(">QQ", pos, ln); out += h
-    struct.pack_into(">Q", out, 8, sp)
-    open(p, "wb").write(out)
-vg, sg = parse(d + "/good/Bad.vo")
-vb, sb = parse(d + "/bad/Bad.vo")
-assert vg == vb and sg["opaques"] != sb["opaques"]
-spliced = dict(sg)
-spliced["opaques"] = sb["opaques"]
-write(d + "/src/Bad.vo", vg, spliced)
-with open(d + "/src/Magic.vo", "r+b") as f:
-    f.write(b"Bad!")
-PY
+python3 misc/vo_segments.py splice-opaques "$d/good/Bad.vo" "$d/bad/Bad.vo" "$d/src/Bad.vo"
+printf 'Bad!' | dd of="$d/src/Magic.vo" bs=1 count=4 conv=notrunc status=none
 
 # A library that every case reads and admits anyway.
 leaf=Corelib.Init.Notations

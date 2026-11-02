@@ -133,7 +133,13 @@ let set_budget t =
    whenever a worker slot is free, it is given [1/(2N)] of what remains,
    and at least one check, so that all workers end at about the same
    time. *)
-let window = ref 1.0
+(* Test only. ROCQCHK_WORKER_WINDOW=seconds replaces the one-second window,
+   so that a test whose libraries are read in less than a second still has
+   workers dealt while they are being read. *)
+let window = ref (
+    match Option.bind (Sys.getenv_opt "ROCQCHK_WORKER_WINDOW") float_of_string_opt with
+    | Some w when w >= 0. && Float.is_finite w -> w
+    | _ -> 1.0)
 
 (* Test only: the unit tests open each window themselves ([end_window]),
    so that what is dealt does not depend on how fast the test runs. *)
