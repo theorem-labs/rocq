@@ -225,10 +225,14 @@ ifeq ($(TIMED),)
 all: run
 	$(MAKE) report
 else
+# /bin/sh has no pipefail: keep the status of "make run" in a file so that
+# tee cannot hide a failure, and fail if that status cannot be read back.
 all:
-	$(MAKE) run | tee time-of-build.log
+	rm -f time-of-build-status.log
+	{ $(MAKE) run; echo $$? > time-of-build-status.log; } | tee time-of-build.log
 	python ../tools/make-one-time-file.py --real time-of-build.log
 	$(MAKE) report
+	status=`cat time-of-build-status.log` && test -n "$$status" && exit "$$status"
 endif
 endif
 
