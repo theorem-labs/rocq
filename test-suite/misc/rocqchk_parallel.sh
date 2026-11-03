@@ -15,11 +15,10 @@ d=$(mktemp -d)
 mkdir "$d/good" "$d/bad" "$d/late"
 
 # Many opaque proofs, so that there is work for several workers. The bad
-# library has its ill-typed proof first. The late one has it at l9: the queue
-# is dealt in a stride of 2 x N, so l9 is the second proof of the first
-# worker's first batch at -j 4 and its third at -j 2, and with
-# -worker-budget 0 that worker stops after l1. l9 is then checked only from
-# the proofs the worker gives back.
+# library has its ill-typed proof first. The late one has it at l9, behind
+# the task that reads the library's table of opaque proofs and l1 to l8, so
+# that with -worker-budget 0, where every worker stops after its first job,
+# l9 is checked only once checks before it have been given back.
 gen() {
   echo 'Inductive T : Prop := I.'
   echo 'Definition U := T.'
@@ -40,7 +39,7 @@ rocq c -native-compiler no -R "$d/bad" "" "$d/bad/Lib.v"
 rocq c -native-compiler no -R "$d/late" "" "$d/late/Lib.v"
 
 python3 - "$d" <<'PY'
-import os, sys, hashlib, struct
+import os, sys, struct
 d = sys.argv[1]
 MAGIC = 0x436F7121  # "Coq!"; all ints big-endian, layout per lib/objFile.ml
 def parse(p):
@@ -57,8 +56,12 @@ def parse(p):
         pos, ln = struct.unpack_from(">QQ", b, off); off += 16
         h = b[off:off+16]; off += 16
         data = b[pos:pos+ln]
-        assert hashlib.md5(data).digest() == h, name + ": bad segment MD5"
-        segs[name] = data
+        # A segment's digest is stored twice, in the table and after the
+        # data, and readers only compare the two copies. The library
+        # segment's is a label, not the MD5 of its bytes, so it is carried
+        # over as stored.
+        assert b[pos+ln:pos+ln+16] == h, name + ": digest copies differ"
+        segs[name] = (data, h)
     return ver, segs
 def write(p, ver, by):
     out = bytearray()
@@ -66,8 +69,7 @@ def write(p, ver, by):
     out += struct.pack(">Q", 0)              # summary position placeholder
     summ = []
     for name in sorted(by):                  # CString.Map.iter order
-        data = by[name]; pos = len(out); out += data
-        h = hashlib.md5(data).digest(); out += h
+        data, h = by[name]; pos = len(out); out += data; out += h
         summ.append((name, pos, len(data), h))
     sp = len(out)
     out += struct.pack(">I", len(summ))
@@ -88,15 +90,21 @@ for bad, out in (("bad", d + "/Lib.vo"), ("late", d + "/late-spliced/Lib.vo")):
     write(out, vg, spliced)
 PY
 
-# Expected output in misc/rocqchk_parallel.out. The error of the bad library
-# is found in the first opaque proof, which always goes to the first worker, so
-# the output is deterministic except for the worker's process id.
+# Expected output in misc/rocqchk_parallel.out: what rocqchk prints up to its
+# second error, and its exit code. The first error is the one of the proof,
+# the same at every -j, apart from the line naming the proof that workers
+# add. With workers, a second error follows from the main process: "Worker
+# process PID exited with code 129 while checking N opaque proofs (the first
+# is ..., the last ...)". It names the batch that the failing worker held, so it
+# depends on the batch sizes and, with -worker-budget 0, on the order in which
+# workers give checks back; it is not kept, as in rocqchk_release.sh (e).
 run() {
   echo "== $1"
   shift
   R=0
   rocqchk -silent "$@" > "$d/run.log" 2>&1 || R=$?
-  sed -e 's/Worker process [0-9]*/Worker process PID/' "$d/run.log"
+  awk '/^Fatal Error/ { n++ } n < 2' "$d/run.log" |
+    sed -e 's/Worker process [0-9]*/Worker process PID/'
   echo "exit code: $R"
 }
 # The late refusal is found by a worker, but which batch l9 is in once it has
@@ -117,8 +125,8 @@ run_late() {
   # verdict is the same.
   run "correct library, -j 4, -worker-budget 0" -j 4 -worker-budget 0 -R "$d/good" "" -norec Lib
   run "ill-typed proof, -j 4, -worker-budget 0" -j 4 -worker-budget 0 -R "$d" "" -norec Lib
-  # The refusing proof is in the first batch but is not its first proof: it is
-  # checked only after that batch's worker gives it back.
+  # The refusing proof is not the first job of its library: it is checked
+  # only after checks before it have been given back.
   run_late "ill-typed late proof, -j 4, -worker-budget 0" -j 4 -worker-budget 0 -R "$d/late-spliced" "" -norec Lib
   run_late "ill-typed late proof, -j 2, -worker-budget 0" -j 2 -worker-budget 0 -R "$d/late-spliced" "" -norec Lib
   # Profiling is sequential only.

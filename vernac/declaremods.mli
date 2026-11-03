@@ -40,7 +40,9 @@ type module_params_expr = (MBId.t list * module_expr) list
 
 type library_name = DirPath.t
 
-type library_objects
+type library_objects = Libobject.t list * Libobject.keep_objects * Libobject.escape_objects
+(** A library's substitutive objects, its [Keep] objects and its [Escape]
+    objects (see [Libobject.substitutivity]). *)
 
 module Synterp : sig
 

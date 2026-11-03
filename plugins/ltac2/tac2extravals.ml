@@ -86,7 +86,8 @@ let () =
     ml_print = print;
     ml_raw_print = raw_print;
   } in
-  define_ml_object Tac2quote.wit_constr obj
+  define_ml_object Tac2quote.wit_constr obj;
+  define_ml_strip Tac2quote.wit_constr GlobStrip.glob_constr
 
 let () =
   let intern = intern_constr_tacexpr in
@@ -103,7 +104,8 @@ let () =
     ml_print = print;
     ml_raw_print = raw_print;
   } in
-  define_ml_object Tac2quote.wit_open_constr obj
+  define_ml_object Tac2quote.wit_open_constr obj;
+  define_ml_strip Tac2quote.wit_open_constr GlobStrip.glob_constr
 
 let () =
   let interp _ id = return (Tac2ffi.of_ident id) in
@@ -115,7 +117,9 @@ let () =
     ml_print = print;
     ml_raw_print = print;
   } in
-  define_ml_object Tac2quote.wit_ident obj
+  define_ml_object Tac2quote.wit_ident obj;
+  (* an identifier *)
+  define_ml_strip Tac2quote.wit_ident (fun id -> id)
 
 let () =
   let intern {Genintern.ltacvars=lfun; genv=env; extra; intern_sign=_; strict_check} c =
@@ -152,7 +156,8 @@ let () =
     ml_print = print;
     ml_raw_print = raw_print;
   } in
-  define_ml_object Tac2quote.wit_pattern obj
+  define_ml_object Tac2quote.wit_pattern obj;
+  define_ml_strip Tac2quote.wit_pattern GlobStrip.uninstantiated_pattern
 
 let () =
   let intern ist c =
@@ -161,7 +166,7 @@ let () =
   in
   let interp env (ids,c) =
     let open Ltac_pretype in
-    let get_preterm id = match Id.Map.find_opt id env.env_ist with
+    let get_preterm id = match Tac2env.IdMap.find_opt id env.env_ist with
       | Some v -> to_preterm v
       | None -> assert false
     in
@@ -191,7 +196,8 @@ let () =
     ml_print = print;
     ml_raw_print = raw_print;
   } in
-  define_ml_object Tac2quote.wit_preterm obj
+  define_ml_object Tac2quote.wit_preterm obj;
+  define_ml_strip Tac2quote.wit_preterm (fun (ids, c) -> (ids, GlobStrip.glob_constr c))
 
 let () =
   let intern ist ref = match ref.CAst.v with
@@ -223,7 +229,9 @@ let () =
     ml_print = print;
     ml_raw_print = raw_print;
   } in
-  define_ml_object Tac2quote.wit_reference obj
+  define_ml_object Tac2quote.wit_reference obj;
+  (* a global reference *)
+  define_ml_strip Tac2quote.wit_reference (fun gr -> gr)
 
 let () =
   let intern ist qid =
@@ -253,7 +261,9 @@ let () =
     ml_print = print;
     ml_raw_print = raw_print;
   } in
-  define_ml_object Tac2quote.wit_module obj
+  define_ml_object Tac2quote.wit_module obj;
+  (* a module path *)
+  define_ml_strip Tac2quote.wit_module (fun mp -> mp)
 
 (** Ltac2 in terms *)
 
@@ -261,7 +271,7 @@ let () =
   let interp ?loc ~poly env sigma tycon (ids, tac) =
     (* Syntax prevents bound notation variables in constr quotations *)
     let ist = Tac2interp.get_env @@ GlobEnv.lfun env in
-    let () = assert (Id.Set.subset ids (Id.Map.domain ist.env_ist)) in
+    let () = assert (Id.Set.for_all (fun id -> Tac2env.IdMap.mem id ist.env_ist) ids) in
     let tac = Proofview.tclIGNORE (Tac2interp.interp ist tac) in
     let name = Id.of_string "ltac2" in
     let sigma, concl = match tycon with
@@ -289,7 +299,7 @@ let check_judge ?loc env sigma tycon j =
 let interp_constr_var_as_constr ?loc env sigma tycon id =
   let ist = Tac2interp.get_env @@ GlobEnv.lfun env in
   let env = GlobEnv.renamed_env env in
-  let c = Id.Map.find id ist.env_ist in
+  let c = Tac2env.IdMap.find id ist.env_ist in
   let c = Tac2ffi.to_constr c in
   let t = Retyping.get_type_of env sigma c in
   let j = { Environ.uj_val = c; uj_type = t } in
@@ -299,7 +309,7 @@ let interp_preterm_var_as_constr ?loc env sigma tycon id =
   let open Ltac_pretype in
   let ist = Tac2interp.get_env @@ GlobEnv.lfun env in
   let env = GlobEnv.renamed_env env in
-  let c = Id.Map.find id ist.env_ist in
+  let c = Tac2env.IdMap.find id ist.env_ist in
   let {closure; term} = Tac2ffi.to_preterm c in
   let vars = {
     ltac_constrs = closure.typed;
@@ -329,7 +339,7 @@ let () = CErrors.register_handler @@ function
 let interp_hyp_var_as_constr ?loc globenv sigma tycon id0 =
   let ist = Tac2interp.get_env @@ GlobEnv.lfun globenv in
   let env = GlobEnv.renamed_env globenv in
-  let v = Id.Map.find id0 ist.env_ist in
+  let v = Tac2env.IdMap.find id0 ist.env_ist in
   let id = Tac2ffi.to_ident v in
   let c = try GlobEnv.lookup_renamed globenv id
     with Not_found ->
@@ -368,7 +378,7 @@ let () =
       | PatternVar -> ()
     in
     let ist = Tac2interp.get_env ist.Ltac_pretype.ltac_genargs in
-    let c = Id.Map.find id ist.env_ist in
+    let c = Tac2env.IdMap.find id ist.env_ist in
     let c = Tac2ffi.to_pattern c in
     c
   in
@@ -448,11 +458,13 @@ let () =
 
 (** Built-in notation entries *)
 
-let add_syntax_class_full s f =
-  Tac2entries.register_syntax_class (Id.of_string s) f
+(* [strip] is the location stripper of the internalized argument of the
+   class (see [Tac2entries.register_syntax_class]). *)
+let add_syntax_class_full ~strip s f =
+  Tac2entries.register_syntax_class ~strip (Id.of_string s) f
 
-let add_syntax_class s intern f =
-  add_syntax_class_full s {
+let add_syntax_class ~strip s intern f =
+  add_syntax_class_full ~strip s {
     intern_synclass = (fun s -> Tac2entries.no_used_levels, intern s);
     interp_synclass = (fun s -> f s);
   }
@@ -464,7 +476,8 @@ let syntax_class_fail s args =
 let q_unit = CAst.make @@ CTacCst (AbsKn (Tuple 0))
 
 let add_expr_syntax_class name entry f =
-  add_syntax_class name begin function
+  (* the argument is unit *)
+  add_syntax_class ~strip:(fun () -> ()) name begin function
   | [] -> ()
   | arg -> syntax_class_fail name arg
   end begin fun () ->
@@ -476,7 +489,8 @@ let add_generic_syntax_class s entry arg =
 
 open CAst
 
-let () = add_syntax_class "keyword" begin function
+(* the argument is a string *)
+let () = add_syntax_class ~strip:(fun s -> s) "keyword" begin function
 | [SexprStr {loc;v=s}] -> s
 | arg -> syntax_class_fail "keyword" arg
   end begin fun s ->
@@ -484,7 +498,8 @@ let () = add_syntax_class "keyword" begin function
     Tac2entries.SyntaxRule (syntax_class, (fun _ -> q_unit))
   end
 
-let () = add_syntax_class "terminal" begin function
+(* the argument is a string *)
+let () = add_syntax_class ~strip:(fun s -> s) "terminal" begin function
 | [SexprStr {loc;v=s}] -> s
 | arg -> syntax_class_fail "terminal" arg
   end begin fun s ->
@@ -492,7 +507,8 @@ let () = add_syntax_class "terminal" begin function
     Tac2entries.SyntaxRule (syntax_class, (fun _ -> q_unit))
   end
 
-let () = add_syntax_class_full "list0" {
+let () = add_syntax_class_full "list0"
+    ~strip:(fun (subclass, sep) -> (Tac2entries.strip_syntax_class subclass, sep)) {
   intern_synclass = begin function
   | [tok] ->
     let used, subclass = Tac2entries.intern_syntax_class tok in
@@ -517,7 +533,8 @@ let () = add_syntax_class_full "list0" {
   end;
 }
 
-let () = add_syntax_class_full "list1" {
+let () = add_syntax_class_full "list1"
+    ~strip:(fun (subclass, sep) -> (Tac2entries.strip_syntax_class subclass, sep)) {
   intern_synclass = begin function
   | [tok] ->
     let used, subclass = Tac2entries.intern_syntax_class tok in
@@ -542,7 +559,7 @@ let () = add_syntax_class_full "list1" {
   end;
 }
 
-let () = add_syntax_class_full "opt" {
+let () = add_syntax_class_full "opt" ~strip:Tac2entries.strip_syntax_class {
   intern_synclass = begin function
   | [tok] ->
     let used, subclass = Tac2entries.intern_syntax_class tok in
@@ -562,7 +579,8 @@ let () = add_syntax_class_full "opt" {
   end;
 }
 
-let () = add_syntax_class "self" begin function
+(* the argument is unit *)
+let () = add_syntax_class ~strip:(fun () -> ()) "self" begin function
   | [] -> ()
   | arg -> syntax_class_fail "self" arg
   end begin fun () ->
@@ -571,7 +589,8 @@ let () = add_syntax_class "self" begin function
     Tac2entries.SyntaxRule (syntax_class, act)
   end
 
-let () = add_syntax_class "next" begin function
+(* the argument is unit *)
+let () = add_syntax_class ~strip:(fun () -> ()) "next" begin function
   | [] -> ()
   | arg -> syntax_class_fail "next" arg
   end begin fun () ->
@@ -580,7 +599,8 @@ let () = add_syntax_class "next" begin function
     Tac2entries.SyntaxRule (syntax_class, act)
   end
 
-let () = add_syntax_class "tactic" begin function
+(* the argument is an int (the level) *)
+let () = add_syntax_class ~strip:(fun lev -> lev) "tactic" begin function
   | [] ->
     (* Default to level 5 parsing *)
     5
@@ -594,7 +614,7 @@ let () = add_syntax_class "tactic" begin function
     Tac2entries.SyntaxRule (syntax_class, act)
   end
 
-let () = add_syntax_class_full "thunk" {
+let () = add_syntax_class_full "thunk" ~strip:Tac2entries.strip_syntax_class {
   intern_synclass = begin function
   | [tok] ->
     let used, subclass = Tac2entries.intern_syntax_class tok in
@@ -695,14 +715,17 @@ let constr_symb (lev,custom) =
 let add_constr_classes (name,lname) quote =
   let () =
     let s = name in
-    add_syntax_class s (constr_args s) begin function (symb,delimiters) ->
+    (* the argument is a level (string option), a custom entry (kernel name
+       option) and delimiters (identifiers): no location *)
+    add_syntax_class ~strip:(fun arg -> arg) s (constr_args s) begin function (symb,delimiters) ->
       let act e = quote ?delimiters:(Some delimiters) e in
       Tac2entries.SyntaxRule (constr_symb symb, act)
     end
   in
   let () =
     let s = lname in
-    add_syntax_class s (constr_delimiters s) begin function delimiters ->
+    (* the argument is a list of delimiters (identifiers) *)
+    add_syntax_class ~strip:(fun delimiters -> delimiters) s (constr_delimiters s) begin function delimiters ->
       let act e = quote ?delimiters:(Some delimiters) e in
       Tac2entries.SyntaxRule (Procq.Symbol.nterm Procq.Constr.lconstr, act)
     end
@@ -791,7 +814,10 @@ let intern_seq_rule toks =
     Tac2entries.no_used_levels
     toks
 
-let () = add_syntax_class_full "seq" {
+let strip_seq_rule toks =
+  List.map (fun (skip, rule) -> (skip, Tac2entries.strip_syntax_class rule)) toks
+
+let () = add_syntax_class_full "seq" ~strip:strip_seq_rule {
   intern_synclass = intern_seq_rule;
   interp_synclass = interp_seq_rule;
 }

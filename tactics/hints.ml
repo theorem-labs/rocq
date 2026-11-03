@@ -1124,7 +1124,10 @@ let inDB : db_obj -> obj =
                   cache_function = cache_db;
                   load_function = load_db;
                   subst_function = (fun (_,x) -> x);
-                  classify_function = classify_db; }
+                  classify_function = classify_db;
+                  (* Flags, a name and a transparency state: no source
+                     location. *)
+                  interface_key = Key_as_is; }
 
 let create_hint_db l n ts b =
   let hint = {db_local=l; db_name=n; db_use_dn=b; db_ts=ts} in
@@ -1336,6 +1339,25 @@ let discharge_autohint obj =
 
 let hint_cat = create_category "hints"
 
+(* Only the tactic of a Hint Extern can hold a source location. Every
+   other part of a hint object is a kernel term, a kernel pattern, a
+   global or evaluable reference, a kernel name, a hint path over global
+   references, a mode or a flag. *)
+let strip_autohint obj =
+  let strip_code (code : raw_hint hint_ast) = match code with
+    | Res_pf _ | ERes_pf _ | Give_exact _ | Res_pf_THEN_trivial_fail _
+    | Unfold_nth _ -> code
+    | Extern (pat, tac) -> Extern (pat, Gentactic.strip tac)
+  in
+  let strip_hint ((k, data) : hint_entry) : hint_entry =
+    (k, { data with code = { data.code with obj = strip_code data.code.obj } })
+  in
+  let hint_action = match obj.hint_action with
+    | AddTransparency _ | RemoveHints _ | AddCut _ | AddMode _ as a -> a
+    | AddHints hints -> AddHints (List.map strip_hint hints)
+  in
+  { obj with hint_action }
+
 let inAutoHint : hint_obj -> obj =
   declare_object
     {(default_object "AUTOHINT") with
@@ -1345,6 +1367,7 @@ let inAutoHint : hint_obj -> obj =
      subst_function = subst_autohint;
      classify_function = classify_autohint;
      discharge_function = discharge_autohint;
+     interface_key = Key_stripped strip_autohint;
     }
 
 let check_locality locality =

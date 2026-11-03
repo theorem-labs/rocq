@@ -316,12 +316,26 @@ let subst_prim_token_interpretation (subs,infos) =
 let classify_prim_token_interpretation infos =
     if infos.pt_local then Dispose else Substitute
 
+(* Only the [ty_name] of a number or string notation holds a source
+   location; the rest are scope names, global references, kernel terms and
+   flags. *)
+let strip_prim_token_infos infos =
+  let strip_obj : type a b. (a, b) prim_token_notation_obj -> (a, b) prim_token_notation_obj =
+    fun o -> { o with ty_name = LocStrip.cast (fun q -> q) o.ty_name } in
+  let pt_interp_info = match infos.pt_interp_info with
+    | Uid _ as i -> i
+    | NumberNotation o -> NumberNotation (strip_obj o)
+    | StringNotation o -> StringNotation (strip_obj o)
+  in
+  { infos with pt_interp_info }
+
 let inPrimTokenInterp : prim_token_infos -> obj =
   declare_object {(default_object "PRIM-TOKEN-INTERP") with
      open_function  = simple_open ~cat:notation_cat cache_prim_token_interpretation;
      cache_function = cache_prim_token_interpretation;
      subst_function = subst_prim_token_interpretation;
-     classify_function = classify_prim_token_interpretation}
+     classify_function = classify_prim_token_interpretation;
+     interface_key = Key_stripped strip_prim_token_infos }
 
 let enable_prim_token_interpretation infos =
   Lib.add_leaf (inPrimTokenInterp infos)
@@ -1118,7 +1132,10 @@ let inArgumentsScope : arguments_scope_obj -> obj =
       subst_function = subst_arguments_scope;
       classify_function = classify_arguments_scope;
       discharge_function = discharge_arguments_scope;
-      rebuild_function = rebuild_arguments_scope }
+      rebuild_function = rebuild_arguments_scope;
+      (* A request flag, a global reference, scope names and coercion
+         classes: no source location. *)
+      interface_key = Key_as_is }
 
 let is_local local ref = local || isVarRef ref && Global.is_in_section ref
 
