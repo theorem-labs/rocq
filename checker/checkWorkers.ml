@@ -426,6 +426,14 @@ let map_forked ?(heap_budget = max_int) ?(item_timeout = infinity) n f k =
         match Unix.pipe ~cloexec:true () with
         | exception Unix.Unix_error _ -> close_report items_in; close_report items; None
         | answers, answers_out ->
+          (* Everything that can fail is done before the fork, so a failure
+             leaves no process behind: only this process's read end of the
+             answers is made non-blocking, and the child closes its copy. *)
+          match Unix.set_nonblock answers; Bytes.create item_size with
+          | exception e when CErrors.noncritical e ->
+            List.iter close_report [items_in; items; answers; answers_out];
+            None
+          | frame ->
           match Unix.fork () with
           | 0 ->
             (* A process that kept the item pipe of another one open would
@@ -437,12 +445,21 @@ let map_forked ?(heap_budget = max_int) ?(item_timeout = infinity) n f k =
           | fpid ->
             close_report items_in;
             close_report answers_out;
-            Unix.set_nonblock answers;
-            let p = { fpid; items; items_open = true; answers;
-                      frame = Bytes.create item_size; frame_got = 0; in_answer = false;
-                      current = None; due = infinity; got = []; failed = false } in
-            procs := p :: !procs;
-            Some p
+            (* Should anything still raise before the child is in [procs],
+               where cleanup finds it, that child is killed and waited for
+               here, so no process outlives the call untracked. *)
+            (try
+               let p = { fpid; items; items_open = true; answers;
+                         frame; frame_got = 0; in_answer = false;
+                         current = None; due = infinity; got = []; failed = false } in
+               procs := p :: !procs;
+               Some p
+             with e ->
+               (try Unix.kill fpid Sys.sigkill with Unix.Unix_error _ -> ());
+               (try ignore (waitpid_non_intr [] fpid) with Unix.Unix_error _ -> ());
+               close_report items;
+               close_report answers;
+               raise e)
           | exception Unix.Unix_error _ ->
             List.iter close_report [items_in; items; answers; answers_out];
             None
