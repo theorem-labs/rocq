@@ -113,6 +113,10 @@ type state = {
   access : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm;
   mutable fields : field_index ModPath.Map.t;
   (* the indexed fields of the implementation of each module looked up so far *)
+  env_constant_canonical : string Cmap_env.t;
+  env_mind_canonical : string Mindmap_env.t;
+  (* the printed canonical name of each constant and inductive of the final
+     environment, from the key it is stored under *)
   mutable public_nodes : node GlobRef.Map_env.t;
   mutable implementation_nodes : node GlobRef.Map_env.t;
   (* each object reached so far, keyed by its constant or by the first
@@ -463,8 +467,14 @@ let name_of = function
   | GlobRef.VarRef id -> Id.to_string id
 
 (* The kernel name of the object the walk reached, whatever path it was reached
-   by: computed here from the constant or inductive itself, never read from any
-   other text. Two paths to one constant give one canonical name.
+   by. A term names a constant by a pair of kernel names, user and canonical,
+   and the environment is keyed by the user half alone, so nothing checks that
+   a term's canonical half is the one its constant is stored under: a library
+   could name [Evil.ax] with the canonical half [Allowed.ax]. So the canonical
+   printed for an object the final environment holds is the canonical half of
+   the key it is stored under there ([env_constant_canonical]); only an object
+   that only an implementation holds is printed by the term's own pair. Two
+   paths to one constant give one canonical name.
 
    It is printed so that two kernel names never print alike: the root of the
    module path, then [:], then the modules under it and the label, separated
@@ -483,15 +493,20 @@ let canonical_kername kn =
   let r, mods = root [] mp in
   r ^ ":" ^ String.concat "." (mods @ [Label.to_string l])
 
-let canonical_of = function
-  | GlobRef.ConstRef kn -> canonical_kername (Constant.canonical kn)
+let canonical_of st = function
+  | GlobRef.ConstRef kn ->
+    (match Cmap_env.find_opt kn st.env_constant_canonical with
+     | Some c -> c
+     | None -> canonical_kername (Constant.canonical kn))
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-    canonical_kername (MutInd.canonical mind)
+    (match Mindmap_env.find_opt mind st.env_mind_canonical with
+     | Some c -> c
+     | None -> canonical_kername (MutInd.canonical mind))
   | GlobRef.VarRef _ -> "-"
 
 (* An [axiom] line's two names: the path the term reached the object by, then
    its canonical kernel name. *)
-let axiom_entry obj = name_of obj ^ " " ^ canonical_of obj
+let axiom_entry st obj = name_of obj ^ " " ^ canonical_of st obj
 
 module FlagSet = Stdlib.Set.Make (struct
     type t = string * string
@@ -520,9 +535,9 @@ let sets_size c =
   CString.Set.cardinal c.axioms + CString.Set.cardinal c.resolved_fields + FlagSet.cardinal c.flag_set
 
 (* What a node itself adds to its closure. *)
-let node_sets n obj = {
-  axioms = if n.axiom then CString.Set.singleton (axiom_entry obj) else CString.Set.empty;
-  resolved_fields = if n.resolved then CString.Set.singleton (axiom_entry obj) else CString.Set.empty;
+let node_sets st n obj = {
+  axioms = if n.axiom then CString.Set.singleton (axiom_entry st obj) else CString.Set.empty;
+  resolved_fields = if n.resolved then CString.Set.singleton (axiom_entry st obj) else CString.Set.empty;
   flag_set = List.fold_left (fun s f -> FlagSet.add f s) FlagSet.empty n.flags;
 }
 
@@ -573,7 +588,7 @@ let closure_per_root st root =
         let n = node st view obj in
         incr walk_visits;
         if n.axiom || n.resolved || not (List.is_empty n.flags) then check_printed_name obj;
-        let acc = union_sets (node_sets n obj) acc in
+        let acc = union_sets (node_sets st n obj) acc in
         let public_seen, implementation_seen = match view with
           | Public -> GlobRef.Set_env.add obj public_seen, implementation_seen
           | Implementation -> public_seen, GlobRef.Set_env.add obj implementation_seen
@@ -704,7 +719,7 @@ let shared_closure st m root =
               match memo_find m rview robj with
               | Some c -> union_sets acc c
               | None -> raise Not_shareable)
-          (node_sets n obj) n.refs
+          (node_sets st n obj) n.refs
       in
       m.budget <- m.budget - sets_size acc;
       if m.budget < 0 then raise Not_shareable;
@@ -914,6 +929,12 @@ let print env access requests =
   in
   let st = {
     env; access; fields = ModPath.Map.empty;
+    env_constant_canonical =
+      Environ.fold_constants (fun c _ m ->
+          Cmap_env.add c (canonical_kername (Constant.canonical c)) m) env Cmap_env.empty;
+    env_mind_canonical =
+      Environ.fold_inductives (fun mind _ m ->
+          Mindmap_env.add mind (canonical_kername (MutInd.canonical mind)) m) env Mindmap_env.empty;
     public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty; gen = 0;
     keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
   } in
