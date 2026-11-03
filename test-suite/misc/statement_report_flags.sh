@@ -20,7 +20,7 @@ report () {
   grep -q '^flag pos assumed-positive StmtNeg.Flags.Bad$' "$d/out"
   grep -q '^flag uip uip StmtNeg.Flags.UIP.seq$' "$d/out"
   grep -q '^flag hidden_flag unsafe-fixpoint StmtNeg.Flags.HG.loop$' "$d/out"
-  grep -q '^axiom opaque_hidden StmtNeg.Flags.oax StmtNeg.Flags.oax$' "$d/out"
+  grep -q '^axiom opaque_hidden StmtNeg.Flags.oax StmtNeg.Flags:oax$' "$d/out"
   awk '
     $1 == "statement" { if (seen) { if (a != ac || f != fc) exit 1 }; seen = 1; a = f = 0; ac = $6; fc = $7 }
     $1 == "axiom" { ++a }

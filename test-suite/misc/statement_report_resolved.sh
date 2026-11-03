@@ -22,9 +22,9 @@ $coqc -Q "$d" StmtRsv "$d/Rsv.v"
 printf 'through StmtRsv.Rsv.through -\nuntouched StmtRsv.Rsv.untouched -\n' > "$d/requests"
 "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtRsv StmtRsv.Rsv > "$d/out" 2>&1
 sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
-grep -q '^resolved through StmtRsv.Rsv.M.n StmtRsv.Rsv.M.n$' "$d/out"
+grep -q '^resolved through StmtRsv.Rsv.M.n StmtRsv.Rsv:M.n$' "$d/out"
 # The implementation's axiom is its own axiom line.
-grep -q '^axiom through [^ ]* StmtRsv.Rsv.N.ax$' "$d/out"
+grep -q '^axiom through [^ ]* StmtRsv.Rsv:N.ax$' "$d/out"
 # No resolved line where no implementation was walked.
 if grep -q '^resolved untouched ' "$d/out"; then exit 1; fi
 grep -q '^END STATEMENT REPORT$' "$d/out"
@@ -42,6 +42,6 @@ $coqc -Q "$d" StmtRsv "$d/Flg.v"
 printf 'uses StmtRsv.Flg.uses -\n' > "$d/freq"
 "$BIN"rocqchk -silent -statement-report "$d/freq" -Q "$d" StmtRsv StmtRsv.Flg > "$d/fout" 2>&1
 sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/fout"
-grep -q '^resolved uses StmtRsv.Flg.M.f StmtRsv.Flg.M.f$' "$d/fout"
+grep -q '^resolved uses StmtRsv.Flg.M.f StmtRsv.Flg:M.f$' "$d/fout"
 grep -q '^flag uses unsafe-fixpoint ' "$d/fout"
 awk '$1 == "flag" { f = 1 } $1 == "resolved" && f { exit 1 }' "$d/fout"

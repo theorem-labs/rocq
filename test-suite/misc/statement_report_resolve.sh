@@ -24,7 +24,7 @@ printf 'hidden StmtRes.Res.M.ax -\nfinal StmtRes.Res.P.ax -\nnone StmtRes.Res.M.
 "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtRes StmtRes.Res > "$d/out" 2>&1
 sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
 grep -q '^statement hidden StmtRes.Res.M.ax - not-requested 1 0$' "$d/out"
-grep -q '^axiom hidden [^ ]* StmtRes.Res.N.ax$' "$d/out"
+grep -q '^axiom hidden [^ ]* StmtRes.Res:N.ax$' "$d/out"
 grep -q '^statement final StmtRes.Res.P.ax - not-requested 1 0$' "$d/out"
 # P.ax is a key of the final environment, so it answers from there (by the
 # order of the lookup in check_closure.ml's print), never as ambiguous.

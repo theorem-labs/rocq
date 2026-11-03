@@ -1,17 +1,17 @@
 STATEMENT REPORT 2
 statement ok statement_report.model statement_report.trusted match 1 1
-axiom ok statement_report.ax statement_report.ax
+axiom ok statement_report.ax statement_report:ax
 flag ok indices-not-mattering Corelib.Init.Logic.eq
 statement wrong statement_report.model statement_report.trusted_other mismatch 1 1
-axiom wrong statement_report.ax statement_report.ax
+axiom wrong statement_report.ax statement_report:ax
 flag wrong indices-not-mattering Corelib.Init.Logic.eq
 statement closure_only statement_report.via_ax - not-requested 1 0
-axiom closure_only statement_report.ax statement_report.ax
+axiom closure_only statement_report.ax statement_report:ax
 statement bare statement_report.ax - not-requested 1 0
-axiom bare statement_report.ax statement_report.ax
+axiom bare statement_report.ax statement_report:ax
 statement missing statement_report.nope - model-missing 0 0
 statement nottrusted statement_report.model statement_report.nope trusted-missing 1 1
-axiom nottrusted statement_report.ax statement_report.ax
+axiom nottrusted statement_report.ax statement_report:ax
 flag nottrusted indices-not-mattering Corelib.Init.Logic.eq
 END STATEMENT REPORT
 

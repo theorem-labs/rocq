@@ -464,13 +464,29 @@ let name_of = function
 
 (* The kernel name of the object the walk reached, whatever path it was reached
    by: computed here from the constant or inductive itself, never read from any
-   other text. Two paths to one constant give one canonical name. The string
-   prints a library path and the modules under it alike, so it is not unique
-   across a library P.A with a module B and a library P.A.B. *)
+   other text. Two paths to one constant give one canonical name.
+
+   It is printed so that two kernel names never print alike: the root of the
+   module path, then [:], then the modules under it and the label, separated
+   by dots. The root is the library's dirpath ([P.A:B.ax] is the constant [ax]
+   of module [B] of library [P.A]; [P.A.B:ax] is the constant [ax] of library
+   [P.A.B]), or, for a functor argument or a bound module, its unique form
+   [<dirpath#name#n>]. No identifier contains [:], [<] or [#], so the string
+   reads back to one kernel name. *)
+let canonical_kername kn =
+  let rec root acc = function
+    | ModPath.MPfile dp -> DirPath.to_string dp, acc
+    | ModPath.MPbound mbid -> MBId.debug_to_string mbid, acc
+    | ModPath.MPdot (mp, l) -> root (Label.to_string l :: acc) mp
+  in
+  let mp, l = KerName.repr kn in
+  let r, mods = root [] mp in
+  r ^ ":" ^ String.concat "." (mods @ [Label.to_string l])
+
 let canonical_of = function
-  | GlobRef.ConstRef kn -> KerName.to_string (Constant.canonical kn)
+  | GlobRef.ConstRef kn -> canonical_kername (Constant.canonical kn)
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-    KerName.to_string (MutInd.canonical mind)
+    canonical_kername (MutInd.canonical mind)
   | GlobRef.VarRef _ -> "-"
 
 (* An [axiom] line's two names: the path the term reached the object by, then

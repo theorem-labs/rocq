@@ -801,9 +801,11 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   line names the axiom by the path the closure reached it by, then by its
   canonical kernel name, which is printed even when it is the same string: two
   paths to one constant (through an ``Include`` or a module alias) share a
-  canonical name. The canonical name prints a library path and the modules
-  under it alike, so constants of a library ``P.A`` with a module ``B`` and of
-  a library ``P.A.B`` can print the same string. A ``resolved`` line, after the
+  canonical name, and two kernel names never print alike: the canonical name
+  is the library's dirpath (or, for a functor argument or bound module,
+  ``<dirpath#name#n>``), then ``:``, then the modules and the label separated
+  by dots, so ``P.A:B.ax`` (module ``B`` of library ``P.A``) and ``P.A.B:ax``
+  (library ``P.A.B``) differ. A ``resolved`` line, after the
   ``axiom`` lines and before the ``flag`` lines and not counted in either
   count, names an interface field the closure read through the implementation
   that defines it; the axioms that implementation rests on are its own

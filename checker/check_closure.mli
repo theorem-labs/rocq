@@ -39,11 +39,13 @@ END STATEMENT REPORT
     The number after [STATEMENT REPORT] is the format version. [<constant>]
     is the path the closure reached the axiom by, as [Names.Constant.to_string]
     prints it; [<canonical>] is that constant's canonical kernel name, always
-    printed, also when it is the same string. Two paths to one constant share a
-    canonical name. The canonical name is [Names.KerName.to_string] of the
-    constant's canonical kernel name, which prints a library path and the
-    modules under it alike, so two constants of two libraries [P.A] (module
-    [B]) and [P.A.B] can print the same canonical string.
+    printed. Two paths to one constant share a canonical name, and two kernel
+    names never print alike: [<canonical>] is the root of the module path,
+    [:], then the modules under it and the label separated by dots. The root
+    is the library's dirpath ([P.A:B.ax] is [ax] of module [B] of library
+    [P.A]; [P.A.B:ax] is [ax] of library [P.A.B]) or, for a functor argument
+    or a bound module, [<dirpath#name#n>]. No identifier contains [:], [<]
+    or [#].
 
     A [resolved] line, after the statement's [axiom] lines and before its
     [flag] lines, names an interface field without a body in the final
