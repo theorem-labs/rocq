@@ -464,8 +464,9 @@ let name_of = function
 
 (* The kernel name of the object the walk reached, whatever path it was reached
    by: computed here from the constant or inductive itself, never read from any
-   other text. Two paths to one constant give one canonical name; two distinct
-   constants never share one. *)
+   other text. Two paths to one constant give one canonical name. The string
+   prints a library path and the modules under it alike, so it is not unique
+   across a library P.A with a module B and a library P.A.B. *)
 let canonical_of = function
   | GlobRef.ConstRef kn -> KerName.to_string (Constant.canonical kn)
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
@@ -909,6 +910,12 @@ let print env access requests =
         | None ->
           match resolve_in_impl st r.req_model with
           | [] -> `Missing
+          (* A type verdict is about the two constants as the final
+             environment holds them; one only an implementation holds has
+             none there (its type may name the implementation's own
+             definitions), so a typed request on it answers as before the
+             implementation lookup existed. *)
+          | [_] when Option.has_some r.req_trusted -> `Missing
           | [c] -> `One c
           | _ :: _ :: _ -> `Ambiguous
       in
@@ -922,16 +929,7 @@ let print env access requests =
           | Some t ->
             match CString.Map.find_opt t index with
             | None -> "trusted-missing"
-            | Some t ->
-              (* the model's declaration the closure walked: the final
-                 environment's, or an implementation's for a resolved name *)
-              let cm =
-                if Environ.mem_constant model env then Environ.lookup_constant model env
-                else match lookup_constant st Implementation model with
-                  | Some (_, cb) -> cb
-                  | None -> Environ.lookup_constant model env
-              in
-              type_verdict env cm t
+            | Some t -> type_verdict env (Environ.lookup_constant model env) t
         in
         line "statement %s %s %s %s %d %d" r.req_name r.req_model trusted verdict
           (CString.Set.cardinal c.axioms) (FlagSet.cardinal c.flag_set);

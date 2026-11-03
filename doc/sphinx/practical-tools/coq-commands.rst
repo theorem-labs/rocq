@@ -815,7 +815,9 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   (a field a sealed module's interface leaves out, or one an ``Include`` in it
   brings). One match is reported as usual; several give the verdict
   ``ambiguous`` with no ``axiom`` or ``flag`` line; none gives
-  ``model-missing``. A name the final environment holds is never looked up in
+  ``model-missing``. A request that names a trusted constant is answered only
+  from the final environment, so such a model answers ``model-missing``. A name
+  the final environment holds is never looked up in
   an implementation.
 
   It does not change the exit status. If the report stops after its start
