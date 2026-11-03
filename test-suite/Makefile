@@ -368,7 +368,7 @@ $(addsuffix .log,$(wildcard prerequisite/*.v)): %.v.log: %.v
 	  $(call WITH_TIMER,$@,$(coqc) "$<" $(call get_coq_prog_args,"$<") 2>&1); R=$$?; times; \
 	  if [ $$R != 0 ]; then \
 	    echo $(log_failure); \
-	    echo "    $< ... could not be prepared" ; \
+	    echo "    $< ... Error! (could not be prepared)" ; \
 	    $(FAIL); \
 	  else \
 	    echo $(log_success); \
@@ -595,8 +595,9 @@ $(addsuffix .log,$(wildcard complexity/*.v)): %.v.log: %.v $(PREREQUISITELOG)
 	$(HIDE){ \
 	  echo $(call log_intro,$<); \
 	  true "extract effective user time"; \
-	  res=`$(call WITH_TIMER,$@,$(coqc_interactive) "$<" $(call get_coq_prog_args,"$<") 2>&1) | sed -n -e "s/Finished .*transaction in .*(\([0-9]*\.[0-9]*\)u.*)/\1/p" | head -1 | sed "s/\r//g"`; \
-	  R=$$?; times; \
+	  out=`$(call WITH_TIMER,$@,$(coqc_interactive) "$<" $(call get_coq_prog_args,"$<") 2>&1)`; \
+	  R=$$?; printf '%s\n' "$$out"; times; \
+	  res=`printf '%s\n' "$$out" | sed -n -e "s/Finished .*transaction in .*(\([0-9]*\.[0-9]*\)u.*)/\1/p" | head -1 | sed "s/\r//g"`; \
 	  if [ $$R != 0 ]; then \
 	    echo $(log_failure); \
 	    echo "    $< ... Error! (should be accepted)" ; \
