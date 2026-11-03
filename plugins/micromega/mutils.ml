@@ -442,6 +442,13 @@ module Hash = struct
   let hash_q = hash_elt (fun q -> Hashtbl.hash (CoqToCaml.q_to_num q))
 end
 
+module Work = struct
+  let count = ref 0
+  let charge n = count := !count + n
+  let tick () = incr count
+  let now () = float_of_int !count
+end
+
 (* Local Variables: *)
 (* coding: utf-8 *)
 (* End: *)

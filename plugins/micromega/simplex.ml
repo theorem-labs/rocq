@@ -347,8 +347,9 @@ let pivot_row (row : Vect.t) (c : var) (e : Vect.t) : Vect.t =
   let g = Vect.get c row in
   if g =/ Q.zero then row else Vect.mul_add g e Q.one (Vect.set c Q.zero row)
 
+(* each row rewritten is a unit of [Mutils.Work] *)
 let pivot_with (m : tableau) (v : var) (p : Vect.t) =
-  IMap.map (fun (r : Vect.t) -> pivot_row r v p) m
+  IMap.map (fun (r : Vect.t) -> Mutils.Work.tick (); pivot_row r v p) m
 
 let pivot (m : tableau) (r : var) (c : var) =
   incr nb_pivot;

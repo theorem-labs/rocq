@@ -122,7 +122,10 @@ let model_pow v = function
     model_check_bits (n * Z_.numbits v);
     Z_.power_int v n
 
-let rec model_eval env = function
+(* each node evaluated is a unit of [Mutils.Work] *)
+let rec model_eval env e =
+  Work.tick ();
+  match e with
   | PEc c -> C2Ml.z_big_int c
   | PEX v -> env (C2Ml.positive v)
   | PEadd (e1, e2) -> Z_.add (model_eval env e1) (model_eval env e2)
@@ -150,29 +153,31 @@ let rec model_vars acc = function
     model_vars (model_vars acc e1) e2
   | PEopp e | PEpow (e, _) -> model_vars acc e
 
-(** The processor seconds per unit of cube size ([model_size]) of the last search's development, of
-    its first LP, and of its check of that LP's point and roundings, in this process: the prediction
-    of the next search's first step on a cube of a given size (0 before the first search; the
-    early-failure check then predicts the first step from the prover's seconds). *)
+(** The units of [Mutils.Work] (or, in the clock mode of [find_model], the seconds) per unit of cube
+    size ([model_size]) of the last search's development, of its first LP, and of its check of that
+    LP's point and roundings, in this process: the prediction of the next search's first step on a
+    cube of a given size (0 before the first search; the early-failure check then predicts the first
+    step from the prover's work). *)
 let dev_rate = ref 0.
 let lp_rate = ref 0.
 let node_rate = ref 0.
 
-(** [timed k f] is [f ()], and calls [k] with its processor seconds, also when [f] raises. *)
-let timed k f =
-  let t = Sys.time () in
+(** [timed clock k f] is [f ()], and calls [k] with what [clock] counted during it, also when [f]
+    raises. *)
+let timed clock k f =
+  let t = clock () in
   match f () with
-  | v -> k (Sys.time () -. t); v
+  | v -> k (clock () -. t); v
   | exception e ->
     let e = Exninfo.capture e in
-    k (Sys.time () -. t);
+    k (clock () -. t);
     Exninfo.iraise e
 
-(** [model_search affordable size sys wsys] searches an integer model of [sys], of size [size], whose
-    developed form is [wsys]. Before each LP it asks [affordable] with the predicted seconds of the LP
-    and of the check of its point (one step): for the first LP, from the rates of the last search and
-    [size]; for a later one, from this search's last LP and check. *)
-let model_search affordable size sys wsys =
+(** [model_search clock affordable size sys wsys] searches an integer model of [sys], of size [size],
+    whose developed form is [wsys]. Before each LP it asks [affordable] with the predicted cost, in
+    the units of [clock], of the LP and of the check of its point (one step): for the first LP, from
+    the rates of the last search and [size]; for a later one, from this search's last LP and check. *)
+let model_search clock affordable size sys wsys =
   (* The LP column of a variable [x] of [sys] is its degree-1 monomial, the vector [LinPoly.var x]. A
      variable that occurs only in nonlinear monomials gets a new column, which no constraint uses:
      its value is 0. *)
@@ -216,7 +221,7 @@ let model_search affordable size sys wsys =
       let first = !lps = 1 in
       let bounds = List.map (fun c -> WithProof.of_cstr (c, ProofFormat.Zero)) extra in
       let sol =
-        timed
+        timed clock
           (fun dt -> last_lp := dt; if first then lp_rate := dt /. size)
           (fun () -> Simplex.relaxed_point (List.rev_append bounds wsys))
       in
@@ -224,7 +229,7 @@ let model_search affordable size sys wsys =
       | None -> None
       | Some sol -> (
         let c =
-          timed
+          timed clock
             (fun dt -> last_node := dt; if first then node_rate := dt /. size)
             (fun () -> candidate sol)
         in
@@ -241,18 +246,18 @@ let model_search affordable size sys wsys =
   in
   match branch [] with Some r -> r | None -> Missed
 
-let find_model ?(affordable = fun _ -> true) prfdepth sys =
+let find_model ?(affordable = fun _ -> true) ?(clock = Work.now) prfdepth sys =
   try
     let size = List.fold_left (fun acc (e, _) -> model_size acc e) 0 sys in
     let fsize = float_of_int (max 1 size) in
     if not (affordable ((!dev_rate +. !lp_rate +. !node_rate) *. fsize)) then Deferred
     else
       let wsys =
-        timed
+        timed clock
           (fun dt -> dev_rate := dt /. fsize)
           (fun () -> Certificate.develop_z_constraints prfdepth sys)
       in
-      model_search affordable size sys wsys
+      model_search clock affordable size sys wsys
   with
   | Model_too_big -> Missed
   | e when CErrors.noncritical e -> Missed

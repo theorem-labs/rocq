@@ -1567,11 +1567,12 @@ open Certificate
 
 (** The early-failure check of lia and nia ([witness_list]). *)
 type ('option, 'a) early =
-  { fails : (float -> bool) -> 'option * 'a list -> bool option
-        (** [fails affordable k]: [Some true] when the clause [k] is known to fail: the persistent
-            cache holds a failure for it, or it holds nothing for it and the model search finds an
-            integer model of it; [Some false] when neither is known; [None] when the search did not
-            start, its first step not fitting [affordable] (a step's predicted seconds). *)
+  { fails : (unit -> float) -> (float -> bool) -> 'option * 'a list -> bool option
+        (** [fails clock affordable k]: [Some true] when the clause [k] is known to fail: the
+            persistent cache holds a failure for it, or it holds nothing for it and the model search
+            finds an integer model of it; [Some false] when neither is known; [None] when the search
+            did not start, its first step not fitting [affordable] (a step's predicted cost in the
+            units of [clock], which the search uses to measure its steps). *)
   ; size : 'a -> int
         (** the size of an atom of a clause, for the check's predictions: [ModelSearch.pol_size] *) }
 
@@ -1632,86 +1633,85 @@ let search_witness_list prover l =
 (** The budget of the early-failure check of [witness_list] has two bounds.
     By clauses: once the prover has decided [k] clauses, the check may have looked at the first
     [early_budget k = 32 + 32 k] clauses.
-    By time: the check's work in a call (the cache lookups and keys, the sizing of clauses and the
-    model searches) starts only while the call's processor seconds outside the prover are below
-    [early_share] times the prover's own seconds in the call (process time, [Sys.time]), so it exceeds
-    that share by at most the misprediction of the one step that crosses the line, plus the call's own
-    bookkeeping (a constant per clause: the clock, the list of clauses). Certificate reuse has a
-    budget of its own ([reuse_in_budget], a sixteenth of the search time), and the two are separate
-    ledgers: a call's work outside the prover reaches the sum of the two shares, about 11% of the
-    prover's seconds (0.05 + 1/16), plus one mispredicted step of the check and one clause's tries
-    (up to [max_tries] certificates, which the budget counts only as a whole). Each ledger holds
-    its own work alone: the check's [fits] subtracts reuse's seconds from the call's, and reuse's
+    By work: the check's work in a call (the cache lookups, the sizing of clauses and the model
+    searches) starts only while the call's work outside the prover is below [early_share] times the
+    prover's own work in the call. Work is counted in units of [Mutils.Work], to which the plugin
+    adds at fixed points of its code: a row that a simplex pivot rewrites, a node of an expression
+    that the development of a constraint walks, a node of a constraint that the model search
+    evaluates, a lookup of the persistent cache, an atom that the check sizes, a formula that reuse
+    hashes or renumbers. So the check exceeds its share by at most the misprediction of the one step
+    that crosses the line. Certificate reuse has a budget of its own ([reuse_in_budget], a sixteenth
+    of the search's work), and the two are separate ledgers: a call's work outside the prover
+    reaches the sum of the two shares, plus one mispredicted step of the check and one clause's
+    tries (up to [max_tries] certificates, which the budget counts only as a whole). Each ledger
+    holds its own work alone: the check's [fits] subtracts reuse's work from the call's, and reuse's
     [charge] counts the tries and the reading of a certificate's literals, not the check's turns.
-    The prover's seconds are those of the searches it still runs, after reuse has proved what it
-    can, so reuse leaves the check a smaller budget, never a larger one. No step is
-    preemptible, so the budget can only refuse to start a step whose predicted seconds do not fit. The
-    check sizes a clause the prover proved only while the budget has room and a later clause remains.
-    Before a clause, it needs room for a prover clause of the call's average seconds (so in a call of
-    alike clauses it starts once the prover has proved about [1 / early_share] of them, and before the
+    The prover's work is that of the searches it still runs, after reuse has proved what it can, so
+    reuse leaves the check a smaller budget, never a larger one. No step is preemptible, so the
+    budget can only refuse to start a step whose predicted work does not fit. The check sizes a
+    clause the prover proved only while the budget has room and a later clause remains. Before a
+    clause, it needs room for a prover clause of the call's average work (so in a call of alike
+    clauses it starts once the prover has proved about [1 / early_share] of them, and before the
     prover's first clause it does nothing); then it predicts the first step of a search on the clause
-    (develop it, solve its LP, check the LP's point) from the prover's seconds on the largest clause
-    it has proved and sized ([early.size]: monomials and degrees), scaled by the size of this clause,
+    (develop it, solve its LP, check the LP's point) from the prover's work on the largest clause it
+    has proved and sized ([early.size]: monomials and degrees), scaled by the size of this clause,
     and looks at no clause larger than that one. Inside the search, the first step is also predicted
-    from the last search's seconds per unit of cube size, and a later LP from the search's own last
-    one ([ModelSearch.find_model]). These are estimates, not bounds: a clause denser than the prover's
-    largest at the same size, or a largest clause that the persistent cache answered in no time, is
-    underestimated. So the check's seconds in a call reach [early_share] times the prover's, plus the
-    misprediction of the one step that crosses that line and the bookkeeping; on top of them comes the
-    work that the check makes the prover itself do (its data out of the processor's caches). Slice 1
-    alone used 0.15 (see [early_share]): with 0.2, calls of the differential fuzz corpus measured up
-    to 1.22 times stock's; with 0.15, at most 1.17.
+    from the last search's work per unit of cube size, and a later LP from the search's own last one
+    ([ModelSearch.find_model]). These are estimates, not bounds: a clause denser than the prover's
+    largest at the same size, or a largest clause that a memo or the persistent cache answered with
+    no work, is underestimated.
     A model search solves up to 16 LPs on a clause that a cheap proof refutes with one, so the bound by
     clauses alone let the check cost several times the prover's time (P21: 4,096 parity cubes, 3.5 s
-    against stock's 0.51 s), and a bound by allocated words did not bound time (round 7: a call at 1.28
-    times stock's).
+    against stock's 0.51 s).
 
-    The clock decides only how early a call that fails fails, never whether a call succeeds or which
-    proof it builds: see [witness_list]. *)
+    The budgets of the tactics read no clock, only [Mutils.Work]'s count, which nothing but the
+    plugin's own computations moves; a clock budgets a call only in the clock mode
+    ([witness_list ~clock]), which no tactic selects. So what the budgets decide (which clauses the
+    check looks at and which steps of it start, and which clauses reuse tries) is a function of the
+    call's clauses and options and of the state that the same process's earlier calls left (the
+    persistent cache, the provers' memos, the model search's rates per unit of size): the same
+    commands in the same order decide the same on any machine under any load. What the check and
+    reuse can change in a call's result is stated at [witness_list]. *)
 let early_budget k = 32 + (32 * k)
 
-(** The share of the prover's seconds that the check may spend in a call. It is 0.05, not the 0.15 of
-    slice 1 alone: with reuse the prover's seconds of a proved call are its searches alone, so the
-    same share is a larger part of the call, and a call that stock proves just inside a [Timeout]
-    stays inside it. r2-b's red test R2bWitnessTimeout, a 12,000-clause [wlia] under [Timeout 6] that
-    stock proves in 5.43 s, takes 5.88 s with 0.15 (over the test's margin) and 5.60 s with 0.05. *)
+(** The share of the prover's work that the check may spend in a call. With the clock that this
+    budget counted until speed-7.5 it was 0.05, not the 0.15 of slice 1 alone: with reuse the
+    prover's part of a proved call is its searches alone, so the same share is a larger part of the
+    call (r2-b's red test R2bWitnessTimeout, a 12,000-clause [wlia] under [Timeout 6] that stock
+    proves in 5.43 s, took 5.88 s with 0.15 and 5.60 s with 0.05). *)
 let early_share = 0.05
 
 (** A clause tries at most [max_tries] certificates found for the clauses before it, so reuse adds at
     most a constant number of checks to a clause's search. *)
 let max_tries = 8
 
+(** [speculate default f] is [f ()], or [default] if [f] raises anything but an interrupt
+    ([Sys.Break], or [Control.Timeout] from an enclosing [Timeout]): for the work of [witness_list]
+    that [search_witness_list] does not do, the early-failure check and the tries of reuse, so that
+    no exception of theirs, a stack overflow or an exhausted memory included, reaches the call. *)
+let speculate default f =
+  try f () with
+  | e when (match e with Sys.Break | Control.Timeout -> false | _ -> true) -> default
+
 (**
   * [witness_list ~reuse eq_cst prover l] finds a certificate for each
-  * clause of [l], with two things that [search_witness_list] does not do,
-  * and gives what [search_witness_list prover l] gives: the same verdict,
-  * and the same certificate for each clause.
+  * clause of [l] as [search_witness_list prover l] does, with two things
+  * that [search_witness_list] does not do.
   *
   * The early-failure check ([early]: lia and nia). The call fails as
   * [Unknown] as soon as a clause is known to fail: the persistent cache
   * holds a failure for it, or the model search finds an integer model of
   * it, which it checks exactly over Z. No certificate refutes such a
-  * clause, so [search_witness_list] fails too: at that clause, or at an
-  * earlier one. Otherwise the prover decides the clauses in the order of
-  * [search_witness_list], as without the check, and fails or proves the
-  * call as it does there, with the same certificates: the state that a
-  * model search changes and the prover reads (the monomial table, the depth
-  * bound, the simplex's counters) is reset by every prover entry point. So
-  * the verdict is always [search_witness_list]'s, and a proof is always the
-  * prover's, whatever the check looked at. That is why its budget may be a
-  * clock: timing changes which clauses the check looks at, and so only how
-  * early a failing call fails, and, with a persistent cache, which model
-  * clauses it records as failures (the value the prover would give them).
-  * Two limits of that: a clock decides how long a call takes, as without
-  * the check, so a call that crosses an enclosing [Timeout] fails there;
-  * and when the check fails a call at a clause after one on which the
-  * prover would raise an exception, the call fails where stock raises,
-  * while a critical exception (a stack overflow, say) of a search on a
-  * clause the prover never reaches is raised where stock fails.
+  * clause. Otherwise the prover decides the clauses in the order of
+  * [search_witness_list], as without the check, with the same certificates:
+  * the state that a model search changes and the prover reads (the monomial
+  * table, the depth bound, the simplex's counters) is reset by every prover
+  * entry point. With a persistent cache, the check records each clause it
+  * finds a model of as a failure: the value the prover would give it.
   * The check runs ahead of the prover, in the same order, within its
   * budget: before the prover decides clause [k + 1] (with [k] clauses
   * decided), the check looks at the clauses from [k + 1] on that it has not
-  * looked at, up to the [early_budget k]th, while its time fits; a clause
+  * looked at, up to the [early_budget k]th, while its work fits; a clause
   * whose search did not fit waits for the next turn. The
   * clauses stay in lists, as in [search_witness_list]: an array of them, in
   * the major heap, would make the next minor collection promote the whole
@@ -1720,29 +1720,50 @@ let max_tries = 8
   * Certificate reuse ([check] and [reuse]: lia and nia, under the flag
   * [Micromega Reuse]). The first pass tries a clause with at most
   * [max_tries] of the certificates that search found for the clauses before
-  * it, before it searches the clause, while the time spent in these tries
+  * it, before it searches the clause, while the work spent in these tries
   * is within [reuse_in_budget]. A certificate is tried on a clause that
   * contains every formula it cites ([eq_cst] compares the coefficients),
   * renumbered to their positions there, and used if [check.checker] accepts
   * it: that is the checker the kernel runs, so a certificate it accepts
   * refutes the clause. A failed search ends the first pass with that
-  * failure, and [search_witness_list] fails on [l] too: it searches the
-  * same clause, which gives the same failure, or it fails on a clause
-  * before it.
+  * failure.
   * If reuse proved a clause, a second pass searches each clause that reuse
   * proved, in the order of [search_witness_list], and takes the certificate
-  * that the first pass found for each other clause. A search depends only
-  * on its clause, so the second pass gives what [search_witness_list prover
-  * l] gives, failure included. The check does not run in the second pass:
-  * it only makes a failing call fail sooner, and the second pass runs only
-  * when the first proved every clause.
-  * So reuse decides which clauses the first pass searches, and the check
-  * decides how early a failing call fails; neither decides a verdict or a
-  * certificate.
-  * [clock] gives the time that the budgets count; the tactics use
-  * [Sys.time].
+  * that the first pass found for each other clause. The check does not run
+  * in the second pass, which runs only when the first proved every clause.
+  *
+  * What the call gives, against [search_witness_list prover l]:
+  * - When [search_witness_list] proves the call, [witness_list] proves it,
+  *   with the same certificate for each clause. The check fails a call only
+  *   at a clause that no certificate refutes; reuse proves a clause in the
+  *   first pass only with a certificate the kernel's checker accepts, and the
+  *   second pass then gives the search's own certificate for it, as a search
+  *   depends only on its clause. No exception of the check or of reuse
+  *   leaves the call but an interrupt ([Sys.Break], [Control.Timeout]):
+  *   any other one, a stack overflow included, counts as nothing known of the
+  *   clause, or as a try that did not prove it, and the prover decides the
+  *   clause as without them ([speculate]).
+  * - When [search_witness_list] fails or raises, [witness_list] fails or
+  *   raises too: a clause that reuse proved is searched in the second pass.
+  *   It need not fail at the same clause, so its failure ([Unknown] or a
+  *   model) or exception need not be the same: the check can fail the call
+  *   at a clause after one on which the prover would fail or raise, and a
+  *   clause that reuse proves is not searched in the first pass, so a later
+  *   search's failure or exception ends the call first.
+  * Where a call stops is decided by the budgets, which in the tactics read
+  * no clock (see [early_budget]), so these results are the same on every
+  * run of the same commands. They describe what a call gives when it ends
+  * on its own: an interrupt ends it where it arrives, and as the check and
+  * reuse add work to the prover's, a call that [search_witness_list]
+  * finishes just inside an enclosing [Timeout] can end outside it.
+  *
+  * [clock], when given, replaces [Mutils.Work]'s count in the budgets with
+  * its own (the clock mode: [Sys.time] budgets by processor seconds, as
+  * until speed-7.5). No tactic gives it: the tactics reach [witness_list]
+  * only through [micromega_tauto], which calls it without [clock]; only
+  * [lia_witness_list], an entry point for the unit tests, passes one on.
   *)
-let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
+let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
   let check = match prover.check with Some c when reuse -> Some c | Some _ | None -> None in
   match (prover.early, check) with
   | None, None -> search_witness_list prover l
@@ -1755,22 +1776,24 @@ let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
     let position tbl h f =
       List.find_map (fun (f', i) -> if eq_formula f f' then Some i else None) (Hashtbl.find_all tbl h)
     in
-    (* maps each formula of [fs] to its first position in [fs] *)
+    (* maps each formula of [fs] to its first position in [fs]; a unit of work per formula *)
     let positions hash fs =
       let tbl = Hashtbl.create 17 in
       List.iteri
         (fun i f ->
+          Mutils.Work.tick ();
           let h = hash f in
           if Option.is_empty (position tbl h f) then Hashtbl.add tbl h (f, i))
         fs;
       tbl
     in
     (* [cited] lists the formulas that [prf] cites, with their index in its own clause and
-       their hash *)
+       their hash; a unit of work per formula renumbered *)
     let renumber tbl (cited, prf) =
       let rec remap m = function
         | [] -> Some m
         | (i, h, f) :: cited -> (
+          Mutils.Work.tick ();
           match position tbl h f with
           | None -> None
           | Some j -> remap (IMap.add i j m) cited )
@@ -1790,18 +1813,23 @@ let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
         | [] -> None
         | _ when Int.equal n max_tries -> None
         | c :: after -> (
+          (* a unit of work per try, besides those of [renumber] *)
+          Mutils.Work.tick ();
           match renumber tbl c with
           | Some prf when check.checker fs prf -> Some (prf, c :: List.rev_append before after)
           | _ -> try_found (n + 1) (c :: before) after )
       in
       try_found 0 [] found
     in
-    (* the formulas that [prf], found for [clause], cites, if they all are in [clause] *)
+    (* the formulas that [prf], found for [clause], cites, if they all are in [clause]; a unit of
+       work per formula of [clause] *)
     let cited check clause prf =
       let hyps = prover.hyps prf in
       let cited =
         CList.map_filter_i
-          (fun i (f, _) -> if ISet.mem i hyps then Some (i, check.hash f, f) else None)
+          (fun i (f, _) ->
+            Mutils.Work.tick ();
+            if ISet.mem i hyps then Some (i, check.hash f, f) else None)
           clause
       in
       if Int.equal (List.length cited) (ISet.cardinal hyps) then Some (cited, prf) else None
@@ -1819,60 +1847,60 @@ let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
         | Unknown -> Unknown
         | Prf w -> rerun visited (w :: acc) )
     in
-    (* [start]: the clock at the start of the call; [search_t], [searched_n]: the seconds and the
-       clauses of the prover in the first pass; [check_t]: the seconds of the tries of reuse;
+    (* [start]: the count of [clock] at the start of the call; [search_t], [searched_n]: the work
+       and the clauses of the prover in the first pass; [check_t]: the work of the tries of reuse;
        [reused_n]: the clauses reuse proved, which the second pass searches *)
     let start = clock () in
     let search_t = ref 0. and check_t = ref 0. and searched_n = ref 0 and reused_n = ref 0 in
-    (* The budget of reuse. On a goal that succeeds, the time beyond stock's is [check_t]: the time of
-       the first pass outside its searches, that is the tries of stored certificates and their
+    (* The budget of reuse. On a goal that succeeds, the work beyond stock's is [check_t]: the work
+       of the first pass outside its searches, that is the tries of stored certificates and their
        bookkeeping. [max_tries] bounds the number of checks, not their cost: a check can cost a
        good part of a search (with large coefficients, for instance). So a clause tries reuse only
-       while [check_t] is at most 1/16 of the search time of the goal: [search_t], the time of the
+       while [check_t] is at most 1/16 of the search work of the goal: [search_t], the work of the
        searches so far, plus, for each clause that reuse proved and that the second pass searches,
-       the mean time of a search so far. Then [check_t] stays below about 6% of the time of the
+       the mean work of a search so far. Then [check_t] stays below about 6% of the work of the
        searches of the goal without reuse (as the mean estimates it), plus the cost of one try,
-       however much a check costs. A goal that stock proves within a Timeout is proved within it
-       with reuse unless the margin is below that, about the spread of stock's own time from run
-       to run. A clause that the budget keeps from reuse is searched, as stock does: the budget
-       changes which clauses the first pass searches, never the result. *)
+       however much a check costs. A clause that the budget keeps from reuse is searched, as stock
+       does. *)
     let reuse_in_budget () =
       let mean_search = !search_t /. float_of_int (max 1 !searched_n) in
       !check_t <= (!search_t +. (float_of_int !reused_n *. mean_search)) /. 16.
     in
     let mark = ref (clock ()) in
-    (* adds the time since the last mark to [t] *)
+    (* adds the count since the last mark to [t] *)
     let charge t =
       let now = clock () in
       t := !t +. (now -. !mark);
       mark := now
     in
-    (* the seconds of the call that are neither the prover's nor a try of reuse, plus [step], fit the
+    (* the work of the call that is neither the prover's nor a try of reuse, plus [step], fits the
        share of the check *)
     let fits step =
       clock () -. start -. !search_t -. !check_t +. step < early_share *. !search_t
     in
     let atom_size = match early with Some early -> early.size | None -> fun _ -> 0 in
     let size_cap = 1 lsl 21 in
-    (* [size e]: the size of clause [e] (the sum of its atoms' sizes), at most [size_cap] *)
+    (* [size e]: the size of clause [e] (the sum of its atoms' sizes), at most [size_cap]; a unit of
+       work per atom *)
     let size e =
       let rec go acc = function
-        | (a, _) :: e when acc < size_cap -> go (acc + atom_size a) e
+        | (a, _) :: e when acc < size_cap -> Mutils.Work.tick (); go (acc + atom_size a) e
         | _ -> min size_cap acc
       in
       go 0 e
     in
-    (* [big_size], [big_time]: the size and the seconds of the largest clause the prover has proved in
-       the first pass and the check sized; [samples]: how many clauses it sized for them. A scale for
-       the check's predictions needs a few clauses, and sizing one costs a walk of its polynomials, so
-       the check sizes at most [max_samples] of them: on a call of 12,000 cheap clauses, sizing every
-       proved clause cost 1.1 s against the prover's 4.8 s (r2-b's red test R2bWitnessTimeout), which
-       no share of the prover's seconds bounds, because the sizing grows with the prover's own work. *)
+    (* [big_size], [big_time]: the size and the prover's work on the largest clause the prover has
+       proved in the first pass and the check sized; [samples]: how many clauses it sized for them. A
+       scale for the check's predictions needs a few clauses, and sizing one costs a walk of its
+       polynomials, so the check sizes at most [max_samples] of them: on a call of 12,000 cheap
+       clauses, sizing every proved clause cost 1.1 s against the prover's 4.8 s (r2-b's red test
+       R2bWitnessTimeout), which no share of the prover's work bounds, because the sizing grows with
+       the prover's own work. *)
     let big_size = ref 0 and big_time = ref 0. and samples = ref 0 in
     let max_samples = 16 in
     (* [prove more e]: the prover on [e] in the first pass; [more]: a clause remains after [e]. A
        proved clause is sized, for the check's predictions, only while one remains, the budget has
-       room and [max_samples] is not reached: the sizing is the check's time. *)
+       room and [max_samples] is not reached: the sizing is the check's work. *)
     let prove more e =
       let t = clock () in
       let r = find_witness prover e in
@@ -1901,9 +1929,9 @@ let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
         sized := (e, s);
         s
     in
-    (* [affordable e]: there is room for a prover clause of the call's average seconds, [e] is no
+    (* [affordable e]: there is room for a prover clause of the call's average work, [e] is no
        larger than the prover's largest clause, and the first step of a search on [e], predicted from
-       the prover's seconds on that clause, fits the budget *)
+       the prover's work on that clause, fits the budget *)
     let affordable e =
       fits (!search_t /. float_of_int (max 1 !searched_n))
       &&
@@ -1913,7 +1941,7 @@ let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
     (* [early_turn k checked rest]: the check's turn before the prover decides the clause after the
        first [k]. [rest] is the clauses after the first [checked]. [None] if a clause fails early;
        otherwise [Some (checked', rest')], where the check stopped: at [early_budget k], or earlier at
-       the bound by time. *)
+       the bound by work. *)
     let early_turn =
       match early with
       | None -> fun _ checked rest -> Some (checked, rest)
@@ -1922,7 +1950,7 @@ let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
         let rec go checked upto rest =
           match rest with
           | e :: rest' when checked < upto && affordable e -> (
-            match early.fails fits (key e) with
+            match speculate (Some false) (fun () -> early.fails clock fits (key e)) with
             | Some true -> None
             | Some false -> go (checked + 1) upto rest'
             | None -> Some (checked, rest) )
@@ -1948,7 +1976,7 @@ let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
           let tried =
             match check with
             | Some check when not (CList.is_empty found) && reuse_in_budget () ->
-              reuse_clause check found e
+              speculate None (fun () -> reuse_clause check found e)
             | Some _ | None -> None
           in
           charge check_t;
@@ -1968,9 +1996,11 @@ let witness_list ?(clock = Sys.time) ~reuse eq_cst prover l =
                 | Some check ->
                   if CList.is_empty stack then found
                   else (
-                    match cited check e w with Some c -> c :: found | None -> found)
+                    match speculate None (fun () -> cited check e w) with
+                    | Some c -> c :: found
+                    | None -> found)
               in
-              (* the literals of the certificate, which only reuse reads, are reuse's time *)
+              (* the literals of the certificate, which only reuse reads, are reuse's work *)
               charge check_t;
               xwitness_list found (k + 1) checked rest stack ((e, Some w) :: visited) ) ) )
     in
@@ -2943,22 +2973,21 @@ let non_linear_prover_Z str o =
     cache holds a failure for it: the prover would read that failure, as it reads a proof. Or when the
     cache holds nothing for it and the model search finds an integer model of it; [record] then adds
     [Unknown] as its result: what the prover gives on a clause that has no certificate. A clause whose
-    proof the cache holds is not searched: the prover reads it. A noncritical exception in the check
-    (of the cache, say) counts as nothing known: the check may look at a clause that the prover never
-    reaches, so it must not raise where the prover does not. *)
+    proof the cache holds is not searched: the prover reads it. A lookup of the cache is a unit of
+    [Mutils.Work]. An exception of the check (of the cache, say) counts as nothing known, as for
+    any early-failure check ([speculate] in [witness_list]). *)
 let int_early (find, record) =
   { fails =
-      (fun affordable ((o, l) as k) ->
-        try
-          match find k with
-          | Some (Unknown | Model _) -> Some true
-          | Some (Prf _) -> Some false
-          | None -> (
-            match lift_pexpr_prover (ModelSearch.find_model ~affordable o) l with
-            | ModelSearch.Found _ -> record k Unknown; Some true
-            | ModelSearch.Missed -> Some false
-            | ModelSearch.Deferred -> None )
-        with e when CErrors.noncritical e -> Some false )
+      (fun clock affordable ((o, l) as k) ->
+        Mutils.Work.tick ();
+        match find k with
+        | Some (Unknown | Model _) -> Some true
+        | Some (Prf _) -> Some false
+        | None -> (
+          match lift_pexpr_prover (ModelSearch.find_model ~affordable ~clock o) l with
+          | ModelSearch.Found _ -> record k Unknown; Some true
+          | ModelSearch.Missed -> Some false
+          | ModelSearch.Deferred -> None ) )
   ; size = (fun (p, _) -> ModelSearch.pol_size p) }
 
 let zarith_reuse_check =
@@ -2998,7 +3027,8 @@ let early_witness_list ~reuse ~early search cnf =
   witness_list ~reuse Mc.Z.eqb
     { linear_Z with
       prover = (fun (_, l) -> search l)
-    ; early = Some {fails = (fun affordable (_, l) -> early affordable l); size = (fun _ -> 1)} }
+    ; early =
+        Some {fails = (fun _ affordable (_, l) -> early affordable l); size = (fun _ -> 1)} }
     cnf
 
 (**

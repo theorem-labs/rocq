@@ -63,8 +63,10 @@ let q_spec =
   ; mult = Mc.qmult
   ; eqb = Mc.qeq_bool }
 
+(* each node of [p] it walks is a unit of [Mutils.Work] *)
 let dev_form n_spec p =
   let rec dev_form p =
+    Mutils.Work.tick ();
     match p with
     | Mc.PEc z -> Poly.constant (n_spec.number_to_num z)
     | Mc.PEX v -> Poly.variable (C2Ml.positive v)
@@ -91,7 +93,9 @@ let dev_form n_spec p =
 
     [dev_form z_spec e] is a function of [e] alone. It builds a [Poly.t], an immutable map from
     the monomials of [e] (over its own variables) to their coefficients, with [Poly]'s operations
-    and [z_spec.number_to_num]; none of them reads or changes any state. In particular it does not
+    and [z_spec.number_to_num]; none of them reads any state, and the only state it changes is the
+    count of [Mutils.Work], which only the budgets of [Coq_micromega.witness_list] read. In
+    particular it does not
     touch the monomial table [LinPoly.MonT]: [develop_constraints] registers the monomials after
     it, with [LinPoly.linpol_of_pol]. The clauses of a goal's CNF repeat most of their constraints
     (on the fast set, consecutive [lia] problems differ in one constraint of about 60), so [lia]

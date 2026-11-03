@@ -18,8 +18,9 @@ type result =
     under which every constraint of [sys] holds, evaluated exactly over Z, if a short search finds
     one: one rational LP on [sys] as [lia] develops it, its point and three roundings of it, then a
     depth-first branching on a fractional variable, with at most 16 LPs. Before each step it asks
-    [affordable] with the step's predicted processor seconds: before developing [sys], the
-    development, first LP and check of its point, predicted from the last search's seconds per unit
+    [affordable] with the step's predicted cost, in units of [Mutils.Work] (or in the units of
+    [clock], when given: the clock mode, which no tactic selects): before developing [sys], the
+    development, first LP and check of its point, predicted from the last search's cost per unit
     of cube size and the size of [sys] (a power [p ^ n] counting [n] times [p]), and [Deferred] if
     that does not fit; before a later LP, the LP and the check of its point, predicted from this
     search's last LP and check, and [Missed] if that does not fit. By default [affordable] is always
@@ -33,9 +34,11 @@ type result =
     pivots in [Simplex]. Certificates stay the provers' own because each prover entry point resets
     that state before it reads it: [Certificate.lia], [Certificate.nlia],
     [Certificate.linear_prover_with_cert] and [Certificate.nlinear_prover] call
-    [develop_constraints] first, and [Simplex.integer_solver] resets its pivot count. *)
+    [develop_constraints] first, and [Simplex.integer_solver] resets its pivot count. It also adds
+    to the count of [Mutils.Work], which no prover reads. *)
 val find_model :
      ?affordable:(float -> bool)
+  -> ?clock:(unit -> float)
   -> int
   -> (Micromega.z Micromega.pExpr * Micromega.op1) list
   -> result
@@ -44,5 +47,5 @@ val find_model :
     term [x ^ i] counting [i]), without allocating, capped at 2^20 + 1; a degree of more than 21 binary
     digits or a nesting of coefficients deeper than 4096 gives the cap at once, whatever the size. The
     early-failure check's measure of a clause, to predict a search's first step on it from the
-    prover's seconds on a clause of a known size. *)
+    prover's work on a clause of a known size. *)
 val pol_size : Micromega.z Micromega.pol -> int

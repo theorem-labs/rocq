@@ -112,3 +112,20 @@ val saturate :
 
 val app_funs : ('a -> 'b option) list -> 'a -> 'b option
 val command : string -> string array -> 'a -> 'b
+
+(** A count of the work that lia and nia do, in units of work: the budgets of their early-failure
+    check and certificate reuse ([Coq_micromega.witness_list]) count it instead of a clock, so
+    what they decide does not depend on the machine or its load. The plugin adds to it at fixed
+    points of its code, nothing else does, and it reads nothing outside the plugin: each row a
+    simplex pivot rewrites ([Simplex]), each node of an expression that the development of a
+    constraint walks ([Certificate.dev_form]), each node of a constraint that the model search
+    evaluates at a point ([ModelSearch]), each lookup of the persistent cache, each atom that the
+    check sizes, and each formula that reuse hashes or renumbers ([Coq_micromega]). So the count a
+    computation adds is a function of what it computes. *)
+module Work : sig
+  val charge : int -> unit
+  val tick : unit -> unit
+
+  (** [now ()]: the units counted so far in this process, as a float, the type of the budgets *)
+  val now : unit -> float
+end

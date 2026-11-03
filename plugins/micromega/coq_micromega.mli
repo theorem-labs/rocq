@@ -65,8 +65,9 @@ val dump_proof_term : Micromega.zArithProof -> EConstr.t
 
 (** [lia_witness_list ~reuse search cnf] finds a certificate for each clause of [cnf] as
     {!xlia} does, with [search] in place of the search of one clause. [reuse] tells whether
-    the flag [Micromega Reuse] is set. [clock] (default [Sys.time]) gives the time that the
-    time budget of reuse counts. *)
+    the flag [Micromega Reuse] is set. Its budgets count {!Mutils.Work}, as the tactics'; given
+    [clock], they count [clock] instead (the clock mode, which no tactic selects: the unit tests
+    of reuse pass a clock they control). *)
 val lia_witness_list :
   ?clock:(unit -> float) ->
   reuse:bool ->
@@ -79,7 +80,8 @@ val lia_witness_list :
 (** [early_witness_list ~reuse ~early search cnf] is {!lia_witness_list} with an early-failure
     check: [early affordable fs] stands for the check of lia on the clause [fs] ([Some true]: the
     clause is known to fail; [Some false]: nothing is known; [None]: the check did not start, its
-    first step not fitting [affordable]). Each atom has size 1 for the check's predictions. *)
+    first step not fitting [affordable], which takes its predicted cost). Each atom has size 1 for
+    the check's predictions. Its budgets count {!Mutils.Work}, as the tactics'. *)
 val early_witness_list :
   reuse:bool ->
   early:((float -> bool) -> Micromega.z Micromega.nFormula list -> bool option) ->
