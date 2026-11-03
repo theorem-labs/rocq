@@ -757,12 +757,13 @@ let close_report fd = try Unix.close fd with Unix.Unix_error _ -> ()
    it and nothing still buffered is written twice.
 
    A process inherits the whole heap of the main process, and every page it
-   writes to is copied. Its GC is lazy ([forked_gc]): a major cycle would mark,
-   and so copy, every inherited page that holds a live block. Its garbage is
-   bounded instead: once its major heap has grown by more than the heap budget,
-   it stops after the item it is on, and the main process forks a fresh process
-   for the items that are left. So each process holds at most about the budget
-   beyond what it shares.
+   writes to is copied. Its major GC does almost no work ([forked_gc]): a
+   major cycle would mark, and so copy, every inherited page that holds a live
+   block, and even a lazy one marks a share of them for each word allocated.
+   Its garbage is bounded instead: once its major heap has grown by more than
+   the heap budget, it stops after the item it is on, and the main process
+   forks a fresh process for the items that are left. So each process holds
+   about what it allocated beyond what it shares.
 
    What a process does is optional: the caller computes whatever it does not
    answer. So no process may keep the main process waiting. The main process
@@ -788,7 +789,7 @@ let forked_gc () =
   let gc = Gc.get () in
   Gc.set { gc with
            Gc.minor_heap_size = max gc.Gc.minor_heap_size (4 * 1024 * 1024);
-           space_overhead = max gc.Gc.space_overhead 1000;
+           space_overhead = max gc.Gc.space_overhead 1_000_000;
            max_overhead = 1000000 }
 
 let write_all fd b =
@@ -903,9 +904,16 @@ module Forked = struct
     mutable fork_time : float;
     mutable polls : int;
     mutable poll_time : float;
+    mutable read_time : float;  (* reading and unmarshalling answers *)
+    mutable deliver_time : float;  (* in the caller's [deliver] *)
+    mutable refill_time : float;  (* handing out items, forks included *)
+    mutable received : int;  (* bytes of whole answers *)
     mutable delivered : int;
     mutable killed : int;
   }
+
+  (* Bytes of the whole answers read so far, for the debug summary. *)
+  let answer_bytes = ref 0
 
   (* What [p] has sent of its answer, read without waiting: a length, then
      exactly one whole marshalled value of that length. *)
@@ -925,6 +933,7 @@ module Forked = struct
         end
       | Some _ ->
         let payload = p.frame in
+        answer_bytes := !answer_bytes + Bytes.length payload;
         p.frame <- Bytes.create item_size;
         p.frame_got <- 0;
         p.in_answer <- false;
@@ -1043,7 +1052,7 @@ module Forked = struct
         | exception Unix.Unix_error _ -> false)
         s.exiting
 
-  let stop s =
+  let stop ?(extra = fun () -> mt ()) s =
     if not s.stopped then begin
       s.stopped <- true;
       let live = s.procs in
@@ -1060,14 +1069,17 @@ module Forked = struct
           str "forked processes: " ++ int s.delivered ++ str " answers of " ++ int s.next ++
           str " items handed out, of " ++ int s.k ++ str ", by " ++ int s.forks ++
           str " processes (" ++ int s.killed ++ str " killed; forks took " ++ real s.fork_time ++
-          str " s), " ++ int s.polls ++ str " polls (" ++ real s.poll_time ++ str " s), in " ++
-          real (Unix.gettimeofday () -. s.started) ++ str " s")
+          str " s), " ++ int s.polls ++ str " polls (" ++ real s.poll_time ++ str " s: reading " ++
+          int s.received ++ str " bytes " ++ real s.read_time ++ str " s, delivering " ++
+          real s.deliver_time ++ str " s, handing out " ++ real s.refill_time ++ str " s), in " ++
+          real (Unix.gettimeofday () -. s.started) ++ str " s" ++ extra ())
     end
 
   let start ?(heap_budget = max_int) ?(item_timeout = infinity) n f k =
     let s = { f; k; n = min n k; heap_budget; item_timeout; procs = []; exiting = [];
               next = 0; stopped = false; started = Unix.gettimeofday ();
-              forks = 0; fork_time = 0.; polls = 0; poll_time = 0.; delivered = 0;
+              forks = 0; fork_time = 0.; polls = 0; poll_time = 0.; read_time = 0.;
+              deliver_time = 0.; refill_time = 0.; received = 0; delivered = 0;
               killed = 0 } in
     (* After an error, no process keeps running. *)
     match refill s with
@@ -1078,6 +1090,7 @@ module Forked = struct
     if s.stopped then false
     else begin
       let t0 = Unix.gettimeofday () in
+      let bytes0 = !answer_bytes in
       s.polls <- s.polls + 1;
       let busy = List.filter (fun p -> Option.has_some p.current) s.procs in
       let ready =
@@ -1095,20 +1108,32 @@ module Forked = struct
              deadline has passed: an answer that came in time and waited for
              the main process counts. *)
           let late = Unix.gettimeofday () >= p.due in
-          if late || List.mem p.answers ready then
-            match (read_answer p : (int * 'a option * bool) progress), p.current with
+          if late || List.mem p.answers ready then begin
+            let t1 = Unix.gettimeofday () in
+            let answer = (read_answer p : (int * 'a option * bool) progress) in
+            let t2 = Unix.gettimeofday () in
+            s.read_time <- s.read_time +. (t2 -. t1);
+            match answer, p.current with
             | Whole (i, v, last), Some j when Int.equal i j ->
               p.answered <- p.answered + 1;
               (* With [last], it has spent its heap budget and exits. *)
               if last then retire s ~killed:false p else give s p;
-              Option.iter (fun v -> s.delivered <- s.delivered + 1; deliver i v) v
+              Option.iter (fun v ->
+                  s.delivered <- s.delivered + 1;
+                  deliver i v;
+                  s.deliver_time <- s.deliver_time +. (Unix.gettimeofday () -. t2))
+                v
             | Partial, _ when not late -> ()
             | (Whole _ | Partial | Broken), _ ->
               (* Late, ended, or wrong: its item is left to the caller. *)
-              retire s ~killed:true p)
+              retire s ~killed:true p
+          end)
         busy;
+      let t3 = Unix.gettimeofday () in
       refill s;
+      s.refill_time <- s.refill_time +. (Unix.gettimeofday () -. t3);
       reap_ended s;
+      s.received <- s.received + (!answer_bytes - bytes0);
       s.poll_time <- s.poll_time +. (Unix.gettimeofday () -. t0);
       List.exists (fun p -> Option.has_some p.current) s.procs
     end

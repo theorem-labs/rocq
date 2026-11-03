@@ -97,9 +97,10 @@ module Forked : sig
       to end. It answers whether some item is still being computed. An item
       whose [f i] raised gets no result. *)
 
-  val stop : 'a t -> unit
+  val stop : ?extra:(unit -> Pp.t) -> 'a t -> unit
   (** Kill every process that is left, wait for all of them, and close what
-      [start] opened. No result is delivered after it. *)
+      [start] opened. No result is delivered after it. With the debug flag
+      [checker-workers], it prints a summary, followed by [extra ()]. *)
 end
 
 val default_budget : float
