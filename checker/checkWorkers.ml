@@ -597,9 +597,13 @@ module Forked = struct
           (* All are killed first, so they end together. A process leaves
              [procs] for [exiting], and [exiting] only once it has been waited
              for, so a stop that was interrupted does what is left of it when
-             it is called again. *)
+             it is called again. Only the processes of [procs] are signalled:
+             none of them has been waited for, so each id still names its
+             process. Those of [exiting] were killed when they got there
+             ([retire], or the line below), and one of them may have been
+             waited for just before an interruption, its id free for another
+             process to take: they are only waited for, never signalled. *)
           List.iter (fun p -> kill p; close_items p; close_answers p) s.procs;
-          List.iter kill s.exiting;
           let exiting = List.filter (fun p -> not (List.memq p s.exiting)) s.procs @ s.exiting in
           s.exiting <- exiting;
           s.procs <- [];
