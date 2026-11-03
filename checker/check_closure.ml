@@ -472,11 +472,9 @@ let mind_node st view mind =
     So the report waits for none of them: at worst the walk computes every
     node itself, as without processes.
 
-    The chunks come in the order the walk is likely to need them: the
-    libraries of the requested models first, then the other libraries, the
-    last one checked first, and in each library the last opaque proof first.
-    ROCQCHK_READ_AHEAD_ORDER=plain, a measurement seam, keeps the order of
-    the environment instead.
+    The chunks follow the order of the environment, grouped by the library
+    whose table holds the bodies. Ordering them by what the walk is likely to
+    need first was measured and gained nothing.
 
     The node a process sends is the one the walk would compute. For a constant
     that the environment holds with a body, [lookup_constant] answers
@@ -530,42 +528,19 @@ let read_ahead_item_timeout = 120.
    nothing next to the walk. *)
 let read_ahead_poll_interval = 0.002
 
-(* The opaque constants of the environment, in the order the processes get
-   them, each with the library of the table that holds its body. *)
-let read_ahead_order st ~libraries models =
+(* The opaque constants of the environment, grouped by the library of the
+   table that holds their bodies (so a process reads each table once), each
+   with that library. *)
+let read_ahead_order st =
   let entries =
     Environ.fold_constants (fun kn cb acc -> match cb.const_body with
-        | OpaqueDef o ->
-          let _, _, dp, h = Opaqueproof.repr o in
-          (kn, dp, Opaqueproof.repr_handle h) :: acc
+        | OpaqueDef o -> let _, _, dp, _ = Opaqueproof.repr o in (kn, dp) :: acc
         | Def _ | Undef _ | Primitive _ | Symbol _ -> acc)
       st.env []
   in
-  let entries = Array.of_list entries in
-  match Sys.getenv_opt "ROCQCHK_READ_AHEAD_ORDER" with
-  | Some "plain" ->
-    let library (kn, _, _) = ModPath.dp (Constant.modpath kn) in
-    Array.stable_sort (fun a b -> DirPath.compare (library a) (library b)) entries;
-    Array.map (fun ((kn, _, _) as e) -> kn, library e) entries
-  | None | Some _ ->
-    let ranks = ref DirPath.Map.empty and count = ref 0 in
-    let add dp =
-      if not (DirPath.Map.mem dp !ranks) then begin
-        ranks := DirPath.Map.add dp !count !ranks;
-        incr count
-      end
-    in
-    List.iter (fun kn -> add (ModPath.dp (Constant.modpath kn))) models;
-    List.iter add libraries;
-    let ranked = Array.map (fun (kn, dp, h) ->
-        (kn, Option.default max_int (DirPath.Map.find_opt dp !ranks), h), dp) entries
-    in
-    Array.stable_sort (fun ((_, ra, ha), _) ((_, rb, hb), _) ->
-        match Int.compare ra rb with
-        | 0 -> Int.compare hb ha
-        | c -> c)
-      ranked;
-    Array.map (fun ((kn, _, _), dp) -> kn, dp) ranked
+  let entries = Array.of_list (List.rev entries) in
+  Array.stable_sort (fun (_, a) (_, b) -> DirPath.compare a b) entries;
+  entries
 
 (* Where each chunk starts in [libs], the library of each constant, and,
    last, the number of constants. *)
@@ -588,8 +563,8 @@ let read_ahead_chunks libs =
    [COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD] prints it. *)
 let read_ahead_used = ref 0
 
-let start_read_ahead st n ~libraries models =
-  let ordered = read_ahead_order st ~libraries models in
+let start_read_ahead st n =
+  let ordered = read_ahead_order st in
   let opaque = Array.map fst ordered in
   let bounds = read_ahead_chunks (Array.map snd ordered) in
   (* The nodes of chunk [c], each with its position in [opaque], so that no
@@ -1191,7 +1166,7 @@ let resolve_in_impl st name =
     in
     List.rev (split 0 [])
 
-let print ~jobs ~libraries env access requests =
+let print ~jobs env access requests =
   let index =
     (* Every constant under each printed name: two kernel names can print
        alike (a library P.A with a module B, and a library P.A.B), and a
@@ -1217,9 +1192,8 @@ let print ~jobs ~libraries env access requests =
   (* Read ahead only when some request has a model to walk, with one process
      fewer than [jobs]: this one walks. The walk computes whatever the
      processes did not: a failure here only leaves it more to compute. *)
-  let models = List.concat_map (fun r -> Option.default [] (CString.Map.find_opt r.req_model index)) requests in
-  if jobs > 1 && not (CList.is_empty models) then
-    (try start_read_ahead st (jobs - 1) ~libraries models
+  if jobs > 1 && List.exists (fun r -> CString.Map.mem r.req_model index) requests then
+    (try start_read_ahead st (jobs - 1)
      with e when CErrors.noncritical e -> ());
   (* No process outlives the walk, whichever way it ends. *)
   Fun.protect ~finally:(fun () -> stop_read_ahead st) (fun () ->
