@@ -131,9 +131,8 @@ and node = {
   (* no body: a constant without one, an opaque constant whose body cannot be
      read, or an object neither the environment nor an implementation
      resolves, which is reported rather than left out *)
-  flags : (string * string) list;
-  (* the relaxed typing conditions the selected object relies on,
-     (kind, object) *)
+  flags : string list;
+  (* the kinds of relaxed typing condition the selected object relies on *)
   resolved : bool;
   (* a constant the final environment holds without a body, reached in the
      public view and read through its implementation instead *)
@@ -339,8 +338,11 @@ let push_context view ctx todo =
       Context.Rel.Declaration.fold_constr (fun c todo -> (view, c) :: todo) d todo)
     todo ctx
 
-let typing_flags name (tf : typing_flags) acc =
-  let add ok kind acc = if ok then acc else (kind, name) :: acc in
+(* A node's flags are the kinds alone; [node_sets] names each by the
+   object's path and canonical, as an [axiom] line is, so that two objects
+   printing one path keep two flag lines. *)
+let typing_flags (tf : typing_flags) acc =
+  let add ok kind acc = if ok then acc else kind :: acc in
   acc
   |> add tf.check_universes "type-in-type"
   |> add tf.check_guarded "unsafe-fixpoint"
@@ -404,7 +406,7 @@ let constant_node st view kn =
       | _ -> false
     in
     { refs = refs_to_list refs; axiom; resolved;
-      flags = typing_flags (Constant.to_string kn) cb.const_typing_flags [] }
+      flags = typing_flags cb.const_typing_flags [] }
 
 let mind_node st view mind =
   match lookup_mind st view mind with
@@ -424,10 +426,9 @@ let mind_node st view mind =
                      CheckNames.quote (Id.to_string mip.mind_typename) ^
                      ", which is not an identifier.")))
       mib.mind_packets;
-    let name = MutInd.to_string mind in
     let tf = mib.mind_typing_flags in
-    let flags = typing_flags name tf [] in
-    let add cond kind flags = if cond then (kind, name) :: flags else flags in
+    let flags = typing_flags tf [] in
+    let add cond kind flags = if cond then kind :: flags else flags in
     let flags =
       flags
       |> add (not tf.check_positive) "assumed-positive"
@@ -550,7 +551,9 @@ let sets_size c =
 let node_sets st n obj = {
   axioms = if n.axiom then CString.Set.singleton (axiom_entry st obj) else CString.Set.empty;
   resolved_fields = if n.resolved then CString.Set.singleton (axiom_entry st obj) else CString.Set.empty;
-  flag_set = List.fold_left (fun s f -> FlagSet.add f s) FlagSet.empty n.flags;
+  flag_set =
+    (let entry = axiom_entry st obj in
+     List.fold_left (fun s kind -> FlagSet.add (kind, entry) s) FlagSet.empty n.flags);
 }
 
 (* Place 2 of the name check (checkNames.mli), for a name that the check at
@@ -989,7 +992,7 @@ let print env access requests =
         CString.Set.iter (line "axiom %s %s" r.req_name) c.axioms;
         (* before the flags: a reader takes resolved lines after the axioms *)
         CString.Set.iter (line "resolved %s %s" r.req_name) c.resolved_fields;
-        FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) c.flag_set)
+        FlagSet.iter (fun (kind, entry) -> line "flag %s %s %s" r.req_name kind entry) c.flag_set)
     requests;
   test_walk_count ();
   line "END STATEMENT REPORT"

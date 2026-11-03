@@ -116,3 +116,26 @@ grep -q '^axiom left Q.A.B.C.ax ?Q.A:B.C.ax$' "$d/qout"
 grep -q '^axiom right Q.A.B.C.ax ?Q.A.B:C.ax$' "$d/qout"
 [ "$(grep -c '^axiom [a-z]* Q.A.B.C.ax ?' "$d/qout")" = 2 ]
 grep -q '^END STATEMENT REPORT$' "$d/qout"
+
+# Two unsafe fixpoints named f that print one path (P.A's module B, and
+# library P.A.B) give two flag lines, told apart by the canonical column.
+# One library cannot require both, so each is reached from its own request.
+mkdir -p "$d/G/A"
+cat > "$d/G/A.v" <<'V'
+Module B. #[bypass_check(guard)] Fixpoint f (n : nat) : nat := f n. End B.
+Definition left : nat := B.f 0.
+V
+cat > "$d/G/A/B.v" <<'V'
+#[bypass_check(guard)] Fixpoint f (n : nat) : nat := f n.
+Definition right : nat := f 0.
+V
+$coqc -Q "$d/G" G "$d/G/A.v"
+$coqc -Q "$d/G" G "$d/G/A/B.v"
+printf 'left G.A.left -\nright G.A.B.right -\n' > "$d/greq"
+"$BIN"rocqchk -silent -statement-report "$d/greq" -Q "$d/G" G G.A G.A.B > "$d/gout" 2>&1
+sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/gout"
+grep -q '^flag left unsafe-fixpoint G.A.B.f G.A:B.f$' "$d/gout"
+grep -q '^flag right unsafe-fixpoint G.A.B.f G.A.B:f$' "$d/gout"
+[ "$(grep -c '^flag [a-z]* unsafe-fixpoint G.A.B.f ' "$d/gout")" = 2 ]
+awk '$1 == "flag" && NF != 5 { bad = 1 } END { exit bad }' "$d/gout"
+grep -q '^END STATEMENT REPORT$' "$d/gout"

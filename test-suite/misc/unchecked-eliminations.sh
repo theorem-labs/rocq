@@ -70,4 +70,4 @@ rocq check -Q theories UncheckedElim -statement-report "$reqs" -silent -norec Un
 rc=${PIPESTATUS[0]}
 rm -f "$reqs"
 [ "$rc" -eq 0 ] || { >&2 echo "rocq check -statement-report exited $rc"; exit 1; }
-grep -q "^flag large unchecked-eliminations UncheckedElim.unchecked.unchecked_or$" srlog
+grep -q "^flag large unchecked-eliminations UncheckedElim.unchecked.unchecked_or UncheckedElim.unchecked:unchecked_or$" srlog

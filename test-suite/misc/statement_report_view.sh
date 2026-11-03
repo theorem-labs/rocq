@@ -15,7 +15,7 @@ $coqc -allow-rewrite-rules -Q "$d" StmtView "$d/Prims.v"
 printf 'public_f StmtView.View.Impl.f -\nboom StmtView.View.Impl.boom -\npublic_f_after StmtView.View.Impl.f -\nalias StmtView.View.alias_model -\nalias_module StmtView.View.alias_module_model -\nalias_impl StmtView.View.alias_impl_model -\nfun_alias StmtView.View.fun_alias_model -\nfallback StmtView.View.FallbackX.model -\nint StmtView.Prims.i -\n' > "$d/requests"
 "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtView StmtView.View StmtView.Prims > "$d/out" 2>&1
 sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
-grep -q '^flag boom unsafe-fixpoint StmtView.View.Impl.f$' "$d/out"
+grep -q '^flag boom unsafe-fixpoint StmtView.View.Impl.f StmtView.View:Impl.f$' "$d/out"
 grep -q '^axiom alias StmtView.View.A.ax StmtView.View:A.ax$' "$d/out"
 grep -q '^axiom alias_module StmtView.View.A.ax StmtView.View:A.ax$' "$d/out"
 grep -q '^axiom alias_impl StmtView.View.A.ax StmtView.View:A.ax$' "$d/out"
