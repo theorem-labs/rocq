@@ -52,12 +52,14 @@ sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/pout"
 grep -q '^axiom left P.A.B.ax P.A:B.ax$' "$d/pout"
 grep -q '^axiom right P.A.B.ax P.A.B:ax$' "$d/pout"
 
-# A functor's own axiom is printed under the functor argument's unique form.
-cat > "$d/Fun.v" <<'V'
-Module Type E. End E.
-Module F (X : E). Axiom ax : nat. Definition n : nat := ax. End F.
-V
-$coqc -Q "$d" StmtCanon "$d/Fun.v"
-printf 'fn StmtCanon.Fun.F.n -\n' > "$d/freq"
-"$BIN"rocqchk -silent -statement-report "$d/freq" -Q "$d" StmtCanon StmtCanon.Fun > "$d/fout" 2>&1 || true
-awk '$1 == "axiom" && $4 !~ /:/ { bad = 1 } END { exit bad }' "$d/fout" "$d/out" "$d/pout"
+# The two print alike as P.A.B.ax: as a model or a trusted constant the
+# name is ambiguous, never one of them picked.
+printf 'm P.A.B.ax -\nt P.A.left P.A.B.ax\n' > "$d/areq"
+"$BIN"rocqchk -silent -statement-report "$d/areq" -Q "$d/P" P P.A P.A.B > "$d/aout" 2>&1
+sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/aout"
+grep -q '^statement m P.A.B.ax - ambiguous 0 0$' "$d/aout"
+grep -q '^statement t P.A.left P.A.B.ax trusted-ambiguous 1 0$' "$d/aout"
+grep -q '^END STATEMENT REPORT$' "$d/aout"
+
+# Every canonical on an axiom line has the root separator.
+awk '$1 == "axiom" && $4 !~ /:/ { bad = 1 } END { exit bad }' "$d/out" "$d/pout"

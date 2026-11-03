@@ -64,7 +64,11 @@ END STATEMENT REPORT
     one with the verdict [ambiguous] and no axiom or flag line, none with
     [model-missing]. A request that names a trusted constant is answered
     only from the final environment: a model only an implementation holds
-    answers [model-missing] there. A name the final environment holds is never looked up
+    answers [model-missing] there. A name two constants of the final
+    environment print as (a library [P.A] with a module [B], and a library
+    [P.A.B]) answers [ambiguous] as a model and [trusted-ambiguous] as a
+    trusted constant. The implementation lookup splits the name at every
+    dot, so a hidden module or label named [..] is not found there. A name the final environment holds is never looked up
     in an implementation.
 
     The verdict is [match] when [Definition f := model] ([Polymorphic] when

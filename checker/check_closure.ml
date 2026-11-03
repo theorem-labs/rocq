@@ -904,7 +904,12 @@ let resolve_in_impl st name =
 
 let print env access requests =
   let index =
-    Environ.fold_constants (fun c _ acc -> CString.Map.add (Constant.to_string c) c acc)
+    (* Every constant under each printed name: two kernel names can print
+       alike (a library P.A with a module B, and a library P.A.B), and a
+       request for such a name answers ambiguous rather than either one. *)
+    Environ.fold_constants (fun c _ acc ->
+        CString.Map.update (Constant.to_string c)
+          (function None -> Some [c] | Some l -> Some (c :: l)) acc)
       env CString.Map.empty
   in
   let st = {
@@ -922,7 +927,8 @@ let print env access requests =
   List.iter (fun r ->
       let trusted = Option.default "-" r.req_trusted in
       let model = match CString.Map.find_opt r.req_model index with
-        | Some c -> `One c
+        | Some [c] -> `One c
+        | Some _ -> `Ambiguous
         | None ->
           match resolve_in_impl st r.req_model with
           | [] -> `Missing
@@ -945,7 +951,8 @@ let print env access requests =
           | Some t ->
             match CString.Map.find_opt t index with
             | None -> "trusted-missing"
-            | Some t -> type_verdict env (Environ.lookup_constant model env) t
+            | Some [t] -> type_verdict env (Environ.lookup_constant model env) t
+            | Some _ -> "trusted-ambiguous"
         in
         line "statement %s %s %s %s %d %d" r.req_name r.req_model trusted verdict
           (CString.Set.cardinal c.axioms) (FlagSet.cardinal c.flag_set);
