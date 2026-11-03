@@ -63,8 +63,9 @@ END STATEMENT REPORT
     brings. Every such match is collected: one is answered as usual, more than
     one with the verdict [ambiguous] and no axiom or flag line, none with
     [model-missing]. A request that names a trusted constant is answered
-    only from the final environment: a model only an implementation holds
-    answers [model-missing] there. A name two constants of the final
+    only from the final environment: a model one implementation alone holds
+    answers [model-missing] there, and one several implementations hold
+    answers [ambiguous]. A name two constants of the final
     environment print as (a library [P.A] with a module [B], and a library
     [P.A.B]) answers [ambiguous] as a model and [trusted-ambiguous] as a
     trusted constant. The implementation lookup splits the name at every
