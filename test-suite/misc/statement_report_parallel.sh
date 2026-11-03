@@ -89,8 +89,9 @@ run 1 serial
 run 4 parallel
 same serial parallel
 
-# A heap budget of one byte: every process stops after one chunk, and fresh
-# processes take the rest. The report is still the -j 1 one.
+# A heap budget of one byte: a process stops after the first chunk that
+# allocates in its major heap, and fresh processes take the rest (the unit
+# tests of map_forked check that it does). The report is still the -j 1 one.
 run 4 budget ROCQCHK_READ_AHEAD_HEAP_BUDGET=1
 same serial budget
 
