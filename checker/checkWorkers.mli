@@ -73,34 +73,43 @@ val processes : unit -> int
 module Forked : sig
   type 'a t
 
-  val start : ?heap_budget:int -> ?item_timeout:float -> int -> (int -> 'a) -> int -> 'a t
-  (** [start ~heap_budget ~item_timeout n f k] forks up to [n] processes
-      created with [Unix.fork], which run [f] on the items [0 .. k-1], handed
-      out in that order. Each process inherits the heap as it is when it is
-      forked, at [start] or at a later [poll], prints nothing, and sends back
-      each result marshalled, so a result must hold no closure. [f] must have
-      no effect that anything depends on, and its result must depend on
-      nothing that changes after [start]: a result is used whatever happens
-      to its process afterwards. A process that has allocated more than
-      [heap_budget] bytes in its major heap (default: no bound) stops after
-      the item it is on, and a fresh process takes the items that are left. A
-      process that has not sent the whole answer to an item [item_timeout]
-      seconds (default: no bound) after it was given the item is killed, that
-      item gets no result, and a fresh process takes the items that are
-      left. *)
+  val start : ?lazy_gc:bool -> ?heap_budget:int -> ?item_timeout:float -> int ->
+    (int -> 'a) -> int -> 'a t
+  (** [start ~lazy_gc ~heap_budget ~item_timeout n f k] forks up to [n]
+      processes created with [Unix.fork], which run [f] on the items
+      [0 .. k-1], handed out in that order. Each process inherits the heap as
+      it is when it is forked, at [start] or at a later [poll], prints
+      nothing, and sends back each result marshalled, so a result must hold
+      no closure. [f] must have no effect that anything depends on, and its
+      result must depend on nothing that changes after [start]: a result is
+      used whatever happens to its process afterwards. A process that has
+      allocated more than [heap_budget] bytes in its major heap (default: no
+      bound) stops after the item it is on, and a fresh process takes the
+      items that are left. A process that has not sent the whole answer to an
+      item [item_timeout] seconds (default: no bound) after it was given the
+      item is killed, that item gets no result, and a fresh process takes the
+      items that are left. A process that stops is killed at once, and counts
+      among the [n] until it has been waited for. With [lazy_gc] (default:
+      false), this process's major GC is made lazy while some process runs,
+      so that it copies fewer shared pages, and takes back its own setting as
+      soon as no result can come, and at [stop]; with no process running, it
+      is never changed. *)
 
   val poll : ?wait:float -> 'a t -> (int -> 'a -> unit) -> bool
   (** [poll ~wait s deliver] calls [deliver i (f i)] for each result that
       has come whole since the last [poll], hands out items to free
-      processes, and forks fresh ones for those that stopped. It waits at
-      most [wait] seconds (default: 0) for a result, and never for a process
-      to end. It answers whether some item is still being computed. An item
-      whose [f i] raised gets no result. *)
+      processes, waits without blocking for those that were killed, and forks
+      fresh ones in their places. It waits at most [wait] seconds (default:
+      0) for a result, and never for a process to end. It answers whether a
+      result may still come: false once no process runs and none can take the
+      items that are left. An item whose [f i] raised gets no result. *)
 
   val stop : ?extra:(unit -> Pp.t) -> 'a t -> unit
-  (** Kill every process that is left, wait for all of them, and close what
-      [start] opened. No result is delivered after it. With the debug flag
-      [checker-workers], it prints a summary, followed by [extra ()]. *)
+  (** Kill every process that is left, wait for all of them, close what
+      [start] opened, and take back this process's GC. No result is
+      delivered after it. A stop that was interrupted does what is left of it
+      when it is called again. With the debug flag [checker-workers], it
+      prints a summary, followed by [extra ()]. *)
 end
 
 val default_budget : float
