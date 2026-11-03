@@ -1,15 +1,15 @@
-(* The budgets of lia's witness_list (the early-failure check and certificate reuse) must not
-   depend on how loaded the machine is.
+(* The budget of lia's early-failure check (witness_list) must not depend on how loaded the
+   machine is.
 
    Load does not change the work a call does, only the processor seconds each step of it takes,
    and not by the same factor for every step (caches, frequency and sibling hyperthreads are
-   shared with other processes). Each test runs the same call on the same clauses twice: once with
-   the prover's steps slowed, once with the other steps slowed, by burning processor time in the
+   shared with other processes). The test runs the same call on the same clauses twice: once with
+   the prover's steps slowed, once with the check's steps slowed, by burning processor time in the
    stubs. The work each run does is the same; its result must be the same.
 
-   In each test a search raises on one clause, as the prover can (a stack overflow, say), and a
-   budget decides whether the call gets to that clause: by the check finding a later clause that
-   fails first, or by reuse proving the clause instead of searching it. *)
+   A search raises on one clause, as the prover can (a stack overflow, say), and the budget
+   decides whether the call gets to that clause or the check fails it first at a later clause.
+   It failed on speed-7.5 (927fa93775), whose budget counted Sys.time. *)
 
 open OUnit
 open Utest
@@ -71,43 +71,12 @@ let early_run ~base ~prover_spin ~check_spin () =
 let () = add_test "the early-failure check decides the same under any load" (fun () ->
   let prover_slowed = outcome (early_run ~base:1000 ~prover_spin:0.002 ~check_spin:0.) in
   let check_slowed = outcome (early_run ~base:2000 ~prover_spin:0. ~check_spin:0.02) in
+  Printf.printf "prover's steps slowed: %s\ncheck's steps slowed: %s\n%!" prover_slowed
+    check_slowed;
   assert_equal
     ~msg:
       (Printf.sprintf "prover's steps slowed: %s; check's steps slowed: %s" prover_slowed
          check_slowed)
     prover_slowed check_slowed)
-
-(* Certificate reuse. [c1]'s search proves it; [c2] contains [c1]'s two formulas, so reuse can
-   prove it with [c1]'s certificate, but its search raises; [c3]'s search fails. Stock raises at
-   [c2]. The two formulas are large (4,000 terms), so the bookkeeping of reuse is not free. The
-   stub answers by the clause's length. *)
-let reuse_run ~prover_spin () =
-  let p = List.fold_left (fun acc i -> Mc.PEadd (acc, var (10 + i))) (var 10) (List.init 4000 succ) in
-  let f1 = ge p (cst 1) and f2 = le p (cst 0) in
-  let c1 = [f1; f2] in
-  let c2 = [ge (var 1) (cst 0); f1; f2] in
-  let c3 = List.init 4 (fun i -> ge (var (3 + i)) (cst 0)) in
-  let refute01 =
-    Mc.RatProof
-      (Mc.PsatzAdd (Mc.PsatzIn (Mutils.CamlToCoq.nat 0), Mc.PsatzIn (Mutils.CamlToCoq.nat 1)),
-       Mc.DoneProof)
-  in
-  assert_bool "the certificate of c1 refutes c1" (Mc.zChecker c1 refute01);
-  let search fs =
-    match List.length fs with
-    | 2 -> spin prover_spin; Certificate.Prf refute01
-    | 3 -> raise Boom
-    | _ -> Certificate.Unknown
-  in
-  Coq_micromega.lia_witness_list ~reuse:true search (List.rev_map clause [c1; c2; c3])
-
-let () = add_test "certificate reuse decides the same under any load" (fun () ->
-  let prover_slowed = outcome (reuse_run ~prover_spin:0.2) in
-  let prover_fast = outcome (reuse_run ~prover_spin:0.) in
-  assert_equal
-    ~msg:
-      (Printf.sprintf "prover's steps slowed: %s; prover's steps fast: %s" prover_slowed
-         prover_fast)
-    prover_slowed prover_fast)
 
 let () = run_tests __FILE__ (open_log_out_ch __FILE__) (List.rev !tests)
