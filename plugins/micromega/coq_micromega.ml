@@ -1763,7 +1763,22 @@ let speculate default f =
   * only through [micromega_tauto], which calls it without [clock]; only
   * [lia_witness_list], an entry point for the unit tests, passes one on.
   *)
-let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
+(* CALIBRATION INSTRUMENTATION, branch sami/micromega-deterministic-instr only, never for a cut:
+   MICROMEGA_BUDGET_LOG=<path> appends one JSON line per call to <path>.<pid>;
+   MICROMEGA_BUDGET_MODE=clock budgets the tactics by Sys.time, as speed-7.5 does. *)
+let instr_log =
+  lazy
+    (match Sys.getenv_opt "MICROMEGA_BUDGET_LOG" with
+     | None | Some "" -> None
+     | Some p ->
+       Some (open_out_gen [Open_append; Open_creat] 0o644 (p ^ "." ^ string_of_int (Unix.getpid ()))))
+let instr_clock = Sys.getenv_opt "MICROMEGA_BUDGET_MODE" = Some "clock"
+let instr_calls = ref 0
+
+let witness_list ?clock ~reuse eq_cst prover l =
+  let clock =
+    match clock with Some c -> c | None -> if instr_clock then Sys.time else Mutils.Work.now
+  in
   let check = match prover.check with Some c when reuse -> Some c | Some _ | None -> None in
   match (prover.early, check) with
   | None, None -> search_witness_list prover l
@@ -1852,6 +1867,13 @@ let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
        [reused_n]: the clauses reuse proved, which the second pass searches *)
     let start = clock () in
     let search_t = ref 0. and check_t = ref 0. and searched_n = ref 0 and reused_n = ref 0 in
+    let i_u0 = Mutils.Work.now () and i_s0 = Sys.time () in
+    let i_su = ref 0. and i_ss = ref 0. and i_cu = ref 0. and i_cs = ref 0. in
+    let i_mu = ref i_u0 and i_ms = ref i_s0 in
+    let i_fits_refused = ref 0 and i_fits_max = ref 0. and i_fits_n = ref 0 in
+    let i_reuse_refused = ref 0 and i_reuse_max = ref 0. and i_reuse_n = ref 0 in
+    let i_checked = ref 0 and i_early_fail = ref false and i_k = ref 0 in
+    let i_fp_end = ref None in
     (* The budget of reuse. On a goal that succeeds, the work beyond stock's is [check_t]: the work
        of the first pass outside its searches, that is the tries of stored certificates and their
        bookkeeping. [max_tries] bounds the number of checks, not their cost: a check can cost a
@@ -1864,19 +1886,40 @@ let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
        does. *)
     let reuse_in_budget () =
       let mean_search = !search_t /. float_of_int (max 1 !searched_n) in
-      !check_t <= (!search_t +. (float_of_int !reused_n *. mean_search)) /. 16.
+      let lim = (!search_t +. (float_of_int !reused_n *. mean_search)) /. 16. in
+      let ok = !check_t <= lim in
+      let r = if lim > 0. then !check_t /. lim else if !check_t > 0. then infinity else 0. in
+      incr i_reuse_n;
+      if ok then (if r > !i_reuse_max then i_reuse_max := r) else incr i_reuse_refused;
+      ok
     in
     let mark = ref (clock ()) in
+    let set_mark () =
+      mark := clock ();
+      i_mu := Mutils.Work.now ();
+      i_ms := Sys.time ()
+    in
     (* adds the count since the last mark to [t] *)
     let charge t =
       let now = clock () in
       t := !t +. (now -. !mark);
-      mark := now
+      mark := now;
+      let u = Mutils.Work.now () and s = Sys.time () in
+      i_cu := !i_cu +. (u -. !i_mu);
+      i_cs := !i_cs +. (s -. !i_ms);
+      i_mu := u;
+      i_ms := s
     in
     (* the work of the call that is neither the prover's nor a try of reuse, plus [step], fits the
        share of the check *)
     let fits step =
-      clock () -. start -. !search_t -. !check_t +. step < early_share *. !search_t
+      let used = clock () -. start -. !search_t -. !check_t +. step in
+      let lim = early_share *. !search_t in
+      let ok = used < lim in
+      let r = if lim > 0. then used /. lim else infinity in
+      incr i_fits_n;
+      if ok then (if r > !i_fits_max then i_fits_max := r) else incr i_fits_refused;
+      ok
     in
     let atom_size = match early with Some early -> early.size | None -> fun _ -> 0 in
     let size_cap = 1 lsl 21 in
@@ -1903,8 +1946,11 @@ let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
        room and [max_samples] is not reached: the sizing is the check's work. *)
     let prove more e =
       let t = clock () in
+      let u0 = Mutils.Work.now () and s0 = Sys.time () in
       let r = find_witness prover e in
       let dt = clock () -. t in
+      i_su := !i_su +. (Mutils.Work.now () -. u0);
+      i_ss := !i_ss +. (Sys.time () -. s0);
       search_t := !search_t +. dt;
       incr searched_n;
       (match r with
@@ -1950,6 +1996,7 @@ let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
         let rec go checked upto rest =
           match rest with
           | e :: rest' when checked < upto && affordable e -> (
+            incr i_checked;
             match speculate (Some false) (fun () -> early.fails clock fits (key e)) with
             | Some true -> None
             | Some false -> go (checked + 1) upto rest'
@@ -1965,14 +2012,17 @@ let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
     let rec xwitness_list found k checked rest stack visited =
       match stack with
       | [] ->
+        i_k := k;
+        i_fp_end := Some (Mutils.Work.now (), Sys.time ());
         if !reused_n > 0 then rerun (List.rev visited) []
         else Prf (CList.map_filter snd visited)
       | e :: stack -> (
         let checked, rest = if checked < k then (k, e :: stack) else (checked, rest) in
         match early_turn k checked rest with
-        | None -> Unknown
+        | None -> i_k := k; i_early_fail := true; Unknown
         | Some (checked, rest) -> (
-          mark := clock ();
+          i_k := k;
+          set_mark ();
           let tried =
             match check with
             | Some check when not (CList.is_empty found) && reuse_in_budget () ->
@@ -1989,7 +2039,7 @@ let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
             | Model m -> Model (m, e)
             | Unknown -> Unknown
             | Prf w ->
-              mark := clock ();
+              set_mark ();
               let found =
                 match check with
                 | None -> found
@@ -2005,7 +2055,39 @@ let witness_list ?(clock = Mutils.Work.now) ~reuse eq_cst prover l =
               xwitness_list found (k + 1) checked rest stack ((e, Some w) :: visited) ) ) )
     in
     let stack = List.rev l in
-    xwitness_list [] 0 0 stack stack []
+    let log outcome =
+      match Lazy.force instr_log with
+      | None -> ()
+      | Some oc ->
+        incr instr_calls;
+        let u1, s1 =
+          match !i_fp_end with Some p -> p | None -> (Mutils.Work.now (), Sys.time ())
+        in
+        let tu = u1 -. i_u0 and ts = s1 -. i_s0 in
+        let fin x = if Float.is_finite x then Printf.sprintf "%.6g" x else "null" in
+        Printf.fprintf oc
+          "{\"file\":%S,\"call\":%d,\"prover\":%S,\"mode\":%S,\"clauses\":%d,\"decided\":%d,\
+           \"outcome\":%S,\"early_fail\":%b,\"checked\":%d,\"searched\":%d,\"reused\":%d,\
+           \"prover_u\":%s,\"prover_s\":%s,\"reuse_u\":%s,\"reuse_s\":%s,\
+           \"outside_u\":%s,\"outside_s\":%s,\"fits_n\":%d,\"fits_refused\":%d,\
+           \"fits_max_ok\":%s,\"reuse_n\":%d,\"reuse_refused\":%d,\"reuse_max_ok\":%s}\n"
+          Sys.argv.(Array.length Sys.argv - 1) !instr_calls prover.name
+          (if instr_clock then "clock" else "work")
+          (List.length l) !i_k outcome !i_early_fail !i_checked !searched_n !reused_n
+          (fin !i_su) (fin !i_ss) (fin !i_cu) (fin !i_cs)
+          (fin (tu -. !i_su -. !i_cu)) (fin (ts -. !i_ss -. !i_cs))
+          !i_fits_n !i_fits_refused (fin !i_fits_max) !i_reuse_n !i_reuse_refused
+          (fin !i_reuse_max);
+        flush oc
+    in
+    match xwitness_list [] 0 0 stack stack [] with
+    | Prf _ as r -> log "prf"; r
+    | Unknown as r -> log "unknown"; r
+    | Model _ as r -> log "model"; r
+    | exception e ->
+      let e = Exninfo.capture e in
+      log (Printexc.to_string (fst e));
+      Exninfo.iraise e
 (*  let t1 = System.get_time () in
   let res = witness_list p g in
   let t2 = System.get_time () in
