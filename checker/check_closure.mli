@@ -23,7 +23,7 @@ val read_requests : string -> request list
     are skipped. A tab or carriage return on any line is an error.
     @raise CErrors.UserError on any other line. *)
 
-val print : Environ.env -> (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) ->
+val print : jobs:int -> Environ.env -> (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) ->
   request list -> unit
 (** Print the report, one line per message on the feedback channel:
 
@@ -126,4 +126,10 @@ END STATEMENT REPORT
     typing conditions of what they reach:
     [type-in-type], [unsafe-fixpoint], [unchecked-eliminations],
     [assumed-positive], [uip] and [indices-not-mattering]. Statements keep
-    request order; axioms and flags are sorted. *)
+    request order; axioms and flags are sorted.
+
+    With [jobs] above 1, up to [jobs] forked processes read and walk the
+    opaque bodies of the environment before the requests are walked
+    ([CheckWorkers.map_forked]). The report is the one printed with [jobs]
+    at 1: a process only computes what the main process would compute, and
+    the main process computes whatever a process did not send. *)

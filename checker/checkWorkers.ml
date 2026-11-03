@@ -50,6 +50,8 @@ let set_jobs ~profiling n =
         (str "Option -j is ignored when profiling; checking sequentially.")
     else max_workers := n - 1
 
+let processes () = !max_workers + 1
+
 let error_printer = ref (fun _ -> ())
 let set_error_printer f = error_printer := f
 
@@ -232,6 +234,215 @@ let spawn tasks =
       Unix.close report_out;
       check_here_instead (Unix.error_message err)
 
+let close_report fd = try Unix.close fd with Unix.Unix_error _ -> ()
+
+(* Running a function on items in forked processes ([map_forked]).
+
+   The main process hands the items out one at a time, in order, each to the
+   first process that is free, on a pipe of that process's own: an item is 8
+   bytes (big endian), and closing the pipe means there are no more. A process
+   answers each item on a second pipe with 8 bytes, the length of what
+   follows, then the item and its result, marshalled. A process prints
+   nothing: its standard output and error are /dev/null, and it ends with
+   [Unix._exit], so no [at_exit] function of the main process runs in it and
+   nothing still buffered is written twice. Its GC is the one of a worker
+   ([tune_gc]). *)
+let item_size = 8
+
+let write_all fd b =
+  let rec go off =
+    if off < Bytes.length b then
+      match Unix.write fd b off (Bytes.length b - off) with
+      | k -> go (off + k)
+      | exception Unix.Unix_error (Unix.EINTR, _, _) -> go off
+  in
+  go 0
+
+(* Exactly [len] bytes, or [None] at end of file or on an error. *)
+let read_exactly fd len =
+  let b = Bytes.create len in
+  let rec go off =
+    if off = len then Some b
+    else match Unix.read fd b off (len - off) with
+      | 0 -> None
+      | k -> go (off + k)
+      | exception Unix.Unix_error (Unix.EINTR, _, _) -> go off
+      | exception Unix.Unix_error _ -> None
+  in
+  go 0
+
+let int_bytes i =
+  let b = Bytes.create item_size in
+  Bytes.set_int64_be b 0 (Int64.of_int i);
+  b
+
+let run_forked ~items ~results f =
+  at_exit (fun () -> Unix._exit 2);
+  let code =
+    try
+      let null = Unix.openfile "/dev/null" [Unix.O_WRONLY] 0 in
+      Unix.dup2 null Unix.stdout;
+      Unix.dup2 null Unix.stderr;
+      Unix.close null;
+      tune_gc ();
+      let rec loop () =
+        match read_exactly items item_size with
+        | None -> 0
+        | Some b ->
+          let i = Int64.to_int (Bytes.get_int64_be b 0) in
+          let v = try Some (f i) with _ -> None in
+          let payload = Marshal.to_bytes (i, v) [] in
+          write_all results (int_bytes (Bytes.length payload));
+          write_all results payload;
+          loop ()
+      in
+      loop ()
+    with _ -> 1
+  in
+  Unix._exit code
+
+(* One answer, or [None] if the process ended or wrote something else: a
+   length, then exactly one whole marshalled value of that length. *)
+let read_answer fd =
+  match read_exactly fd item_size with
+  | None -> None
+  | Some b ->
+    let len = Int64.to_int (Bytes.get_int64_be b 0) in
+    if len < Marshal.header_size || len > Sys.max_string_length then None
+    else match read_exactly fd len with
+      | None -> None
+      | Some payload ->
+        match Marshal.total_size payload 0 with
+        | total when Int.equal total len ->
+          (try Some (Marshal.from_bytes payload 0) with _ -> None)
+        | _ -> None
+        | exception _ -> None
+
+type 'a forked = {
+  fpid : int;
+  items : Unix.file_descr;
+  mutable items_open : bool;
+  answers : Unix.file_descr;
+  mutable current : int option;  (* the item it was given and has not answered *)
+  mutable got : (int * 'a option) list;  (* its answers so far *)
+  mutable failed : bool;
+}
+
+(* Closed once only: a second close could close a descriptor reused since. *)
+let close_items p =
+  if p.items_open then begin
+    p.items_open <- false;
+    close_report p.items
+  end
+
+let map_forked n f k =
+  let out = Array.make k None in
+  let n = min n k in
+  if n < 1 then out
+  else begin
+    (* Otherwise a process would hold what is still buffered. *)
+    flush_output ();
+    (* A write to a process that has ended must fail, not kill this one. *)
+    let sigpipe = Sys.signal Sys.sigpipe Sys.Signal_ignore in
+    let procs = ref [] in
+    let next = ref 0 in
+    let start0 = Unix.gettimeofday () in
+    let start () =
+      match Unix.pipe ~cloexec:true () with
+      | exception Unix.Unix_error _ -> ()
+      | items_in, items ->
+        match Unix.pipe ~cloexec:true () with
+        | exception Unix.Unix_error _ -> close_report items_in; close_report items
+        | answers, answers_out ->
+          match Unix.fork () with
+          | 0 ->
+            (* A process that kept the item pipe of another one open would
+               keep that one waiting for items after the last. *)
+            List.iter (fun p -> close_items p; close_report p.answers) !procs;
+            close_report items;
+            close_report answers;
+            run_forked ~items:items_in ~results:answers_out f
+          | fpid ->
+            close_report items_in;
+            close_report answers_out;
+            procs := { fpid; items; items_open = true; answers; current = None; got = [];
+                       failed = false } :: !procs
+          | exception Unix.Unix_error _ ->
+            List.iter close_report [items_in; items; answers; answers_out]
+    in
+    let fail p =
+      p.failed <- true;
+      p.current <- None;
+      p.got <- [];
+      close_items p;
+      (try Unix.kill p.fpid Sys.sigkill with Unix.Unix_error _ -> ())
+    in
+    let give p =
+      if !next < k then begin
+        let i = !next in
+        incr next;
+        match write_all p.items (int_bytes i) with
+        | () -> p.current <- Some i
+        | exception Unix.Unix_error _ -> fail p
+      end
+      else begin
+        p.current <- None;
+        close_items p
+      end
+    in
+    let hand_out () =
+      for _ = 1 to n do start () done;
+      List.iter give (List.rev !procs);
+      let rec loop () =
+        let busy = List.filter (fun p -> Option.has_some p.current) !procs in
+        if not (CList.is_empty busy) then begin
+          let ready =
+            match Unix.select (List.map (fun p -> p.answers) busy) [] [] (-1.) with
+            | ready, _, _ -> ready
+            | exception Unix.Unix_error (Unix.EINTR, _, _) -> []
+          in
+          List.iter (fun p ->
+              if List.mem p.answers ready then
+                match read_answer p.answers, p.current with
+                | Some (i, v), Some j when Int.equal i j ->
+                  p.got <- (i, v) :: p.got;
+                  give p
+                | _ -> fail p)
+            busy;
+          loop ()
+        end
+      in
+      loop ()
+    in
+    (* A process's answers count only if it then exited with code 0. *)
+    let finish p =
+      close_items p;
+      let status =
+        match waitpid_non_intr [] p.fpid with
+        | _, status -> Some status
+        | exception Unix.Unix_error _ -> None
+      in
+      close_report p.answers;
+      let ok = not p.failed && status = Some (Unix.WEXITED 0) in
+      if ok then List.iter (fun (i, v) -> out.(i) <- v) p.got;
+      debug (fun () ->
+          str "forked process " ++ int p.fpid ++ str ": " ++ int (List.length p.got) ++
+          str " items" ++ (if ok then mt () else str ", discarded"))
+    in
+    let finally () =
+      (* After an error, no process keeps running. *)
+      List.iter (fun p -> if Option.has_some p.current then fail p) !procs;
+      List.iter finish !procs;
+      Sys.set_signal Sys.sigpipe sigpipe;
+      debug (fun () ->
+          str "forked processes: " ++ int !next ++ str " of " ++ int k ++
+          str " items handed out in " ++ real (Unix.gettimeofday () -. start0) ++ str " s")
+    in
+    Fun.protect ~finally (fun () ->
+        try hand_out () with e when CErrors.noncritical e -> ());
+    out
+  end
+
 let signal_name s =
   let names = Sys.[
       sigabrt, "SIGABRT"; sigbus, "SIGBUS"; sigfpe, "SIGFPE";
@@ -243,8 +454,6 @@ let signal_name s =
   match List.assoc_opt s names with
   | Some name -> name
   | None -> "signal " ^ string_of_int s
-
-let close_report fd = try Unix.close fd with Unix.Unix_error _ -> ()
 
 let abort () =
   let workers = !running in
