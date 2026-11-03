@@ -468,9 +468,9 @@ let name_of = function
    a term's canonical half is the one its constant is stored under: a library
    could name [Evil.ax] with the canonical half [Allowed.ax]. So the canonical
    printed for an object the final environment holds is the canonical half of
-   the key it is stored under there ([Environ.lookup_constant_key]); only an object
-   that only an implementation holds is printed by the term's own pair. Two
-   paths to one constant give one canonical name.
+   the key it is stored under there ([Environ.lookup_constant_key]); an object
+   that only an implementation holds prints [?] instead (see [canonical_kn]).
+   Two paths to one constant give one canonical name.
 
    It is printed so that two kernel names never print alike: the root of the
    module path, then [:], then the modules under it and the label, separated
@@ -490,20 +490,25 @@ let canonical_kername kn =
   r ^ ":" ^ String.concat "." (mods @ [Label.to_string l])
 
 (* The canonical kernel name printed for [obj]; the name check reads the same
-   one ([printable_name]). *)
+   one ([printable_name]). [None] for an object only an implementation holds:
+   its canonical half comes from the term that names it, which no check ties
+   to a declaration, so it is printed as [?], which a reader never joins on. *)
 let canonical_kn env = function
   | GlobRef.ConstRef kn ->
     if Environ.mem_constant kn env then
       let _, _, can = Environ.lookup_constant_key kn env in Some can
-    else Some (Constant.canonical kn)
+    else None
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
     if Environ.mem_mind mind env then
       let _, _, can = Environ.lookup_mind_key mind env in Some can
-    else Some (MutInd.canonical mind)
+    else None
   | GlobRef.VarRef _ -> None
 
 let canonical_of st obj =
-  match canonical_kn st.env obj with Some kn -> canonical_kername kn | None -> "-"
+  match obj, canonical_kn st.env obj with
+  | _, Some kn -> canonical_kername kn
+  | GlobRef.VarRef _, None -> "-"
+  | (GlobRef.ConstRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _), None -> "?"
 
 (* An [axiom] line's two names: the path the term reached the object by, then
    its canonical kernel name. *)
