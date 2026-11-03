@@ -115,6 +115,8 @@ type 'node read_ahead = {
   ahead_opaque : Constant.t array;  (* the constants handed out, by position *)
   mutable ticks : int;  (* nodes looked up since the processes were started *)
   mutable last_poll : float;
+  gc_control : Gc.control;  (* the GC of this process before the processes *)
+  gc_start : Gc.stat;
 }
 
 type state = {
@@ -472,9 +474,12 @@ let mind_node st view mind =
 
 exception Unreadable
 
-(* Constants handed to a process at a time. The constants are sorted by
-   library, so a chunk mostly reads the table of opaque proofs of one library. *)
-let read_ahead_chunk = 32
+(* A chunk, what a process is handed at a time, is the opaque constants of
+   one library, so that a process reads the table of opaque proofs of a
+   library once: at most [read_ahead_chunk_max] of them, and libraries with
+   fewer than [read_ahead_chunk_min] go together. *)
+let read_ahead_chunk_min = 32
+let read_ahead_chunk_max = 128
 
 (* Bytes a process may allocate in its major heap before a fresh one replaces
    it. A process shares the heap of the main process, about the size of the
@@ -491,8 +496,8 @@ let read_ahead_heap_budget () =
   | Some _ | None -> 1 lsl 28
 
 (* Seconds a process has to answer one chunk before it is killed and the
-   walk computes its nodes itself. A chunk takes about a tenth of a second
-   on a large development (4,515 chunks in 25 s over 16 processes), so this
+   walk computes its nodes itself. A chunk of a large development takes
+   about a second at most (about 6 ms a body, at most 128 bodies), so this
    only stops a process that will not end, for instance on a malformed
    stored proof that no request reaches. *)
 let read_ahead_item_timeout = 120.
@@ -503,7 +508,7 @@ let read_ahead_item_timeout = 120.
 let read_ahead_poll_interval = 0.002
 
 (* The opaque constants of the environment, in the order the processes get
-   them. *)
+   them, each with the library of the table that holds its body. *)
 let read_ahead_order st ~libraries models =
   let entries =
     Environ.fold_constants (fun kn cb acc -> match cb.const_body with
@@ -514,12 +519,11 @@ let read_ahead_order st ~libraries models =
       st.env []
   in
   let entries = Array.of_list entries in
-  let name (kn, _, _) = kn in
   match Sys.getenv_opt "ROCQCHK_READ_AHEAD_ORDER" with
   | Some "plain" ->
     let library (kn, _, _) = ModPath.dp (Constant.modpath kn) in
     Array.stable_sort (fun a b -> DirPath.compare (library a) (library b)) entries;
-    Array.map name entries
+    Array.map (fun ((kn, _, _) as e) -> kn, library e) entries
   | None | Some _ ->
     let ranks = ref DirPath.Map.empty and count = ref 0 in
     let add dp =
@@ -531,24 +535,44 @@ let read_ahead_order st ~libraries models =
     List.iter (fun kn -> add (ModPath.dp (Constant.modpath kn))) models;
     List.iter add libraries;
     let ranked = Array.map (fun (kn, dp, h) ->
-        (kn, Option.default max_int (DirPath.Map.find_opt dp !ranks), h)) entries
+        (kn, Option.default max_int (DirPath.Map.find_opt dp !ranks), h), dp) entries
     in
-    Array.stable_sort (fun (_, ra, ha) (_, rb, hb) ->
+    Array.stable_sort (fun ((_, ra, ha), _) ((_, rb, hb), _) ->
         match Int.compare ra rb with
         | 0 -> Int.compare hb ha
         | c -> c)
       ranked;
-    Array.map name ranked
+    Array.map (fun ((kn, _, _), dp) -> kn, dp) ranked
+
+(* Where each chunk starts in [libs], the library of each constant, and,
+   last, the number of constants. *)
+let read_ahead_chunks libs =
+  let total = Array.length libs in
+  let starts = ref [0] and start = ref 0 in
+  for j = 1 to total - 1 do
+    let size = j - !start in
+    if size >= read_ahead_chunk_max
+    || (size >= read_ahead_chunk_min && not (DirPath.equal libs.(j) libs.(j - 1)))
+    then begin
+      starts := j :: !starts;
+      start := j
+    end
+  done;
+  if Int.equal total 0 then [| 0 |] else Array.of_list (List.rev (total :: !starts))
+
+(* Test-only seam, beside [test_fault] below: how many nodes the walk took
+   from the processes of [start_read_ahead].
+   [COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD] prints it. *)
+let read_ahead_used = ref 0
 
 let start_read_ahead st n ~libraries models =
-  let opaque = read_ahead_order st ~libraries models in
-  let total = Array.length opaque in
-  let chunks = (total + read_ahead_chunk - 1) / read_ahead_chunk in
+  let ordered = read_ahead_order st ~libraries models in
+  let opaque = Array.map fst ordered in
+  let bounds = read_ahead_chunks (Array.map snd ordered) in
   (* The nodes of chunk [c], each with its position in [opaque], so that no
      name is sent back. *)
   let chunk c =
-    let first = c * read_ahead_chunk in
-    let last = min total (first + read_ahead_chunk) - 1 in
+    let first = bounds.(c) in
     let rec go j acc =
       if j < first then acc
       else
@@ -559,17 +583,33 @@ let start_read_ahead st n ~libraries models =
         in
         go (j - 1) acc
     in
-    go last []
+    go (bounds.(c + 1) - 1) []
   in
+  let gc_control = Gc.get () in
   let session = CheckWorkers.Forked.start ~heap_budget:(read_ahead_heap_budget ())
-      ~item_timeout:read_ahead_item_timeout n chunk chunks
+      ~item_timeout:read_ahead_item_timeout n chunk (Array.length bounds - 1)
   in
   st.ahead <- Some { session; ahead_opaque = opaque; ticks = 0;
-                     last_poll = Unix.gettimeofday () }
+                     last_poll = Unix.gettimeofday (); gc_control;
+                     gc_start = Gc.quick_stat () };
+  (* While the processes share the heap of this one, a major collection here
+     would mark, and so copy, every page of it that holds a live block: this
+     process collects as lazily as they do until they are stopped. *)
+  Gc.set { gc_control with Gc.space_overhead = max gc_control.Gc.space_overhead 1000 }
 
 let stop_read_ahead st = match st.ahead with
   | None -> ()
-  | Some a -> st.ahead <- None; CheckWorkers.Forked.stop a.session
+  | Some a ->
+    st.ahead <- None;
+    Gc.set a.gc_control;
+    let extra () =
+      let s = Gc.quick_stat () in
+      Pp.(str "; the walk took " ++ int !read_ahead_used ++ str " nodes, and ran " ++
+          int (s.Gc.minor_collections - a.gc_start.Gc.minor_collections) ++
+          str " minor and " ++ int (s.Gc.major_collections - a.gc_start.Gc.major_collections) ++
+          str " major collections, its heap " ++ int (s.Gc.heap_words / 131072) ++ str " MiB")
+    in
+    CheckWorkers.Forked.stop ~extra a.session
 
 (* Takes the nodes that have come, and answers whether more may come. A
    failure only stops the processes: the walk computes the rest. *)
@@ -593,11 +633,6 @@ let read_ahead_tick st ~miss = match st.ahead with
     if (miss || Int.equal (a.ticks land 63) 0)
     && Unix.gettimeofday () -. a.last_poll >= read_ahead_poll_interval
     then ignore (poll_read_ahead st a)
-
-(* Test-only seam, beside [test_fault] below: how many nodes the walk took
-   from the processes of [start_read_ahead].
-   [COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD] prints it. *)
-let read_ahead_used = ref 0
 
 let read_ahead_node st view kn =
   let n = match view, st.ahead with
