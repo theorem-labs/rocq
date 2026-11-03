@@ -460,13 +460,34 @@ let inMLModule : ml_module_object -> Libobject.obj =
       cache_function = (fun _ -> ());
       load_function = load_ml_objects;
       subst_function = (fun (_,o) -> o);
-      classify_function = classify_ml_objects }
+      classify_function = classify_ml_objects;
+      (* The library label reads the plugin names and whether each is an
+         implicit dependency, not the digests of the plugins' files
+         ([mdigests], which the object still stores and which a rebuild of
+         the plugin moves: LibkeyObjects, label version 4). *)
+      interface_key = Key_stripped (fun o -> { o with mdigests = [] }) }
+
+(* The plugins' files as findlib resolves them, for the attempted-resolution
+   records ([Attempts]). *)
+let () =
+  Attempts.set_plugin_resolver (fun lib ->
+      match Fl_internals.fl_find_plugins lib with
+      | files -> Some files
+      | exception e when CErrors.noncritical e -> None)
+
+let is_loaded_module name =
+  List.exists (fun p -> String.equal (PluginSpec.to_package p) name) (get_loaded_modules ())
 
 let declare_ml_modules local mnames =
   let mnames = List.map (PluginSpec.of_package ~usercode:true) mnames in
+  (* Logged before anything can fail, so that a declaration under [Fail]
+     that names a missing plugin is recorded too. *)
+  List.iter (fun p -> Attempts.record_ml_module (PluginSpec.to_package p)) mnames;
   if Lib.sections_are_opened()
   then CErrors.user_err Pp.(str "Cannot Declare ML Module while sections are opened.");
   let mnames = PluginSpec.add_deps mnames in
+  List.iter (fun (implicit, p) ->
+      if implicit then Attempts.record_ml_module (PluginSpec.to_package p)) mnames;
   let mdigests = CList.concat_map (fun (_,plugin) -> PluginSpec.digest plugin) mnames in
   Lib.add_leaf (inMLModule {mlocal=local; mnames; mdigests});
   (* We can't put this in cache_function: it may declare other

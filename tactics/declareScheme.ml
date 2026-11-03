@@ -30,10 +30,12 @@ let subst_scheme (subst,(kind,l)) =
 
 let inScheme : Libobject.locality * (string * (inductive * GlobRef.t)) -> Libobject.obj =
   let open Libobject in
-  declare_object @@ object_with_locality "SCHEME"
+  (* A scheme kind name, an inductive and a global reference: no source
+     location. *)
+  declare_object { (object_with_locality "SCHEME"
     ~cache:cache_scheme
     ~subst:(Some subst_scheme)
-    ~discharge:(fun x -> x)
+    ~discharge:(fun x -> x)) with interface_key = Key_as_is }
 
 let declare_scheme local kind indcl =
   Lib.add_leaf (inScheme (local,(kind,indcl)))

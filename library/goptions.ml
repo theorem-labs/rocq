@@ -106,9 +106,13 @@ module MakeTable =
         if p' == p then obj else
           (f,p')
       in
-      Libobject.declare_object @@
-      Libobject.object_with_locality ~cat:opts_cat nick
-        ~cache ~subst:(Some subst) ~discharge:(on_snd A.discharge)
+      (* Every table instance stores a kernel object (A.t is a global
+         reference, an inductive or a string, see [RefConvertArg]): no
+         source location. *)
+      Libobject.declare_object
+        { (Libobject.object_with_locality ~cat:opts_cat nick
+             ~cache ~subst:(Some subst) ~discharge:(on_snd A.discharge))
+          with Libobject.interface_key = Libobject.Key_as_is }
 
     let add_option local c =
       A.check_local local c;
@@ -316,6 +320,9 @@ let option_object name stage act =
     subst_function = (fun (_,o) -> o);
     discharge_function = discharge_option;
     classify_function = classify_option;
+    (* The value is a bool, an int option, a string or a string option
+       ([option_kind]): no source location. *)
+    interface_key = Libobject.Key_as_is;
   }
 
 let declare_option ?(preprocess = fun x -> x) ?(no_summary=false) ~kind

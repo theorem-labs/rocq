@@ -492,7 +492,9 @@ let inDB : db_obj -> Libobject.obj =
     cache_function = cache_db;
     load_function = load_db;
     subst_function = (fun (_, x) -> x);
-    classify_function = classify_db; }
+    classify_function = classify_db;
+    (* A flag and a database name: no source location. *)
+    interface_key = Key_as_is; }
 
 let create_rewrite_hint_db ~local ~name =
   let hint = { db_local = local; db_name = name } in
@@ -527,12 +529,19 @@ let subst_hintrewrite (subst,(rbase,list as node)) =
       (rbase,list')
 
 (* Declaration of the Hint Rewrite library object *)
+(* Only the tactic of a rewrite rule can hold a source location; the rest
+   are kernel names, kernel terms, universes and a flag. *)
+let strip_hintrewrite (local, (rbase, rules)) =
+  let strip_rule r = { r with rew_tac = Option.map Gentactic.strip r.rew_tac } in
+  (local, (rbase, List.map strip_rule rules))
+
 let inHintRewrite : Libobject.locality * (string * rew_rule list) -> Libobject.obj =
   let open Libobject in
-  declare_object @@ object_with_locality ~cat:Hints.hint_cat "HINT_REWRITE_GLOBAL"
+  declare_object { (object_with_locality ~cat:Hints.hint_cat "HINT_REWRITE_GLOBAL"
     ~cache:cache_hintrewrite
     ~subst:(Some subst_hintrewrite)
-    ~discharge:(fun _ -> assert false)
+    ~discharge:(fun _ -> assert false))
+    with interface_key = Key_stripped strip_hintrewrite }
 
 type hypinfo = {
   hyp_ty : EConstr.types;

@@ -11,3 +11,7 @@
 open Analyze
 
 val validate : Values.value -> data * obj LargeArray.t -> unit
+
+val check : Values.value -> data * obj LargeArray.t -> (unit, string) result
+(** [validate] that prints nothing: [Error] says what failed and where. For a
+    reader whose standard output is a document ([rocq-library-label]). *)

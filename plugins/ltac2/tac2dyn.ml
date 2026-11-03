@@ -15,6 +15,7 @@ struct
   type ('a, 'b) tag = ('a * 'b) DYN.tag
   let eq = DYN.eq
   let repr = DYN.repr
+  let repr_opt = DYN.repr_opt
   let create = DYN.create
   type glb = Glb : (_,'a) tag * 'a  -> glb
 end
