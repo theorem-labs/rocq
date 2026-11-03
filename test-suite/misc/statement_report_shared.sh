@@ -78,10 +78,10 @@ diff -u "$d/first" "$d/again"
 # The tree must really exercise axioms and a flag, or the test proves nothing.
 awk '$1 == "statement" && $2 == "r_m_axiom" { exit !($6 >= 2) }
      END { }' "$d/together"
-grep -q '^axiom r_m_axiom StmtShared.Shared.other$' "$d/together"
-grep -q '^axiom r_m_axiom StmtShared.Shared.base$' "$d/together"
+grep -q '^axiom r_m_axiom StmtShared.Shared.other StmtShared.Shared.other$' "$d/together"
+grep -q '^axiom r_m_axiom StmtShared.Shared.base StmtShared.Shared.base$' "$d/together"
 grep -q '^flag r_m_flagged assumed-positive StmtShared.Shared.bad$' "$d/together"
-grep -q '^axiom r_m_sealed StmtShared.Shared.base$' "$d/together"
+grep -q '^axiom r_m_sealed StmtShared.Shared.base StmtShared.Shared.base$' "$d/together"
 
 # What the sharing is for: the walk of a report of six requests must stay near
 # the walk of one, not grow with the number of requests. One walk for each

@@ -28,12 +28,28 @@ val print : Environ.env -> (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) 
 (** Print the report, one line per message on the feedback channel:
 
     {v
-STATEMENT REPORT
+STATEMENT REPORT 2
 statement <name> <model> <trusted|-> <verdict> <axiom-count> <flag-count>
-axiom <name> <constant>
+axiom <name> <constant> <canonical>
 flag <name> <kind> <object>
 END STATEMENT REPORT
     v}
+
+    The number after [STATEMENT REPORT] is the format version. [<constant>]
+    is the path the closure reached the axiom by, as [Names.Constant.to_string]
+    prints it; [<canonical>] is that constant's canonical kernel name, always
+    printed, also when it is the same string. Two paths to one constant share a
+    canonical name.
+
+    A request's model is looked up first among the constants of the final
+    environment, by the string [Names.Constant.to_string] prints. Only a name
+    no constant there prints as is looked up in the module implementations,
+    the way [Print Assumptions] finds a constant a seal hides: a field of a
+    sealed module that its interface leaves out, or one an [Include] in it
+    brings. Every such match is collected: one is answered as usual, more than
+    one with the verdict [ambiguous] and no axiom or flag line, none with
+    [model-missing]. A name the final environment holds is never looked up
+    in an implementation.
 
     The verdict is [match] when [Definition f := model] ([Polymorphic] when
     the trusted constant is) is accepted for the field [Parameter f : T] of a
