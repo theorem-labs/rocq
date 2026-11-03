@@ -45,9 +45,11 @@ END STATEMENT REPORT
     prints it; [<canonical>] is that constant's canonical kernel name, always
     printed. It is the canonical half of the key the final environment
     stores the constant under. A constant or inductive only an
-    implementation holds prints [?] there: its canonical half would come
-    from the term that names it, which nothing ties to a declaration, so a
-    reader must never join on [?] (no identifier contains it). Two paths to one constant share a
+    implementation holds prints [?] followed by the term's own canonical
+    name there ([?P.A:B.C.ax]): that half comes from the term that names it,
+    which nothing ties to a declaration, so a reader must never join on a
+    token that starts with [?] (no identifier contains it). The name after
+    the [?] only keeps two such axioms apart. Two paths to one constant share a
     canonical name, and two kernel
     names never print alike: [<canonical>] is the root of the module path,
     [:], then the modules under it and the label separated by dots. The root
