@@ -42,15 +42,18 @@ val processes : unit -> int
     left it: [n] after [set_jobs ~profiling n], or 1 when it fell back to
     checking in the main process. *)
 
-val map_forked : int -> (int -> 'a) -> int -> 'a option array
-(** [map_forked n f k] runs [f] on [0 .. k-1] in at most [n] processes
-    created with [Unix.fork], and answers [Some (f i)] at [i], or [None]
-    when [f i] raised, when its process did not exit with code 0, or when no
-    process could run it. Each process inherits the heap as it is when
-    [map_forked] is called, prints nothing, and sends back each result
-    marshalled, so a result must hold no closure, and [f] must have no effect
-    that anything depends on. The main process only hands out the items and
-    reads the results. *)
+val map_forked : ?heap_budget:int -> int -> (int -> 'a) -> int -> 'a option array
+(** [map_forked ~heap_budget n f k] runs [f] on [0 .. k-1] in at most [n]
+    processes created with [Unix.fork] at the same time, and answers
+    [Some (f i)] at [i], or [None] when [f i] raised, when its process did
+    not exit with code 0, or when no process could run it. Each process
+    inherits the heap as it is when [map_forked] is called, prints nothing,
+    and sends back each result marshalled, so a result must hold no closure,
+    and [f] must have no effect that anything depends on. A process that has
+    allocated more than [heap_budget] bytes in its major heap (default: no
+    bound) stops after the item it is on, and a fresh process takes the
+    items that are left. The main process only hands out the items and reads
+    the results. *)
 
 val default_budget : float
 (** Seconds. *)

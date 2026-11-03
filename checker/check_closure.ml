@@ -475,6 +475,20 @@ exception Unreadable
    library, so a chunk mostly reads the table of opaque proofs of one library. *)
 let read_ahead_chunk = 32
 
+(* Bytes a process may allocate in its major heap before a fresh one replaces
+   it. A process shares the heap of the main process, about the size of the
+   environment, until it writes to it. What it adds on top is what it
+   allocated in its major heap, plus the inherited pages that the major GC
+   slices paid for by that allocation write to, about as much again: at a
+   budget of 1 GiB, 16 processes added about 2.25 GB each. So the memory of
+   [n] processes beyond the main process grows with [n] times the budget,
+   whatever the size of the tree. ROCQCHK_READ_AHEAD_HEAP_BUDGET (in bytes)
+   overrides it, to measure another value. *)
+let read_ahead_heap_budget () =
+  match Option.bind (Sys.getenv_opt "ROCQCHK_READ_AHEAD_HEAP_BUDGET") int_of_string_opt with
+  | Some b when b > 0 -> b
+  | Some _ | None -> 1 lsl 28
+
 let read_ahead st jobs =
   let opaque =
     Environ.fold_constants (fun kn cb acc -> match cb.const_body with
@@ -508,7 +522,7 @@ let read_ahead st jobs =
       | None -> ()
       | Some nodes ->
         List.iter (fun (j, n) -> st.prefetched <- Cmap_env.add opaque.(j) n st.prefetched) nodes)
-    (CheckWorkers.map_forked jobs chunk chunks)
+    (CheckWorkers.map_forked ~heap_budget:(read_ahead_heap_budget ()) jobs chunk chunks)
 
 (* Test-only seam, beside [test_fault] below: how many nodes the walk took
    from the processes of [read_ahead].
