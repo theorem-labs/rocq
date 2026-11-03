@@ -489,6 +489,13 @@ let read_ahead_heap_budget () =
   | Some b when b > 0 -> b
   | Some _ | None -> 1 lsl 28
 
+(* Seconds a process has to answer one chunk before it is killed and the
+   walk computes its nodes itself. A chunk takes about a tenth of a second
+   on a large development (4,515 chunks in 25 s over 16 processes), so this
+   only stops a process that will not end, for instance on a malformed
+   stored proof that no request reaches. *)
+let read_ahead_item_timeout = 120.
+
 let read_ahead st jobs =
   let opaque =
     Environ.fold_constants (fun kn cb acc -> match cb.const_body with
@@ -522,7 +529,8 @@ let read_ahead st jobs =
       | None -> ()
       | Some nodes ->
         List.iter (fun (j, n) -> st.prefetched <- Cmap_env.add opaque.(j) n st.prefetched) nodes)
-    (CheckWorkers.map_forked ~heap_budget:(read_ahead_heap_budget ()) jobs chunk chunks)
+    (CheckWorkers.map_forked ~heap_budget:(read_ahead_heap_budget ())
+       ~item_timeout:read_ahead_item_timeout jobs chunk chunks)
 
 (* Test-only seam, beside [test_fault] below: how many nodes the walk took
    from the processes of [read_ahead].
