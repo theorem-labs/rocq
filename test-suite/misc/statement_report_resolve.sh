@@ -29,3 +29,9 @@ grep -q '^statement final StmtRes.Res.P.ax - not-requested 1 0$' "$d/out"
 # P.ax is a key of the final environment, so it answers from there (by the
 # order of the lookup in check_closure.ml's print), never as ambiguous.
 grep -q '^statement none StmtRes.Res.M.nothing - model-missing 0 0$' "$d/out"
+
+# A resolved model with a trusted constant gets a type verdict.
+printf 'typed StmtRes.Res.M.ax StmtRes.Res.N.ax\n' > "$d/treq"
+"$BIN"rocqchk -silent -statement-report "$d/treq" -Q "$d" StmtRes StmtRes.Res > "$d/tout" 2>&1
+grep -q '^statement typed StmtRes.Res.M.ax StmtRes.Res.N.ax match 1 0$' "$d/tout"
+grep -q '^END STATEMENT REPORT$' "$d/tout"

@@ -31,6 +31,7 @@ val print : Environ.env -> (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) 
 STATEMENT REPORT 2
 statement <name> <model> <trusted|-> <verdict> <axiom-count> <flag-count>
 axiom <name> <constant> <canonical>
+resolved <name> <field> <canonical>
 flag <name> <kind> <object>
 END STATEMENT REPORT
     v}
@@ -39,7 +40,18 @@ END STATEMENT REPORT
     is the path the closure reached the axiom by, as [Names.Constant.to_string]
     prints it; [<canonical>] is that constant's canonical kernel name, always
     printed, also when it is the same string. Two paths to one constant share a
-    canonical name.
+    canonical name. The canonical name is [Names.KerName.to_string] of the
+    constant's canonical kernel name, which prints a library path and the
+    modules under it alike, so two constants of two libraries [P.A] (module
+    [B]) and [P.A.B] can print the same canonical string.
+
+    A [resolved] line, after the statement's [axiom] lines and before its
+    [flag] lines, names an interface field without a body in the final
+    environment that the closure read through the implementation defining
+    it; the field is printed by its path and canonical name. It is not
+    counted in [<axiom-count>], and it does not say the field is free of
+    axioms: what the implementation rests on is listed as [axiom] lines, and
+    an opaque body that cannot be read is both [resolved] and an [axiom].
 
     A request's model is looked up first among the constants of the final
     environment, by the string [Names.Constant.to_string] prints. Only a name

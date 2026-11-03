@@ -793,6 +793,7 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
      STATEMENT REPORT 2
      statement <name> <model> <trusted|-> <verdict> <axiom-count> <condition-count>
      axiom <name> <constant> <canonical>
+     resolved <name> <field> <canonical>
      flag <name> <condition> <object>
      END STATEMENT REPORT
 
@@ -800,7 +801,13 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   line names the axiom by the path the closure reached it by, then by its
   canonical kernel name, which is printed even when it is the same string: two
   paths to one constant (through an ``Include`` or a module alias) share a
-  canonical name, and two distinct constants never do.
+  canonical name. The canonical name prints a library path and the modules
+  under it alike, so constants of a library ``P.A`` with a module ``B`` and of
+  a library ``P.A.B`` can print the same string. A ``resolved`` line, after the
+  ``axiom`` lines and before the ``flag`` lines and not counted in either
+  count, names an interface field the closure read through the implementation
+  that defines it; the axioms that implementation rests on are its own
+  ``axiom`` lines.
 
   A request's model is looked up first among the constants of the final
   environment. Only a name none of them has is looked up in the module
