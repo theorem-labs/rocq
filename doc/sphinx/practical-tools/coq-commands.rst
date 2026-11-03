@@ -871,7 +871,8 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   brings). One match is reported as usual; several give the verdict
   ``ambiguous`` with no ``axiom`` or ``flag`` line; none gives
   ``model-missing``. A request that names a trusted constant is answered only
-  from the final environment, so such a model answers ``model-missing``. A
+  from the final environment, so such a model answers ``model-missing`` (or
+  ``ambiguous`` when several implementations hold it). A
   name two constants of the final environment print as answers ``ambiguous``
   as a model and ``trusted-ambiguous`` as a trusted constant. A name
   the final environment holds is never looked up in
