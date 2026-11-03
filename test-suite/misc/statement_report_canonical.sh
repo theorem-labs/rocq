@@ -62,4 +62,31 @@ grep -q '^statement t P.A.left P.A.B.ax trusted-ambiguous 1 0$' "$d/aout"
 grep -q '^END STATEMENT REPORT$' "$d/aout"
 
 # Every canonical on an axiom line has the root separator.
-awk '$1 == "axiom" && $4 !~ /:/ { bad = 1 } END { exit bad }' "$d/out" "$d/pout"
+awk '$1 == "axiom" && $4 !~ /:/ { bad = 1 } END { exit bad }' "$d/out" "$d/pout" "$d/aout"
+
+# Functor arguments: the closure walks an applied functor's body under the
+# argument substitution, so an axiom reached through a functor argument
+# prints the argument's library root, not a bound-module root.
+cat > "$d/Fn.v" <<'V'
+Module Type T. Parameter ax : nat. End T.
+Module A. Axiom ax : nat. End A.
+Module F (X : T). Definition n : nat := X.ax. End F.
+Module B := F A.
+Module G (X : T) : T. Definition ax : nat := X.ax. End G.
+Module C := G A.
+Module Type S. Declare Module X : T. Definition m : nat := X.ax. End S.
+Declare Module D : S.
+Definition u1 : nat := B.n.
+Definition u2 : nat := C.ax.
+Definition u3 : nat := D.m.
+V
+$coqc -Q "$d" StmtCanon "$d/Fn.v"
+printf 'u1 StmtCanon.Fn.u1 -\nu2 StmtCanon.Fn.u2 -\nu3 StmtCanon.Fn.u3 -\nf StmtCanon.Fn.F.n -\n' > "$d/fnreq"
+"$BIN"rocqchk -silent -statement-report "$d/fnreq" -Q "$d" StmtCanon StmtCanon.Fn > "$d/fnout" 2>&1
+sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/fnout"
+grep -q '^axiom u1 StmtCanon.Fn.A.ax StmtCanon.Fn:A.ax$' "$d/fnout"
+grep -q '^axiom u2 StmtCanon.Fn.A.ax StmtCanon.Fn:A.ax$' "$d/fnout"
+grep -q '^axiom u3 StmtCanon.Fn.D.X.ax StmtCanon.Fn:D.X.ax$' "$d/fnout"
+# An unapplied functor's field is not a request target.
+grep -q '^statement f StmtCanon.Fn.F.n - model-missing 0 0$' "$d/fnout"
+grep -q '^END STATEMENT REPORT$' "$d/fnout"
