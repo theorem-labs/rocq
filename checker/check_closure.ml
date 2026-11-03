@@ -134,6 +134,9 @@ and node = {
   flags : (string * string) list;
   (* the relaxed typing conditions the selected object relies on,
      (kind, object) *)
+  resolved : bool;
+  (* a constant the final environment holds without a body, reached in the
+     public view and read through its implementation instead *)
 }
 
 
@@ -174,12 +177,15 @@ and fields_of_mp st mp =
          strengthen: the fields are the functor body's under the argument
          substitution, as vernac/assumptions.ml reads them, so that a field
          resolves to the body that defines it. *)
-      let source () = lookup_module_in_impl st inner_mp in
-      match mod_expr mb, ModPath.equal inner_mp mp with
-      | (Algebraic _, false)
-        when (match mod_type (source ()) with NoFunctor _ -> true | MoreFunctor _ -> false) ->
+      let source = match mod_expr mb, ModPath.equal inner_mp mp with
+        | Algebraic _, false ->
+          let source = lookup_module_in_impl st inner_mp in
+          (match mod_type source with NoFunctor _ -> Some source | MoreFunctor _ -> None)
+        | _ -> None
+      in
+      match source with
+      | Some source ->
         let mp_from = inner_mp in
-        let source = source () in
         let alias = Modops.strengthen_and_subst_module_body mp_from source mp false in
         let fields, inner_mp, subs =
           fields_of_signature Mod_subst.empty_subst mp [] (mod_type alias) in
@@ -232,16 +238,6 @@ let in_impl st get kn =
    has no body, its proof witness is the implementation. A term already
    reached from an implementation keeps that implementation view. The user
    name, not its canonical target, selects a transparent Include alias. *)
-(* A field whose body is only its own canonical constant: the delta alias an
-   [Include] or a module alias leaves, a name for that constant rather than a
-   definition of its own. *)
-let names_itself kn cb = match cb.const_body with
-  | Def c ->
-    (match Constr.kind c with
-     | Constr.Const (c', _) -> Constant.CanOrd.equal c' kn
-     | _ -> false)
-  | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> false
-
 let lookup_constant st view kn =
   let impl () = in_impl st find_constant (Constant.user kn) in
   match view with
@@ -359,7 +355,7 @@ let uses_uip mib =
       && Int.equal (List.length (fst mip.mind_nf_lc.(0))) (List.length mib.mind_params_ctxt))
     mib.mind_packets
 
-let unresolved = { refs = []; axiom = true; flags = [] }
+let unresolved = { refs = []; axiom = true; flags = []; resolved = false }
 
 (* Test-only seam, beside [test_fault] below: a test sets this to make the
    opaque accessor fail for one constant, so the unreadable-body warning has a
@@ -400,7 +396,14 @@ let constant_node st view kn =
       | Undef _ | Primitive _ | Symbol _ -> [], true
     in
     let refs = walk st (fresh_gen st) empty_refs ((declaration_view, cb.const_type) :: body) in
-    { refs = refs_to_list refs; axiom;
+    let resolved = match view, declaration_view with
+      | Public, Implementation ->
+        (* only a field the implementation defines: an axiom read there is
+           still an axiom, not a resolution *)
+        Environ.mem_constant kn st.env && Declareops.constant_has_body cb
+      | _ -> false
+    in
+    { refs = refs_to_list refs; axiom; resolved;
       flags = typing_flags (Constant.to_string kn) cb.const_typing_flags [] }
 
 let mind_node st view mind =
@@ -433,7 +436,7 @@ let mind_node st view mind =
               && Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) mib.mind_packets)
         "indices-not-mattering"
     in
-    { refs = refs_to_list refs; axiom = false; flags }
+    { refs = refs_to_list refs; axiom = false; flags; resolved = false }
 
 let node st view obj =
   let nodes = match view with
@@ -446,7 +449,7 @@ let node st view obj =
     let n = match obj with
       | GlobRef.ConstRef kn -> constant_node st view kn
       | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> mind_node st view mind
-      | GlobRef.VarRef _ -> { refs = []; axiom = false; flags = [] }
+      | GlobRef.VarRef _ -> { refs = []; axiom = false; flags = []; resolved = false }
     in
     begin match view with
     | Public -> st.public_nodes <- GlobRef.Map_env.add obj n st.public_nodes
@@ -459,6 +462,32 @@ let name_of = function
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> MutInd.to_string mind
   | GlobRef.VarRef id -> Id.to_string id
 
+(* The kernel name of the object the walk reached, whatever path it was reached
+   by: computed here from the constant or inductive itself, never read from any
+   other text. Two paths to one constant give one canonical name; two distinct
+   constants never share one. *)
+let canonical_of = function
+  | GlobRef.ConstRef kn -> KerName.to_string (Constant.canonical kn)
+  | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+    KerName.to_string (MutInd.canonical mind)
+  | GlobRef.VarRef _ -> "-"
+
+(* An [axiom] line's two names: the path the term reached the object by, then
+   its canonical kernel name. *)
+let axiom_entry obj = name_of obj ^ " " ^ canonical_of obj
+
+(* A closure's set holds its [axiom] entries and its [resolved] entries apart
+   by this prefix, which no name can start with (a name is made of
+   identifiers), so that the memo keeps one set per object. *)
+let resolved_mark = "\001"
+let resolved_entry obj = resolved_mark ^ name_of obj ^ " " ^ canonical_of obj
+let is_resolved_entry e = String.length e > 0 && e.[0] = '\001'
+
+(* What a node adds to its closure's set. *)
+let node_entries n obj =
+  let s = if n.axiom then CString.Set.singleton (axiom_entry obj) else CString.Set.empty in
+  if n.resolved then CString.Set.add (resolved_entry obj) s else s
+
 (* Place 2 of the name check (checkNames.mli), for a name that the check at
    load cannot see: a constant or an inductive that a term of an admitted
    library names and that no library declares, which the report prints as an
@@ -470,9 +499,10 @@ let name_of = function
    REPORT line. *)
 let printable_name obj =
   match obj with
-  | GlobRef.ConstRef kn -> CheckNames.valid_kername (Constant.user kn)
+  | GlobRef.ConstRef kn ->
+    CheckNames.valid_kername (Constant.user kn) && CheckNames.valid_kername (Constant.canonical kn)
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-    CheckNames.valid_kername (MutInd.user mind)
+    CheckNames.valid_kername (MutInd.user mind) && CheckNames.valid_kername (MutInd.canonical mind)
   | GlobRef.VarRef id -> CheckNames.valid_id id
 
 let check_printed_name obj =
@@ -510,8 +540,8 @@ let closure_per_root st root =
       else
         let n = node st view obj in
         incr walk_visits;
-        if n.axiom || not (List.is_empty n.flags) then check_printed_name obj;
-        let axioms = if n.axiom then CString.Set.add (name_of obj) axioms else axioms in
+        if n.axiom || n.resolved || not (List.is_empty n.flags) then check_printed_name obj;
+        let axioms = CString.Set.union (node_entries n obj) axioms in
         let flags = List.fold_left (fun flags f -> FlagSet.add f flags) flags n.flags in
         let public_seen, implementation_seen = match view with
           | Public -> GlobRef.Set_env.add obj public_seen, implementation_seen
@@ -625,7 +655,7 @@ let shared_closure st m root =
       else begin
         let n = node st view obj in
         incr walk_visits;
-        if n.axiom || not (List.is_empty n.flags) then begin
+        if n.axiom || n.resolved || not (List.is_empty n.flags) then begin
           (* The per-root walk must be the one that reports it. *)
           if not (printable_name obj) then raise Not_shareable
         end;
@@ -634,7 +664,7 @@ let shared_closure st m root =
       end)
     | Leave (view, obj) :: rest ->
       let n = node st view obj in
-      let axioms = if n.axiom then CString.Set.singleton (name_of obj) else CString.Set.empty in
+      let axioms = node_entries n obj in
       let flags = List.fold_left (fun s f -> FlagSet.add f s) FlagSet.empty n.flags in
       let self = (view, obj) in
       let axioms, flags =
@@ -798,6 +828,51 @@ let test_fault () =
   | Some "1" -> CErrors.user_err Pp.(str "test statement-report failure")
   | None | Some _ -> ()
 
+(* The report's format. 2: an [axiom] line also names the axiom's canonical
+   kernel name. The first format had no number. *)
+let format_version = 2
+
+(* A request's subject that the final environment does not hold, looked up
+   in the implementations, as [Print Assumptions] finds a constant that a seal
+   hides: each way of splitting the dotted name into a library, modules and a
+   label that names a constant field of that module's implementation. Every
+   match is returned, so that a name two constants answer to is told apart.
+   This only finds which constant a name denotes; the closure printed for it
+   is the ordinary one. *)
+let resolve_in_impl st name =
+  let parts = String.split_on_char '.' name in
+  let ids = try Some (List.map Id.of_string parts) with e when CErrors.noncritical e -> None in
+  match ids with
+  | None -> []
+  | Some ids ->
+    let n = List.length ids in
+    let rec split i acc =
+      if i >= n - 1 then acc
+      else
+        let dir = List.filteri (fun j _ -> j <= i) ids in
+        let rest = List.filteri (fun j _ -> j > i) ids in
+        let mp0 = ModPath.MPfile (DirPath.make (List.rev dir)) in
+        let acc =
+          if not (try ignore (Environ.lookup_module mp0 st.env); true with Not_found -> false) then acc
+          else
+            let rec descend mp = function
+              | [lab] ->
+                let kn = KerName.make mp (Label.of_id lab) in
+                (match in_impl st find_constant kn with
+                 | Some _ -> Some (Constant.make1 kn)
+                 | None -> None
+                 | exception Not_found -> None)
+              | m :: rest -> descend (ModPath.MPdot (mp, Label.of_id m)) rest
+              | [] -> None
+            in
+            match descend mp0 rest with
+            | Some c when not (List.exists (Constant.UserOrd.equal c) acc) -> c :: acc
+            | _ -> acc
+        in
+        split (i + 1) acc
+    in
+    List.rev (split 0 [])
+
 let print env access requests =
   let index =
     Environ.fold_constants (fun c _ acc -> CString.Map.add (Constant.to_string c) c acc)
@@ -812,15 +887,25 @@ let print env access requests =
      "One walk for every request"). *)
   let memo = new_memo () in
   walk_visits := 0;
-  line "STATEMENT REPORT";
+  line "STATEMENT REPORT %d" format_version;
   test_fault ();
 
   List.iter (fun r ->
       let trusted = Option.default "-" r.req_trusted in
-      match CString.Map.find_opt r.req_model index with
-      | None -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
-      | Some model ->
-        let axioms, flags = closure st memo (GlobRef.ConstRef model) in
+      let model = match CString.Map.find_opt r.req_model index with
+        | Some c -> `One c
+        | None ->
+          match resolve_in_impl st r.req_model with
+          | [] -> `Missing
+          | [c] -> `One c
+          | _ :: _ :: _ -> `Ambiguous
+      in
+      match model with
+      | `Missing -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
+      | `Ambiguous -> line "statement %s %s %s ambiguous 0 0" r.req_name r.req_model trusted
+      | `One model ->
+        let entries, flags = closure st memo (GlobRef.ConstRef model) in
+        let resolved, axioms = CString.Set.partition is_resolved_entry entries in
         let verdict = match r.req_trusted with
           | None -> "not-requested"
           | Some t ->
@@ -831,7 +916,9 @@ let print env access requests =
         line "statement %s %s %s %s %d %d" r.req_name r.req_model trusted verdict
           (CString.Set.cardinal axioms) (FlagSet.cardinal flags);
         CString.Set.iter (line "axiom %s %s" r.req_name) axioms;
-        FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) flags)
+        FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) flags;
+        CString.Set.iter (fun e ->
+            line "resolved %s %s" r.req_name (String.sub e 1 (String.length e - 1))) resolved)
     requests;
   test_walk_count ();
   line "END STATEMENT REPORT"

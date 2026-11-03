@@ -17,25 +17,26 @@ $coqc -noinit -Q "$d" StmtNeg "$d/Defs.v"
 $coqc -noinit -Q "$d" StmtNeg "$d/Use.v"
 
 # Flag lines and counts are left out: output-coqchk/statement_report.v pins them.
+# Resolved lines are left out: misc/statement_report_resolved.sh pins them.
 cat > "$d/expected" <<'EOF'
-STATEMENT REPORT
+STATEMENT REPORT 2
 statement sealed StmtNeg.Use.sealed StmtNeg.Use.trusted_thm match 1
-axiom sealed StmtNeg.Defs.ax
+axiom sealed StmtNeg.Defs.ax StmtNeg.Defs.ax
 statement helper StmtNeg.Use.helper - not-requested 1
-axiom helper StmtNeg.Defs.ax
+axiom helper StmtNeg.Defs.ax StmtNeg.Defs.ax
 statement hidden_axiom StmtNeg.Use.hidden_axiom - not-requested 1
-axiom hidden_axiom StmtNeg.Defs.HiddenAxiom.hidden
+axiom hidden_axiom StmtNeg.Defs.HiddenAxiom.hidden StmtNeg.Defs.HiddenAxiom.hidden
 statement hidden_inductive StmtNeg.Use.hidden_inductive - not-requested 1
-axiom hidden_inductive StmtNeg.Defs.ax
+axiom hidden_inductive StmtNeg.Defs.ax StmtNeg.Defs.ax
 statement clean StmtNeg.Use.clean StmtNeg.Use.trusted match 1
-axiom clean StmtNeg.Defs.ax
+axiom clean StmtNeg.Defs.ax StmtNeg.Defs.ax
 statement dirty StmtNeg.Use.dirty StmtNeg.Use.trusted match 2
-axiom dirty StmtNeg.Defs.ax
-axiom dirty StmtNeg.Defs.extra
+axiom dirty StmtNeg.Defs.ax StmtNeg.Defs.ax
+axiom dirty StmtNeg.Defs.extra StmtNeg.Defs.extra
 statement near StmtNeg.Use.near StmtNeg.Use.trusted mismatch 1
-axiom near StmtNeg.Defs.ax
+axiom near StmtNeg.Defs.ax StmtNeg.Defs.ax
 statement conv StmtNeg.Use.conv StmtNeg.Use.trusted match 1
-axiom conv StmtNeg.Defs.ax
+axiom conv StmtNeg.Defs.ax StmtNeg.Defs.ax
 statement poly_mono StmtNeg.Use.pmodel StmtNeg.Use.ptrusted match 0
 statement poly_poly StmtNeg.Use.pmodel StmtNeg.Use.ptrusted_poly match 0
 statement poly_constraints StmtNeg.Use.pmodel_lt StmtNeg.Use.ptrusted_lt universes-differ 0
@@ -45,8 +46,8 @@ EOF
 report () {
   "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtNeg "$@" > "$d/out.log" 2>&1 \
     || { cat "$d/out.log"; exit 1; }
-  sed -n '/^STATEMENT REPORT$/,/^END STATEMENT REPORT$/p' "$d/out.log" |
-    sed -e '/^flag /d' -E -e 's/^(statement( [^ ]+){5}) [0-9]+$/\1/' > "$d/report"
+  sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out.log" |
+    sed -e '/^flag /d' -e '/^resolved /d' -E -e 's/^(statement( [^ ]+){5}) [0-9]+$/\1/' > "$d/report"
   diff -u "$d/expected" "$d/report"
 }
 

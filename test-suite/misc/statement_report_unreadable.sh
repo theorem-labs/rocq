@@ -25,7 +25,7 @@ grep -q '^END STATEMENT REPORT$' "$d/clean"
 if grep -q 'could not be read' "$d/clean"; then
   echo "an ordinary run must not warn" >&2; cat "$d/clean" >&2; exit 1
 fi
-if grep -q '^axiom r1 Unreadable.Opaque.secret$' "$d/clean"; then
+if grep -q '^axiom r1 Unreadable.Opaque.secret Unreadable.Opaque.secret$' "$d/clean"; then
   echo "a readable opaque body is not an axiom" >&2; cat "$d/clean" >&2; exit 1
 fi
 
@@ -40,7 +40,7 @@ if ! env COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE=Unreadable.Opaque.secret \
 fi
 
 # The report is whole, so a parser still reads it as evidence.
-grep -q '^STATEMENT REPORT$' "$d/out"
+grep -q '^STATEMENT REPORT 2$' "$d/out"
 grep -q '^END STATEMENT REPORT$' "$d/out"
 
 # The failure is named, with the constant and the cause.
@@ -49,4 +49,4 @@ grep -q 'test unreadable opaque body' "$d/out"
 
 # And it still reads as an axiom, so the report never understates what the
 # proof rests on.
-grep -q '^axiom r1 Unreadable.Opaque.secret$' "$d/out"
+grep -q '^axiom r1 Unreadable.Opaque.secret Unreadable.Opaque.secret$' "$d/out"

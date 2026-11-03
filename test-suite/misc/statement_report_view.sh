@@ -14,20 +14,20 @@ $coqc -Q "$d" StmtView "$d/View.v"
 $coqc -allow-rewrite-rules -Q "$d" StmtView "$d/Prims.v"
 printf 'public_f StmtView.View.Impl.f -\nboom StmtView.View.Impl.boom -\npublic_f_after StmtView.View.Impl.f -\nalias StmtView.View.alias_model -\nalias_module StmtView.View.alias_module_model -\nalias_impl StmtView.View.alias_impl_model -\nfun_alias StmtView.View.fun_alias_model -\nfallback StmtView.View.FallbackX.model -\nint StmtView.Prims.i -\n' > "$d/requests"
 "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtView StmtView.View StmtView.Prims > "$d/out" 2>&1
-sed -n '/^STATEMENT REPORT$/,/^END STATEMENT REPORT$/p' "$d/out"
+sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
 grep -q '^flag boom unsafe-fixpoint StmtView.View.Impl.f$' "$d/out"
-grep -q '^axiom alias StmtView.View.A.ax$' "$d/out"
-grep -q '^axiom alias_module StmtView.View.A.ax$' "$d/out"
-grep -q '^axiom alias_impl StmtView.View.A.ax$' "$d/out"
-grep -q '^axiom fun_alias StmtView.View.A.ax$' "$d/out"
-if grep -q '^axiom alias StmtView.View.B.p$' "$d/out" ||
-   grep -q '^axiom alias_module StmtView.View.C.p$' "$d/out" ||
-   grep -q '^axiom alias_impl StmtView.View.C.ax$' "$d/out" ||
-   grep -q '^axiom fun_alias StmtView.View.D.ax$' "$d/out"; then
+grep -q '^axiom alias StmtView.View.A.ax StmtView.View.A.ax$' "$d/out"
+grep -q '^axiom alias_module StmtView.View.A.ax StmtView.View.A.ax$' "$d/out"
+grep -q '^axiom alias_impl StmtView.View.A.ax StmtView.View.A.ax$' "$d/out"
+grep -q '^axiom fun_alias StmtView.View.A.ax StmtView.View.A.ax$' "$d/out"
+if grep -q '^axiom alias StmtView.View.B.p StmtView.View.B.p$' "$d/out" ||
+   grep -q '^axiom alias_module StmtView.View.C.p StmtView.View.C.p$' "$d/out" ||
+   grep -q '^axiom alias_impl StmtView.View.C.ax StmtView.View.C.ax$' "$d/out" ||
+   grep -q '^axiom fun_alias StmtView.View.D.ax StmtView.View.D.ax$' "$d/out"; then
   exit 1
 fi
-grep -q '^axiom int Corelib.Numbers.Cyclic.Int63.PrimInt63.int$' "$d/out"
-grep -q '^axiom int StmtView.Prims.T$' "$d/out"
+grep -q '^axiom int Corelib.Numbers.Cyclic.Int63.PrimInt63.int Corelib.Numbers.Cyclic.Int63.PrimInt63.int$' "$d/out"
+grep -q '^axiom int StmtView.Prims.T StmtView.Prims.T$' "$d/out"
 awk '$1 == "statement" && $2 == "public_f" { found_public_f = 1; public_f_ok = ($6 == 0 && $7 == 0) }
      $1 == "statement" && $2 == "boom" { found_boom = 1; boom_ok = ($6 == 0 && $7 == 2) }
      $1 == "statement" && $2 == "public_f_after" { found_public_f_after = 1; public_f_after_ok = ($6 == 0 && $7 == 0) }

@@ -790,11 +790,26 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
 
   .. code-block:: text
 
-     STATEMENT REPORT
+     STATEMENT REPORT 2
      statement <name> <model> <trusted|-> <verdict> <axiom-count> <condition-count>
-     axiom <name> <constant>
+     axiom <name> <constant> <canonical>
      flag <name> <condition> <object>
      END STATEMENT REPORT
+
+  The number after ``STATEMENT REPORT`` is the format version. An ``axiom``
+  line names the axiom by the path the closure reached it by, then by its
+  canonical kernel name, which is printed even when it is the same string: two
+  paths to one constant (through an ``Include`` or a module alias) share a
+  canonical name, and two distinct constants never do.
+
+  A request's model is looked up first among the constants of the final
+  environment. Only a name none of them has is looked up in the module
+  implementations, the way ``Print Assumptions`` finds a constant a seal hides
+  (a field a sealed module's interface leaves out, or one an ``Include`` in it
+  brings). One match is reported as usual; several give the verdict
+  ``ambiguous`` with no ``axiom`` or ``flag`` line; none gives
+  ``model-missing``. A name the final environment holds is never looked up in
+  an implementation.
 
   It does not change the exit status. If the report stops after its start
   line, it has no ``END STATEMENT REPORT`` line and the checker emits a
