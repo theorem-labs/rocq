@@ -750,12 +750,26 @@ let close_report fd = try Unix.close fd with Unix.Unix_error _ -> ()
    first process that is free, on a pipe of that process's own: an item is 8
    bytes (big endian), and closing the pipe means there are no more. A process
    answers each item on a second pipe with 8 bytes, the length of what
-   follows, then the item and its result, marshalled. A process prints
-   nothing: its standard output and error are /dev/null, and it ends with
-   [Unix._exit], so no [at_exit] function of the main process runs in it and
-   nothing still buffered is written twice. Its GC is the one of a worker
-   ([tune_gc]). *)
+   follows, then the item, its result and whether it stops, marshalled. A
+   process prints nothing: its standard output and error are /dev/null, and it
+   ends with [Unix._exit], so no [at_exit] function of the main process runs in
+   it and nothing still buffered is written twice.
+
+   A process inherits the whole heap of the main process, and every page it
+   writes to is copied. Its GC is lazy ([forked_gc]): a major cycle would mark,
+   and so copy, every inherited page that holds a live block. Its garbage is
+   bounded instead: once its major heap has grown by more than the heap budget,
+   it stops after the item it is on, and the main process forks a fresh process
+   for the items that are left. So each process holds at most about the budget
+   beyond what it shares. *)
 let item_size = 8
+
+let forked_gc () =
+  let gc = Gc.get () in
+  Gc.set { gc with
+           Gc.minor_heap_size = max gc.Gc.minor_heap_size (4 * 1024 * 1024);
+           space_overhead = max gc.Gc.space_overhead 1000;
+           max_overhead = 1000000 }
 
 let write_all fd b =
   let rec go off =
@@ -784,7 +798,7 @@ let int_bytes i =
   Bytes.set_int64_be b 0 (Int64.of_int i);
   b
 
-let run_forked ~items ~results f =
+let run_forked ~heap_budget ~items ~results f =
   at_exit (fun () -> Unix._exit 2);
   let code =
     try
@@ -792,17 +806,23 @@ let run_forked ~items ~results f =
       Unix.dup2 null Unix.stdout;
       Unix.dup2 null Unix.stderr;
       Unix.close null;
-      tune_gc ();
+      forked_gc ();
+      let words0 = (Gc.quick_stat ()).Gc.major_words in
+      let budget_words = float_of_int heap_budget /. float_of_int (Sys.word_size / 8) in
+      (* What it has added to its major heap. The lazy GC frees little of it,
+         so this bounds what the process holds beyond the pages it shares. *)
+      let spent () = (Gc.quick_stat ()).Gc.major_words -. words0 >= budget_words in
       let rec loop () =
         match read_exactly items item_size with
         | None -> 0
         | Some b ->
           let i = Int64.to_int (Bytes.get_int64_be b 0) in
           let v = try Some (f i) with _ -> None in
-          let payload = Marshal.to_bytes (i, v) [] in
+          let last = spent () in
+          let payload = Marshal.to_bytes (i, v, last) [] in
           write_all results (int_bytes (Bytes.length payload));
           write_all results payload;
-          loop ()
+          if last then 0 else loop ()
       in
       loop ()
     with _ -> 1
@@ -843,7 +863,7 @@ let close_items p =
     close_report p.items
   end
 
-let map_forked n f k =
+let map_forked ?(heap_budget = max_int) n f k =
   let out = Array.make k None in
   let n = min n k in
   if n < 1 then out
@@ -857,10 +877,10 @@ let map_forked n f k =
     let start0 = Unix.gettimeofday () in
     let start () =
       match Unix.pipe ~cloexec:true () with
-      | exception Unix.Unix_error _ -> ()
+      | exception Unix.Unix_error _ -> None
       | items_in, items ->
         match Unix.pipe ~cloexec:true () with
-        | exception Unix.Unix_error _ -> close_report items_in; close_report items
+        | exception Unix.Unix_error _ -> close_report items_in; close_report items; None
         | answers, answers_out ->
           match Unix.fork () with
           | 0 ->
@@ -869,14 +889,17 @@ let map_forked n f k =
             List.iter (fun p -> close_items p; close_report p.answers) !procs;
             close_report items;
             close_report answers;
-            run_forked ~items:items_in ~results:answers_out f
+            run_forked ~heap_budget ~items:items_in ~results:answers_out f
           | fpid ->
             close_report items_in;
             close_report answers_out;
-            procs := { fpid; items; items_open = true; answers; current = None; got = [];
-                       failed = false } :: !procs
+            let p = { fpid; items; items_open = true; answers; current = None; got = [];
+                      failed = false } in
+            procs := p :: !procs;
+            Some p
           | exception Unix.Unix_error _ ->
-            List.iter close_report [items_in; items; answers; answers_out]
+            List.iter close_report [items_in; items; answers; answers_out];
+            None
     in
     let fail p =
       p.failed <- true;
@@ -899,7 +922,7 @@ let map_forked n f k =
       end
     in
     let hand_out () =
-      for _ = 1 to n do start () done;
+      for _ = 1 to n do ignore (start ()) done;
       List.iter give (List.rev !procs);
       let rec loop () =
         let busy = List.filter (fun p -> Option.has_some p.current) !procs in
@@ -911,10 +934,17 @@ let map_forked n f k =
           in
           List.iter (fun p ->
               if List.mem p.answers ready then
-                match read_answer p.answers, p.current with
-                | Some (i, v), Some j when Int.equal i j ->
+                match (read_answer p.answers : (int * 'a option * bool) option), p.current with
+                | Some (i, v, last), Some j when Int.equal i j ->
                   p.got <- (i, v) :: p.got;
-                  give p
+                  if not last then give p
+                  else begin
+                    (* It has spent its heap budget and exits: a fresh process
+                       takes its place. *)
+                    p.current <- None;
+                    close_items p;
+                    if !next < k then Option.iter give (start ())
+                  end
                 | _ -> fail p)
             busy;
           loop ()
@@ -944,7 +974,8 @@ let map_forked n f k =
       Sys.set_signal Sys.sigpipe sigpipe;
       debug (fun () ->
           str "forked processes: " ++ int !next ++ str " of " ++ int k ++
-          str " items handed out in " ++ real (Unix.gettimeofday () -. start0) ++ str " s")
+          str " items handed out to " ++ int (List.length !procs) ++ str " processes in " ++
+          real (Unix.gettimeofday () -. start0) ++ str " s")
     in
     Fun.protect ~finally (fun () ->
         try hand_out () with e when CErrors.noncritical e -> ());

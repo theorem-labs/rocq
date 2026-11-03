@@ -658,6 +658,14 @@ let () = add_test "map_forked: every item, in its place" (fun () ->
     (* More processes than items. *)
     check 50 10)
 
+(* A heap budget of one byte: every process stops after its first item, and
+   fresh processes take the rest, so every item is still answered in place. *)
+let () = add_test "map_forked: a spent heap budget replaces the process" (fun () ->
+    let k = 40 in
+    let f i = Array.length (Array.make 100_000 i) + i in
+    let expected = Array.init k (fun i -> Some (100_000 + i)) in
+    assert_equal ~printer:pr_results expected (CheckWorkers.map_forked ~heap_budget:1 4 f k))
+
 let () = add_test "map_forked: no item, no process" (fun () ->
     assert_equal 0 (Array.length (CheckWorkers.map_forked 4 (fun _ -> assert false) 0)))
 
