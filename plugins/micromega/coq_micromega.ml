@@ -2994,6 +2994,13 @@ let lia_witness_list ?clock ~reuse search cnf =
     {linear_Z with prover = (fun (_, l) -> search l); early = None}
     cnf
 
+let early_witness_list ~reuse ~early search cnf =
+  witness_list ~reuse Mc.Z.eqb
+    { linear_Z with
+      prover = (fun (_, l) -> search l)
+    ; early = Some {fails = (fun affordable (_, l) -> early affordable l); size = (fun _ -> 1)} }
+    cnf
+
 (**
   * Functions instantiating micromega_gen with the appropriate theories and
   * solvers

@@ -76,6 +76,19 @@ val lia_witness_list :
     (int * Micromega.z list) * (Micromega.z Micromega.nFormula, 'tag) Micromega.clause )
   Certificate.res
 
+(** [early_witness_list ~reuse ~early search cnf] is {!lia_witness_list} with an early-failure
+    check: [early affordable fs] stands for the check of lia on the clause [fs] ([Some true]: the
+    clause is known to fail; [Some false]: nothing is known; [None]: the check did not start, its
+    first step not fitting [affordable]). Each atom has size 1 for the check's predictions. *)
+val early_witness_list :
+  reuse:bool ->
+  early:((float -> bool) -> Micromega.z Micromega.nFormula list -> bool option) ->
+  (Micromega.z Micromega.nFormula list -> Certificate.zres) ->
+  (Micromega.z Micromega.nFormula, 'tag) Micromega.clause list ->
+  ( Micromega.zArithProof list,
+    (int * Micromega.z list) * (Micromega.z Micromega.nFormula, 'tag) Micromega.clause )
+  Certificate.res
+
 (** [cnfZ k f] and [cnfQ k f] are the CNF conversions of the tactics: [Micromega.cnfZ k f] and
     [Micromega.cnfQ k f], with each check of a pair of literals computed once ({!Cnf_memo}). *)
 val cnfZ :
