@@ -68,24 +68,39 @@ val processes : unit -> int
     left it: [n] after [set_jobs ~profiling n], or 1 when it fell back to
     checking in the main process. *)
 
-val map_forked : ?heap_budget:int -> ?item_timeout:float -> int -> (int -> 'a) -> int ->
-  'a option array
-(** [map_forked ~heap_budget ~item_timeout n f k] runs [f] on [0 .. k-1] in
-    at most [n] processes created with [Unix.fork] at the same time, and
-    answers [Some (f i)] at [i], or [None] when [f i] raised, when its
-    process did not exit with code 0, or when no process could run it. Each
-    process inherits the heap as it is when [map_forked] is called, prints
-    nothing, and sends back each result marshalled, so a result must hold no
-    closure, and [f] must have no effect that anything depends on. A process
-    that has allocated more than [heap_budget] bytes in its major heap
-    (default: no bound) stops after the item it is on, and a fresh process
-    takes the items that are left. A process that has not sent the whole
-    answer to an item [item_timeout] seconds (default: no bound) after it
-    was given the item is killed, all its answers are [None], and a fresh
-    process takes the items that are left. A process that should exit is
-    waited for at most a few seconds, then killed, so [map_forked] returns
-    whatever its processes do. The main process only hands out the items
-    and reads the results. *)
+(** Running a function on items in forked processes while the main process
+    goes on with its own work. *)
+module Forked : sig
+  type 'a t
+
+  val start : ?heap_budget:int -> ?item_timeout:float -> int -> (int -> 'a) -> int -> 'a t
+  (** [start ~heap_budget ~item_timeout n f k] forks up to [n] processes
+      created with [Unix.fork], which run [f] on the items [0 .. k-1], handed
+      out in that order. Each process inherits the heap as it is when it is
+      forked, at [start] or at a later [poll], prints nothing, and sends back
+      each result marshalled, so a result must hold no closure. [f] must have
+      no effect that anything depends on, and its result must depend on
+      nothing that changes after [start]: a result is used whatever happens
+      to its process afterwards. A process that has allocated more than
+      [heap_budget] bytes in its major heap (default: no bound) stops after
+      the item it is on, and a fresh process takes the items that are left. A
+      process that has not sent the whole answer to an item [item_timeout]
+      seconds (default: no bound) after it was given the item is killed, that
+      item gets no result, and a fresh process takes the items that are
+      left. *)
+
+  val poll : ?wait:float -> 'a t -> (int -> 'a -> unit) -> bool
+  (** [poll ~wait s deliver] calls [deliver i (f i)] for each result that
+      has come whole since the last [poll], hands out items to free
+      processes, and forks fresh ones for those that stopped. It waits at
+      most [wait] seconds (default: 0) for a result, and never for a process
+      to end. It answers whether some item is still being computed. An item
+      whose [f i] raised gets no result. *)
+
+  val stop : 'a t -> unit
+  (** Kill every process that is left, wait for all of them, and close what
+      [start] opened. No result is delivered after it. *)
+end
 
 val default_budget : float
 (** Seconds. *)
@@ -258,9 +273,9 @@ val set_window : float -> unit
 val end_window : unit -> unit
 (** The next [defer] or [defer_table] deals, as once a window has passed. *)
 val default_answer_writer : Unix.file_descr -> bytes -> bytes -> unit
-(** What a process of [map_forked] does to send an answer, given the
+(** What a process of [Forked] does to send an answer, given the
     descriptor to write to, the 8 bytes of its length, and the answer. *)
 
 val set_answer_writer : (Unix.file_descr -> bytes -> bytes -> unit) -> unit
-(** [set_answer_writer f] replaces what the processes of [map_forked]
+(** [set_answer_writer f] replaces what the processes of [Forked]
     started after it do to send an answer. *)

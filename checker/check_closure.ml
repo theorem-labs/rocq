@@ -108,6 +108,15 @@ let index_fields fields =
 let find_module fields label = Id.Map.find_opt label fields.modules
 let find_constant fields label = Id.Map.find_opt label fields.constants
 let find_mind fields label = Id.Map.find_opt label fields.minds
+(* The processes that read opaque bodies ahead of the walk ("Opaque bodies
+   read ahead"). *)
+type 'node read_ahead = {
+  session : (int * 'node) list CheckWorkers.Forked.t;
+  ahead_opaque : Constant.t array;  (* the constants handed out, by position *)
+  mutable ticks : int;  (* nodes looked up since the processes were started *)
+  mutable last_poll : float;
+}
+
 type state = {
   env : Environ.env;
   access : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm;
@@ -120,6 +129,8 @@ type state = {
   mutable prefetched : node Cmap_env.t;
   (* the nodes of [(Public, ConstRef kn)] that forked processes computed
      ahead of the walk ("Opaque bodies read ahead") *)
+  mutable ahead : node read_ahead option;
+  (* those processes, while they run *)
   mutable gen : int;
   keys : Constr.t array;
   gens : int array;
@@ -450,10 +461,20 @@ let mind_node st view mind =
 
     Reading the opaque bodies and walking them is most of what the report
     costs, and the walk of [closure] does it one constant after another. With
-    [-j n], [n] forked processes compute ahead of the walk the node of
-    [(Public, ConstRef kn)] for every opaque constant [kn] of the environment,
-    a chunk of constants at a time to whichever process is free, and the walk
-    takes such a node from them instead of computing it.
+    [-j n], [n - 1] forked processes compute, while the walk goes on, the node
+    of [(Public, ConstRef kn)] for the opaque constants [kn] of the
+    environment, a chunk of constants at a time to whichever process is free,
+    and the walk takes such a node when it has come instead of computing it.
+    The main process keeps a core for the walk, looks at the processes every
+    few milliseconds ([read_ahead_tick]), and kills them when the walk ends.
+    So the report waits for none of them: at worst the walk computes every
+    node itself, as without processes.
+
+    The chunks come in the order the walk is likely to need them: the
+    libraries of the requested models first, then the other libraries, the
+    last one checked first, and in each library the last opaque proof first.
+    ROCQCHK_READ_AHEAD_ORDER=plain, a measurement seam, keeps the order of
+    the environment instead.
 
     The node a process sends is the one the walk would compute. For a constant
     that the environment holds with a body, [lookup_constant] answers
@@ -461,13 +482,16 @@ let mind_node st view mind =
     module implementation, so [constant_node] depends only on the environment
     and the opaque accessor, which a forked process has as they are. Its walk
     gives the same set of references whatever the state of [seen], which never
-    finds a term of an earlier walk.
+    finds a term of an earlier walk. A process is forked from the main process
+    at any point of the walk, whose caches ([public_nodes], [seen], [fields],
+    [prefetched]) have grown by then, but none of them changes such a node, so
+    the node does not depend on when its process was forked.
 
     A process sends no node for a body it cannot read, nor for a constant whose
     node raised: the walk computes those itself, so the warning about a body
     that cannot be read is printed where it is printed without processes. A
-    process that fails sends nothing, and the walk computes its nodes. Nothing
-    a process does reaches the output ([CheckWorkers.map_forked]). *)
+    process that fails sends no more nodes, and the walk computes the rest.
+    Nothing a process does reaches the output ([CheckWorkers.Forked]). *)
 
 exception Unreadable
 
@@ -496,16 +520,51 @@ let read_ahead_heap_budget () =
    stored proof that no request reaches. *)
 let read_ahead_item_timeout = 120.
 
-let read_ahead st jobs =
-  let opaque =
+(* Seconds between two looks at the processes: often enough that a free
+   process waits little for its next chunk, rarely enough that looking costs
+   nothing next to the walk. *)
+let read_ahead_poll_interval = 0.002
+
+(* The opaque constants of the environment, in the order the processes get
+   them. *)
+let read_ahead_order st ~libraries models =
+  let entries =
     Environ.fold_constants (fun kn cb acc -> match cb.const_body with
-        | OpaqueDef _ -> kn :: acc
+        | OpaqueDef o ->
+          let _, _, dp, h = Opaqueproof.repr o in
+          (kn, dp, Opaqueproof.repr_handle h) :: acc
         | Def _ | Undef _ | Primitive _ | Symbol _ -> acc)
       st.env []
   in
-  let library kn = ModPath.dp (Constant.modpath kn) in
-  let opaque = Array.of_list opaque in
-  Array.stable_sort (fun a b -> DirPath.compare (library a) (library b)) opaque;
+  let entries = Array.of_list entries in
+  let name (kn, _, _) = kn in
+  match Sys.getenv_opt "ROCQCHK_READ_AHEAD_ORDER" with
+  | Some "plain" ->
+    let library (kn, _, _) = ModPath.dp (Constant.modpath kn) in
+    Array.stable_sort (fun a b -> DirPath.compare (library a) (library b)) entries;
+    Array.map name entries
+  | None | Some _ ->
+    let ranks = ref DirPath.Map.empty and count = ref 0 in
+    let add dp =
+      if not (DirPath.Map.mem dp !ranks) then begin
+        ranks := DirPath.Map.add dp !count !ranks;
+        incr count
+      end
+    in
+    List.iter (fun kn -> add (ModPath.dp (Constant.modpath kn))) models;
+    List.iter add libraries;
+    let ranked = Array.map (fun (kn, dp, h) ->
+        (kn, Option.default max_int (DirPath.Map.find_opt dp !ranks), h)) entries
+    in
+    Array.stable_sort (fun (_, ra, ha) (_, rb, hb) ->
+        match Int.compare ra rb with
+        | 0 -> Int.compare hb ha
+        | c -> c)
+      ranked;
+    Array.map name ranked
+
+let start_read_ahead st n ~libraries models =
+  let opaque = read_ahead_order st ~libraries models in
   let total = Array.length opaque in
   let chunks = (total + read_ahead_chunk - 1) / read_ahead_chunk in
   (* The nodes of chunk [c], each with its position in [opaque], so that no
@@ -525,24 +584,61 @@ let read_ahead st jobs =
     in
     go last []
   in
-  Array.iter (function
-      | None -> ()
-      | Some nodes ->
-        List.iter (fun (j, n) -> st.prefetched <- Cmap_env.add opaque.(j) n st.prefetched) nodes)
-    (CheckWorkers.map_forked ~heap_budget:(read_ahead_heap_budget ())
-       ~item_timeout:read_ahead_item_timeout jobs chunk chunks)
+  let session = CheckWorkers.Forked.start ~heap_budget:(read_ahead_heap_budget ())
+      ~item_timeout:read_ahead_item_timeout n chunk chunks
+  in
+  st.ahead <- Some { session; ahead_opaque = opaque; ticks = 0;
+                     last_poll = Unix.gettimeofday () }
+
+let stop_read_ahead st = match st.ahead with
+  | None -> ()
+  | Some a -> st.ahead <- None; CheckWorkers.Forked.stop a.session
+
+(* Takes the nodes that have come, and answers whether more may come. A
+   failure only stops the processes: the walk computes the rest. *)
+let poll_read_ahead ?wait st a =
+  a.last_poll <- Unix.gettimeofday ();
+  let deliver _ nodes =
+    List.iter (fun (j, n) -> st.prefetched <- Cmap_env.add a.ahead_opaque.(j) n st.prefetched)
+      nodes
+  in
+  match CheckWorkers.Forked.poll ?wait a.session deliver with
+  | more -> more
+  | exception e when CErrors.noncritical e -> stop_read_ahead st; false
+
+(* Called for each node the walk computes or takes: at a miss on an opaque
+   constant, and every 64 nodes, it looks at the processes, at most once every
+   [read_ahead_poll_interval]. *)
+let read_ahead_tick st ~miss = match st.ahead with
+  | None -> ()
+  | Some a ->
+    a.ticks <- a.ticks + 1;
+    if (miss || Int.equal (a.ticks land 63) 0)
+    && Unix.gettimeofday () -. a.last_poll >= read_ahead_poll_interval
+    then ignore (poll_read_ahead st a)
 
 (* Test-only seam, beside [test_fault] below: how many nodes the walk took
-   from the processes of [read_ahead].
+   from the processes of [start_read_ahead].
    [COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD] prints it. *)
 let read_ahead_used = ref 0
 
-let read_ahead_node st view kn = match view with
-  | Implementation -> None
-  | Public ->
-    let n = Cmap_env.find_opt kn st.prefetched in
-    if Option.has_some n then incr read_ahead_used;
-    n
+let read_ahead_node st view kn =
+  let n = match view, st.ahead with
+    | Implementation, _ -> read_ahead_tick st ~miss:false; None
+    | Public, None -> Cmap_env.find_opt kn st.prefetched
+    | Public, Some _ ->
+      match Cmap_env.find_opt kn st.prefetched with
+      | Some _ as n -> read_ahead_tick st ~miss:false; n
+      | None ->
+        let opaque = match Environ.lookup_constant_opt kn st.env with
+          | Some { const_body = OpaqueDef _; _ } -> true
+          | Some _ | None -> false
+        in
+        read_ahead_tick st ~miss:opaque;
+        if opaque then Cmap_env.find_opt kn st.prefetched else None
+  in
+  if Option.has_some n then incr read_ahead_used;
+  n
 
 let node st view obj =
   let nodes = match view with
@@ -557,7 +653,9 @@ let node st view obj =
         (match read_ahead_node st view kn with
          | Some n -> n
          | None -> constant_node ~unreadable:warn_unreadable st view kn)
-      | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> mind_node st view mind
+      | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+        read_ahead_tick st ~miss:false;
+        mind_node st view mind
       | GlobRef.VarRef _ -> { refs = []; axiom = false; flags = []; resolved = false }
     in
     begin match view with
@@ -990,12 +1088,19 @@ let test_walk_count () =
   | None | Some _ -> ()
 
 (* Test-only seam: with the test variable set, print how many nodes the walk
-   took from the processes of [read_ahead], so a test can tell that they were
-   used. It has no effect unless the test variable is explicitly set. *)
+   took from the processes of [start_read_ahead], so a test can tell that they were
+   used, and make the walk wait until the processes have answered every chunk,
+   so that the count does not depend on how fast they are. It has no effect
+   unless the test variable is explicitly set. *)
 let test_read_ahead_count () =
   match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD" with
   | Some "1" -> line "read ahead %d" !read_ahead_used
   | None | Some _ -> ()
+
+let test_read_ahead_wait st =
+  match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD", st.ahead with
+  | Some "1", Some a -> while poll_read_ahead ~wait:1. st a do () done
+  | (None | Some _), _ -> ()
 
 (* Test-only seam: a test sets this for one process to exercise the public
    incomplete-report contract. It has no effect unless the test variable is
@@ -1051,7 +1156,7 @@ let resolve_in_impl st name =
     in
     List.rev (split 0 [])
 
-let print ~jobs env access requests =
+let print ~jobs ~libraries env access requests =
   let index =
     (* Every constant under each printed name: two kernel names can print
        alike (a library P.A with a module B, and a library P.A.B), and a
@@ -1064,7 +1169,7 @@ let print ~jobs env access requests =
   let st = {
     env; access; fields = ModPath.Map.empty;
     public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty;
-    prefetched = Cmap_env.empty; gen = 0;
+    prefetched = Cmap_env.empty; ahead = None; gen = 0;
     keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
   } in
   (* One memo for the whole report: the requests share the walk (see
@@ -1074,49 +1179,53 @@ let print ~jobs env access requests =
   read_ahead_used := 0;
   line "STATEMENT REPORT %d" format_version;
   test_fault ();
-  (* Read ahead only when some request has a model to walk. The walk computes
-     whatever the processes did not: a failure here only leaves it more to
-     compute. *)
-  if jobs > 1 && List.exists (fun r -> CString.Map.mem r.req_model index) requests then
-    (try read_ahead st jobs with e when CErrors.noncritical e -> ());
-
-  List.iter (fun r ->
-      let trusted = Option.default "-" r.req_trusted in
-      let model = match CString.Map.find_opt r.req_model index with
-        | Some [c] -> `One c
-        | Some _ -> `Ambiguous
-        | None ->
-          match resolve_in_impl st r.req_model with
-          | [] -> `Missing
-          (* A type verdict is about the two constants as the final
-             environment holds them; one only an implementation holds has
-             none there (its type may name the implementation's own
-             definitions), so a typed request on it answers as before the
-             implementation lookup existed. *)
-          | [_] when Option.has_some r.req_trusted -> `Missing
-          | [c] -> `One c
-          | _ :: _ :: _ -> `Ambiguous
-      in
-      match model with
-      | `Missing -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
-      | `Ambiguous -> line "statement %s %s %s ambiguous 0 0" r.req_name r.req_model trusted
-      | `One model ->
-        let c = closure st memo (GlobRef.ConstRef model) in
-        let verdict = match r.req_trusted with
-          | None -> "not-requested"
-          | Some t ->
-            match CString.Map.find_opt t index with
-            | None -> "trusted-missing"
-            | Some [t] -> type_verdict env (Environ.lookup_constant model env) t
-            | Some _ -> "trusted-ambiguous"
-        in
-        line "statement %s %s %s %s %d %d" r.req_name r.req_model trusted verdict
-          (CString.Set.cardinal c.axioms) (FlagSet.cardinal c.flag_set);
-        CString.Set.iter (line "axiom %s %s" r.req_name) c.axioms;
-        (* before the flags: a reader takes resolved lines after the axioms *)
-        CString.Set.iter (line "resolved %s %s" r.req_name) c.resolved_fields;
-        FlagSet.iter (fun (kind, entry) -> line "flag %s %s %s" r.req_name kind entry) c.flag_set)
-    requests;
+  (* Read ahead only when some request has a model to walk, with one process
+     fewer than [jobs]: this one walks. The walk computes whatever the
+     processes did not: a failure here only leaves it more to compute. *)
+  let models = List.concat_map (fun r -> Option.default [] (CString.Map.find_opt r.req_model index)) requests in
+  if jobs > 1 && not (CList.is_empty models) then
+    (try start_read_ahead st (jobs - 1) ~libraries models
+     with e when CErrors.noncritical e -> ());
+  (* No process outlives the walk, whichever way it ends. *)
+  Fun.protect ~finally:(fun () -> stop_read_ahead st) (fun () ->
+      test_read_ahead_wait st;
+      List.iter (fun r ->
+          let trusted = Option.default "-" r.req_trusted in
+          let model = match CString.Map.find_opt r.req_model index with
+            | Some [c] -> `One c
+            | Some _ -> `Ambiguous
+            | None ->
+              match resolve_in_impl st r.req_model with
+              | [] -> `Missing
+              (* A type verdict is about the two constants as the final
+                 environment holds them; one only an implementation holds has
+                 none there (its type may name the implementation's own
+                 definitions), so a typed request on it answers as before the
+                 implementation lookup existed. *)
+              | [_] when Option.has_some r.req_trusted -> `Missing
+              | [c] -> `One c
+              | _ :: _ :: _ -> `Ambiguous
+          in
+          match model with
+          | `Missing -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
+          | `Ambiguous -> line "statement %s %s %s ambiguous 0 0" r.req_name r.req_model trusted
+          | `One model ->
+            let c = closure st memo (GlobRef.ConstRef model) in
+            let verdict = match r.req_trusted with
+              | None -> "not-requested"
+              | Some t ->
+                match CString.Map.find_opt t index with
+                | None -> "trusted-missing"
+                | Some [t] -> type_verdict env (Environ.lookup_constant model env) t
+                | Some _ -> "trusted-ambiguous"
+            in
+            line "statement %s %s %s %s %d %d" r.req_name r.req_model trusted verdict
+              (CString.Set.cardinal c.axioms) (FlagSet.cardinal c.flag_set);
+            CString.Set.iter (line "axiom %s %s" r.req_name) c.axioms;
+            (* before the flags: a reader takes resolved lines after the axioms *)
+            CString.Set.iter (line "resolved %s %s" r.req_name) c.resolved_fields;
+            FlagSet.iter (fun (kind, entry) -> line "flag %s %s %s" r.req_name kind entry) c.flag_set)
+        requests);
   test_walk_count ();
   test_read_ahead_count ();
   line "END STATEMENT REPORT"
