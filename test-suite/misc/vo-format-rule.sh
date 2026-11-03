@@ -11,7 +11,10 @@
 # - that segment inserted before a recorded one, the recorded keepfacts
 #   segment moved before vmlibrary, a second segment under a recorded name,
 #   a changed field of the recorded keepfacts segment: rc 1, telling to bump
-#   vo_magic.
+#   vo_magic;
+# - a new kind whose table element type the printer could not read (an
+#   object_kind line and a table_payload_unresolved line added): rc 1,
+#   naming that table, although a new kind alone passes.
 
 set -e
 export PATH=$BIN:$PATH
@@ -77,5 +80,13 @@ k && /= sum\(bool,2,0,\)$/ { sub(/sum\(bool,2,0,\)$/, "int"); hit = 1 }
 { print }
 END { if (!hit) exit 3 }'
 expect_bump changed_field
+
+run unresolved_table '{ print }
+/^object_kind / && !k { print "object_kind Zzz Table"; k = 1 }
+/^table_payload / && !t { print "table_payload_unresolved Zzz.Table inline-argument"; t = 1 }'
+if [ "$rc" = 1 ] && grep -q 'element type the printer cannot read' "$W/unresolved_table.out" \
+   && grep -q 'Zzz.Table inline-argument' "$W/unresolved_table.out"; then
+  pass "unresolved_table: rc 1, names the table"
+else bad "unresolved_table: expected rc 1 naming the table, got rc $rc:"; show unresolved_table; fi
 
 exit $fail

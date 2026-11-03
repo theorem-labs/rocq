@@ -53,6 +53,12 @@
 # assumptions, whose shape did not change, and rocq-library-label validates
 # the segment before it reads the queries).
 #
+# A table whose element type the printer cannot read (a
+# [table_payload_unresolved] line: a Goptions.MakeRefTable argument that is
+# not a module name) fails before any comparison, recorded or not: the type
+# such a table stores would be pinned nowhere, so neither a change to it nor
+# a new table of it could be told from an unchanged one.
+#
 
 set -e
 
@@ -72,6 +78,13 @@ fi
 "$TOOL" --vo-representation > _test/current.txt
 if ! grep -q '^vo_version ' _test/current.txt; then
   echo "FAIL rocq-library-label --vo-representation printed no representation"
+  exit 1
+fi
+if grep -q '^table_payload_unresolved ' _test/current.txt; then
+  echo "FAIL a Goptions.MakeRefTable argument whose element type the printer cannot read:"
+  grep '^table_payload_unresolved ' _test/current.txt | sed 's/^/       /'
+  echo "     bind the argument to a module name (module A = struct ... end, then"
+  echo "     MakeRefTable (A)), so that the type the table stores is printed"
   exit 1
 fi
 

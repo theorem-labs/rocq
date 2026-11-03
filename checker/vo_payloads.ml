@@ -67,7 +67,11 @@
      not when it is the functor's parameter. [Goptions.MakeRefTable] and
      [Goptions.MakeStringTable] are the second case, and the element type
      each of their applications chooses is printed as a [table_payload]
-     line;
+     line. A [MakeRefTable] application whose argument is not a module name
+     (a [struct ... end], a functor application written in place) is
+     printed as a [table_payload_unresolved] line instead, since this
+     printer reads the [t] of a named module only; misc/vo-format.sh fails
+     on such a line;
    - [opaque NAME REASON]: a type reached from a payload whose definition
      no tree holds. The reasons are [abstract] (abstract in the module
      that defines it), [functor-application] (built by one),
@@ -281,10 +285,17 @@ let sites : site list ref = ref []
 (* One application of [Goptions.MakeRefTable] or [Goptions.MakeStringTable]:
    a table is a kind, and what it stores is the element type the application
    chooses, which the functor's body names only through its parameter. *)
+type table_element =
+  | String_table                (* [MakeStringTable]: it stores strings *)
+  | Ref_table of Path.t         (* [MakeRefTable (A)]: it stores [A.t] *)
+  | Ref_table_inline            (* [MakeRefTable (struct ... end)] or another
+                                   argument that is not a module name: this
+                                   printer does not read its [t] *)
+
 type table = {
   t_name : string;            (* the module path of the application *)
   t_scope : string list;      (* the module path it is written in *)
-  t_element : Path.t option;  (* the argument module, whose [t] it stores *)
+  t_element : table_element;
 }
 
 let tables : table list ref = ref []
@@ -470,10 +481,10 @@ let collect_structure ~register_sites modname structure =
                 || (penultimate_component (path_name f) = "Goptions"
                     && List.mem (last_component (path_name f)) table_functions) ->
               let element =
-                match argument.Typedtree.mod_desc with
-                | Typedtree.Tmod_ident (a, _)
-                  when last_component (path_name f) = "MakeRefTable" -> Some a
-                | _ -> None
+                if last_component (path_name f) <> "MakeRefTable" then String_table
+                else match argument.Typedtree.mod_desc with
+                  | Typedtree.Tmod_ident (a, _) -> Ref_table a
+                  | _ -> Ref_table_inline
               in
               Some element
             | _ -> None
@@ -1193,25 +1204,29 @@ let print_tables b =
     (List.sort String.compare
        (List.map
           (fun table ->
-             let element =
-               match table.t_element with
-               | None -> "string"
-               | Some argument ->
-                 let path = Path.Pdot (argument, "t") in
-                 (match find_declaration table.t_scope path with
-                  | Some _ -> print_constructor ~scope:table.t_scope [] path []
-                  | None ->
-                    (* The argument is itself a functor application: what it
-                       stores is the type that functor's body declares. *)
-                    let name =
-                      String.concat "." (table.t_scope @ [ path_name argument ])
-                    in
-                    (match Hashtbl.find_opt module_applications (resolve_alias name) with
-                     | Some functor_name ->
-                       print_named ~scope:table.t_scope (functor_name ^ ".t")
-                     | None -> print_constructor ~scope:table.t_scope [] path []))
-             in
-             Printf.sprintf "table_payload %s %s" table.t_name element)
+             match table.t_element with
+             | String_table -> Printf.sprintf "table_payload %s string" table.t_name
+             | Ref_table_inline ->
+               (* misc/vo-format.sh refuses this line: name the argument
+                  module, so that its [t] is printed. *)
+               Printf.sprintf "table_payload_unresolved %s inline-argument" table.t_name
+             | Ref_table argument ->
+               let path = Path.Pdot (argument, "t") in
+               let element =
+                 match find_declaration table.t_scope path with
+                 | Some _ -> print_constructor ~scope:table.t_scope [] path []
+                 | None ->
+                   (* The argument is itself a functor application: what it
+                      stores is the type that functor's body declares. *)
+                   let name =
+                     String.concat "." (table.t_scope @ [ path_name argument ])
+                   in
+                   (match Hashtbl.find_opt module_applications (resolve_alias name) with
+                    | Some functor_name ->
+                      print_named ~scope:table.t_scope (functor_name ^ ".t")
+                    | None -> print_constructor ~scope:table.t_scope [] path [])
+               in
+               Printf.sprintf "table_payload %s %s" table.t_name element)
           !tables))
 
 let representation () =
