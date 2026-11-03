@@ -666,7 +666,8 @@ let strip_syntax_class (SynclassDyn.Dyn (tag, data)) =
   match SynclassStripMap.find tag !syntax_class_strips with
   | strip -> SynclassDyn.Dyn (tag, strip data)
   | exception Not_found ->
-    LocStrip.unknown ("Ltac2 syntax class " ^ SynclassDyn.repr tag)
+    LocStrip.unknown ("Ltac2 syntax class " ^
+                      Option.default "of a plugin this process did not load" (SynclassDyn.repr_opt tag))
 
 module CustomV = struct
   include Tac2Custom

@@ -31,7 +31,16 @@ let rec strip : type r g t. (r, g, t) genarg_type -> g strip_fun = function
     fun (x1, x2) -> (f1 x1, f2 x2)
   | ExtraArg tag as wit ->
     if Strip.mem wit then Strip.obj wit
-    else fun _ -> LocStrip.unknown ("generic argument " ^ ArgT.repr tag)
+    else
+      (* A tag this process did not register (the argument of a plugin it
+         did not load, as when rocq-library-label reads a library compiled
+         with that plugin) has no name here, and [ArgT.repr] would fail an
+         assertion. *)
+      let what = match ArgT.repr_opt tag with
+        | Some name -> "generic argument " ^ name
+        | None -> "a generic argument of a plugin this process did not load"
+      in
+      fun _ -> LocStrip.unknown what
 
 let generic_strip (GenArg (Glbwit wit, v)) =
   in_gen (glbwit wit) (strip wit v)

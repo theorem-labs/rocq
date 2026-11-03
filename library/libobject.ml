@@ -273,6 +273,11 @@ let interface_object (Dyn.Dyn (tag, v) as obj) =
       | v -> Ok (Dyn.Dyn (tag, v))
       | exception LocStrip.Unknown what ->
         Error ("object kind " ^ decl.object_name ^ ": " ^ what)
+      | exception e when CErrors.noncritical e ->
+        (* A stripper that fails otherwise gives no view either: the library
+           then has no label, and stock's digest (a rebuild of its
+           dependents), never a crash of the compile or of a reader. *)
+        Error ("object kind " ^ decl.object_name ^ ": " ^ Printexc.to_string e)
 
 let dump = Dyn.dump
 

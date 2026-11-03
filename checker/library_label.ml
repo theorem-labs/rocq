@@ -17,7 +17,12 @@
      is the MD5 of the segment's bytes (stock's digest: a library compiled
      without -location-free-label, or with no label), followed by it;
      "other <hex>" otherwise (a label of another layout version, a tampered
-     file), followed by the stored digest.
+     file, or a library this build cannot label: one whose objects hold a
+     value of a plugin this tool does not link, such as a generic argument
+     of coq-hammer's tactics, which only a process that loaded the plugin can
+     strip), followed by the stored digest. When the reading is not
+     "label2", standard error says why. Any other failure prints its cause
+     and exits 1.
    - [--stored FILE.vo]: the digest the file stores for its library segment,
      in hex, as its dependents record it.
    - [--attempts FILE.vo]: the attempted-resolution records (Attempts), one
@@ -95,10 +100,22 @@ let usage () =
 
 (* The label kind [--check] prints, and the hex it prints beside it: the full
    32-byte label for [label2], otherwise the stored digest. *)
-let check_kind (l : Library.file_label) =
-  match Lazy.force l.label with
+let check_kind ?file (l : Library.file_label) =
+  let label = match Lazy.force l.label with
+    | r -> r
+    | exception e when CErrors.noncritical e -> Error (Printexc.to_string e)
+  in
+  match label with
   | Ok label when String.equal (Libkey.stored label) l.stored -> ("label2", hex label)
   | Ok _ | Error _ ->
+    (* Why there is no label reading, on standard error: the label this
+       build computes for the file is another one, or none. *)
+    (match file, label with
+     | Some f, Error why ->
+       prerr_endline ("rocq-library-label: " ^ f ^ ": no label: " ^ why)
+     | Some f, Ok _ ->
+       prerr_endline ("rocq-library-label: " ^ f ^ ": the stored digest is not this build's label")
+     | None, _ -> ());
     if String.equal (Lazy.force l.segment_md5) l.stored then ("md5", hex l.stored)
     else ("other", hex l.stored)
 
@@ -160,7 +177,7 @@ let read_keep_facts f (l : Library.file_label) : KeepFacts.t option =
 
 let axiom_report_json file (l : Library.file_label) =
   let r = Lazy.force l.axiom_report in
-  let kind, lhex = check_kind l in
+  let kind, lhex = check_kind ~file l in
   let b = Buffer.create 1024 in
   let comma = ref false in
   let field k f = (if !comma then Buffer.add_char b ','); comma := true;
@@ -422,12 +439,12 @@ let read f =
     prerr_endline ("rocq-library-label: cannot read " ^ f ^ ": " ^ Printexc.to_string e);
     exit 1
 
-let () =
+let main () =
   match List.tl (Array.to_list Sys.argv) with
   | [mode; f] ->
     begin match mode with
     | "--check" ->
-      let kind, lhex = check_kind (read f) in Printf.printf "%s %s\n" kind lhex
+      let kind, lhex = check_kind ~file:f (read f) in Printf.printf "%s %s\n" kind lhex
     | "--stored" -> print_endline (hex (read f).stored)
     | "--attempts" ->
       begin match (read f).attempts with
@@ -447,3 +464,13 @@ let () =
     Printf.printf "%d\n" LibkeyObjects.vmlibrary_format_version
   | ["--vo-representation"] -> print_string (vo_representation ())
   | _ -> usage ()
+
+(* Every failure names itself: an exception that escapes a mode is printed,
+   with exit status 1, rather than OCaml's bare exit 2. *)
+let () =
+  try main () with
+  | Stdlib.Exit -> exit 1
+  | e ->
+    prerr_endline ("rocq-library-label: " ^ String.concat " " (List.tl (Array.to_list Sys.argv))
+                   ^ ": " ^ Printexc.to_string e);
+    exit 1

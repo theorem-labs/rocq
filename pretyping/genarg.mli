@@ -127,6 +127,7 @@ sig
   type ('a, 'b, 'c) tag
   val eq : ('a1, 'b1, 'c1) tag -> ('a2, 'b2, 'c2) tag -> ('a1 * 'b1 * 'c1, 'a2 * 'b2 * 'c2) CSig.eq option
   val repr : ('a, 'b, 'c) tag -> string
+  val repr_opt : ('a, 'b, 'c) tag -> string option
   type any = Any : ('a, 'b, 'c) tag -> any
   val name : string -> any option
   val dump : unit -> (int * string) list

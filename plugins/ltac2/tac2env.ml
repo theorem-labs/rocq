@@ -306,7 +306,8 @@ let strip_ml_object : type a b. (a, b) Tac2dyn.Arg.tag -> b -> b = fun t v ->
   match MLStrip.find t !ml_strip_table with
   | MLStrip.Pack f -> f v
   | exception Not_found ->
-    LocStrip.unknown ("Ltac2 ML object " ^ Tac2dyn.Arg.repr t)
+    LocStrip.unknown ("Ltac2 ML object " ^
+                      Option.default "of a plugin this process did not load" (Tac2dyn.Arg.repr_opt t))
 
 (** Absolute paths *)
 

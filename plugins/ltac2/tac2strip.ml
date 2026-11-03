@@ -94,7 +94,8 @@ and raw_tacexpr_r = function
   | CTacExt (tag, _) ->
     (* Raw ML payloads have no stripper; globalization never leaves one in
        a stored expression (see [Tac2intern.globalize]). *)
-    LocStrip.unknown ("Ltac2 raw ML object " ^ Tac2dyn.Arg.repr tag)
+    LocStrip.unknown ("Ltac2 raw ML object " ^
+                      Option.default "of a plugin this process did not load" (Tac2dyn.Arg.repr_opt tag))
   | CTacGlb (prms, args, body, ty) ->
     let args = List.map (fun (na, e, t) -> (cast_leaf na, raw_tacexpr e, t)) args in
     CTacGlb (prms, args, glb_tacexpr body, ty)
