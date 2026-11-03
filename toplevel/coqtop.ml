@@ -137,6 +137,12 @@ let init_toploop opts stm_opts injections =
   let state = Load.load_init_vernaculars opts ~state in
   state
 
+let typecheck_every_qed opts injections =
+  Opaques.force_qed_typecheck ();
+  if opts.config.skip_qed_typecheck
+  then injections @ [Coqargs.WarnSkipQedTypecheckIgnored]
+  else injections
+
 let coqtop_init ({ run_mode; color_mode }, async_opts) injections ~opts =
   if run_mode != Interactive then Flags.quiet := true;
   Colors.init_color color_mode;
@@ -146,6 +152,7 @@ let coqtop_init ({ run_mode; color_mode }, async_opts) injections ~opts =
     ; submit_answer = ltac_debug_answer
     ; isTerminal = true
     });
+  let injections = typecheck_every_qed opts injections in
   init_toploop opts async_opts injections
 
 let coqtop_parse_extra opts extras =

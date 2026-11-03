@@ -519,7 +519,14 @@ and ``rocq repl``, unless stated otherwise:
   typechecks every opaque proof regardless of this option.
   :cmd:`Print Assumptions` reports each constant whose proof was not
   typechecked. Subproofs declared by :tacn:`abstract` are still typechecked
-  when the tactic runs.
+  when the tactic runs, and so is a proof declared under :cmd:`Fail` or
+  :cmd:`Succeed`, as the :flag:`Skip Qed Typecheck` flag describes.
+  A proof that a command rolling the document back discards, such as
+  :cmd:`Reset`, is typechecked at that command for the same reason, when
+  ``rocq compile`` is building a file.
+  A command that writes no file for ``rocqchk`` to check typechecks every
+  opaque proof: ``rocq compile -vok``, which refuses this option, and
+  ``rocq repl`` and ``coqidetop``, which warn that it has no effect.
 
   .. warning:: A library compiled with this option can contain an ill-typed
      proof, for instance one built with ``exact_no_check``, until ``rocqchk``

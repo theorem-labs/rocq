@@ -256,12 +256,18 @@ let set_option (opt,v) =
   | OptionSet None -> set_bool_option_value_gen ~locality:OptLocal opt true
   | OptionSet (Some v) -> set_option_value ~locality:OptLocal (interp_set_option opt) opt v
 
+let warn_skip_qed_typecheck_ignored =
+  CWarnings.create ~name:"skip-qed-typecheck-ignored"
+    Pp.(fun () -> strbrk "A toplevel typechecks the opaque proofs it reads, \
+                          so -skip-qed-typecheck has no effect here.")
+
 let handle_injection ~intern = let open Coqargs in function
   | RequireInjection {lib;prefix;export;allow_failure} ->
     require_file ~intern ~lib ~prefix ~export ~allow_failure
   | OptionInjection o -> set_option o
   | WarnNoNative s -> warn_no_native_compiler s
   | WarnNativeDeprecated -> warn_deprecated_native_compiler ()
+  | WarnSkipQedTypecheckIgnored -> warn_skip_qed_typecheck_ignored ()
 
 let start_library ~intern ~top injections =
   Flags.verbosely Declaremods.start_library top;

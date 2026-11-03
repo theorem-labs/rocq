@@ -716,6 +716,7 @@ let islave_init ( { Coqtop.run_mode; color_mode }, stm_opts) injections ~opts =
     then Coqargs.OptionInjection (["Debug"], OptionSet (Some "all")) :: injections
     else injections
   in
+  let injections = Coqtop.typecheck_every_qed opts injections in
   Coqtop.init_toploop opts stm_opts injections
 
 let islave_default_opts = Coqargs.default

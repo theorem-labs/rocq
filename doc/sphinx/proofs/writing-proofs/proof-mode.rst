@@ -237,7 +237,18 @@ When the proof is completed, you can exit proof mode with commands such as
    on every proof of the file, even after ``Unset Skip Qed Typecheck``.
    :cmd:`Print Assumptions` reports each constant whose proof was not
    typechecked. Subproofs declared by :tacn:`abstract` are still typechecked
-   when the tactic runs.
+   when the tactic runs, and so is a proof declared under :cmd:`Fail` or
+   :cmd:`Succeed`, which discard the proof: it would reach no :file:`.vo`
+   for ``rocqchk`` to check, and skipping its check would change the verdict
+   of the control.
+   A command that rolls the document back past such a proof, such as
+   :cmd:`Reset`, discards it in the same way, and typechecks it at that
+   command: the error :cmd:`Qed` raises without the flag is raised there.
+   A command that writes no file for ``rocqchk`` to check typechecks every
+   opaque proof, so this flag has no effect there: ``rocq compile -vok``,
+   ``rocq repl`` and ``coqidetop``, the ``rocqide`` toplevel. Given the
+   ``-skip-qed-typecheck`` option, which does the same as this flag,
+   ``-vok`` stops with an error; a toplevel warns and goes on.
 
    .. warning:: A library compiled with this flag on can contain an ill-typed
       proof, for instance one built with ``exact_no_check``, until ``rocqchk``
