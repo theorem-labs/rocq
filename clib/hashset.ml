@@ -37,6 +37,10 @@ module type S = sig
   val stats : t -> statistics
 end
 
+(* See [retain_entries] in the interface. *)
+let retain = ref false
+let retain_entries () = retain := true
+
 module Make (E : EqType) =
   struct
 
@@ -50,6 +54,7 @@ module Make (E : EqType) =
     mutable limit : int;               (* bucket size limit *)
     mutable oversize : int;            (* number of oversize buckets *)
     mutable rover : int;               (* for internal bookkeeping *)
+    mutable kept : elt list;           (* the elements stored while [!retain] *)
   }
 
   let get_index t h = (h land max_int) mod (Array.length t)
@@ -66,6 +71,7 @@ module Make (E : EqType) =
       limit = limit;
       oversize = 0;
       rover = 0;
+      kept = [];
     }
 
   let clear t =
@@ -74,7 +80,8 @@ module Make (E : EqType) =
       t.hashes.(i) <- [| |];
     done;
     t.limit <- limit;
-    t.oversize <- 0
+    t.oversize <- 0;
+    t.kept <- []
 
   let iter_weak f t =
     let rec iter_bucket i j b =
@@ -200,6 +207,7 @@ module Make (E : EqType) =
     | Some v -> v
     | None ->
       let () = add_aux t Weak.set (Some d) h index in
+      let () = if !retain then t.kept <- d :: t.kept in
       d
 
   let stats t =
