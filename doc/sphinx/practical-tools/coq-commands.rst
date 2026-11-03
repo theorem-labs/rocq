@@ -773,7 +773,8 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   the definition can minimize those and the check does not replay it;
   ``not-requested`` with no *trusted*;
   ``model-missing`` or ``trusted-missing`` when a name is not in the
-  environment. The verdict is about the two constants as the kernel stores
+  environment; ``ambiguous`` or ``trusted-ambiguous`` when it denotes several
+  constants. The verdict is about the two constants as the kernel stores
   them. Implicit arguments are elaboration data that the kernel never sees,
   so a *model* declared with maximal implicit arguments reads ``match``
   when its type is *trusted*'s; whether a bare alias ``Definition f :=

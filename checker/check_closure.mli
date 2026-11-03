@@ -69,8 +69,9 @@ END STATEMENT REPORT
     environment print as (a library [P.A] with a module [B], and a library
     [P.A.B]) answers [ambiguous] as a model and [trusted-ambiguous] as a
     trusted constant. The implementation lookup splits the name at every
-    dot, so a hidden module or label named [..] is not found there. A name the final environment holds is never looked up
-    in an implementation.
+    dot, so a hidden module or label named [..] is not found there and
+    answers [model-missing]. A name the final environment holds is never
+    looked up in an implementation.
 
     The verdict is [match] when [Definition f := model] ([Polymorphic] when
     the trusted constant is) is accepted for the field [Parameter f : T] of a
@@ -85,7 +86,8 @@ END STATEMENT REPORT
     or constraints: elaborating the definition can minimize those, and the
     check does not replay it, so the sealing may still accept such a model.
     It is [mismatch] when the types are not convertible, and otherwise
-    [model-missing], [trusted-missing], or
+    [model-missing], [trusted-missing], [ambiguous] (the model name denotes
+    several constants), [trusted-ambiguous] (the trusted name does), or
     [not-requested] (no trusted constant).
 
     The verdict is about the two constants as the kernel stores them.
