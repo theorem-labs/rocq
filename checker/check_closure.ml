@@ -476,17 +476,38 @@ let canonical_of = function
    its canonical kernel name. *)
 let axiom_entry obj = name_of obj ^ " " ^ canonical_of obj
 
-(* A closure's set holds its [axiom] entries and its [resolved] entries apart
-   by this prefix, which no name can start with (a name is made of
-   identifiers), so that the memo keeps one set per object. *)
-let resolved_mark = "\001"
-let resolved_entry obj = resolved_mark ^ name_of obj ^ " " ^ canonical_of obj
-let is_resolved_entry e = String.length e > 0 && e.[0] = '\001'
+module FlagSet = Stdlib.Set.Make (struct
+    type t = string * string
+    let compare (k1, o1) (k2, o2) =
+      let c = String.compare k1 k2 in
+      if Int.equal c 0 then String.compare o1 o2 else c
+  end)
 
-(* What a node adds to its closure's set. *)
-let node_entries n obj =
-  let s = if n.axiom then CString.Set.singleton (axiom_entry obj) else CString.Set.empty in
-  if n.resolved then CString.Set.add (resolved_entry obj) s else s
+(* What a closure reports: its [axiom] entries, its [resolved] entries (each
+   "<field> <canonical>") and its flags. *)
+type closure_sets = {
+  axioms : CString.Set.t;
+  resolved_fields : CString.Set.t;
+  flag_set : FlagSet.t;
+}
+
+let empty_sets = { axioms = CString.Set.empty; resolved_fields = CString.Set.empty; flag_set = FlagSet.empty }
+
+let union_sets a b = {
+  axioms = CString.Set.union a.axioms b.axioms;
+  resolved_fields = CString.Set.union a.resolved_fields b.resolved_fields;
+  flag_set = FlagSet.union a.flag_set b.flag_set;
+}
+
+let sets_size c =
+  CString.Set.cardinal c.axioms + CString.Set.cardinal c.resolved_fields + FlagSet.cardinal c.flag_set
+
+(* What a node itself adds to its closure. *)
+let node_sets n obj = {
+  axioms = if n.axiom then CString.Set.singleton (axiom_entry obj) else CString.Set.empty;
+  resolved_fields = if n.resolved then CString.Set.singleton (axiom_entry obj) else CString.Set.empty;
+  flag_set = List.fold_left (fun s f -> FlagSet.add f s) FlagSet.empty n.flags;
+}
 
 (* Place 2 of the name check (checkNames.mli), for a name that the check at
    load cannot see: a constant or an inductive that a term of an admitted
@@ -511,12 +532,6 @@ let check_printed_name obj =
       Pp.(str ("The statement report would print the name " ^ CheckNames.quote (name_of obj) ^
                ", which is not made of identifiers."))
 
-module FlagSet = Stdlib.Set.Make (struct
-    type t = string * string
-    let compare (k1, o1) (k2, o2) =
-      let c = String.compare k1 k2 in
-      if Int.equal c 0 then String.compare o1 o2 else c
-  end)
 
 (* Test-only seam, beside [test_fault] below: how many objects the report's
    walks entered, counted where an object is first reached rather than found
@@ -529,27 +544,26 @@ let walk_visits = ref 0
     that root alone. A name the report must not print stops it
     ([check_printed_name]). *)
 let closure_per_root st root =
-  let rec loop public_seen implementation_seen axioms flags = function
-    | [] -> axioms, flags
+  let rec loop public_seen implementation_seen acc = function
+    | [] -> acc
     | (view, obj) :: todo ->
       let seen = match view with
         | Public -> GlobRef.Set_env.mem obj public_seen
         | Implementation -> GlobRef.Set_env.mem obj implementation_seen
       in
-      if seen then loop public_seen implementation_seen axioms flags todo
+      if seen then loop public_seen implementation_seen acc todo
       else
         let n = node st view obj in
         incr walk_visits;
         if n.axiom || n.resolved || not (List.is_empty n.flags) then check_printed_name obj;
-        let axioms = CString.Set.union (node_entries n obj) axioms in
-        let flags = List.fold_left (fun flags f -> FlagSet.add f flags) flags n.flags in
+        let acc = union_sets (node_sets n obj) acc in
         let public_seen, implementation_seen = match view with
           | Public -> GlobRef.Set_env.add obj public_seen, implementation_seen
           | Implementation -> public_seen, GlobRef.Set_env.add obj implementation_seen
         in
-        loop public_seen implementation_seen axioms flags (List.rev_append n.refs todo)
+        loop public_seen implementation_seen acc (List.rev_append n.refs todo)
   in
-  loop GlobRef.Set_env.empty GlobRef.Set_env.empty CString.Set.empty FlagSet.empty [Public, root]
+  loop GlobRef.Set_env.empty GlobRef.Set_env.empty empty_sets [Public, root]
 
 (** {6 One walk for every request}
 
@@ -586,8 +600,8 @@ let closure_per_root st root =
 exception Not_shareable
 
 type memo = {
-  mutable public_closure : (CString.Set.t * FlagSet.t) GlobRef.Map_env.t;
-  mutable implementation_closure : (CString.Set.t * FlagSet.t) GlobRef.Map_env.t;
+  mutable public_closure : closure_sets GlobRef.Map_env.t;
+  mutable implementation_closure : closure_sets GlobRef.Map_env.t;
   mutable pending_public : GlobRef.Set_env.t;
   mutable pending_implementation : GlobRef.Set_env.t;
   mutable budget : int;
@@ -664,23 +678,21 @@ let shared_closure st m root =
       end)
     | Leave (view, obj) :: rest ->
       let n = node st view obj in
-      let axioms = node_entries n obj in
-      let flags = List.fold_left (fun s f -> FlagSet.add f s) FlagSet.empty n.flags in
       let self = (view, obj) in
-      let axioms, flags =
-        List.fold_left (fun (a, f) r ->
-            if same_object r self then (a, f)
+      let acc =
+        List.fold_left (fun acc r ->
+            if same_object r self then acc
             else
               let (rview, robj) = r in
               match memo_find m rview robj with
-              | Some (a', f') -> CString.Set.union a a', FlagSet.union f f'
+              | Some c -> union_sets acc c
               | None -> raise Not_shareable)
-          (axioms, flags) n.refs
+          (node_sets n obj) n.refs
       in
-      m.budget <- m.budget - CString.Set.cardinal axioms - FlagSet.cardinal flags;
+      m.budget <- m.budget - sets_size acc;
       if m.budget < 0 then raise Not_shareable;
       pending_set m view obj false;
-      memo_add m view obj (axioms, flags);
+      memo_add m view obj acc;
       run rest
   in
   run [Enter (Public, root)];
@@ -767,8 +779,8 @@ let infer_universes : (UGraph.t, unit) Conversion.universe_compare =
    and can minimize them when the model's universe context has sort variables
    or constraints; this check does not replay that, so it answers
    [universes-differ] for such a model, which the sealing may still accept. *)
-let type_verdict env model trusted =
-  let cm = Environ.lookup_constant model env and ct = Environ.lookup_constant trusted env in
+let type_verdict env cm trusted =
+  let ct = Environ.lookup_constant trusted env in
   let infer env =
     let state = Environ.universes env, infer_universes in
     match Conversion.generic_conv Conversion.CUMUL ~l2r:false TransparentState.full env state
@@ -904,21 +916,29 @@ let print env access requests =
       | `Missing -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
       | `Ambiguous -> line "statement %s %s %s ambiguous 0 0" r.req_name r.req_model trusted
       | `One model ->
-        let entries, flags = closure st memo (GlobRef.ConstRef model) in
-        let resolved, axioms = CString.Set.partition is_resolved_entry entries in
+        let c = closure st memo (GlobRef.ConstRef model) in
         let verdict = match r.req_trusted with
           | None -> "not-requested"
           | Some t ->
             match CString.Map.find_opt t index with
             | None -> "trusted-missing"
-            | Some t -> type_verdict env model t
+            | Some t ->
+              (* the model's declaration the closure walked: the final
+                 environment's, or an implementation's for a resolved name *)
+              let cm =
+                if Environ.mem_constant model env then Environ.lookup_constant model env
+                else match lookup_constant st Implementation model with
+                  | Some (_, cb) -> cb
+                  | None -> Environ.lookup_constant model env
+              in
+              type_verdict env cm t
         in
         line "statement %s %s %s %s %d %d" r.req_name r.req_model trusted verdict
-          (CString.Set.cardinal axioms) (FlagSet.cardinal flags);
-        CString.Set.iter (line "axiom %s %s" r.req_name) axioms;
-        FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) flags;
-        CString.Set.iter (fun e ->
-            line "resolved %s %s" r.req_name (String.sub e 1 (String.length e - 1))) resolved)
+          (CString.Set.cardinal c.axioms) (FlagSet.cardinal c.flag_set);
+        CString.Set.iter (line "axiom %s %s" r.req_name) c.axioms;
+        (* before the flags: a reader takes resolved lines after the axioms *)
+        CString.Set.iter (line "resolved %s %s" r.req_name) c.resolved_fields;
+        FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) c.flag_set)
     requests;
   test_walk_count ();
   line "END STATEMENT REPORT"
