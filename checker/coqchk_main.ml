@@ -529,7 +529,9 @@ let run senv =
    The text is the one [explain_exn] returns: it prints the terms of a
    [CantApplyBadType] type error itself, but nothing in the report raises one. *)
 let print_statement_report env requests =
-  try Check_closure.print env CheckLibrary.indirect_accessor requests
+  try
+    Check_closure.print ~jobs:(CheckWorkers.processes ()) env
+      CheckLibrary.indirect_accessor requests
   with e when (match e with Sys.Break | Out_of_memory -> false | _ -> true) ->
     Feedback.msg_warning
       (str "Statement report stopped: " ++
