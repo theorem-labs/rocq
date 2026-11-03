@@ -596,6 +596,90 @@ let () = add_test "Forked: a process that stops instead of exiting is killed" (f
          assert_equal ~printer:pr_results (Array.init k (fun i -> Some (i + 1))) out;
          assert_no_child_left ()))
 
+(* The children of this process, those not yet waited for included, as
+   /proc shows them (0 where there is no /proc). *)
+let children () =
+  let ppid_of pid =
+    match open_in (Printf.sprintf "/proc/%s/stat" pid) with
+    | exception Sys_error _ -> None
+    | ch ->
+      let l = try Some (input_line ch) with End_of_file -> None in
+      close_in ch;
+      (* "pid (comm) state ppid ...", where comm may hold spaces. *)
+      match Option.bind l (fun l -> Option.map (fun i -> l, i) (String.rindex_opt l ')')) with
+      | None -> None
+      | Some (l, i) ->
+        match String.split_on_char ' ' (String.sub l (i + 2) (String.length l - i - 2)) with
+        | _state :: ppid :: _ -> int_of_string_opt ppid
+        | _ -> None
+  in
+  match Sys.readdir "/proc" with
+  | exception Sys_error _ -> 0
+  | entries ->
+    Array.fold_left (fun count e ->
+        match int_of_string_opt e with
+        | None -> count
+        | Some _ -> if ppid_of e = Some (Unix.getpid ()) then count + 1 else count)
+      0 entries
+
+(* A heap budget of one byte, and every process stops itself (SIGSTOP) right
+   after it has sent its last answer, instead of exiting. Each is killed as it
+   retires and keeps its place until it has been waited for, so the
+   processes, those not yet waited for included, are never more than [n]
+   while the items are handed out; every item still has its result, and no
+   process is left after [stop]. *)
+let () = add_test "Forked: retired processes stay within the pool" (fun () ->
+    let writer fd length answer =
+      let (_, _, last) : int * int option * bool = Marshal.from_bytes answer 0 in
+      CheckWorkers.default_answer_writer fd length answer;
+      if last then Unix.kill (Unix.getpid ()) Sys.sigstop
+    in
+    CheckWorkers.set_answer_writer writer;
+    Fun.protect ~finally:(fun () -> CheckWorkers.set_answer_writer CheckWorkers.default_answer_writer)
+      (fun () ->
+         let n = 3 and k = 60 in
+         let out = Array.make k None in
+         let most = ref 0 in
+         let count () = most := max !most (children ()) in
+         let f i = Array.length (Array.make 1000 i) + i - 999 in
+         let s = CheckWorkers.Forked.start ~heap_budget:1 n f k in
+         Fun.protect ~finally:(fun () -> CheckWorkers.Forked.stop s) (fun () ->
+             count ();
+             while CheckWorkers.Forked.poll ~wait:0.05 s (fun i v -> out.(i) <- Some v) do
+               count ()
+             done;
+             count ());
+         assert_bool (Printf.sprintf "%d processes at once, more than %d" !most n) (!most <= n);
+         if Sys.file_exists "/proc/self/stat" then assert_bool "no process was seen" (!most > 0);
+         assert_equal ~printer:pr_results (Array.init k (fun i -> Some (i + 1))) out;
+         assert_no_child_left ()))
+
+(* This process's GC is lazy only while processes run: never changed when
+   there is no item or no process, taken back as soon as no result can come,
+   and at [stop]. *)
+let () = add_test "Forked: the lazy GC lasts only while processes run" (fun () ->
+    let before = Gc.get () in
+    let unchanged what = assert_bool what (Gc.get () = before) in
+    List.iter (fun (n, k) ->
+        let s = CheckWorkers.Forked.start ~lazy_gc:true n (fun i -> i) k in
+        unchanged (Printf.sprintf "after a start of %d processes for %d items" n k);
+        assert_bool "a result may come" (not (CheckWorkers.Forked.poll s (fun _ _ -> ())));
+        unchanged "after poll";
+        CheckWorkers.Forked.stop s;
+        unchanged "after stop")
+      [(4, 0); (0, 10)];
+    let s = CheckWorkers.Forked.start ~lazy_gc:true 2 (fun i -> i) 10 in
+    Fun.protect ~finally:(fun () -> CheckWorkers.Forked.stop s) (fun () ->
+        assert_bool "lazy while processes run" ((Gc.get ()).Gc.space_overhead >= 1000);
+        while CheckWorkers.Forked.poll ~wait:0.05 s (fun _ _ -> ()) do () done;
+        unchanged "once no result can come");
+    unchanged "after stop";
+    let s = CheckWorkers.Forked.start ~lazy_gc:true 2 (fun i -> Unix.sleep 3600; i) 4 in
+    assert_bool "lazy while processes run" ((Gc.get ()).Gc.space_overhead >= 1000);
+    CheckWorkers.Forked.stop s;
+    unchanged "after a stop with processes running";
+    assert_no_child_left ())
+
 let () = add_test "Forked: no item, no process" (fun () ->
     assert_equal 0 (Array.length (run_all 4 (fun _ -> assert false) 0));
     assert_no_child_left ())

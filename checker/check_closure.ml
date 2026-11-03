@@ -115,7 +115,7 @@ type 'node read_ahead = {
   ahead_opaque : Constant.t array;  (* the constants handed out, by position *)
   mutable ticks : int;  (* nodes looked up since the processes were started *)
   mutable last_poll : float;
-  gc_control : Gc.control;  (* the GC of this process before the processes *)
+  mutable finished : bool;  (* no more nodes can come from the processes *)
   gc_start : Gc.stat;
 }
 
@@ -560,23 +560,22 @@ let start_read_ahead st n =
     in
     go (bounds.(c + 1) - 1) []
   in
-  let gc_control = Gc.get () in
-  let session = CheckWorkers.Forked.start ~heap_budget:(read_ahead_heap_budget ())
+  let gc_start = Gc.quick_stat () in
+  let last_poll = Unix.gettimeofday () in
+  (* With [lazy_gc], while the processes share the heap of this one, it
+     collects as lazily as they do ([CheckWorkers.Forked]). *)
+  let session = CheckWorkers.Forked.start ~lazy_gc:true ~heap_budget:(read_ahead_heap_budget ())
       ~item_timeout:read_ahead_item_timeout n chunk (Array.length bounds - 1)
   in
-  st.ahead <- Some { session; ahead_opaque = opaque; ticks = 0;
-                     last_poll = Unix.gettimeofday (); gc_control;
-                     gc_start = Gc.quick_stat () };
-  (* While the processes share the heap of this one, a major collection here
-     would mark, and so copy, every page of it that holds a live block: this
-     process collects as lazily as they do until they are stopped. *)
-  Gc.set { gc_control with Gc.space_overhead = max gc_control.Gc.space_overhead 1000 }
+  (* [st.ahead] owns the processes from here: [stop_read_ahead] stops them. *)
+  match st.ahead <- Some { session; ahead_opaque = opaque; ticks = 0; last_poll;
+                           finished = false; gc_start } with
+  | () -> ()
+  | exception e -> CheckWorkers.Forked.stop session; raise e
 
 let stop_read_ahead st = match st.ahead with
   | None -> ()
   | Some a ->
-    st.ahead <- None;
-    Gc.set a.gc_control;
     let extra () =
       let s = Gc.quick_stat () in
       Pp.(str "; the walk took " ++ int !read_ahead_used ++ str " nodes, and ran " ++
@@ -584,7 +583,10 @@ let stop_read_ahead st = match st.ahead with
           str " minor and " ++ int (s.Gc.major_collections - a.gc_start.Gc.major_collections) ++
           str " major collections, its heap " ++ int (s.Gc.heap_words / 131072) ++ str " MiB")
     in
-    CheckWorkers.Forked.stop ~extra a.session
+    CheckWorkers.Forked.stop ~extra a.session;
+    (* Only once its processes have been stopped and waited for, so a stop
+       that was interrupted is done again. *)
+    st.ahead <- None
 
 (* Takes the nodes that have come, and answers whether more may come. A
    failure only stops the processes: the walk computes the rest. *)
@@ -595,14 +597,16 @@ let poll_read_ahead ?wait st a =
       nodes
   in
   match CheckWorkers.Forked.poll ?wait a.session deliver with
-  | more -> more
+  | true -> true
+  | false -> a.finished <- true; false
   | exception e when CErrors.noncritical e -> stop_read_ahead st; false
 
 (* Called for each node the walk computes or takes: at a miss on an opaque
    constant, and every 64 nodes, it looks at the processes, at most once every
-   [read_ahead_poll_interval]. *)
+   [read_ahead_poll_interval], until no more nodes can come from them. *)
 let read_ahead_tick st ~miss = match st.ahead with
   | None -> ()
+  | Some a when a.finished -> ()
   | Some a ->
     a.ticks <- a.ticks + 1;
     if (miss || Int.equal (a.ticks land 63) 0)
@@ -1030,12 +1034,13 @@ let print ~jobs env access requests =
   test_fault ();
   (* Read ahead only when some request has a model to walk, with one process
      fewer than [jobs]: this one walks. The walk computes whatever the
-     processes did not: a failure here only leaves it more to compute. *)
-  if jobs > 1 && List.exists (fun r -> CString.Map.mem r.req_model index) requests then
-    (try start_read_ahead st (jobs - 1)
-     with e when CErrors.noncritical e -> ());
-  (* No process outlives the walk, whichever way it ends. *)
+     processes did not: a failure here only leaves it more to compute. No
+     process outlives the walk, whichever way it ends: the processes are
+     stopped in a [finally] that is in place before they start. *)
   Fun.protect ~finally:(fun () -> stop_read_ahead st) (fun () ->
+      if jobs > 1 && List.exists (fun r -> CString.Map.mem r.req_model index) requests then
+        (try start_read_ahead st (jobs - 1)
+         with e when CErrors.noncritical e -> ());
       test_read_ahead_wait st;
       List.iter (fun r ->
           let trusted = Option.default "-" r.req_trusted in
