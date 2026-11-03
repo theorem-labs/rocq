@@ -30,8 +30,19 @@ grep -q '^statement final StmtRes.Res.P.ax - not-requested 1 0$' "$d/out"
 # order of the lookup in check_closure.ml's print), never as ambiguous.
 grep -q '^statement none StmtRes.Res.M.nothing - model-missing 0 0$' "$d/out"
 
-# A resolved model with a trusted constant gets a type verdict.
-printf 'typed StmtRes.Res.M.ax StmtRes.Res.N.ax\n' > "$d/treq"
-"$BIN"rocqchk -silent -statement-report "$d/treq" -Q "$d" StmtRes StmtRes.Res > "$d/tout" 2>&1
-grep -q '^statement typed StmtRes.Res.M.ax StmtRes.Res.N.ax match 1 0$' "$d/tout"
+# A typed request on a model only an implementation holds answers
+# model-missing, and the report goes on: its type may name the
+# implementation's own definitions, which the final environment lacks.
+cat > "$d/Hid.v" <<'V'
+Module Type Empty. End Empty.
+Module M : Empty. Definition T := nat. Axiom ax : T. End M.
+Definition trusted : nat := 0.
+V
+$coqc -Q "$d" StmtRes "$d/Hid.v"
+printf 'closure StmtRes.Hid.M.ax -\ntyped StmtRes.Hid.M.ax StmtRes.Hid.trusted\nafter StmtRes.Hid.trusted -\n' > "$d/treq"
+"$BIN"rocqchk -silent -statement-report "$d/treq" -Q "$d" StmtRes StmtRes.Hid > "$d/tout" 2>&1
+sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/tout"
+grep -q '^statement closure StmtRes.Hid.M.ax - not-requested 1 0$' "$d/tout"
+grep -q '^statement typed StmtRes.Hid.M.ax StmtRes.Hid.trusted model-missing 0 0$' "$d/tout"
+grep -q '^statement after StmtRes.Hid.trusted - not-requested 0 0$' "$d/tout"
 grep -q '^END STATEMENT REPORT$' "$d/tout"

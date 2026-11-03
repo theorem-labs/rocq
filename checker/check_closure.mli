@@ -60,7 +60,9 @@ END STATEMENT REPORT
     sealed module that its interface leaves out, or one an [Include] in it
     brings. Every such match is collected: one is answered as usual, more than
     one with the verdict [ambiguous] and no axiom or flag line, none with
-    [model-missing]. A name the final environment holds is never looked up
+    [model-missing]. A request that names a trusted constant is answered
+    only from the final environment: a model only an implementation holds
+    answers [model-missing] there. A name the final environment holds is never looked up
     in an implementation.
 
     The verdict is [match] when [Definition f := model] ([Polymorphic] when
