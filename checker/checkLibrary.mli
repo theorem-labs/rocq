@@ -35,7 +35,3 @@ val recheck_library : safe_environment ->
 val indirect_accessor : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm
 (** The body of an opaque constant of a loaded library, read from the
     library's table of opaque proofs. *)
-
-val libraries_newest_first : unit -> DirPath.t list
-(** The libraries that [recheck_library] loaded, in the reverse of the order
-    it checked them: a library comes before those it depends on. *)

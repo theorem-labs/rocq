@@ -84,14 +84,8 @@ let library_full_filename dir = (find_library dir).library_filename
   (* If a library is loaded several time, then the first occurrence must
      be performed first, thus the libraries_loaded_list ... *)
 
-(* The libraries loaded so far, the last one first. *)
-let loaded_order = ref []
-
 let register_loaded_library m =
-  libraries_table := LibraryMap.add m.library_name m !libraries_table;
-  loaded_order := m.library_name :: !loaded_order
-
-let libraries_newest_first () = !loaded_order
+  libraries_table := LibraryMap.add m.library_name m !libraries_table
 
 (* Map from library names to table of opaque terms *)
 let opaque_tables = ref LibraryMap.empty

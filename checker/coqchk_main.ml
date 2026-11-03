@@ -530,8 +530,7 @@ let run senv =
    [CantApplyBadType] type error itself, but nothing in the report raises one. *)
 let print_statement_report env requests =
   try
-    Check_closure.print ~jobs:(CheckWorkers.processes ())
-      ~libraries:(CheckLibrary.libraries_newest_first ()) env
+    Check_closure.print ~jobs:(CheckWorkers.processes ()) env
       CheckLibrary.indirect_accessor requests
   with e when (match e with Sys.Break | Out_of_memory -> false | _ -> true) ->
     Feedback.msg_warning
