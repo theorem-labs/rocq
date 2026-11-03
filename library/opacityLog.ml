@@ -114,13 +114,17 @@ open Names
    file back with its own records ([get]) when it saves the library and
    removes the log and its private directory at exit, but only when every
    component of TMPDIR was secure at creation ([path_secure]: owned by this
-   uid or root, and either not group/other-writable or sticky) and the log
-   and the private directory still have the dev:ino recorded when they were
-   made. The components of TMPDIR are checked once, at creation, and their
-   identities are not kept: a path that now resolves through another
-   directory reaches another inode, which the two recorded identities
-   refuse. A substitute at the log name or at the directory name (a
-   different dev:ino) or an insecure parent leaves both. A child's records
+   uid or root, and either not group/other-writable or sticky). The
+   components of TMPDIR are checked once, at creation, and their identities
+   are not kept. Each of the two removals is guarded on its own: the log is
+   removed only when lstat of its path gives the dev:ino recorded when it
+   was made, and the directory (which rmdir removes only once empty) only
+   when lstat of its path gives its own recorded dev:ino. A path that now
+   resolves through another directory either still names the original
+   object, which may then be removed, or names another one, which fails its
+   identity check and stays; only this uid or root can rename or link
+   inside a secure path. A substitute at either name keeps that object, and
+   an insecure parent keeps both. A child's records
    reach it only when the child writes them
    before that read-back: a plugin whose forked child outlives the tactic
    that forked it, and whose result reaches the compile later, is outside
@@ -292,8 +296,9 @@ let create_log dir =
   | Opened (d, p, log_id) -> Some (d, p, log_id)
   | Open_failed | Opened_failed _ -> None
 
-(* Remove the log and its private directory when the path was secure and lstat
-   still matches each recorded identity. [stable] was computed over every
+(* Remove the log and its private directory when the path was secure, each
+   only when lstat of its path still gives its own recorded identity (the
+   two checks are independent). [stable] was computed over every
    component of canonical TMPDIR at creation. When it is false, or lstat
    disagrees, nothing is removed: a small leak, never the wrong file. *)
 let cleanup_log ~stable dir dir_id p log_id =

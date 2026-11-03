@@ -53,8 +53,9 @@ val set_enabled : bool -> unit
     answers [None]. At exit it removes the log and its private directory
     only when every component of TMPDIR was secure at creation (each
     directory owned by this uid or root and either not group/other-writable
-    or sticky) and lstat of each still matches the recorded dev:ino; a
-    substitute at the log name or an insecure parent leaves both. The
+    or sticky), each of the two only when lstat of its path still gives
+    the dev:ino recorded when it was made; a substitute at either name keeps
+    that object, and an insecure parent keeps both. The
     compiling process clears any inherited values of
     {!env_var} and {!identity_env_var}; the worker pool gives workers
     {!worker_env_value} and {!worker_identity_env_value} from this process's
