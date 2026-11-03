@@ -761,8 +761,20 @@ let close_report fd = try Unix.close fd with Unix.Unix_error _ -> ()
    bounded instead: once its major heap has grown by more than the heap budget,
    it stops after the item it is on, and the main process forks a fresh process
    for the items that are left. So each process holds at most about the budget
-   beyond what it shares. *)
+   beyond what it shares.
+
+   What a process does is optional: the caller computes whatever it does not
+   answer. So no process may keep the main process waiting. The main process
+   reads answers without waiting: their descriptors do not block, and the
+   bytes of an answer are kept until it is whole. A process has a deadline for
+   each item, counted from when it is given the item; a process whose answer
+   is not whole when its deadline has passed is killed, and all its answers
+   are dropped. A process that should exit is waited for only for
+   [reap_grace] seconds, then killed, and a kill always lets the wait
+   return. *)
 let item_size = 8
+
+let reap_grace = 10.
 
 let forked_gc () =
   let gc = Gc.get () in
@@ -798,6 +810,14 @@ let int_bytes i =
   Bytes.set_int64_be b 0 (Int64.of_int i);
   b
 
+(* What a process does to send an answer: its length, then the answer. *)
+let default_answer_writer fd length answer =
+  write_all fd length;
+  write_all fd answer
+
+let answer_writer = ref default_answer_writer
+let set_answer_writer f = answer_writer := f
+
 let run_forked ~heap_budget ~items ~results f =
   at_exit (fun () -> Unix._exit 2);
   let code =
@@ -820,8 +840,7 @@ let run_forked ~heap_budget ~items ~results f =
           let v = try Some (f i) with _ -> None in
           let last = spent () in
           let payload = Marshal.to_bytes (i, v, last) [] in
-          write_all results (int_bytes (Bytes.length payload));
-          write_all results payload;
+          !answer_writer results (int_bytes (Bytes.length payload)) payload;
           if last then 0 else loop ()
       in
       loop ()
@@ -829,32 +848,65 @@ let run_forked ~heap_budget ~items ~results f =
   in
   Unix._exit code
 
-(* One answer, or [None] if the process ended or wrote something else: a
-   length, then exactly one whole marshalled value of that length. *)
-let read_answer fd =
-  match read_exactly fd item_size with
-  | None -> None
-  | Some b ->
-    let len = Int64.to_int (Bytes.get_int64_be b 0) in
-    if len < Marshal.header_size || len > Sys.max_string_length then None
-    else match read_exactly fd len with
-      | None -> None
-      | Some payload ->
-        match Marshal.total_size payload 0 with
-        | total when Int.equal total len ->
-          (try Some (Marshal.from_bytes payload 0) with _ -> None)
-        | _ -> None
-        | exception _ -> None
+(* Reads into [b] from [off] what the descriptor [fd], which does not
+   block, holds now: the new offset, or [None] at end of file or on an
+   error. *)
+let rec read_available fd b off =
+  if off = Bytes.length b then Some off
+  else match Unix.read fd b off (Bytes.length b - off) with
+    | 0 -> None
+    | k -> read_available fd b (off + k)
+    | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) -> Some off
+    | exception Unix.Unix_error (Unix.EINTR, _, _) -> read_available fd b off
+    | exception Unix.Unix_error _ -> None
+
+type 'a progress =
+  | Whole of 'a
+  | Partial  (* bytes of it are still to come *)
+  | Broken  (* the process ended, or wrote something else *)
 
 type 'a forked = {
   fpid : int;
   items : Unix.file_descr;
   mutable items_open : bool;
   answers : Unix.file_descr;
+  mutable frame : Bytes.t;  (* the length of the answer being read, then the answer *)
+  mutable frame_got : int;  (* the bytes of [frame] read so far *)
+  mutable in_answer : bool;  (* whether [frame] is the answer, not its length *)
   mutable current : int option;  (* the item it was given and has not answered *)
+  mutable due : float;  (* when it must have answered [current] *)
   mutable got : (int * 'a option) list;  (* its answers so far *)
   mutable failed : bool;
 }
+
+(* What [p] has sent of its answer, read without waiting: a length, then
+   exactly one whole marshalled value of that length. *)
+let read_answer p =
+  let rec go () =
+    match read_available p.answers p.frame p.frame_got with
+    | None -> Broken
+    | Some got when got < Bytes.length p.frame -> p.frame_got <- got; Partial
+    | Some _ when not p.in_answer ->
+      let len = Int64.to_int (Bytes.get_int64_be p.frame 0) in
+      if len < Marshal.header_size || len > Sys.max_string_length then Broken
+      else begin
+        p.frame <- Bytes.create len;
+        p.frame_got <- 0;
+        p.in_answer <- true;
+        go ()
+      end
+    | Some _ ->
+      let payload = p.frame in
+      p.frame <- Bytes.create item_size;
+      p.frame_got <- 0;
+      p.in_answer <- false;
+      match Marshal.total_size payload 0 with
+      | total when Int.equal total (Bytes.length payload) ->
+        (try Whole (Marshal.from_bytes payload 0) with _ -> Broken)
+      | _ -> Broken
+      | exception _ -> Broken
+  in
+  go ()
 
 (* Closed once only: a second close could close a descriptor reused since. *)
 let close_items p =
@@ -863,7 +915,7 @@ let close_items p =
     close_report p.items
   end
 
-let map_forked ?(heap_budget = max_int) n f k =
+let map_forked ?(heap_budget = max_int) ?(item_timeout = infinity) n f k =
   let out = Array.make k None in
   let n = min n k in
   if n < 1 then out
@@ -893,8 +945,10 @@ let map_forked ?(heap_budget = max_int) n f k =
           | fpid ->
             close_report items_in;
             close_report answers_out;
-            let p = { fpid; items; items_open = true; answers; current = None; got = [];
-                      failed = false } in
+            Unix.set_nonblock answers;
+            let p = { fpid; items; items_open = true; answers;
+                      frame = Bytes.create item_size; frame_got = 0; in_answer = false;
+                      current = None; due = infinity; got = []; failed = false } in
             procs := p :: !procs;
             Some p
           | exception Unix.Unix_error _ ->
@@ -913,7 +967,9 @@ let map_forked ?(heap_budget = max_int) n f k =
         let i = !next in
         incr next;
         match write_all p.items (int_bytes i) with
-        | () -> p.current <- Some i
+        | () ->
+          p.current <- Some i;
+          p.due <- Unix.gettimeofday () +. item_timeout
         | exception Unix.Unix_error _ -> fail p
       end
       else begin
@@ -921,14 +977,28 @@ let map_forked ?(heap_budget = max_int) n f k =
         close_items p
       end
     in
-    (* A process's answers count only if it then exited with code 0. *)
-    let finish p =
-      close_items p;
-      let status =
-        match waitpid_non_intr [] p.fpid with
+    (* The status of a process that should exit: it is waited for until
+       [until], then killed, and a kill always lets the wait return. *)
+    let reap ~until p =
+      let rec poll () =
+        match waitpid_non_intr [Unix.WNOHANG] p.fpid with
+        | 0, _ when Unix.gettimeofday () < until ->
+          (try Unix.sleepf 0.005 with Unix.Unix_error (Unix.EINTR, _, _) -> ());
+          poll ()
+        | 0, _ ->
+          (try Unix.kill p.fpid Sys.sigkill with Unix.Unix_error _ -> ());
+          (match waitpid_non_intr [] p.fpid with
+           | _, status -> Some status
+           | exception Unix.Unix_error _ -> None)
         | _, status -> Some status
         | exception Unix.Unix_error _ -> None
       in
+      poll ()
+    in
+    (* A process's answers count only if it then exited with code 0. *)
+    let finish ~until p =
+      close_items p;
+      let status = reap ~until p in
       close_report p.answers;
       let ok = not p.failed && status = Some (Unix.WEXITED 0) in
       if ok then List.iter (fun (i, v) -> out.(i) <- v) p.got;
@@ -936,35 +1006,47 @@ let map_forked ?(heap_budget = max_int) n f k =
           str "forked process " ++ int p.fpid ++ str ": " ++ int (List.length p.got) ++
           str " items" ++ (if ok then mt () else str ", discarded"))
     in
+    (* A process that has stopped is waited for now, so it holds no process
+       slot, and a fresh process takes the items that are left. It leaves
+       [procs] before the next fork, so no later process closes its
+       descriptors, which [finish] has already closed. *)
+    let replace p =
+      p.current <- None;
+      finish ~until:(Unix.gettimeofday () +. reap_grace) p;
+      procs := List.filter (fun q -> q != p) !procs;
+      if !next < k then Option.iter give (start ())
+    in
     let hand_out () =
       for _ = 1 to n do ignore (start ()) done;
       List.iter give (List.rev !procs);
       let rec loop () =
         let busy = List.filter (fun p -> Option.has_some p.current) !procs in
         if not (CList.is_empty busy) then begin
+          let now = Unix.gettimeofday () in
+          let wait = List.fold_left (fun w p -> Float.min w (p.due -. now)) infinity busy in
+          let timeout = if Float.equal wait infinity then -1. else Float.max 0. wait in
           let ready =
-            match Unix.select (List.map (fun p -> p.answers) busy) [] [] (-1.) with
+            match Unix.select (List.map (fun p -> p.answers) busy) [] [] timeout with
             | ready, _, _ -> ready
             | exception Unix.Unix_error (Unix.EINTR, _, _) -> []
           in
           List.iter (fun p ->
-              if List.mem p.answers ready then
-                match (read_answer p.answers : (int * 'a option * bool) option), p.current with
-                | Some (i, v, last), Some j when Int.equal i j ->
+              (* A process is late only if its answer is not whole when its
+                 deadline has passed: an answer that came in time and waited
+                 for the main process counts. *)
+              let late = Unix.gettimeofday () >= p.due in
+              if late || List.mem p.answers ready then
+                match (read_answer p : (int * 'a option * bool) progress), p.current with
+                | Whole (i, v, last), Some j when Int.equal i j ->
                   p.got <- (i, v) :: p.got;
-                  if not last then give p
-                  else begin
-                    (* It has spent its heap budget and exits: it is waited
-                       for now, so it holds no process slot, and a fresh
-                       process takes its place. It leaves [procs] before the
-                       next fork, so no later process closes its descriptors,
-                       which [finish] has already closed. *)
-                    p.current <- None;
-                    finish p;
-                    procs := List.filter (fun q -> q != p) !procs;
-                    if !next < k then Option.iter give (start ())
-                  end
-                | _ -> fail p)
+                  (* With [last], it has spent its heap budget and exits. *)
+                  if last then replace p else give p
+                | Partial, _ when not late -> ()
+                | (Whole _ | Partial | Broken), _ ->
+                  (* Late, ended, or wrong: its item and its other answers are
+                     left to the caller. *)
+                  fail p;
+                  replace p)
             busy;
           loop ()
         end
@@ -974,7 +1056,8 @@ let map_forked ?(heap_budget = max_int) n f k =
     let finally () =
       (* After an error, no process keeps running. *)
       List.iter (fun p -> if Option.has_some p.current then fail p) !procs;
-      List.iter finish !procs;
+      let until = Unix.gettimeofday () +. reap_grace in
+      List.iter (finish ~until) !procs;
       Sys.set_signal Sys.sigpipe sigpipe;
       debug (fun () ->
           str "forked processes: " ++ int !next ++ str " of " ++ int k ++
