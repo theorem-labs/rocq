@@ -263,9 +263,11 @@ let close_report fd = try Unix.close fd with Unix.Unix_error _ -> ()
    answers without waiting: their descriptors do not block, and the bytes of an
    answer are kept until it is whole. A process has a deadline for each item,
    counted from when it is given the item; a process whose answer is not whole
-   when its deadline has passed is killed. A process that stops is waited for
-   without blocking, and [Forked.stop] kills every process that is left before
-   it waits for it, and a kill always lets the wait return.
+   when its deadline has passed is killed. A process that stops, for its heap
+   budget or for want of items, is killed at once, and waited for without
+   blocking; until then it keeps its place in the pool, so the processes are
+   never more than asked for. [Forked.stop] kills every process that is left
+   before it waits for it, and a kill always lets the wait return.
 
    An answer counts as soon as it is whole, whatever its process does next.
    It is the result of [f i] computed in a process that the main process
@@ -373,6 +375,7 @@ module Forked = struct
     items : Unix.file_descr;
     mutable items_open : bool;
     answers : Unix.file_descr;
+    mutable answers_open : bool;
     mutable frame : Bytes.t;  (* the length of the answer being read, then the answer *)
     mutable frame_got : int;  (* the bytes of [frame] read so far *)
     mutable in_answer : bool;  (* whether [frame] is the answer, not its length *)
@@ -387,10 +390,13 @@ module Forked = struct
     n : int;
     heap_budget : int;
     item_timeout : float;
+    lazy_gc : bool;
+    mutable saved_gc : Gc.control option;  (* this process's GC, while it is lazy *)
     mutable procs : proc list;  (* the processes that may still answer *)
-    mutable exiting : proc list;  (* stopped or killed, not yet waited for *)
+    mutable exiting : proc list;  (* killed, not yet waited for *)
     mutable next : int;  (* the next item to hand out *)
-    mutable stopped : bool;
+    mutable stopping : bool;  (* [stop] was called: no more results *)
+    mutable stopped : bool;  (* [stop] has waited for every process *)
     started : float;
     mutable forks : int;
     mutable fork_time : float;
@@ -401,7 +407,7 @@ module Forked = struct
     mutable refill_time : float;  (* handing out items, forks included *)
     mutable received : int;  (* bytes of whole answers *)
     mutable delivered : int;
-    mutable killed : int;
+    mutable killed : int;  (* processes that failed *)
   }
 
   (* Bytes of the whole answers read so far, for the debug summary. *)
@@ -444,19 +450,49 @@ module Forked = struct
       close_report p.items
     end
 
+  let close_answers p =
+    if p.answers_open then begin
+      p.answers_open <- false;
+      close_report p.answers
+    end
+
   let kill p = try Unix.kill p.fpid Sys.sigkill with Unix.Unix_error _ -> ()
 
   let reaped p =
     debug (fun () -> str "forked process " ++ int p.fpid ++ str ": " ++ int p.answered ++ str " items")
 
-  (* Its answers so far count, and it gets no more items. *)
-  let retire s ~killed p =
-    if killed then begin kill p; s.killed <- s.killed + 1 end;
+  (* While processes share the heap of this one, a major collection here
+     would mark, and so copy, every page of it that holds a live block. With
+     [lazy_gc], this process collects as lazily as they do while one of them
+     runs, and takes back its own setting as soon as none runs and no result
+     can come, and at [stop]. *)
+  let lazy_on s =
+    match s.saved_gc with
+    | Some _ -> ()
+    | None when not s.lazy_gc || CList.is_empty s.procs -> ()
+    | None ->
+      let c = Gc.get () in
+      s.saved_gc <- Some c;
+      Gc.set { c with Gc.space_overhead = max c.Gc.space_overhead 1000 }
+
+  let lazy_off s = match s.saved_gc with
+    | None -> ()
+    | Some c -> Gc.set c; s.saved_gc <- None
+
+  (* Its answers so far count, and it gets no more items. It is killed at
+     once: whatever it does next, nothing it could still send is used. It
+     keeps its place in the pool until it has been waited for
+     ([reap_ended]), so the processes, those not yet waited for included,
+     are never more than [n]. It is in [exiting] before it leaves [procs],
+     so cleanup always finds it. *)
+  let retire s ~failed p =
+    kill p;
+    if failed then s.killed <- s.killed + 1;
     p.current <- None;
     close_items p;
-    close_report p.answers;
-    s.procs <- List.filter (fun q -> q != p) s.procs;
-    s.exiting <- p :: s.exiting
+    close_answers p;
+    s.exiting <- p :: s.exiting;
+    s.procs <- List.filter (fun q -> q != p) s.procs
 
   let spawn s =
     match Unix.pipe ~cloexec:true () with
@@ -468,11 +504,11 @@ module Forked = struct
         (* Everything that can fail is done before the fork, so a failure
            leaves no process behind: only this process's read end of the
            answers is made non-blocking, and the child closes its copy. *)
-        match Unix.set_nonblock answers; Bytes.create item_size with
+        match Unix.set_nonblock answers; Bytes.create item_size, ref true, ref true with
         | exception e when CErrors.noncritical e ->
           List.iter close_report [items_in; items; answers; answers_out];
           None
-        | frame ->
+        | frame, in_open, out_open ->
           (* Otherwise a process would hold what is still buffered. *)
           flush_output ();
           let t0 = Unix.gettimeofday () in
@@ -480,27 +516,34 @@ module Forked = struct
           | 0 ->
             (* A process that kept the item pipe of another one open would
                keep that one waiting for items after the last. *)
-            List.iter (fun p -> close_items p; close_report p.answers) s.procs;
+            List.iter (fun p -> close_items p; close_answers p) s.procs;
             close_report items;
             close_report answers;
             run_forked ~heap_budget:s.heap_budget ~items:items_in ~results:answers_out s.f
           | fpid ->
-            s.forks <- s.forks + 1;
-            s.fork_time <- s.fork_time +. (Unix.gettimeofday () -. t0);
-            close_report items_in;
-            close_report answers_out;
-            (* Should anything still raise before the child is in [procs],
-               where cleanup finds it, that child is killed and waited for
-               here, so no process outlives the call untracked. *)
+            (* Until the child is in [procs], where cleanup finds it, anything
+               that raises, the statistics included, kills and waits for this
+               child here, so no process outlives the call untracked. The last
+               step, adding it to [procs], allocates nothing. *)
             (try
-               let p = { fpid; items; items_open = true; answers;
+               close_report items_in;
+               in_open := false;
+               close_report answers_out;
+               out_open := false;
+               let p = { fpid; items; items_open = true; answers; answers_open = true;
                          frame; frame_got = 0; in_answer = false;
                          current = None; due = infinity; answered = 0 } in
-               s.procs <- p :: s.procs;
-               Some p
+               s.forks <- s.forks + 1;
+               s.fork_time <- s.fork_time +. (Unix.gettimeofday () -. t0);
+               let result = Some p in
+               let procs = p :: s.procs in
+               s.procs <- procs;
+               result
              with e ->
                (try Unix.kill fpid Sys.sigkill with Unix.Unix_error _ -> ());
                (try ignore (waitpid_non_intr [] fpid) with Unix.Unix_error _ -> ());
+               if !in_open then close_report items_in;
+               if !out_open then close_report answers_out;
                close_report items;
                close_report answers;
                raise e)
@@ -523,19 +566,20 @@ module Forked = struct
       | () ->
         p.current <- Some i;
         p.due <- Unix.gettimeofday () +. s.item_timeout
-      | exception Unix.Unix_error _ -> retire s ~killed:true p
+      | exception Unix.Unix_error _ -> retire s ~failed:true p
     end
-    else retire s ~killed:false p
+    else retire s ~failed:false p
 
-  (* Up to [n] processes, while there are items to hand out. *)
+  (* Up to [n] processes, those not yet waited for included, while there are
+     items to hand out. *)
   let rec refill s =
-    if s.next < s.k && List.length s.procs < s.n then
+    if s.next < s.k && List.length s.procs + List.length s.exiting < s.n then
       match spawn s with
       | Some p -> give s p; refill s
       | None -> ()
 
-  (* The processes that stopped and have ended are waited for, without
-     blocking. *)
+  (* The processes that were killed and have ended are waited for, without
+     blocking, which frees their places in the pool. *)
   let reap_ended s =
     s.exiting <- List.filter (fun p ->
         match waitpid_non_intr [Unix.WNOHANG] p.fpid with
@@ -546,17 +590,29 @@ module Forked = struct
 
   let stop ?(extra = fun () -> mt ()) s =
     if not s.stopped then begin
+      s.stopping <- true;
+      (* Neither taking back this process's GC nor stopping the processes can
+         prevent the other. *)
+      Fun.protect ~finally:(fun () -> lazy_off s) (fun () ->
+          (* All are killed first, so they end together. A process leaves
+             [procs] for [exiting], and [exiting] only once it has been waited
+             for, so a stop that was interrupted does what is left of it when
+             it is called again. *)
+          List.iter (fun p -> kill p; close_items p; close_answers p) s.procs;
+          List.iter kill s.exiting;
+          let exiting = List.filter (fun p -> not (List.memq p s.exiting)) s.procs @ s.exiting in
+          s.exiting <- exiting;
+          s.procs <- [];
+          let rec wait_all () = match s.exiting with
+            | [] -> ()
+            | p :: rest ->
+              (try ignore (waitpid_non_intr [] p.fpid) with Unix.Unix_error _ -> ());
+              s.exiting <- rest;
+              reaped p;
+              wait_all ()
+          in
+          wait_all ());
       s.stopped <- true;
-      let live = s.procs in
-      s.procs <- [];
-      List.iter (fun p -> kill p; close_items p; close_report p.answers) live;
-      (* All are killed first, so they end together. *)
-      List.iter kill s.exiting;
-      List.iter (fun p ->
-          (try ignore (waitpid_non_intr [] p.fpid) with Unix.Unix_error _ -> ());
-          reaped p)
-        (live @ s.exiting);
-      s.exiting <- [];
       debug (fun () ->
           str "forked processes: " ++ int s.delivered ++ str " answers of " ++ int s.next ++
           str " items handed out, of " ++ int s.k ++ str ", by " ++ int s.forks ++
@@ -567,19 +623,20 @@ module Forked = struct
           real (Unix.gettimeofday () -. s.started) ++ str " s" ++ extra ())
     end
 
-  let start ?(heap_budget = max_int) ?(item_timeout = infinity) n f k =
-    let s = { f; k; n = min n k; heap_budget; item_timeout; procs = []; exiting = [];
-              next = 0; stopped = false; started = Unix.gettimeofday ();
+  let start ?(lazy_gc = false) ?(heap_budget = max_int) ?(item_timeout = infinity) n f k =
+    let s = { f; k; n = min n k; heap_budget; item_timeout; lazy_gc; saved_gc = None;
+              procs = []; exiting = []; next = 0; stopping = false; stopped = false;
+              started = Unix.gettimeofday ();
               forks = 0; fork_time = 0.; polls = 0; poll_time = 0.; read_time = 0.;
               deliver_time = 0.; refill_time = 0.; received = 0; delivered = 0;
               killed = 0 } in
     (* After an error, no process keeps running. *)
-    match refill s with
+    match refill s; lazy_on s with
     | () -> s
     | exception e -> stop s; raise e
 
   let poll ?(wait = 0.) (s : 'a t) (deliver : int -> 'a -> unit) =
-    if s.stopped then false
+    if s.stopping then false
     else begin
       let t0 = Unix.gettimeofday () in
       let bytes0 = !answer_bytes in
@@ -608,8 +665,8 @@ module Forked = struct
             match answer, p.current with
             | Whole (i, v, last), Some j when Int.equal i j ->
               p.answered <- p.answered + 1;
-              (* With [last], it has spent its heap budget and exits. *)
-              if last then retire s ~killed:false p else give s p;
+              (* With [last], it has spent its heap budget. *)
+              if last then retire s ~failed:false p else give s p;
               Option.iter (fun v ->
                   s.delivered <- s.delivered + 1;
                   deliver i v;
@@ -618,16 +675,23 @@ module Forked = struct
             | Partial, _ when not late -> ()
             | (Whole _ | Partial | Broken), _ ->
               (* Late, ended, or wrong: its item is left to the caller. *)
-              retire s ~killed:true p
+              retire s ~failed:true p
           end)
         busy;
+      reap_ended s;
       let t3 = Unix.gettimeofday () in
       refill s;
       s.refill_time <- s.refill_time +. (Unix.gettimeofday () -. t3);
-      reap_ended s;
+      lazy_on s;
       s.received <- s.received + (!answer_bytes - bytes0);
       s.poll_time <- s.poll_time +. (Unix.gettimeofday () -. t0);
-      List.exists (fun p -> Option.has_some p.current) s.procs
+      (* A result may still come from a process that runs, or, while items
+         are left, from one forked once a killed one has been waited for. *)
+      let more =
+        not (CList.is_empty s.procs) || (s.next < s.k && not (CList.is_empty s.exiting))
+      in
+      if not more then lazy_off s;
+      more
     end
 
 end
