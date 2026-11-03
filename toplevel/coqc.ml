@@ -92,4 +92,8 @@ let custom_coqc : ((Coqcargs.t * Colors.color) * Stm.AsyncOpts.stm_opt, 'b) Coqt
 
 let main args =
   let () = Memtrace_init.init () in
+  (* A compiled file must not depend on when the GC runs: see
+     [Hashset.retain_entries]. Here, before the arguments are read and any
+     library is loaded. *)
+  let () = Hashset.retain_entries () in
   Coqtop.start_coq custom_coqc args
