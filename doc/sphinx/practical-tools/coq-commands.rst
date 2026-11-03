@@ -795,8 +795,12 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
      statement <name> <model> <trusted|-> <verdict> <axiom-count> <condition-count>
      axiom <name> <constant> <canonical>
      resolved <name> <field> <canonical>
-     flag <name> <condition> <object>
+     flag <name> <condition> <object> <canonical>
      END STATEMENT REPORT
+
+  A ``flag`` line names the object by its path and the same canonical token as
+  an ``axiom`` line, so two objects of one printed path that rely on the same
+  condition give two ``flag`` lines.
 
   The canonical name of a constant or inductive only a module implementation
   holds is printed ``?`` followed by the term's own canonical name (for

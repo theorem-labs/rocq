@@ -32,7 +32,7 @@ STATEMENT REPORT 2
 statement <name> <model> <trusted|-> <verdict> <axiom-count> <flag-count>
 axiom <name> <constant> <canonical>
 resolved <name> <field> <canonical>
-flag <name> <kind> <object>
+flag <name> <kind> <object> <canonical>
 END STATEMENT REPORT
     v}
 
@@ -57,6 +57,11 @@ END STATEMENT REPORT
     [P.A]; [P.A.B:ax] is [ax] of library [P.A.B]) or, for a functor argument
     or a bound module, [<dirpath#name#n>]. No identifier contains [:], [<]
     or [#].
+
+    A [flag] line names the object by its path and the same canonical token
+    as an [axiom] line (the environment key's, or [?] and the term's for an
+    object only an implementation holds), so two objects of one printed
+    path that rely on the same condition give two flag lines.
 
     A [resolved] line, after the statement's [axiom] lines and before its
     [flag] lines, names an interface field without a body in the final
