@@ -91,7 +91,7 @@ same serial parallel
 
 # A heap budget of one byte: a process stops after the first chunk that
 # allocates in its major heap, and fresh processes take the rest (the unit
-# tests of map_forked check that it does). The report is still the -j 1 one.
+# tests of CheckWorkers.Forked check that it does). The report is still the -j 1 one.
 run 4 budget ROCQCHK_READ_AHEAD_HEAP_BUDGET=1
 same serial budget
 
@@ -108,9 +108,15 @@ grep -q "^statement r_typed $P.p1 $P.p2 match " "$d/parallel.err"
 
 # The processes did the work: the walk took nodes from them at -j 4, and none
 # at -j 1. The seam is a test variable the checker reads only when it is set
-# (check_closure.ml's test_read_ahead_count, beside test_fault).
+# (check_closure.ml's test_read_ahead_count, beside test_fault): it prints the
+# count, and makes the walk wait until the processes have answered every
+# chunk, so that every node they computed is there to be taken.
 used() {
   awk '$1 == "read" && $2 == "ahead" { print $3 }' "$d/$1.err"
+}
+# The report of a run with the seam, without the line of the count.
+uncounted() {
+  grep -v '^read ahead [0-9]*$' "$d/$1.err" > "$d/$1.uncounted" || true
 }
 run 4 seam COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD=1
 run 1 seam1 COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD=1
@@ -119,16 +125,26 @@ if [ "$(used seam)" -le 100 ]; then
   echo "the walk took $(used seam) nodes from the processes" >&2; exit 1
 fi
 test "$(used seam1)" = 0
+# Every node the walk could take from them, it took: still the -j 1 report.
+uncounted seam
+diff -u "$d/serial.err" "$d/seam.uncounted"
+diff -u "$d/serial.out" "$d/seam.out"
 
 # An opaque body that cannot be read, one the processes would read ahead and
 # one that only the walk reaches (the implementation of the sealed field): the
-# processes send nothing for either, and the walk warns where it warns at -j 1.
+# processes send nothing for either, and the walk warns where it warns at -j 1,
+# whether it computed the nodes itself or took them (with the seam).
 for c in $P.p150 $P.M.hidden; do
   run 1 unreadable1 COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE="$c"
   run 4 unreadable4 COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE="$c"
   same unreadable1 unreadable4
   grep -q "Statement report: the opaque body of $c could not be read" "$d/unreadable4.err"
   grep -q "^axiom r_top $c\$" "$d/unreadable4.err"
+  run 4 unreadable4w COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE="$c" \
+    COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD=1
+  uncounted unreadable4w
+  diff -u "$d/unreadable1.err" "$d/unreadable4w.uncounted"
+  diff -u "$d/unreadable1.out" "$d/unreadable4w.out"
 done
 
 echo OK

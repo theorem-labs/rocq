@@ -498,34 +498,43 @@ let () = add_test "negative budget is refused" (fun () ->
     assert_raises (Invalid_argument "CheckWorkers.set_budget") (fun () -> CheckWorkers.set_budget (-1.));
     assert_raises (Invalid_argument "CheckWorkers.set_budget") (fun () -> CheckWorkers.set_budget nan))
 
-(* [map_forked]: functions run in forked processes, whose results count
-   only if their process exits with code 0. *)
+(* [CheckWorkers.Forked]: functions run in forked processes while the main
+   process goes on; a result counts as soon as it has come whole. *)
 let pr_results a =
   String.concat "," (Array.to_list (Array.map (function None -> "-" | Some v -> string_of_int v) a))
 
-let () = add_test "map_forked: every item, in its place" (fun () ->
-    let check n k =
-      let expected = Array.init k (fun i -> Some (i * i)) in
-      assert_equal ~printer:pr_results expected (CheckWorkers.map_forked n (fun i -> i * i) k)
-    in
-    List.iter (fun n -> check n 300) [1; 2; 4; 16];
-    (* More processes than items. *)
-    check 50 10)
+(* Every result of [f] on [0 .. k-1], polling until no item is left. *)
+let run_all ?heap_budget ?item_timeout n f k =
+  let out = Array.make k None in
+  let s = CheckWorkers.Forked.start ?heap_budget ?item_timeout n f k in
+  Fun.protect ~finally:(fun () -> CheckWorkers.Forked.stop s) (fun () ->
+      while CheckWorkers.Forked.poll ~wait:0.1 s (fun i v -> out.(i) <- Some v) do () done);
+  out
 
-(* Every child of [map_forked] has been waited for. *)
+(* Every child has been waited for. *)
 let assert_no_child_left () =
   match Unix.waitpid [Unix.WNOHANG] (-1) with
   | exception Unix.Unix_error (Unix.ECHILD, _, _) -> ()
   | pid, _ -> assert_failure (Printf.sprintf "child %d was left" pid)
 
+let () = add_test "Forked: every item, in its place" (fun () ->
+    let check n k =
+      let expected = Array.init k (fun i -> Some (i * i)) in
+      assert_equal ~printer:pr_results expected (run_all n (fun i -> i * i) k)
+    in
+    List.iter (fun n -> check n 300) [1; 2; 4; 16];
+    (* More processes than items. *)
+    check 50 10;
+    assert_no_child_left ())
+
 (* A heap budget of one byte, and an item that allocates in the major heap:
    every process stops after its first item, and a fresh process takes the
    next, so each item is answered, in place, by a process of its own, and
    every process has been waited for. *)
-let () = add_test "map_forked: a spent heap budget replaces the process" (fun () ->
+let () = add_test "Forked: a spent heap budget replaces the process" (fun () ->
     let k = 40 in
     let f i = Unix.getpid (), Array.length (Array.make 100_000 i) + i in
-    let out = CheckWorkers.map_forked ~heap_budget:1 4 f k in
+    let out = run_all ~heap_budget:1 4 f k in
     let pids = Array.to_list (Array.mapi (fun i v -> match v with
         | Some (pid, r) -> assert_equal ~printer:string_of_int (100_000 + i) r; pid
         | None -> assert_failure (Printf.sprintf "item %d has no answer" i)) out)
@@ -534,26 +543,24 @@ let () = add_test "map_forked: a spent heap budget replaces the process" (fun ()
     assert_equal ~printer:string_of_int k (List.length (List.sort_uniq compare pids));
     assert_no_child_left ())
 
-(* Item 0 never ends (or, below, its process stops partway through an answer,
-   or after a whole one): with an item deadline of 1 s, [map_forked] returns
-   all the same, item 0 has no answer, every other item has its own, and no
-   process is left. Item 0 is the first item of its process, so that process
-   has no other answer to lose. *)
-let assert_item_0_dropped ?(heap_budget = max_int) f =
+(* Item 0 never ends (or, below, its process stops partway through an answer):
+   with an item deadline of 1 s, the processes are done all the same, item 0
+   has no result, every other item has its own, and no process is left. *)
+let assert_item_0_dropped f =
   let k = 20 in
   let t0 = Unix.gettimeofday () in
-  let out = CheckWorkers.map_forked ~heap_budget ~item_timeout:1. 4 f k in
+  let out = run_all ~item_timeout:1. 4 f k in
   let took = Unix.gettimeofday () -. t0 in
-  assert_bool (Printf.sprintf "map_forked took %.1f s" took) (took < 30.);
+  assert_bool (Printf.sprintf "it took %.1f s" took) (took < 30.);
   assert_equal None out.(0);
   Array.iteri (fun i v -> if i > 0 then
                   assert_equal ~printer:pr_results [| Some (i + 1) |] [| v |]) out;
   assert_no_child_left ()
 
-let () = add_test "map_forked: an item that never ends is dropped" (fun () ->
+let () = add_test "Forked: an item that never ends is dropped" (fun () ->
     assert_item_0_dropped (fun i -> if i = 0 then Unix.sleep 3600; i + 1))
 
-let () = add_test "map_forked: a process that stops is dropped" (fun () ->
+let () = add_test "Forked: a process that stops is dropped" (fun () ->
     assert_item_0_dropped (fun i -> if i = 0 then Unix.kill (Unix.getpid ()) Sys.sigstop; i + 1))
 
 (* A test answer writer, for item 0 only: [stall] decides what it does after
@@ -571,51 +578,74 @@ let with_answer_writer ~part ~stall f =
   CheckWorkers.set_answer_writer writer;
   Fun.protect ~finally:(fun () -> CheckWorkers.set_answer_writer CheckWorkers.default_answer_writer) f
 
-let () = add_test "map_forked: a process stalled in the middle of an answer is dropped" (fun () ->
+let () = add_test "Forked: a process stalled in the middle of an answer is dropped" (fun () ->
     with_answer_writer ~part:(fun n -> n / 2) ~stall:(fun () -> Unix.sleep 3600)
       (fun () -> assert_item_0_dropped (fun i -> i + 1)))
 
 (* The process sends its whole last answer (heap budget of one byte), then
-   stops instead of exiting: it is waited for a few seconds, then killed, and
-   its answer does not count. *)
-let () = add_test "map_forked: a process that stops instead of exiting is killed" (fun () ->
+   stops instead of exiting: its answer counts, nothing waits for it, and
+   [stop] kills it. *)
+let () = add_test "Forked: a process that stops instead of exiting is killed" (fun () ->
     with_answer_writer ~part:Fun.id ~stall:(fun () -> Unix.kill (Unix.getpid ()) Sys.sigstop)
-      (fun () -> assert_item_0_dropped ~heap_budget:1 (fun i -> Array.length (Array.make 1000 i) + i + 1 - 1000)))
+      (fun () ->
+         let k = 20 in
+         let t0 = Unix.gettimeofday () in
+         let out = run_all ~heap_budget:1 4 (fun i -> Array.length (Array.make 1000 i) + i - 999) k in
+         let took = Unix.gettimeofday () -. t0 in
+         assert_bool (Printf.sprintf "it took %.1f s" took) (took < 30.);
+         assert_equal ~printer:pr_results (Array.init k (fun i -> Some (i + 1))) out;
+         assert_no_child_left ()))
 
-let () = add_test "map_forked: no item, no process" (fun () ->
-    assert_equal 0 (Array.length (CheckWorkers.map_forked 4 (fun _ -> assert false) 0)))
+let () = add_test "Forked: no item, no process" (fun () ->
+    assert_equal 0 (Array.length (run_all 4 (fun _ -> assert false) 0));
+    assert_no_child_left ())
 
-let () = add_test "map_forked: an item that raises is None, the others are kept" (fun () ->
+let () = add_test "Forked: an item that raises has no result, the others are kept" (fun () ->
     let k = 100 in
     let f i = if i mod 7 = 3 then failwith "no" else i + 1 in
     let expected = Array.init k (fun i -> if i mod 7 = 3 then None else Some (i + 1)) in
-    assert_equal ~printer:pr_results expected (CheckWorkers.map_forked 4 f k))
+    assert_equal ~printer:pr_results expected (run_all 4 f k))
 
-(* A process that ends with another code, or is killed, loses every answer
-   it gave; the answers of the other processes are kept. The process given
-   item 120 was first given one of items 0 to 3, so at least one answer
-   besides 120 is lost. *)
-let assert_dying_process_discarded die =
+(* A process that ends with another code, or is killed, keeps the results it
+   sent: only the item it was on has none, and a fresh process takes the
+   items that are left. *)
+let assert_dying_process_keeps die =
   let k = 200 in
-  let out = CheckWorkers.map_forked 4 (fun i -> if i = 120 then die () else i) k in
-  assert_equal None out.(120);
-  Array.iteri (fun i v -> match v with
-      | None -> ()
-      | Some v -> assert_equal ~printer:string_of_int i v)
-    out;
-  let kept = Array.fold_left (fun n v -> match v with Some _ -> n + 1 | None -> n) 0 out in
-  assert_bool "the other processes' answers are kept" (kept > 0);
-  assert_bool "the answers of the process that died are lost" (kept < k - 1)
+  let out = run_all 4 (fun i -> if i = 120 then die () else i) k in
+  let expected = Array.init k (fun i -> if i = 120 then None else Some i) in
+  assert_equal ~printer:pr_results expected out;
+  assert_no_child_left ()
 
-let () = add_test "map_forked: a process that exits with code 3 loses its answers" (fun () ->
-    assert_dying_process_discarded (fun () -> Unix._exit 3))
+let () = add_test "Forked: a process that exits with code 3 keeps its results" (fun () ->
+    assert_dying_process_keeps (fun () -> Unix._exit 3))
 
-let () = add_test "map_forked: a process that is killed loses its answers" (fun () ->
-    assert_dying_process_discarded (fun () -> Unix.kill (Unix.getpid ()) Sys.sigkill; 0))
+let () = add_test "Forked: a process that is killed keeps its results" (fun () ->
+    assert_dying_process_keeps (fun () -> Unix.kill (Unix.getpid ()) Sys.sigkill; 0))
+
+(* A result counts as soon as it has come, while its process works on, and
+   [poll] waits for no process: item 1 never ends, yet item 0 is delivered,
+   [poll] comes back at once, and [stop] kills the process. *)
+let () = add_test "Forked: a result comes before its process ends, and poll waits for nothing" (fun () ->
+    let s = CheckWorkers.Forked.start 1 (fun i -> if i = 1 then Unix.sleep 3600; i + 1) 2 in
+    let got = ref None in
+    let deadline = Unix.gettimeofday () +. 20. in
+    while !got = None && Unix.gettimeofday () < deadline do
+      ignore (CheckWorkers.Forked.poll ~wait:0.1 s (fun i v -> got := Some (i, v)))
+    done;
+    assert_equal (Some (0, 1)) !got;
+    let t0 = Unix.gettimeofday () in
+    let busy = CheckWorkers.Forked.poll s (fun _ _ -> assert_failure "item 1 has no result") in
+    assert_bool "poll waited" (Unix.gettimeofday () -. t0 < 0.5);
+    assert_bool "item 1 is still being computed" busy;
+    let t0 = Unix.gettimeofday () in
+    CheckWorkers.Forked.stop s;
+    assert_bool "stop waited" (Unix.gettimeofday () -. t0 < 5.);
+    assert_bool "poll after stop" (not (CheckWorkers.Forked.poll s (fun _ _ -> assert_failure "after stop")));
+    assert_no_child_left ())
 
 (* A process prints nothing on standard output or error, and leaves nothing
    buffered behind it. *)
-let () = add_test "map_forked: a process prints nothing" (fun () ->
+let () = add_test "Forked: a process prints nothing" (fun () ->
     Format.pp_print_flush Format.std_formatter ();
     Format.pp_print_flush Format.err_formatter ();
     flush stdout;
@@ -633,8 +663,7 @@ let () = add_test "map_forked: a process prints nothing" (fun () ->
             Unix.dup2 saved_err Unix.stderr;
             Unix.close saved_out;
             Unix.close saved_err)
-        (fun () ->
-           CheckWorkers.map_forked 2 (fun i -> print_string "noise"; prerr_string "noise"; i) 10)
+        (fun () -> run_all 2 (fun i -> print_string "noise"; prerr_string "noise"; i) 10)
     in
     let b = Bytes.create 16 in
     Unix.set_nonblock out;
