@@ -117,6 +117,9 @@ type state = {
   mutable implementation_nodes : node GlobRef.Map_env.t;
   (* each object reached so far, keyed by its constant or by the first
      inductive of its block, in the declaration view that typed its use *)
+  mutable prefetched : node Cmap_env.t;
+  (* the nodes of [(Public, ConstRef kn)] that forked processes computed
+     ahead of the walk ("Opaque bodies read ahead") *)
   mutable gen : int;
   keys : Constr.t array;
   gens : int array;
@@ -370,31 +373,35 @@ let test_unreadable_opaque kn =
     CErrors.user_err Pp.(str "test unreadable opaque body")
   | None | Some _ -> ()
 
-let constant_node st view kn =
+(* What the main process does with an opaque body it cannot read: an opaque
+   body that cannot be read is reported as an axiom, as vernac/assumptions.ml's
+   [get_constant_body] does: a constant whose body this process cannot see
+   rests on something it cannot check. The read can fail for two unrelated
+   reasons, though — the proof was not stored, which is what upstream means, or
+   the table could not be READ (damaged bytes, or a lazy reader refusing a
+   table whose bytes changed since intern) — and the verdict alone does not
+   tell them apart. So the failure is named here. The exit status is
+   deliberately unchanged: a stored-nowhere body is an ordinary answer, and
+   failing the whole check on it would turn every delayed proof into a failed
+   grade. A reader who needs certainty reads the warning, which names the
+   constant. *)
+let warn_unreadable kn e =
+  Feedback.msg_warning
+    Pp.(str "Statement report: the opaque body of " ++ str (Constant.to_string kn)
+        ++ str " could not be read, so it is reported as an axiom: " ++ CErrors.print e)
+
+(* [unreadable] is called on an opaque body that cannot be read; when it
+   returns, the constant is an axiom. *)
+let constant_node ~unreadable st view kn =
   match lookup_constant st view kn with
   | None -> unresolved
   | Some (declaration_view, cb) ->
-    (* An opaque body that cannot be read is reported as an axiom, as
-       vernac/assumptions.ml's [get_constant_body] does: a constant whose body
-       this process cannot see rests on something it cannot check. The read can
-       fail for two unrelated reasons, though — the proof was not stored, which
-       is what upstream means, or the table could not be READ (damaged bytes, or
-       a lazy reader refusing a table whose bytes changed since intern) — and
-       the verdict alone does not tell them apart. So the failure is named here.
-       The exit status is deliberately unchanged: a stored-nowhere body is an
-       ordinary answer, and failing the whole check on it would turn every
-       delayed proof into a failed grade. A reader who needs certainty reads the
-       warning, which names the constant. *)
     let body, axiom = match cb.const_body with
       | Def c -> [declaration_view, c], false
       | OpaqueDef o ->
         (match (test_unreadable_opaque kn; st.access o) with
          | c, _ -> [declaration_view, c], false
-         | exception e when CErrors.noncritical e ->
-           Feedback.msg_warning
-             Pp.(str "Statement report: the opaque body of " ++ str (Constant.to_string kn)
-                 ++ str " could not be read, so it is reported as an axiom: " ++ CErrors.print e);
-           [], true)
+         | exception e when CErrors.noncritical e -> unreadable kn e; [], true)
       | Undef _ | Primitive _ | Symbol _ -> [], true
     in
     let refs = walk st (fresh_gen st) empty_refs ((declaration_view, cb.const_type) :: body) in
@@ -439,6 +446,82 @@ let mind_node st view mind =
     in
     { refs = refs_to_list refs; axiom = false; flags; resolved = false }
 
+(** {6 Opaque bodies read ahead}
+
+    Reading the opaque bodies and walking them is most of what the report
+    costs, and the walk of [closure] does it one constant after another. With
+    [-j n], [n] forked processes compute ahead of the walk the node of
+    [(Public, ConstRef kn)] for every opaque constant [kn] of the environment,
+    a chunk of constants at a time to whichever process is free, and the walk
+    takes such a node from them instead of computing it.
+
+    The node a process sends is the one the walk would compute. For a constant
+    that the environment holds with a body, [lookup_constant] answers
+    [(Public, cb)] with the environment's own declaration and looks at no
+    module implementation, so [constant_node] depends only on the environment
+    and the opaque accessor, which a forked process has as they are. Its walk
+    gives the same set of references whatever the state of [seen], which never
+    finds a term of an earlier walk.
+
+    A process sends no node for a body it cannot read, nor for a constant whose
+    node raised: the walk computes those itself, so the warning about a body
+    that cannot be read is printed where it is printed without processes. A
+    process that fails sends nothing, and the walk computes its nodes. Nothing
+    a process does reaches the output ([CheckWorkers.map_forked]). *)
+
+exception Unreadable
+
+(* Constants handed to a process at a time. The constants are sorted by
+   library, so a chunk mostly reads the table of opaque proofs of one library. *)
+let read_ahead_chunk = 32
+
+let read_ahead st jobs =
+  let opaque =
+    Environ.fold_constants (fun kn cb acc -> match cb.const_body with
+        | OpaqueDef _ -> kn :: acc
+        | Def _ | Undef _ | Primitive _ | Symbol _ -> acc)
+      st.env []
+  in
+  let library kn = ModPath.dp (Constant.modpath kn) in
+  let opaque = Array.of_list opaque in
+  Array.stable_sort (fun a b -> DirPath.compare (library a) (library b)) opaque;
+  let total = Array.length opaque in
+  let chunks = (total + read_ahead_chunk - 1) / read_ahead_chunk in
+  (* The nodes of chunk [c], each with its position in [opaque], so that no
+     name is sent back. *)
+  let chunk c =
+    let first = c * read_ahead_chunk in
+    let last = min total (first + read_ahead_chunk) - 1 in
+    let rec go j acc =
+      if j < first then acc
+      else
+        let acc =
+          match constant_node ~unreadable:(fun _ _ -> raise Unreadable) st Public opaque.(j) with
+          | n -> (j, n) :: acc
+          | exception _ -> acc
+        in
+        go (j - 1) acc
+    in
+    go last []
+  in
+  Array.iter (function
+      | None -> ()
+      | Some nodes ->
+        List.iter (fun (j, n) -> st.prefetched <- Cmap_env.add opaque.(j) n st.prefetched) nodes)
+    (CheckWorkers.map_forked jobs chunk chunks)
+
+(* Test-only seam, beside [test_fault] below: how many nodes the walk took
+   from the processes of [read_ahead].
+   [COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD] prints it. *)
+let read_ahead_used = ref 0
+
+let read_ahead_node st view kn = match view with
+  | Implementation -> None
+  | Public ->
+    let n = Cmap_env.find_opt kn st.prefetched in
+    if Option.has_some n then incr read_ahead_used;
+    n
+
 let node st view obj =
   let nodes = match view with
     | Public -> st.public_nodes
@@ -448,7 +531,10 @@ let node st view obj =
   | Some n -> n
   | None ->
     let n = match obj with
-      | GlobRef.ConstRef kn -> constant_node st view kn
+      | GlobRef.ConstRef kn ->
+        (match read_ahead_node st view kn with
+         | Some n -> n
+         | None -> constant_node ~unreadable:warn_unreadable st view kn)
       | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> mind_node st view mind
       | GlobRef.VarRef _ -> { refs = []; axiom = false; flags = []; resolved = false }
     in
@@ -881,6 +967,14 @@ let test_walk_count () =
   | Some "1" -> line "walk %d" !walk_visits
   | None | Some _ -> ()
 
+(* Test-only seam: with the test variable set, print how many nodes the walk
+   took from the processes of [read_ahead], so a test can tell that they were
+   used. It has no effect unless the test variable is explicitly set. *)
+let test_read_ahead_count () =
+  match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD" with
+  | Some "1" -> line "read ahead %d" !read_ahead_used
+  | None | Some _ -> ()
+
 (* Test-only seam: a test sets this for one process to exercise the public
    incomplete-report contract. It has no effect unless the test variable is
    explicitly set. *)
@@ -935,7 +1029,7 @@ let resolve_in_impl st name =
     in
     List.rev (split 0 [])
 
-let print env access requests =
+let print ~jobs env access requests =
   let index =
     (* Every constant under each printed name: two kernel names can print
        alike (a library P.A with a module B, and a library P.A.B), and a
@@ -947,15 +1041,22 @@ let print env access requests =
   in
   let st = {
     env; access; fields = ModPath.Map.empty;
-    public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty; gen = 0;
+    public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty;
+    prefetched = Cmap_env.empty; gen = 0;
     keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
   } in
   (* One memo for the whole report: the requests share the walk (see
      "One walk for every request"). *)
   let memo = new_memo () in
   walk_visits := 0;
+  read_ahead_used := 0;
   line "STATEMENT REPORT %d" format_version;
   test_fault ();
+  (* Read ahead only when some request has a model to walk. The walk computes
+     whatever the processes did not: a failure here only leaves it more to
+     compute. *)
+  if jobs > 1 && List.exists (fun r -> CString.Map.mem r.req_model index) requests then
+    (try read_ahead st jobs with e when CErrors.noncritical e -> ());
 
   List.iter (fun r ->
       let trusted = Option.default "-" r.req_trusted in
@@ -995,4 +1096,5 @@ let print env access requests =
         FlagSet.iter (fun (kind, entry) -> line "flag %s %s %s" r.req_name kind entry) c.flag_set)
     requests;
   test_walk_count ();
+  test_read_ahead_count ();
   line "END STATEMENT REPORT"

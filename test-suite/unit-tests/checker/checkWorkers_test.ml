@@ -644,4 +644,82 @@ let () = add_test "negative budget is refused" (fun () ->
     assert_raises (Invalid_argument "CheckWorkers.set_budget") (fun () -> CheckWorkers.set_budget (-1.));
     assert_raises (Invalid_argument "CheckWorkers.set_budget") (fun () -> CheckWorkers.set_budget nan))
 
+(* [map_forked]: functions run in forked processes, whose results count
+   only if their process exits with code 0. *)
+let pr_results a =
+  String.concat "," (Array.to_list (Array.map (function None -> "-" | Some v -> string_of_int v) a))
+
+let () = add_test "map_forked: every item, in its place" (fun () ->
+    let check n k =
+      let expected = Array.init k (fun i -> Some (i * i)) in
+      assert_equal ~printer:pr_results expected (CheckWorkers.map_forked n (fun i -> i * i) k)
+    in
+    List.iter (fun n -> check n 300) [1; 2; 4; 16];
+    (* More processes than items. *)
+    check 50 10)
+
+let () = add_test "map_forked: no item, no process" (fun () ->
+    assert_equal 0 (Array.length (CheckWorkers.map_forked 4 (fun _ -> assert false) 0)))
+
+let () = add_test "map_forked: an item that raises is None, the others are kept" (fun () ->
+    let k = 100 in
+    let f i = if i mod 7 = 3 then failwith "no" else i + 1 in
+    let expected = Array.init k (fun i -> if i mod 7 = 3 then None else Some (i + 1)) in
+    assert_equal ~printer:pr_results expected (CheckWorkers.map_forked 4 f k))
+
+(* A process that ends with another code, or is killed, loses every answer
+   it gave; the answers of the other processes are kept. The process given
+   item 120 was first given one of items 0 to 3, so at least one answer
+   besides 120 is lost. *)
+let assert_dying_process_discarded die =
+  let k = 200 in
+  let out = CheckWorkers.map_forked 4 (fun i -> if i = 120 then die () else i) k in
+  assert_equal None out.(120);
+  Array.iteri (fun i v -> match v with
+      | None -> ()
+      | Some v -> assert_equal ~printer:string_of_int i v)
+    out;
+  let kept = Array.fold_left (fun n v -> match v with Some _ -> n + 1 | None -> n) 0 out in
+  assert_bool "the other processes' answers are kept" (kept > 0);
+  assert_bool "the answers of the process that died are lost" (kept < k - 1)
+
+let () = add_test "map_forked: a process that exits with code 3 loses its answers" (fun () ->
+    assert_dying_process_discarded (fun () -> Unix._exit 3))
+
+let () = add_test "map_forked: a process that is killed loses its answers" (fun () ->
+    assert_dying_process_discarded (fun () -> Unix.kill (Unix.getpid ()) Sys.sigkill; 0))
+
+(* A process prints nothing on standard output or error, and leaves nothing
+   buffered behind it. *)
+let () = add_test "map_forked: a process prints nothing" (fun () ->
+    Format.pp_print_flush Format.std_formatter ();
+    Format.pp_print_flush Format.err_formatter ();
+    flush stdout;
+    flush stderr;
+    let out, out_w = Unix.pipe () in
+    let saved_out = Unix.dup Unix.stdout in
+    let saved_err = Unix.dup Unix.stderr in
+    Unix.dup2 out_w Unix.stdout;
+    Unix.dup2 out_w Unix.stderr;
+    Unix.close out_w;
+    let result =
+      Fun.protect
+        ~finally:(fun () ->
+            Unix.dup2 saved_out Unix.stdout;
+            Unix.dup2 saved_err Unix.stderr;
+            Unix.close saved_out;
+            Unix.close saved_err)
+        (fun () ->
+           CheckWorkers.map_forked 2 (fun i -> print_string "noise"; prerr_string "noise"; i) 10)
+    in
+    let b = Bytes.create 16 in
+    Unix.set_nonblock out;
+    let got =
+      try Unix.read out b 0 16
+      with Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) -> 0
+    in
+    Unix.close out;
+    assert_equal ~printer:string_of_int 0 got;
+    assert_equal ~printer:pr_results (Array.init 10 (fun i -> Some i)) result)
+
 let () = run_tests __FILE__ (open_log_out_ch __FILE__) (List.rev !tests)

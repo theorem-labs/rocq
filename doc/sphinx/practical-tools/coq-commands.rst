@@ -787,8 +787,10 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   run for longer than its budget (see ``-worker-budget``) stops after the proof
   it is checking and hands its remaining proofs back to the main process,
   which queues them again for another process; each proof is still checked
-  exactly once. More processes use more memory. This option is not available
-  on Windows, and is ignored with ``-profile``.
+  exactly once. With ``-statement-report``, up to *n* processes also read and
+  walk the opaque proofs the report needs before it is printed; the report is
+  the one ``-j 1`` prints. More processes use more memory. This option is not
+  available on Windows, and is ignored with ``-profile``.
 :-worker-budget *s*: With ``-j``, the time in seconds (default 20) after which
   a worker process stops, once it has completed one check, and gives the proofs
   it has not checked back to the main process. A worker lives for the budget
