@@ -46,3 +46,24 @@ grep -q '^statement closure StmtRes.Hid.M.ax - not-requested 1 0$' "$d/tout"
 grep -q '^statement typed StmtRes.Hid.M.ax StmtRes.Hid.trusted model-missing 0 0$' "$d/tout"
 grep -q '^statement after StmtRes.Hid.trusted - not-requested 0 0$' "$d/tout"
 grep -q '^END STATEMENT REPORT$' "$d/tout"
+
+# A name the final environment holds answers from there, and the
+# implementations are not searched for it: library P.A hides ax in a sealed
+# B, library P.A.B has a public ax, and both print as P.A.B.ax.
+mkdir -p "$d/P/A"
+cat > "$d/P/A.v" <<'V'
+Module Type Empty. End Empty.
+Module B : Empty. Axiom ax : nat. End B.
+V
+cat > "$d/P/A/B.v" <<'V'
+Axiom ax : nat.
+V
+$coqc -Q "$d/P" P "$d/P/A.v"
+$coqc -Q "$d/P" P "$d/P/A/B.v"
+printf 'pub P.A.B.ax -\n' > "$d/preq"
+"$BIN"rocqchk -silent -statement-report "$d/preq" -Q "$d/P" P P.A P.A.B > "$d/pout" 2>&1
+sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/pout"
+grep -q '^statement pub P.A.B.ax - not-requested 1 0$' "$d/pout"
+grep -q '^axiom pub P.A.B.ax P.A.B:ax$' "$d/pout"
+if grep -q 'P.A:B.ax' "$d/pout"; then exit 1; fi
+grep -q '^END STATEMENT REPORT$' "$d/pout"

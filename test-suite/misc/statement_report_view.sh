@@ -20,10 +20,10 @@ grep -q '^axiom alias StmtView.View.A.ax StmtView.View:A.ax$' "$d/out"
 grep -q '^axiom alias_module StmtView.View.A.ax StmtView.View:A.ax$' "$d/out"
 grep -q '^axiom alias_impl StmtView.View.A.ax StmtView.View:A.ax$' "$d/out"
 grep -q '^axiom fun_alias StmtView.View.A.ax StmtView.View:A.ax$' "$d/out"
-if grep -q '^axiom alias StmtView.View.B.p StmtView.View:B.p$' "$d/out" ||
-   grep -q '^axiom alias_module StmtView.View.C.p StmtView.View:C.p$' "$d/out" ||
-   grep -q '^axiom alias_impl StmtView.View.C.ax StmtView.View:C.ax$' "$d/out" ||
-   grep -q '^axiom fun_alias StmtView.View.D.ax StmtView.View:D.ax$' "$d/out"; then
+if grep -q '^axiom alias StmtView.View.B.p ' "$d/out" ||
+   grep -q '^axiom alias_module StmtView.View.C.p ' "$d/out" ||
+   grep -q '^axiom alias_impl StmtView.View.C.ax ' "$d/out" ||
+   grep -q '^axiom fun_alias StmtView.View.D.ax ' "$d/out"; then
   exit 1
 fi
 grep -q '^axiom int Corelib.Numbers.Cyclic.Int63.PrimInt63.int Corelib.Numbers.Cyclic.Int63.PrimInt63:int$' "$d/out"

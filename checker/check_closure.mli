@@ -36,10 +36,17 @@ flag <name> <kind> <object>
 END STATEMENT REPORT
     v}
 
-    The number after [STATEMENT REPORT] is the format version. [<constant>]
+    The number after [STATEMENT REPORT] is the format version. A reader
+    must take a report as whole only when it reads the [END STATEMENT
+    REPORT] line: a report that stops (an anomaly inside the report's own
+    module lookups, for instance) has printed the statements before it and
+    no end line, and the checker still exits 0. [<constant>]
     is the path the closure reached the axiom by, as [Names.Constant.to_string]
     prints it; [<canonical>] is that constant's canonical kernel name, always
-    printed. Two paths to one constant share a canonical name, and two kernel
+    printed. It is the canonical half of the key the final environment
+    stores the constant under, or, for a constant only an implementation
+    holds, of the term's own name for it. Two paths to one constant share a
+    canonical name, and two kernel
     names never print alike: [<canonical>] is the root of the module path,
     [:], then the modules under it and the label separated by dots. The root
     is the library's dirpath ([P.A:B.ax] is [ax] of module [B] of library

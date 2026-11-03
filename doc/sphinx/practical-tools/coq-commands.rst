@@ -798,7 +798,10 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
      flag <name> <condition> <object>
      END STATEMENT REPORT
 
-  The number after ``STATEMENT REPORT`` is the format version. An ``axiom``
+  The number after ``STATEMENT REPORT`` is the format version. A reader must
+  take the report as whole only when it reads the ``END STATEMENT REPORT``
+  line: a report that stops has printed the statements before it and no end
+  line, and the checker still exits 0. An ``axiom``
   line names the axiom by the path the closure reached it by, then by its
   canonical kernel name, which is printed even when it is the same string: two
   paths to one constant (through an ``Include`` or a module alias) share a
