@@ -798,6 +798,9 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
      flag <name> <condition> <object>
      END STATEMENT REPORT
 
+  The canonical name of a constant or inductive only a module implementation
+  holds is printed ``?``: a reader must treat it as matching nothing.
+
   The number after ``STATEMENT REPORT`` is the format version. A reader must
   take the report as whole only when it reads the ``END STATEMENT REPORT``
   line: a report that stops has printed the statements before it and no end

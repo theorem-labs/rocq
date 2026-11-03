@@ -44,8 +44,10 @@ END STATEMENT REPORT
     is the path the closure reached the axiom by, as [Names.Constant.to_string]
     prints it; [<canonical>] is that constant's canonical kernel name, always
     printed. It is the canonical half of the key the final environment
-    stores the constant under, or, for a constant only an implementation
-    holds, of the term's own name for it. Two paths to one constant share a
+    stores the constant under. A constant or inductive only an
+    implementation holds prints [?] there: its canonical half would come
+    from the term that names it, which nothing ties to a declaration, so a
+    reader must never join on [?] (no identifier contains it). Two paths to one constant share a
     canonical name, and two kernel
     names never print alike: [<canonical>] is the root of the module path,
     [:], then the modules under it and the label separated by dots. The root
