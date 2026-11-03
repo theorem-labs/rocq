@@ -114,9 +114,13 @@ open Names
    file back with its own records ([get]) when it saves the library and
    removes the log and its private directory at exit, but only when every
    component of TMPDIR was secure at creation ([path_secure]: owned by this
-   uid or root, and either not group/other-writable or sticky) and lstat of
-   each still matches the recorded dev:ino; a substitute at the log name
-   (a different dev:ino) or an insecure parent leaves both. A child's records
+   uid or root, and either not group/other-writable or sticky) and the log
+   and the private directory still have the dev:ino recorded when they were
+   made. The components of TMPDIR are checked once, at creation, and their
+   identities are not kept: a path that now resolves through another
+   directory reaches another inode, which the two recorded identities
+   refuse. A substitute at the log name or at the directory name (a
+   different dev:ino) or an insecure parent leaves both. A child's records
    reach it only when the child writes them
    before that read-back: a plugin whose forked child outlives the tactic
    that forked it, and whose result reaches the compile later, is outside
@@ -348,8 +352,8 @@ let set_enabled b =
     (* The owner makes a private 0700 directory in TMPDIR, then creates the
        log through [create_log] with O_CREAT|O_EXCL; no path is reopened.
        Cleanup removes the log and directory only when every component of
-       TMPDIR was secure at creation ([path_secure]) and lstat of each still
-       matches ([cleanup_log]). *)
+       TMPDIR was secure at creation ([path_secure]) and the log and the
+       directory still have the dev:ino recorded here ([cleanup_log]). *)
     tried_env := true;
     fd := None;
     path := None;
