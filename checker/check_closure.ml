@@ -167,10 +167,19 @@ and fields_of_mp st mp =
     let mb = lookup_module_in_impl st mp in
     let raw_fields, inner_mp, subs = fields_of_mb st Mod_subst.empty_subst mp mb [] in
     let fields =
+      (* When the expression resolves to another module [M] (an alias
+         [Module A := M], or an identity functor applied to [M]), [A] takes
+         [M]'s strengthened signature. When it resolves to a functor's own
+         body ([Module A := F X], sealed or not), there is no module to
+         strengthen: the fields are the functor body's under the argument
+         substitution, as vernac/assumptions.ml reads them, so that a field
+         resolves to the body that defines it. *)
+      let source () = lookup_module_in_impl st inner_mp in
       match mod_expr mb, ModPath.equal inner_mp mp with
-      | (Algebraic _, false) ->
+      | (Algebraic _, false)
+        when (match mod_type (source ()) with NoFunctor _ -> true | MoreFunctor _ -> false) ->
         let mp_from = inner_mp in
-        let source = lookup_module_in_impl st mp_from in
+        let source = source () in
         let alias = Modops.strengthen_and_subst_module_body mp_from source mp false in
         let fields, inner_mp, subs =
           fields_of_signature Mod_subst.empty_subst mp [] (mod_type alias) in
@@ -223,6 +232,16 @@ let in_impl st get kn =
    has no body, its proof witness is the implementation. A term already
    reached from an implementation keeps that implementation view. The user
    name, not its canonical target, selects a transparent Include alias. *)
+(* A field whose body is only its own canonical constant: the delta alias an
+   [Include] or a module alias leaves, a name for that constant rather than a
+   definition of its own. *)
+let names_itself kn cb = match cb.const_body with
+  | Def c ->
+    (match Constr.kind c with
+     | Constr.Const (c', _) -> Constant.CanOrd.equal c' kn
+     | _ -> false)
+  | Undef _ | OpaqueDef _ | Primitive _ | Symbol _ -> false
+
 let lookup_constant st view kn =
   let impl () = in_impl st find_constant (Constant.user kn) in
   match view with
