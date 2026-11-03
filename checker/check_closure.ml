@@ -113,10 +113,6 @@ type state = {
   access : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm;
   mutable fields : field_index ModPath.Map.t;
   (* the indexed fields of the implementation of each module looked up so far *)
-  env_constant_canonical : string Cmap_env.t;
-  env_mind_canonical : string Mindmap_env.t;
-  (* the printed canonical name of each constant and inductive of the final
-     environment, from the key it is stored under *)
   mutable public_nodes : node GlobRef.Map_env.t;
   mutable implementation_nodes : node GlobRef.Map_env.t;
   (* each object reached so far, keyed by its constant or by the first
@@ -472,7 +468,7 @@ let name_of = function
    a term's canonical half is the one its constant is stored under: a library
    could name [Evil.ax] with the canonical half [Allowed.ax]. So the canonical
    printed for an object the final environment holds is the canonical half of
-   the key it is stored under there ([env_constant_canonical]); only an object
+   the key it is stored under there ([Environ.lookup_constant_key]); only an object
    that only an implementation holds is printed by the term's own pair. Two
    paths to one constant give one canonical name.
 
@@ -493,16 +489,21 @@ let canonical_kername kn =
   let r, mods = root [] mp in
   r ^ ":" ^ String.concat "." (mods @ [Label.to_string l])
 
-let canonical_of st = function
+(* The canonical kernel name printed for [obj]; the name check reads the same
+   one ([printable_name]). *)
+let canonical_kn env = function
   | GlobRef.ConstRef kn ->
-    (match Cmap_env.find_opt kn st.env_constant_canonical with
-     | Some c -> c
-     | None -> canonical_kername (Constant.canonical kn))
+    if Environ.mem_constant kn env then
+      let _, _, can = Environ.lookup_constant_key kn env in Some can
+    else Some (Constant.canonical kn)
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-    (match Mindmap_env.find_opt mind st.env_mind_canonical with
-     | Some c -> c
-     | None -> canonical_kername (MutInd.canonical mind))
-  | GlobRef.VarRef _ -> "-"
+    if Environ.mem_mind mind env then
+      let _, _, can = Environ.lookup_mind_key mind env in Some can
+    else Some (MutInd.canonical mind)
+  | GlobRef.VarRef _ -> None
+
+let canonical_of st obj =
+  match canonical_kn st.env obj with Some kn -> canonical_kername kn | None -> "-"
 
 (* An [axiom] line's two names: the path the term reached the object by, then
    its canonical kernel name. *)
@@ -550,16 +551,19 @@ let node_sets st n obj = {
    conversion can reach an anomaly that prints an unresolved inductive's name,
    and before the statement's line, so a refusal leaves no END STATEMENT
    REPORT line. *)
-let printable_name obj =
+let printable_name env obj =
+  let canonical_ok () = match canonical_kn env obj with
+    | Some kn -> CheckNames.valid_kername kn
+    | None -> true
+  in
   match obj with
-  | GlobRef.ConstRef kn ->
-    CheckNames.valid_kername (Constant.user kn) && CheckNames.valid_kername (Constant.canonical kn)
+  | GlobRef.ConstRef kn -> CheckNames.valid_kername (Constant.user kn) && canonical_ok ()
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-    CheckNames.valid_kername (MutInd.user mind) && CheckNames.valid_kername (MutInd.canonical mind)
+    CheckNames.valid_kername (MutInd.user mind) && canonical_ok ()
   | GlobRef.VarRef id -> CheckNames.valid_id id
 
-let check_printed_name obj =
-  if not (printable_name obj) then
+let check_printed_name env obj =
+  if not (printable_name env obj) then
     CErrors.user_err
       Pp.(str ("The statement report would print the name " ^ CheckNames.quote (name_of obj) ^
                ", which is not made of identifiers."))
@@ -587,7 +591,7 @@ let closure_per_root st root =
       else
         let n = node st view obj in
         incr walk_visits;
-        if n.axiom || n.resolved || not (List.is_empty n.flags) then check_printed_name obj;
+        if n.axiom || n.resolved || not (List.is_empty n.flags) then check_printed_name st.env obj;
         let acc = union_sets (node_sets st n obj) acc in
         let public_seen, implementation_seen = match view with
           | Public -> GlobRef.Set_env.add obj public_seen, implementation_seen
@@ -703,7 +707,7 @@ let shared_closure st m root =
         incr walk_visits;
         if n.axiom || n.resolved || not (List.is_empty n.flags) then begin
           (* The per-root walk must be the one that reports it. *)
-          if not (printable_name obj) then raise Not_shareable
+          if not (printable_name st.env obj) then raise Not_shareable
         end;
         pending_set m view obj true;
         run (push_refs (view, obj) n.refs (Leave (view, obj) :: rest))
@@ -929,12 +933,6 @@ let print env access requests =
   in
   let st = {
     env; access; fields = ModPath.Map.empty;
-    env_constant_canonical =
-      Environ.fold_constants (fun c _ m ->
-          Cmap_env.add c (canonical_kername (Constant.canonical c)) m) env Cmap_env.empty;
-    env_mind_canonical =
-      Environ.fold_inductives (fun mind _ m ->
-          Mindmap_env.add mind (canonical_kername (MutInd.canonical mind)) m) env Mindmap_env.empty;
     public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty; gen = 0;
     keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
   } in
