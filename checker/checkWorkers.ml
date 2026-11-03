@@ -413,6 +413,21 @@ let map_forked ?(heap_budget = max_int) n f k =
         close_items p
       end
     in
+    (* A process's answers count only if it then exited with code 0. *)
+    let finish p =
+      close_items p;
+      let status =
+        match waitpid_non_intr [] p.fpid with
+        | _, status -> Some status
+        | exception Unix.Unix_error _ -> None
+      in
+      close_report p.answers;
+      let ok = not p.failed && status = Some (Unix.WEXITED 0) in
+      if ok then List.iter (fun (i, v) -> out.(i) <- v) p.got;
+      debug (fun () ->
+          str "forked process " ++ int p.fpid ++ str ": " ++ int (List.length p.got) ++
+          str " items" ++ (if ok then mt () else str ", discarded"))
+    in
     let hand_out () =
       for _ = 1 to n do ignore (start ()) done;
       List.iter give (List.rev !procs);
@@ -431,10 +446,14 @@ let map_forked ?(heap_budget = max_int) n f k =
                   p.got <- (i, v) :: p.got;
                   if not last then give p
                   else begin
-                    (* It has spent its heap budget and exits: a fresh process
-                       takes its place. *)
+                    (* It has spent its heap budget and exits: it is waited
+                       for now, so it holds no process slot, and a fresh
+                       process takes its place. It leaves [procs] before the
+                       next fork, so no later process closes its descriptors,
+                       which [finish] has already closed. *)
                     p.current <- None;
-                    close_items p;
+                    finish p;
+                    procs := List.filter (fun q -> q != p) !procs;
                     if !next < k then Option.iter give (start ())
                   end
                 | _ -> fail p)
@@ -443,21 +462,6 @@ let map_forked ?(heap_budget = max_int) n f k =
         end
       in
       loop ()
-    in
-    (* A process's answers count only if it then exited with code 0. *)
-    let finish p =
-      close_items p;
-      let status =
-        match waitpid_non_intr [] p.fpid with
-        | _, status -> Some status
-        | exception Unix.Unix_error _ -> None
-      in
-      close_report p.answers;
-      let ok = not p.failed && status = Some (Unix.WEXITED 0) in
-      if ok then List.iter (fun (i, v) -> out.(i) <- v) p.got;
-      debug (fun () ->
-          str "forked process " ++ int p.fpid ++ str ": " ++ int (List.length p.got) ++
-          str " items" ++ (if ok then mt () else str ", discarded"))
     in
     let finally () =
       (* After an error, no process keeps running. *)
