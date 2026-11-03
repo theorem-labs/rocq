@@ -89,6 +89,11 @@ run 1 serial
 run 4 parallel
 same serial parallel
 
+# A heap budget of one byte: every process stops after one chunk, and fresh
+# processes take the rest. The report is still the -j 1 one.
+run 4 budget ROCQCHK_READ_AHEAD_HEAP_BUDGET=1
+same serial budget
+
 # The tree must really exercise axioms, a flag and the sealed field through
 # opaque proofs, or the comparison proves nothing.
 grep -q '^END STATEMENT REPORT$' "$d/parallel.err"
