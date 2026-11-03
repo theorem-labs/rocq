@@ -14,17 +14,17 @@ sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
 cat > "$d/expected" <<'EOF'
 STATEMENT REPORT 2
 statement int StmtNeg.Prims.i - not-requested 2
-axiom int Corelib.Numbers.Cyclic.Int63.PrimInt63.int Corelib.Numbers.Cyclic.Int63.PrimInt63.int
-axiom int StmtNeg.Prims.TI StmtNeg.Prims.TI
+axiom int Corelib.Numbers.Cyclic.Int63.PrimInt63.int Corelib.Numbers.Cyclic.Int63.PrimInt63:int
+axiom int StmtNeg.Prims.TI StmtNeg.Prims:TI
 statement float StmtNeg.Prims.f - not-requested 2
-axiom float Corelib.Floats.PrimFloat.float Corelib.Floats.PrimFloat.float
-axiom float StmtNeg.Prims.TF StmtNeg.Prims.TF
+axiom float Corelib.Floats.PrimFloat.float Corelib.Floats.PrimFloat:float
+axiom float StmtNeg.Prims.TF StmtNeg.Prims:TF
 statement string StmtNeg.Prims.s - not-requested 2
-axiom string Corelib.Strings.PrimString.string Corelib.Strings.PrimString.string
-axiom string StmtNeg.Prims.TS StmtNeg.Prims.TS
+axiom string Corelib.Strings.PrimString.string Corelib.Strings.PrimString:string
+axiom string StmtNeg.Prims.TS StmtNeg.Prims:TS
 statement array StmtNeg.Prims.a - not-requested 2
-axiom array Corelib.Array.PrimArray.array Corelib.Array.PrimArray.array
-axiom array StmtNeg.Prims.TA StmtNeg.Prims.TA
+axiom array Corelib.Array.PrimArray.array Corelib.Array.PrimArray:array
+axiom array StmtNeg.Prims.TA StmtNeg.Prims:TA
 END STATEMENT REPORT
 EOF
 sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out" |
