@@ -469,7 +469,8 @@ let name_of = function
    could name [Evil.ax] with the canonical half [Allowed.ax]. So the canonical
    printed for an object the final environment holds is the canonical half of
    the key it is stored under there ([Environ.lookup_constant_key]); an object
-   that only an implementation holds prints [?] instead (see [canonical_kn]).
+   that only an implementation holds prints [?] and the term's own name
+   instead (see [canonical_kn]).
    Two paths to one constant give one canonical name.
 
    It is printed so that two kernel names never print alike: the root of the
@@ -492,7 +493,10 @@ let canonical_kername kn =
 (* The canonical kernel name printed for [obj]; the name check reads the same
    one ([printable_name]). [None] for an object only an implementation holds:
    its canonical half comes from the term that names it, which no check ties
-   to a declaration, so it is printed as [?], which a reader never joins on. *)
+   to a declaration, so it is printed after a [?], which a reader never joins
+   on. The name after the [?] keeps two such objects apart: a bare [?] would
+   give two distinct axioms of one printed path one entry of the closure's
+   set, and the report would list one of them. *)
 let canonical_kn env = function
   | GlobRef.ConstRef kn ->
     if Environ.mem_constant kn env then
@@ -508,7 +512,9 @@ let canonical_of st obj =
   match obj, canonical_kn st.env obj with
   | _, Some kn -> canonical_kername kn
   | GlobRef.VarRef _, None -> "-"
-  | (GlobRef.ConstRef _ | GlobRef.IndRef _ | GlobRef.ConstructRef _), None -> "?"
+  | GlobRef.ConstRef kn, None -> "?" ^ canonical_kername (Constant.canonical kn)
+  | (GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _)), None ->
+    "?" ^ canonical_kername (MutInd.canonical mind)
 
 (* An [axiom] line's two names: the path the term reached the object by, then
    its canonical kernel name. *)

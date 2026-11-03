@@ -799,7 +799,9 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
      END STATEMENT REPORT
 
   The canonical name of a constant or inductive only a module implementation
-  holds is printed ``?``: a reader must treat it as matching nothing.
+  holds is printed ``?`` followed by the term's own canonical name (for
+  instance ``?P.A:B.C.ax``): a reader must never join on a token that starts
+  with ``?``. The name after it only keeps two such axioms apart.
 
   The number after ``STATEMENT REPORT`` is the format version. A reader must
   take the report as whole only when it reads the ``END STATEMENT REPORT``

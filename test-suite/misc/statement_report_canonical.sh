@@ -90,3 +90,29 @@ grep -q '^axiom u3 StmtCanon.Fn.D.X.ax StmtCanon.Fn:D.X.ax$' "$d/fnout"
 # An unapplied functor's field is not a request target.
 grep -q '^statement f StmtCanon.Fn.F.n - model-missing 0 0$' "$d/fnout"
 grep -q '^END STATEMENT REPORT$' "$d/fnout"
+
+# Two implementation-only axioms that print the same path (P.A's module B.C
+# and P.A.B's module C each hide an ax) get two distinct tokens after ?, the
+# term's own canonical, so no set keyed on the printed line can merge them.
+# One library cannot require both (coqc: "Q.A.B already exists"), so each
+# is reached from its own library, in one report.
+mkdir -p "$d/Q/A"
+cat > "$d/Q/A.v" <<'V'
+Module Type T. Parameter n : nat. End T.
+Module B. Module C : T. Axiom ax : nat. Definition n : nat := ax. End C. End B.
+Definition left : nat := B.C.n.
+V
+cat > "$d/Q/A/B.v" <<'V'
+Module Type T. Parameter n : nat. End T.
+Module C : T. Axiom ax : nat. Definition n : nat := ax. End C.
+Definition right : nat := C.n.
+V
+$coqc -Q "$d/Q" Q "$d/Q/A.v"
+$coqc -Q "$d/Q" Q "$d/Q/A/B.v"
+printf 'left Q.A.left -\nright Q.A.B.right -\n' > "$d/qreq"
+"$BIN"rocqchk -silent -statement-report "$d/qreq" -Q "$d/Q" Q Q.A Q.A.B > "$d/qout" 2>&1
+sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/qout"
+grep -q '^axiom left Q.A.B.C.ax ?Q.A:B.C.ax$' "$d/qout"
+grep -q '^axiom right Q.A.B.C.ax ?Q.A.B:C.ax$' "$d/qout"
+[ "$(grep -c '^axiom [a-z]* Q.A.B.C.ax ?' "$d/qout")" = 2 ]
+grep -q '^END STATEMENT REPORT$' "$d/qout"

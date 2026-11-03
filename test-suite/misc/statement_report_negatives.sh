@@ -25,7 +25,7 @@ axiom sealed StmtNeg.Defs.ax StmtNeg.Defs:ax
 statement helper StmtNeg.Use.helper - not-requested 1
 axiom helper StmtNeg.Defs.ax StmtNeg.Defs:ax
 statement hidden_axiom StmtNeg.Use.hidden_axiom - not-requested 1
-axiom hidden_axiom StmtNeg.Defs.HiddenAxiom.hidden ?
+axiom hidden_axiom StmtNeg.Defs.HiddenAxiom.hidden ?StmtNeg.Defs:HiddenAxiom.hidden
 statement hidden_inductive StmtNeg.Use.hidden_inductive - not-requested 1
 axiom hidden_inductive StmtNeg.Defs.ax StmtNeg.Defs:ax
 statement clean StmtNeg.Use.clean StmtNeg.Use.trusted match 1
