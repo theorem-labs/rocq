@@ -996,6 +996,11 @@ let explain_ill_formed_inductive env sigma mind kn =
   strbrk "expected canonical name" ++ spc () ++ KerName.print kn ++ spc () ++
   strbrk "but found" ++ spc () ++ KerName.print (MutInd.canonical mind)
 
+let explain_array_too_long len =
+  strbrk "Array literal of length" ++ spc () ++ int len ++ spc () ++
+  strbrk "exceeds the maximum array length" ++ spc () ++
+  str (Uint63.to_string Parray.max_length) ++ str "."
+
 let explain_type_error env sigma err =
   let env = make_all_name_different env sigma in
   match err with
@@ -1056,6 +1061,8 @@ let explain_type_error env sigma err =
     explain_ill_formed_constant env sigma cst kn
   | IllFormedInductive (mind, kn) ->
     explain_ill_formed_inductive env sigma mind kn
+  | ArrayTooLong len ->
+    explain_array_too_long len
 
 let pr_position (cl,pos) =
   let clpos = match cl with

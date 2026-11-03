@@ -838,6 +838,12 @@ and execute_aux tbl env cstr =
     | Float _ -> type_of_float env
     | String _ -> type_of_string env
     | Array(u,t,def,ty) ->
+      (* A longer literal would have two lengths: Parray truncates it to
+         max_length, while the VM and native compilers keep it whole. *)
+      let len = Array.length t in
+      let () = if Uint63.lt Parray.max_length (Uint63.of_int len) then
+          error_array_too_long env len
+      in
       (* ty : Type@{u} and all of t,def : ty *)
       let ulev = match UVars.Instance.to_array u with
         | [||], [|u|] -> u
