@@ -37,6 +37,25 @@ module type S = sig
   val stats : t -> statistics
 end
 
+(* See [retain_entries] in the interface. [pin_existing] holds, for each set
+   made before the call and still alive, a test that it is alive and the
+   function that keeps its elements. *)
+let retain = ref false
+let pin_existing : ((unit -> bool) * (unit -> unit)) list ref = ref []
+
+let register alive pin =
+  pin_existing := (alive, pin) :: List.filter (fun (alive, _) -> alive ()) !pin_existing
+
+let retain_entries () =
+  if not !retain then begin
+    (* Collect first: the elements pinned are then exactly those still
+       reachable here, wherever the earlier collections fell. *)
+    Gc.full_major ();
+    List.iter (fun (_, pin) -> pin ()) !pin_existing;
+    pin_existing := [];
+    retain := true
+  end
+
 module Make (E : EqType) =
   struct
 
@@ -50,6 +69,7 @@ module Make (E : EqType) =
     mutable limit : int;               (* bucket size limit *)
     mutable oversize : int;            (* number of oversize buckets *)
     mutable rover : int;               (* for internal bookkeeping *)
+    mutable kept : elt list;           (* the elements stored while [!retain] *)
   }
 
   let get_index t h = (h land max_int) mod (Array.length t)
@@ -57,7 +77,17 @@ module Make (E : EqType) =
   let limit = 7
   let over_limit = 2
 
-  let create sz =
+  let pin t =
+    let pin_bucket b =
+      for i = 0 to Weak.length b - 1 do
+        match Weak.get b i with
+        | Some v -> t.kept <- v :: t.kept
+        | None -> ()
+      done
+    in
+    Array.iter pin_bucket t.table
+
+  let make sz =
     let sz = if sz < 7 then 7 else sz in
     let sz = if sz > Sys.max_array_length then Sys.max_array_length else sz in
     {
@@ -66,7 +96,21 @@ module Make (E : EqType) =
       limit = limit;
       oversize = 0;
       rover = 0;
+      kept = [];
     }
+
+  (* A set made before [retain_entries] is registered weakly, so that a process
+     that never calls it (an interactive one) does not keep the set alive, and
+     each registration drops those of the sets that died. *)
+  let create sz =
+    let t = make sz in
+    if not !retain then begin
+      let w = Weak.create 1 in
+      Weak.set w 0 (Some t);
+      let pin_if_alive () = match Weak.get w 0 with Some t -> pin t | None -> () in
+      register (fun () -> Weak.check w 0) pin_if_alive
+    end;
+    t
 
   let clear t =
     for i = 0 to Array.length t.table - 1 do
@@ -74,7 +118,8 @@ module Make (E : EqType) =
       t.hashes.(i) <- [| |];
     done;
     t.limit <- limit;
-    t.oversize <- 0
+    t.oversize <- 0;
+    t.kept <- []
 
   let iter_weak f t =
     let rec iter_bucket i j b =
@@ -131,7 +176,7 @@ module Make (E : EqType) =
     let oldlen = Array.length t.table in
     let newlen = next_sz oldlen in
     if newlen > oldlen then begin
-      let newt = create newlen in
+      let newt = make newlen in
       let add_weak ob oh oi =
         let setter nb ni _ = Weak.blit ob oi nb ni 1 in
         let h = oh.(oi) in
@@ -200,6 +245,7 @@ module Make (E : EqType) =
     | Some v -> v
     | None ->
       let () = add_aux t Weak.set (Some d) h index in
+      let () = if !retain then t.kept <- d :: t.kept in
       d
 
   let stats t =

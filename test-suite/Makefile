@@ -98,6 +98,9 @@ COQFLAGS?=$(COQEXTRAFLAGS)
 
 coqc := $(BIN)rocq c -q -R prerequisite TestSuite $(COQFLAGS)
 coqchk := $(BIN)rocqchk -R prerequisite TestSuite
+# Every coqchk the suite runs also cooks each opaque body the stock way and
+# fails unless that equals the shared cook (checker/checkLibrary.ml).
+export ROCQCHK_COOK_CROSS_CHECK := 1
 coqdoc := $(BIN)rocq doc
 coqtop := $(BIN)rocq repl -q -test-mode -R prerequisite TestSuite
 
@@ -225,10 +228,14 @@ ifeq ($(TIMED),)
 all: run
 	$(MAKE) report
 else
+# /bin/sh has no pipefail: keep the status of "make run" in a file so that
+# tee cannot hide a failure, and fail if that status cannot be read back.
 all:
-	$(MAKE) run | tee time-of-build.log
+	rm -f time-of-build-status.log
+	{ $(MAKE) run; echo $$? > time-of-build-status.log; } | tee time-of-build.log
 	python ../tools/make-one-time-file.py --real time-of-build.log
 	$(MAKE) report
+	status=`cat time-of-build-status.log` && test -n "$$status" && exit "$$status"
 endif
 endif
 
@@ -347,10 +354,16 @@ unit-tests/src/utest.cmi: unit-tests/src/utest.mli
 
 unit-tests: $(UNIT_LOGFILES)
 
+
 # Build executable, run it to generate log file
+UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2
+# The micromega unit tests also need the micromega plugin (Polynomial, Vect, ...).
+unit-tests/micromega/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.plugins.micromega
+# The sysinit unit tests call Coqinit and Unix.putenv.
+unit-tests/sysinit/%.ml.log: UNIT_PKGS := rocq-runtime.toplevel,rocq-runtime.checklib,ounit2,rocq-runtime.sysinit,unix
 unit-tests/%.ml.log: unit-tests/%.ml unit-tests/src/$(UNIT_LINK)
 	$(SHOW) 'TEST      $<'
-	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package rocq-runtime.toplevel,rocq-runtime.checklib,ounit2 \
+	$(HIDE)$(OCAMLBEST) -w -29 -linkpkg -package $(UNIT_PKGS) \
 	     -I unit-tests/src $(UNIT_LINK) $< -o $<.test;
 	$(HIDE)$(call WITH_TIMER,$@,./$<.test)
 	$(HIDE)$(call REPORT_TIMER,$@)
@@ -368,7 +381,7 @@ $(addsuffix .log,$(wildcard prerequisite/*.v)): %.v.log: %.v
 	  $(call WITH_TIMER,$@,$(coqc) "$<" $(call get_coq_prog_args,"$<") 2>&1); R=$$?; times; \
 	  if [ $$R != 0 ]; then \
 	    echo $(log_failure); \
-	    echo "    $< ... could not be prepared" ; \
+	    echo "    $< ... Error! (could not be prepared)" ; \
 	    $(FAIL); \
 	  else \
 	    echo $(log_success); \
@@ -598,8 +611,9 @@ $(addsuffix .log,$(wildcard complexity/*.v)): %.v.log: %.v $(PREREQUISITELOG)
 	$(HIDE){ \
 	  echo $(call log_intro,$<); \
 	  true "extract effective user time"; \
-	  res=`$(call WITH_TIMER,$@,$(coqc_interactive) "$<" $(call get_coq_prog_args,"$<") 2>&1) | sed -n -e "s/Finished .*transaction in .*(\([0-9]*\.[0-9]*\)u.*)/\1/p" | head -1 | sed "s/\r//g"`; \
-	  R=$$?; times; \
+	  out=`$(call WITH_TIMER,$@,$(coqc_interactive) "$<" $(call get_coq_prog_args,"$<") 2>&1)`; \
+	  R=$$?; printf '%s\n' "$$out"; times; \
+	  res=`printf '%s\n' "$$out" | sed -n -e "s/Finished .*transaction in .*(\([0-9]*\.[0-9]*\)u.*)/\1/p" | head -1 | sed "s/\r//g"`; \
 	  if [ $$R != 0 ]; then \
 	    echo $(log_failure); \
 	    echo "    $< ... Error! (should be accepted)" ; \
