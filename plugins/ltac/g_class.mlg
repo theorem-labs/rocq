@@ -58,12 +58,14 @@ let pr_search_strategy _prc _prlc _prt = function
 
 }
 
-ARGUMENT EXTEND eauto_search_strategy_name PRINTED BY { pr_search_strategy_name }
+(* A search strategy name is a constant constructor: no location. *)
+ARGUMENT EXTEND eauto_search_strategy_name PRINTED BY { pr_search_strategy_name } STRIPPED BY { fun x -> x }
 | [ "bfs" ] -> { Bfs }
 | [ "dfs" ] -> { Dfs }
 END
 
-ARGUMENT EXTEND eauto_search_strategy PRINTED BY { pr_search_strategy }
+(* An optional search strategy name: no location. *)
+ARGUMENT EXTEND eauto_search_strategy PRINTED BY { pr_search_strategy } STRIPPED BY { fun x -> x }
 | [ "(" eauto_search_strategy_name(s) ")" ] -> { Some s }
 | [ ] -> { None }
 END

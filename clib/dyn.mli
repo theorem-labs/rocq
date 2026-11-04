@@ -58,6 +58,12 @@ sig
   val repr : 'a tag -> string
   (** [repr tag] returns the name of the type represented by [tag]. *)
 
+  val repr_opt : 'a tag -> string option
+  (** [repr_opt tag] is [Some (repr tag)], or [None] for a tag that no
+      [create] of this process registered: the tag of a value another
+      process made, such as a generic argument of a plugin this process did
+      not load. *)
+
   val dump : unit -> (int * string) list
   (** [dump ()] returns a list of (tag, name) pairs for every type tag registered
       in this [Dyn.Make] instance. *)
