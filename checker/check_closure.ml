@@ -487,6 +487,12 @@ let mind_node st view mind =
     [prefetched]) have grown by then, but none of them changes such a node, so
     the node does not depend on when its process was forked.
 
+    In this case [resolved] is false, and [flags] holds only condition kinds.
+    Canonical names, including the [?] token for implementation-only objects,
+    are formed later by [node_sets] in the main process. There is no numbering:
+    each token is a function of the environment key or the reference's own
+    canonical name, whose representative the declaration walk preserves.
+
     A process sends no node for a body it cannot read, nor for a constant whose
     node raised: the walk computes those itself, so the warning about a body
     that cannot be read is printed where it is printed without processes. A

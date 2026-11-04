@@ -98,12 +98,13 @@ same serial budget
 # The tree must really exercise axioms, a flag and the sealed field through
 # opaque proofs, or the comparison proves nothing.
 grep -q '^END STATEMENT REPORT$' "$d/parallel.err"
-grep -q "^axiom r_top $P.base\$" "$d/parallel.err"
-grep -q "^axiom r_top $P.other\$" "$d/parallel.err"
-grep -q "^flag r_top assumed-positive $P.bad\$" "$d/parallel.err"
-grep -q "^flag r_flagged assumed-positive $P.bad\$" "$d/parallel.err"
-grep -q "^axiom r_sealed $P.base\$" "$d/parallel.err"
-grep -q "^axiom r_shared $P.base\$" "$d/parallel.err"
+grep -q "^axiom r_top $P.base $P:base\$" "$d/parallel.err"
+grep -q "^axiom r_top $P.other $P:other\$" "$d/parallel.err"
+grep -q "^flag r_top assumed-positive $P.bad $P:bad\$" "$d/parallel.err"
+grep -q "^flag r_flagged assumed-positive $P.bad $P:bad\$" "$d/parallel.err"
+grep -q "^axiom r_sealed $P.base $P:base\$" "$d/parallel.err"
+grep -q "^axiom r_shared $P.base $P:base\$" "$d/parallel.err"
+grep -q "^resolved r_sealed $P.M.out $P:M.out\$" "$d/parallel.err"
 grep -q "^statement r_typed $P.p1 $P.p2 match " "$d/parallel.err"
 
 # The processes did the work: the walk took nodes from them at -j 4, and none
@@ -139,7 +140,11 @@ for c in $P.p150 $P.M.hidden; do
   run 4 unreadable4 COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE="$c"
   same unreadable1 unreadable4
   grep -q "Statement report: the opaque body of $c could not be read" "$d/unreadable4.err"
-  grep -q "^axiom r_top $c\$" "$d/unreadable4.err"
+  case "$c" in
+    "$P.p150") canonical="$P:p150" ;;
+    "$P.M.hidden") canonical="?$P:M.hidden" ;;
+  esac
+  grep -q "^axiom r_top $c $canonical\$" "$d/unreadable4.err"
   run 4 unreadable4w COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE="$c" \
     COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD=1
   uncounted unreadable4w
