@@ -157,10 +157,21 @@ let rec xmul_add (n1 : Q.t) (ve1 : t) (n2 : Q.t) (ve2 : t) =
 let mul_add n1 ve1 n2 ve2 =
   if n1 =/ Q.one && n2 =/ Q.one then add ve1 ve2 else xmul_add n1 ve1 n2 ve2
 
-let compare : t -> t -> int =
-  Mutils.Cmp.compare_list (fun x y ->
-      Mutils.Cmp.compare_lexical
-        [(fun () -> Int.compare x.var y.var); (fun () -> Q.compare x.coe y.coe)])
+(** Stock's [compare] was [Mutils.Cmp.compare_list] of [Mutils.Cmp.compare_lexical] on the
+    variables, then the coefficients: this computes the same, and returns the same integers
+    ([-1] and [1] for a shorter and a longer vector, or the first non-zero [Int.compare] or
+    [Q.compare]), without building two closures and their list for each pair of entries. *)
+let rec compare (v1 : t) (v2 : t) =
+  match (v1, v2) with
+  | [], [] -> 0
+  | [], _ -> -1
+  | _, [] -> 1
+  | x :: l1, y :: l2 ->
+    let c = Int.compare x.var y.var in
+    if not (Int.equal c 0) then c
+    else
+      let c = Q.compare x.coe y.coe in
+      if not (Int.equal c 0) then c else compare l1 l2
 
 (** [tail v vect] returns
         - [None] if [v] is not a variable of the vector [vect]

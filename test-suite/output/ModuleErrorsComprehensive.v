@@ -139,7 +139,7 @@ Module NumIndMod.
 End NumIndMod.
 Fail Module NumIndTest : NumIndType := NumIndMod.
 
-(* 15. InductiveParamsNumberField - number of parameters differs *)
+(* 15. InductiveParams - parameter contexts differ *)
 Module Type ParamsType.
   Inductive I (A B : Type) : Type := c : A -> B -> I A B.
 End ParamsType.

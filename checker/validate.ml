@@ -228,6 +228,9 @@ let validate v (o, mem) : unit =
   try NewProfile.profile "validate" (fun () -> val_gen v mem mt_ec o) ()
   with ValidObjError(msg,ctx,obj) ->
     let rctx = List.rev_map print_frame ctx in
-    print_endline ("Context: "^String.concat"/"rctx);
+    (* Through the formatter, as [pr_obj] prints, so that whoever holds
+       standard output holds both. *)
+    Format.print_string ("Context: "^String.concat"/"rctx);
+    Format.print_newline ();
     pr_obj mem obj;
     failwith ("Validation failed: "^msg^" (in "^(print_frame (List.hd ctx))^")")
