@@ -345,6 +345,13 @@ unit-tests/src/utest.cmi: unit-tests/src/utest.mli
 	$(SHOW) 'OCAMLC  $<'
 	$(HIDE)$(OCAMLC) -package ounit2 -c $<
 
+# A test that fails under Utest.run_tests still exits 0, and the last line
+# of its log reads "... Error!", which "make report" finds. Fail here too,
+# so that "make unit-tests" and "make run" do not succeed with a failed test.
+unit-tests:
+	$(HIDE)failed=`grep -lsF 'Error!' /dev/null $(UNIT_LOGFILES)`; \
+	if [ -n "$$failed" ]; then printf 'FAILED    %s\n' $$failed >&2; exit 1; fi
+
 unit-tests: $(UNIT_LOGFILES)
 
 # Build executable, run it to generate log file
