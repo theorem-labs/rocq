@@ -487,7 +487,7 @@ and fold_deps_list seen ff modl needed =
 let fold_deps_list ff modl acc =
   snd (fold_deps_list LibrarySet.empty ff modl (LibrarySet.empty,acc))
 
-let recheck_library senv ~norec ~admit ~check =
+let recheck_library ?(on_check = fun _ -> ()) senv ~norec ~admit ~check =
   let ml = List.map try_locate_qualified_library check in
   let nrl = List.map try_locate_qualified_library norec in
   let al =  List.map try_locate_qualified_library admit in
@@ -526,7 +526,11 @@ let recheck_library senv ~norec ~admit ~check =
     (fun (dir,_) -> pr_dirpath dir ++ fnl()) needed));
   let senv =
     try
-      let senv = List.fold_left (check_one_lib nochk) (senv, Cmap.empty) needed in
+      let check_one senv (dir, _ as lib) =
+        if not (LibrarySet.mem dir nochk) then on_check dir;
+        check_one_lib nochk senv lib
+      in
+      let senv = List.fold_left check_one (senv, Cmap.empty) needed in
       CheckWorkers.finish ();
       senv
     with e ->

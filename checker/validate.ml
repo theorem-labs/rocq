@@ -224,6 +224,8 @@ let print_frame = function
 | CtxField i -> Printf.sprintf "fld=%i" i
 | CtxTag i -> Printf.sprintf "tag=%i" i
 
+let validate_silent v (o, mem) = val_gen v mem mt_ec o
+
 let validate v (o, mem) : unit =
   try NewProfile.profile "validate" (fun () -> val_gen v mem mt_ec o) ()
   with ValidObjError(msg,ctx,obj) ->

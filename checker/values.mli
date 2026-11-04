@@ -61,3 +61,4 @@ val v_libsum : value
 val v_lib : value
 val v_opaquetable : value
 val v_vmlib : value
+val v_report_nodes : value

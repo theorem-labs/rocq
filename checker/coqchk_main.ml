@@ -150,6 +150,15 @@ let indices_matter = ref false
 let enable_vm = ref false
 
 let statement_report = ref None
+let report_nodes_in = ref None
+let report_nodes_admit = ref None
+let report_nodes_out = ref None
+let report_nodes_digests = ref None
+let checked_libraries = ref DirPath.Set.empty
+
+let paired_options a b = match !a, !b with
+  | Some a, Some b -> Some (a, b)
+  | _ -> None
 
 let jobs = ref 1
 let set_jobs s =
@@ -188,7 +197,11 @@ let add_compile s =
     between coqtop and coqc. *)
 
 let compile_files senv =
-  CheckLibrary.recheck_library senv
+  let on_check = match paired_options report_nodes_in report_nodes_admit with
+    | None -> None
+    | Some _ -> Some (fun dp -> checked_libraries := DirPath.Set.add dp !checked_libraries)
+  in
+  CheckLibrary.recheck_library ?on_check senv
     ~norec:(List.rev !norec_list)
     ~admit:(List.rev !admit_list)
     ~check:(List.rev !compile_list)
@@ -228,6 +241,10 @@ let print_usage_channel co command =
 \n  -statement-report f         print, for each statement named in f, whether its model\
 \n                              constant has its trusted constant's type and the axioms its\
 \n                              closure uses\
+\n  -report-nodes-out f         save public opaque report nodes atomically to f\
+\n  -report-nodes-digests f     library whole-file SHA256 list for saved nodes\
+\n  -report-nodes-in f          reuse report nodes from a trusted check\
+\n  -report-nodes-admit f       unchecked library whole-file SHA256 list\
 \n\
 \n  -impredicative-set          set sort Set impredicative\
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
@@ -457,6 +474,13 @@ let parse_args argv =
         statement_report := Some (Check_closure.read_requests f); parse rem
     | "-statement-report" :: [] -> usage 1
 
+    | "-report-nodes-in" :: f :: rem -> report_nodes_in := Some f; parse rem
+    | "-report-nodes-admit" :: f :: rem -> report_nodes_admit := Some f; parse rem
+    | "-report-nodes-out" :: f :: rem -> report_nodes_out := Some f; parse rem
+    | "-report-nodes-digests" :: f :: rem -> report_nodes_digests := Some f; parse rem
+    | ("-report-nodes-in" | "-report-nodes-admit" | "-report-nodes-out" |
+       "-report-nodes-digests") :: [] -> usage 1
+
     | s :: _ when s<>"" && s.[0]='-' ->
         fatal_error (str "Unknown option " ++ str s) 1
     | s :: rem ->  add_compile s; parse rem
@@ -521,6 +545,11 @@ let run senv =
     if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
     fatal_error (explain_exn e) (exit_code e)
 
+let save_report_nodes env =
+  Option.iter (fun (file, digests) ->
+      Check_closure.save_nodes env CheckLibrary.indirect_accessor ~file ~digests)
+    (paired_options report_nodes_out report_nodes_digests)
+
 (* The report is evidence beside the verdict, never the verdict: a report
    that cannot be completed is left without its end marker, which a reader
    takes as no report, and the exit status is unchanged. It comes before the
@@ -530,17 +559,22 @@ let run senv =
    [CantApplyBadType] type error itself, but nothing in the report raises one. *)
 let print_statement_report env requests =
   try
-    Check_closure.print ~jobs:(CheckWorkers.processes ()) env
-      CheckLibrary.indirect_accessor requests
+    Check_closure.print ~jobs:(CheckWorkers.processes ())
+      ?nodes_in:(paired_options report_nodes_in report_nodes_admit)
+      ?nodes_out:(paired_options report_nodes_out report_nodes_digests)
+      ~checked:!checked_libraries env CheckLibrary.indirect_accessor requests
   with e when (match e with Sys.Break | Out_of_memory -> false | _ -> true) ->
     Feedback.msg_warning
       (str "Statement report stopped: " ++
-       str (String.escaped (Pp.string_of_ppcmds (explain_exn e))))
+       str (String.escaped (Pp.string_of_ppcmds (explain_exn e))));
+    save_report_nodes env
 
 let main () =
   let senv = init() in
   let senv, opac = run senv in
   let env = Safe_typing.env_of_safe_env senv in
-  Option.iter (print_statement_report env) !statement_report;
+  (match !statement_report with
+   | Some requests -> print_statement_report env requests
+   | None -> save_report_nodes env);
   Check_stat.stats env opac;
   exit 0

@@ -623,3 +623,13 @@ let v_delayed_universes =
 let v_opaquetable = v_array (v_opt (v_pair v_constr v_delayed_universes))
 
 let v_vmlib = v_tuple "vmlibrary" [|v_dp; v_array v_vm_to_patch|]
+
+(** checker/check_closure: public opaque report nodes, grouped by library.
+    The node fields are references with their view, axiom, flags, resolved. *)
+let v_report_nodes =
+  let view = v_enum "report view" 2 in
+  let reference = v_sum "report reference" 0
+      [| [|v_id|]; [|v_cst|]; [|v_ind|]; [|v_cons|] |] in
+  let node = v_tuple "report node"
+      [|v_list (v_pair view reference); v_bool; v_list v_string; v_bool|] in
+  v_list (v_tuple "report node group" [|v_dp; v_string; v_list (v_pair v_cst node)|])

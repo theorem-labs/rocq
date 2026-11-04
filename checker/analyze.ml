@@ -347,7 +347,7 @@ let input_double_little chan : float =
     (l lsl 24) lor (k lsl 16) lor (j lsl 8) lor (Int64.of_int i) in
   Int64.float_of_bits bits
 
-let parse_object chan =
+let parse_object ~quiet chan =
   let data = input_byte chan in
   if prefix_small_block <= data then
     let tag = data land 0x0F in
@@ -393,7 +393,7 @@ let parse_object chan =
   | CODE_CUSTOM_FIXED ->
     begin match input_cstring chan with
     | "_j" -> Rint64 (input_intL chan)
-    | s -> Printf.eprintf "Unhandled custom code: %s" s; assert false
+    | s -> if not quiet then Printf.eprintf "Unhandled custom code: %s" s; assert false
     end
   | CODE_DOUBLE_BIG ->
     RFloat64 (input_double_big chan)
@@ -409,9 +409,9 @@ let parse_object chan =
   | CODE_DOUBLE_ARRAY64_BIG
   | CODE_DOUBLE_ARRAY64_LITTLE
   | CODE_CUSTOM_LEN
-    -> Printf.eprintf "Unhandled code %04x\n%!" data; assert false
+    -> if not quiet then Printf.eprintf "Unhandled code %04x\n%!" data; assert false
 
-let parse chan =
+let parse ~quiet chan =
   let size = parse_header chan in
   let memory = LargeArray.make size (Struct ((-1), [||])) in
   let current_object = ref 0 in
@@ -458,7 +458,7 @@ let parse chan =
       | [] -> ()
       | (block, off) :: accu -> fill block off accu
     else
-      let data, nobj = fill_obj (parse_object chan) in
+      let data, nobj = fill_obj (parse_object ~quiet chan) in
       let () = block.(off) <- data in
       let block, off, accu = match nobj with
       | None -> block, succ off, accu
@@ -470,9 +470,9 @@ let parse chan =
   let () = fill ans 0 [] in
   (ans.(0), memory)
 
-let parse chan : _ * _ =
+let parse ?(quiet = false) chan : _ * _ =
   NewProfile.profile "analyze"
-    (fun () -> parse chan)
+    (fun () -> parse ~quiet chan)
     ()
 
 end
