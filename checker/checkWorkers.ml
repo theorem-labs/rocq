@@ -330,11 +330,17 @@ let run_forked ~heap_budget ~items ~results f =
       Unix.dup2 null Unix.stderr;
       Unix.close null;
       forked_gc ();
-      let words0 = (Gc.quick_stat ()).Gc.major_words in
-      let budget_words = float_of_int heap_budget /. float_of_int (Sys.word_size / 8) in
       (* What it has added to its major heap. The lazy GC frees little of it,
-         so this bounds what the process holds beyond the pages it shares. *)
-      let spent () = (Gc.quick_stat ()).Gc.major_words -. words0 >= budget_words in
+         so this bounds what the process holds beyond the pages it shares.
+         OCaml 5's counters may lag by what was allocated since the last minor
+         collection, so there one runs first; OCaml 4's are exact as read. *)
+      let major_words () =
+        if Sys.ocaml_release.major >= 5 then Gc.minor ();
+        (Gc.quick_stat ()).Gc.major_words
+      in
+      let words0 = major_words () in
+      let budget_words = float_of_int heap_budget /. float_of_int (Sys.word_size / 8) in
+      let spent () = major_words () -. words0 >= budget_words in
       let rec loop () =
         match read_exactly items item_size with
         | None -> 0
