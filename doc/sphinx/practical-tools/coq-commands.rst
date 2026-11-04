@@ -844,7 +844,7 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
 
   .. code-block:: text
 
-     STATEMENT REPORT 2
+     STATEMENT REPORT 3
      statement <name> <model> <trusted|-> <verdict> <axiom-count> <condition-count>
      axiom <name> <constant> <canonical>
      resolved <name> <field> <canonical>
@@ -860,7 +860,9 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   instance ``?P.A:B.C.ax``): a reader must never join on a token that starts
   with ``?``. The name after it only keeps two such axioms apart.
 
-  The number after ``STATEMENT REPORT`` is the format version. A reader must
+  The number after ``STATEMENT REPORT`` is the format version, 3. Format 2 had
+  no canonical column on ``flag`` lines and no ``?`` token; a reader of format 2
+  must not read format 3. A reader must
   take the report as whole only when it reads the ``END STATEMENT REPORT``
   line: a report that stops has printed the statements before it and no end
   line, and the checker still exits 0. An ``axiom``

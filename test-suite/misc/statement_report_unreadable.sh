@@ -40,7 +40,7 @@ if ! env COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE=Unreadable.Opaque.secret \
 fi
 
 # The report is whole, so a parser still reads it as evidence.
-grep -q '^STATEMENT REPORT 2$' "$d/out"
+grep -q '^STATEMENT REPORT 3$' "$d/out"
 grep -q '^END STATEMENT REPORT$' "$d/out"
 
 # The failure is named, with the constant and the cause.

@@ -28,7 +28,7 @@ val print : Environ.env -> (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) 
 (** Print the report, one line per message on the feedback channel:
 
     {v
-STATEMENT REPORT 2
+STATEMENT REPORT 3
 statement <name> <model> <trusted|-> <verdict> <axiom-count> <flag-count>
 axiom <name> <constant> <canonical>
 resolved <name> <field> <canonical>
@@ -36,7 +36,9 @@ flag <name> <kind> <object> <canonical>
 END STATEMENT REPORT
     v}
 
-    The number after [STATEMENT REPORT] is the format version. A reader
+    The number after [STATEMENT REPORT] is the format version: 3. Format 2
+    had no canonical column on [flag] lines and no [?] token; a reader of 2
+    must not read 3. A reader
     must take a report as whole only when it reads the [END STATEMENT
     REPORT] line: a report that stops (an anomaly inside the report's own
     module lookups, for instance) has printed the statements before it and

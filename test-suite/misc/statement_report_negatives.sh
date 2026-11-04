@@ -19,7 +19,7 @@ $coqc -noinit -Q "$d" StmtNeg "$d/Use.v"
 # Flag lines and counts are left out: output-coqchk/statement_report.v pins them.
 # Resolved lines are left out: misc/statement_report_resolved.sh pins them.
 cat > "$d/expected" <<'EOF'
-STATEMENT REPORT 2
+STATEMENT REPORT 3
 statement sealed StmtNeg.Use.sealed StmtNeg.Use.trusted_thm match 1
 axiom sealed StmtNeg.Defs.ax StmtNeg.Defs:ax
 statement helper StmtNeg.Use.helper - not-requested 1
@@ -46,7 +46,7 @@ EOF
 report () {
   "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtNeg "$@" > "$d/out.log" 2>&1 \
     || { cat "$d/out.log"; exit 1; }
-  sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out.log" |
+  sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/out.log" |
     sed -e '/^flag /d' -e '/^resolved /d' -E -e 's/^(statement( [^ ]+){5}) [0-9]+$/\1/' > "$d/report"
   diff -u "$d/expected" "$d/report"
 }

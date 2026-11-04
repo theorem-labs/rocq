@@ -22,8 +22,8 @@ EOF
 $coqc -Q "$d" StmtCanon "$d/Canon.v"
 printf 'two StmtCanon.Canon.two_distinct -\ninc StmtCanon.Canon.through_include -\n' > "$d/requests"
 "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtCanon StmtCanon.Canon > "$d/out" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
-grep -q '^STATEMENT REPORT 2$' "$d/out"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/out"
+grep -q '^STATEMENT REPORT 3$' "$d/out"
 grep -q '^END STATEMENT REPORT$' "$d/out"
 grep -q '^axiom two StmtCanon.Canon.A.ax StmtCanon.Canon:A.ax$' "$d/out"
 grep -q '^axiom two StmtCanon.Canon.B.ax StmtCanon.Canon:B.ax$' "$d/out"
@@ -48,7 +48,7 @@ $coqc -Q "$d/P" P "$d/P/A.v"
 $coqc -Q "$d/P" P "$d/P/A/B.v"
 printf 'left P.A.left -\nright P.A.B.right -\n' > "$d/preq"
 "$BIN"rocqchk -silent -statement-report "$d/preq" -Q "$d/P" P P.A P.A.B > "$d/pout" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/pout"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/pout"
 grep -q '^axiom left P.A.B.ax P.A:B.ax$' "$d/pout"
 grep -q '^axiom right P.A.B.ax P.A.B:ax$' "$d/pout"
 
@@ -56,7 +56,7 @@ grep -q '^axiom right P.A.B.ax P.A.B:ax$' "$d/pout"
 # name is ambiguous, never one of them picked.
 printf 'm P.A.B.ax -\nt P.A.left P.A.B.ax\n' > "$d/areq"
 "$BIN"rocqchk -silent -statement-report "$d/areq" -Q "$d/P" P P.A P.A.B > "$d/aout" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/aout"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/aout"
 grep -q '^statement m P.A.B.ax - ambiguous 0 0$' "$d/aout"
 grep -q '^statement t P.A.left P.A.B.ax trusted-ambiguous 1 0$' "$d/aout"
 grep -q '^END STATEMENT REPORT$' "$d/aout"
@@ -83,7 +83,7 @@ V
 $coqc -Q "$d" StmtCanon "$d/Fn.v"
 printf 'u1 StmtCanon.Fn.u1 -\nu2 StmtCanon.Fn.u2 -\nu3 StmtCanon.Fn.u3 -\nf StmtCanon.Fn.F.n -\n' > "$d/fnreq"
 "$BIN"rocqchk -silent -statement-report "$d/fnreq" -Q "$d" StmtCanon StmtCanon.Fn > "$d/fnout" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/fnout"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/fnout"
 grep -q '^axiom u1 StmtCanon.Fn.A.ax StmtCanon.Fn:A.ax$' "$d/fnout"
 grep -q '^axiom u2 StmtCanon.Fn.A.ax StmtCanon.Fn:A.ax$' "$d/fnout"
 grep -q '^axiom u3 StmtCanon.Fn.D.X.ax StmtCanon.Fn:D.X.ax$' "$d/fnout"
@@ -111,7 +111,7 @@ $coqc -Q "$d/Q" Q "$d/Q/A.v"
 $coqc -Q "$d/Q" Q "$d/Q/A/B.v"
 printf 'left Q.A.left -\nright Q.A.B.right -\n' > "$d/qreq"
 "$BIN"rocqchk -silent -statement-report "$d/qreq" -Q "$d/Q" Q Q.A Q.A.B > "$d/qout" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/qout"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/qout"
 grep -q '^axiom left Q.A.B.C.ax ?Q.A:B.C.ax$' "$d/qout"
 grep -q '^axiom right Q.A.B.C.ax ?Q.A.B:C.ax$' "$d/qout"
 [ "$(grep -c '^axiom [a-z]* Q.A.B.C.ax ?' "$d/qout")" = 2 ]
@@ -133,7 +133,7 @@ $coqc -Q "$d/G" G "$d/G/A.v"
 $coqc -Q "$d/G" G "$d/G/A/B.v"
 printf 'left G.A.left -\nright G.A.B.right -\n' > "$d/greq"
 "$BIN"rocqchk -silent -statement-report "$d/greq" -Q "$d/G" G G.A G.A.B > "$d/gout" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/gout"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/gout"
 grep -q '^flag left unsafe-fixpoint G.A.B.f G.A:B.f$' "$d/gout"
 grep -q '^flag right unsafe-fixpoint G.A.B.f G.A.B:f$' "$d/gout"
 [ "$(grep -c '^flag [a-z]* unsafe-fixpoint G.A.B.f ' "$d/gout")" = 2 ]

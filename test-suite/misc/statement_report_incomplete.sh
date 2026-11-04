@@ -16,7 +16,7 @@ if ! env COQ_TEST_SUITE_STATEMENT_REPORT_FAILURE=1 \
   "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtView StmtView.View > "$d/out" 2>&1; then
   exit 1
 fi
-grep -q '^STATEMENT REPORT 2$' "$d/out"
+grep -q '^STATEMENT REPORT 3$' "$d/out"
 if grep -q '^END STATEMENT REPORT$' "$d/out"; then
   exit 1
 fi

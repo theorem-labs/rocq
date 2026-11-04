@@ -90,7 +90,7 @@ probe () {
   echo "--- end $id ---"
   if raw_line "$d/out.log" "$forged"; then raw=yes; fi
   if matches -F -- "$expected" "$d/out.log"; then has=yes; fi
-  if matches '^STATEMENT REPORT 2$' "$d/out.log"; then start=yes; fi
+  if matches '^STATEMENT REPORT 3$' "$d/out.log"; then start=yes; fi
   if matches '^END STATEMENT REPORT$' "$d/out.log"; then end=yes; fi
   if matches '^Warning: Statement report stopped:' "$d/out.log"; then warn=yes; fi
   case $kind in

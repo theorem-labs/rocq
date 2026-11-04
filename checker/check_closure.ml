@@ -890,8 +890,9 @@ let test_fault () =
   | None | Some _ -> ()
 
 (* The report's format. 2: an [axiom] line also names the axiom's canonical
-   kernel name. The first format had no number. *)
-let format_version = 2
+   kernel name. 3: a [flag] line too, and a canonical only an implementation
+   holds is printed after a [?]. The first format had no number. *)
+let format_version = 3
 
 (* A request's subject that the final environment does not hold, looked up
    in the implementations, as [Print Assumptions] finds a constant that a seal
