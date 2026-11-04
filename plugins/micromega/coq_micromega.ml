@@ -1735,25 +1735,26 @@ let speculate default f =
   *   returned for that clause in this call (the check and the first pass's
   *   tries only decide which clauses are searched, and when). The kernel
   *   checks the proof built from them, as for [search_witness_list].
-  * - The certificates need not be [search_witness_list]'s. The search of a
-  *   clause reads state that the searches before it in the process leave
-  *   (its memos), so its certificate can depend on which clauses were
-  *   searched before it, and in which order; the check's model searches and
-  *   reuse change both. This is measured, not only possible: on speed-7.5,
-  *   with reuse proving 912 of 1,009 clauses of one call by the clock, the
-  *   proof terms of two files of the tree r187-final-0e134b1a differed from
-  *   those of the same call with reuse proving none (INFRA-263,
+  * - These certificates are [search_witness_list]'s as far as the search of
+  *   a clause gives a value that depends on the clause alone. The prover's
+  *   memos (of the searches, of [dev_form], of [WithProof.subst]'s previous
+  *   call) are each stated to give the value a new computation would. They
+  *   do not give the same physical sharing: a hit returns nodes shared with
+  *   an earlier search, a miss fresh ones. That sharing reaches the proof
+  *   term, and so the bytes of the object file, though not its value. And
+  *   which earlier searches ran is decided by the budgets, through the
+  *   check's model searches and reuse. On speed-7.5, which budgeted by the
+  *   clock, two files of the tree r187-final-0e134b1a compiled to different
+  *   bytes from one run to another with equal values (INFRA-263,
   *   micromega-deterministic-20261103.md).
-  * - For the same reason the verdict is [search_witness_list]'s only as far
-  *   as each search's verdict does not depend on the searches before it.
-  *   Where the verdicts differ, it is not by the check or by reuse alone:
-  *   the check fails a call only at a clause that no certificate refutes,
-  *   and reuse proves a clause only with a certificate the kernel's checker
-  *   accepts and then searches that clause again in the second pass. A
-  *   failing call need not fail at the same clause, or with the same
-  *   failure ([Unknown] or a model) or exception: the check can fail it at a
-  *   clause after one on which the prover would fail or raise, and a clause
-  *   that reuse proves is not searched in the first pass.
+  * - On a call that [search_witness_list] fails or raises on, [witness_list]
+  *   need not fail at the same clause, or with the same failure ([Unknown]
+  *   or a model) or exception: the check can fail it at a clause after one
+  *   on which the prover would fail or raise, and a clause that reuse proves
+  *   is not searched in the first pass. The check fails a call only at a
+  *   clause that no certificate refutes, and reuse proves a clause only with
+  *   a certificate the kernel's checker accepts, and searches it again in
+  *   the second pass.
   * - No exception of the check or of reuse leaves the call but an interrupt
   *   ([Sys.Break], [Control.Timeout]): any other one, a stack overflow
   *   included, counts as nothing known of the clause, or as a try that did
@@ -1761,11 +1762,12 @@ let speculate default f =
   *   ([speculate]).
   * - All of this is decided by the budgets, which in the tactics read no
   *   clock (see [early_budget]): the same commands in the same order give the
-  *   same certificates, verdicts and failures on every run, on any machine
-  *   under any load. A call that ends on its own ends where the budgets
-  *   decide; an interrupt ends it where it arrives, and as the check and
-  *   reuse add work to the prover's, a call that [search_witness_list]
-  *   finishes just inside an enclosing [Timeout] can end outside it.
+  *   same certificates, sharing included, verdicts and failures on every run,
+  *   on any machine under any load. A call that ends on its own ends where
+  *   the budgets decide; an interrupt ends it where it arrives, and as the
+  *   check and reuse add work to the prover's, a call that
+  *   [search_witness_list] finishes just inside an enclosing [Timeout] can
+  *   end outside it.
   *
   * [clock], when given, replaces [Mutils.Work]'s count in the budgets with
   * its own (the clock mode: [Sys.time] budgets by processor seconds, as
