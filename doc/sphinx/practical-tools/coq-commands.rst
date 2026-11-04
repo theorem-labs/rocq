@@ -853,12 +853,13 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
 :-report-nodes-out *file*: After checking, save the public report node of
   each opaque constant in the environment whose declaring library is named
   by ``-report-nodes-digests``. Constants whose node cannot be computed,
-  whose opaque body cannot be read or whose references contain a name the
-  report must not print are omitted. The file groups nodes by library and
-  records its whole-file SHA256 digest. Its header identifies the format,
-  Rocq version and checker binary. Writing is atomic; a failed write is
-  silent and does not change any output, verdict or exit status. This option
-  does not require ``-statement-report``.
+  whose opaque body cannot be read, whose opaque handle is owned by another
+  library or whose references contain a name the report must not print are
+  omitted. The file groups nodes by library and records its whole-file
+  SHA256 digest. Its header identifies the format,
+  Rocq version and checker binary. Writing is atomic; a noncritical write
+  failure is silent and does not change any output, verdict or exit status.
+  This option does not require ``-statement-report``.
 :-report-nodes-digests *file*: The library digests for ``-report-nodes-out``,
   one ``<library-dirpath> <sha256-hex>`` per line, separated by one space.
   A library absent from this list is not saved. A malformed or unreadable
@@ -868,8 +869,11 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   not check that library, ``-report-nodes-admit`` names it with the same
   whole-file SHA256 digest, and the header matches this checker binary.
   A library selected for checking cannot use saved nodes, even if the
-  admission list names it. Missing, unreadable, malformed or incompatible
-  inputs are silently ignored. The report and checker verdict are unchanged
+  admission list names it. A saved node is also excluded if its opaque
+  handle points to another library's proof table: the declaring library's
+  digest does not authenticate that body. Missing, unreadable, malformed or
+  incompatible inputs are silently ignored; critical exceptions propagate.
+  The report and checker verdict are unchanged
   at every ``-j``. The build header is not authentication: the cache and
   admission list must arrive through a trusted transport.
 :-report-nodes-admit *file*: The libraries admitted unchecked for
@@ -877,8 +881,11 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   separated by one space. Use the verified SHA256 of the whole staged
   ``.vo`` file: Rocq's load digest does not cover its opaque proofs. A
   malformed or unreadable list disables reuse silently. Both input options
-  must be supplied. None of these options changes which libraries are
-  checked or admitted.
+  must be supplied. Cache inputs must be regular files; node files larger
+  than 4 GiB, digest lists larger than 64 MiB or lines longer than 64 KiB
+  are ignored. The payload's declared allocation sizes are checked against
+  the available bytes before decoding. None of these options changes which
+  libraries are checked or admitted.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
