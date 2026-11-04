@@ -1773,6 +1773,15 @@ let instr_log =
      | Some p ->
        Some (open_out_gen [Open_append; Open_creat] 0o644 (p ^ "." ^ string_of_int (Unix.getpid ()))))
 let instr_clock = Sys.getenv_opt "MICROMEGA_BUDGET_MODE" = Some "clock"
+(* CALIBRATION ONLY: in work mode, MICROMEGA_EARLY_SHARE replaces [early_share] in [fits] and
+   MICROMEGA_REUSE_SHARE replaces the 1/16 of [reuse_in_budget]; read once at load. The clock mode keeps
+   0.05 and 1/16. *)
+let instr_share var default =
+  match Sys.getenv_opt var with
+  | Some s when not instr_clock -> (match float_of_string_opt s with Some f -> f | None -> default)
+  | _ -> default
+let early_share_work = instr_share "MICROMEGA_EARLY_SHARE" early_share
+let reuse_share_work = instr_share "MICROMEGA_REUSE_SHARE" (1. /. 16.)
 let instr_calls = ref 0
 
 let witness_list ?clock ~reuse eq_cst prover l =
@@ -1886,7 +1895,7 @@ let witness_list ?clock ~reuse eq_cst prover l =
        does. *)
     let reuse_in_budget () =
       let mean_search = !search_t /. float_of_int (max 1 !searched_n) in
-      let lim = (!search_t +. (float_of_int !reused_n *. mean_search)) /. 16. in
+      let lim = (!search_t +. (float_of_int !reused_n *. mean_search)) *. reuse_share_work in
       let ok = !check_t <= lim in
       let r = if lim > 0. then !check_t /. lim else if !check_t > 0. then infinity else 0. in
       incr i_reuse_n;
@@ -1914,7 +1923,7 @@ let witness_list ?clock ~reuse eq_cst prover l =
        share of the check *)
     let fits step =
       let used = clock () -. start -. !search_t -. !check_t +. step in
-      let lim = early_share *. !search_t in
+      let lim = early_share_work *. !search_t in
       let ok = used < lim in
       let r = if lim > 0. then used /. lim else infinity in
       incr i_fits_n;
