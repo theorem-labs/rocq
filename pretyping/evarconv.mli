@@ -147,6 +147,10 @@ val set_solve_evars : (env -> evar_map -> constr -> evar_map * constr) -> unit
 (** Override default [evar_conv_x] algorithm. *)
 val set_evar_conv : unify_fun -> unit
 
+(** Whether unification runs the default algorithm with no canonical-solution hook active and no unification
+    debug output, so that repeating one of its calls on the same input has no effect but its result. *)
+val default_conversion : unit -> bool
+
 (** The default unification algorithm with evars and universes. *)
 val evar_conv_x : unify_fun
 
