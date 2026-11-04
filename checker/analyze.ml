@@ -152,7 +152,7 @@ end
 module type S =
 sig
   type input
-  val parse : input -> (data * obj LargeArray.t)
+  val parse : ?quiet:bool -> ?length:int -> input -> (data * obj LargeArray.t)
 end
 
 module Make(M : Input) =
@@ -163,17 +163,27 @@ open M
 type input = M.t
 
 let current_offset = ref 0
+let input_limit = ref None
+
+let require_bytes n = match !input_limit with
+  | Some limit when n < 0 || n > limit - !current_offset ->
+    failwith "Marshalled value exceeds its input"
+  | _ -> ()
 
 let input_byte chan =
+  let () = require_bytes 1 in
   let () = incr current_offset in
   input_byte chan
 
 let input_binary_int chan =
+  let () = require_bytes 4 in
   let () = current_offset := !current_offset + 4 in
   input_binary_int chan
 
 let input_char chan = Char.chr (input_byte chan)
-let input_string len chan = String.init len (fun _ -> input_char chan)
+let input_string len chan =
+  require_bytes len;
+  String.init len (fun _ -> input_char chan)
 
 (* Unsigned big-endian integer on [n] bytes, or [None] if it does not fit in
    a native int. *)
@@ -194,25 +204,38 @@ let input_nobjects n chan = match input_uint n chan with
 | Some n -> n
 | None -> failwith "Too many marshalled objects for this architecture"
 
-(* Returns the number of shared objects. The other header fields (data length
-   and sizes in words) are not needed to parse the data and may exceed the
-   native int range on 32-bit architectures. *)
-let parse_header chan =
+(* A bounded caller supplies the bytes available, including this header.
+   Check every allocation-driving field before allocating the object table. *)
+let parse_header ?length chan =
   let () = current_offset := 0 in
   let magic = input_string 4 chan in
-  if String.equal magic magic_number_small then
-    let _length = input_uint 4 chan in
-    let objects = input_nobjects 4 chan in
-    let _size32 = input_uint 4 chan in
-    let _size64 = input_uint 4 chan in
-    objects
-  else if String.equal magic magic_number_big then
-    let _reserved = input_uint 4 chan in
-    let _length = input_uint 8 chan in
-    let objects = input_nobjects 8 chan in
-    let _size64 = input_uint 8 chan in
-    objects
-  else failwith "Not marshalled data"
+  let data_length, objects, sizes =
+    if String.equal magic magic_number_small then
+      let data_length = input_uint 4 chan in
+      let objects = input_nobjects 4 chan in
+      let size32 = input_uint 4 chan in
+      let size64 = input_uint 4 chan in
+      data_length, objects, [size32; size64]
+    else if String.equal magic magic_number_big then
+      let reserved = input_uint 4 chan in
+      let data_length = input_uint 8 chan in
+      let objects = input_nobjects 8 chan in
+      let size64 = input_uint 8 chan in
+      if Option.has_some length && reserved <> Some 0 then failwith "Invalid Marshal header";
+      data_length, objects, [size64]
+    else failwith "Not marshalled data"
+  in
+  (match length with
+   | None -> ()
+   | Some available ->
+     let remaining = available - !current_offset in
+     if data_length <> Some remaining || remaining <= 0 || objects > remaining then
+       failwith "Invalid Marshal length or object count";
+     List.iter (function
+         | Some words when words >= objects && words / 8 <= remaining
+                           && (words / 8 <> remaining || words mod 8 = 0) -> ()
+         | _ -> failwith "Invalid Marshal heap size") sizes);
+  objects
 
 let input_int8s chan =
   let i = input_byte chan in
@@ -367,7 +390,7 @@ let parse_object ~quiet chan =
     let len = data land 0x1F in
     RString (input_string len chan)
   else if data > code_max then
-    assert false
+    if Option.has_some !input_limit then failwith "Invalid Marshal code" else assert false
   else match (Obj.magic data) with
   | CODE_INT8 ->
     RInt (input_int8s chan)
@@ -401,7 +424,10 @@ let parse_object ~quiet chan =
   | CODE_CUSTOM_FIXED ->
     begin match input_cstring chan with
     | "_j" -> Rint64 (input_intL chan)
-    | s -> if not quiet then eprint_raw (Printf.sprintf "Unhandled custom code: %s" s); assert false
+    | s ->
+      if Option.has_some !input_limit then failwith "Unsupported Marshal custom value";
+      if not quiet then eprint_raw (Printf.sprintf "Unhandled custom code: %s" s);
+      assert false
     end
   | CODE_DOUBLE_BIG ->
     RFloat64 (input_double_big chan)
@@ -417,14 +443,19 @@ let parse_object ~quiet chan =
   | CODE_DOUBLE_ARRAY64_BIG
   | CODE_DOUBLE_ARRAY64_LITTLE
   | CODE_CUSTOM_LEN
-    -> if not quiet then eprint_raw ~flush:true (Printf.sprintf "Unhandled code %04x\n" data); assert false
+    ->
+      if Option.has_some !input_limit then failwith "Unsupported Marshal code";
+      if not quiet then eprint_raw ~flush:true (Printf.sprintf "Unhandled code %04x\n" data);
+      assert false
 
-let parse ~quiet chan =
-  let size = parse_header chan in
+let parse ~quiet ?length chan =
+  let size = parse_header ?length chan in
   let memory = LargeArray.make size (Struct ((-1), [||])) in
   let current_object = ref 0 in
   let fill_obj = function
   | RPointer n ->
+    if Option.has_some length && (n <= 0 || n > !current_object) then
+      failwith "Invalid Marshal shared reference";
     let data = Ptr (!current_object - n) in
     data, None
   | RInt n ->
@@ -440,6 +471,7 @@ let parse ~quiet chan =
     let data = Atm tag in
     data, None
   | RBlock (tag, len) ->
+    require_bytes len;
     let data = Ptr !current_object in
     let nblock = Array.make len (Atm (-1)) in
     let () = LargeArray.set memory !current_object (Struct (tag, nblock)) in
@@ -476,11 +508,18 @@ let parse ~quiet chan =
   in
   let ans = [|Atm (-1)|] in
   let () = fill ans 0 [] in
+  (match length with
+   | Some available when !current_offset <> available || !current_object <> size ->
+     failwith "Invalid Marshal payload size"
+   | _ -> ());
   (ans.(0), memory)
 
-let parse ?(quiet = false) chan : _ * _ =
+let parse ?(quiet = false) ?length chan : _ * _ =
   NewProfile.profile "analyze"
-    (fun () -> parse ~quiet chan)
+    (fun () ->
+       input_limit := length;
+       Fun.protect ~finally:(fun () -> input_limit := None)
+         (fun () -> parse ~quiet ?length chan))
     ()
 
 end
