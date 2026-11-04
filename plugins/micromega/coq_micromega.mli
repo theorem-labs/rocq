@@ -81,8 +81,10 @@ val lia_witness_list :
     check: [early affordable fs] stands for the check of lia on the clause [fs] ([Some true]: the
     clause is known to fail; [Some false]: nothing is known; [None]: the check did not start, its
     first step not fitting [affordable], which takes its predicted cost). Each atom has size 1 for
-    the check's predictions. Its budgets count {!Mutils.Work}, as the tactics'. *)
+    the check's predictions. [checker], when given, replaces the kernel's checker in the tries of
+    reuse (to inject exceptions there). Its budgets count {!Mutils.Work}, as the tactics'. *)
 val early_witness_list :
+  ?checker:(Micromega.z Micromega.nFormula list -> Micromega.zArithProof -> bool) ->
   reuse:bool ->
   early:((float -> bool) -> Micromega.z Micromega.nFormula list -> bool option) ->
   (Micromega.z Micromega.nFormula list -> Certificate.zres) ->

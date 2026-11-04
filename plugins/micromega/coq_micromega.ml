@@ -1686,13 +1686,20 @@ let early_share = 0.05
     most a constant number of checks to a clause's search. *)
 let max_tries = 8
 
-(** [speculate default f] is [f ()], or [default] if [f] raises anything but an interrupt
-    ([Sys.Break], or [Control.Timeout] from an enclosing [Timeout]): for the work of [witness_list]
-    that [search_witness_list] does not do, the early-failure check and the tries of reuse, so that
-    no exception of theirs, a stack overflow or an exhausted memory included, reaches the call. *)
+(** [speculate default f] is [f ()], or [default] if [f] raises a noncritical exception
+    ([CErrors.noncritical]) or a stack overflow: for the work of [witness_list] that
+    [search_witness_list] does not do, the early-failure check and the tries of reuse. That work
+    can run on a clause the prover never reaches, so an exception of it counts as nothing known
+    of the clause, or as a try that did not prove it. A stack overflow is recovered by name: a
+    model search on a deep clause can overflow where stock never searches, and the prover then
+    decides the clause itself, as stock does. Every other critical exception ([Sys.Break],
+    [Control.Timeout], [Out_of_memory], [Assert_failure], [Match_failure], an anomaly, or any
+    exception while [Memprof_coq.is_interrupted ()]) propagates: it reports an interrupt or a
+    defect, which the compiler layer handles, not a fact about the clause. *)
 let speculate default f =
   try f () with
-  | e when (match e with Sys.Break | Control.Timeout -> false | _ -> true) -> default
+  | Stack_overflow when not (Memprof_coq.is_interrupted ()) -> default
+  | e when CErrors.noncritical e -> default
 
 (**
   * [witness_list ~reuse eq_cst prover l] finds a certificate for each
@@ -1753,11 +1760,11 @@ let speculate default f =
   *   stock raises. The check fails a call only at a clause that no
   *   certificate refutes, and reuse proves a clause only with a certificate
   *   the kernel's checker accepts, and searches it again in the second pass.
-  * - No exception of the check or of reuse leaves the call but an interrupt
-  *   ([Sys.Break], [Control.Timeout]): any other one, a stack overflow
-  *   included, counts as nothing known of the clause, or as a try that did
-  *   not prove it, and the prover decides the clause as without them
-  *   ([speculate]).
+  * - A noncritical exception or a stack overflow of the check or of reuse
+  *   counts as nothing known of the clause, or as a try that did not prove
+  *   it, and the prover decides the clause as without them. Every other
+  *   critical exception (an interrupt, an exhausted memory, a failed
+  *   assertion, an anomaly) leaves the call ([speculate]).
   * - All of this is decided by the budgets, which in the tactics read no
   *   clock, only [Mutils.Work]'s count (see [early_budget]). A call that ends
   *   on its own ends where the budgets decide; an interrupt ends it where it
@@ -3002,8 +3009,8 @@ let non_linear_prover_Z str o =
     cache holds nothing for it and the model search finds an integer model of it; [record] then adds
     [Unknown] as its result: what the prover gives on a clause that has no certificate. A clause whose
     proof the cache holds is not searched: the prover reads it. A lookup of the cache is a unit of
-    [Mutils.Work]. An exception of the check (of the cache, say) counts as nothing known, as for
-    any early-failure check ([speculate] in [witness_list]). *)
+    [Mutils.Work]. A noncritical exception of the check (of the cache, say), or a stack overflow,
+    counts as nothing known, as for any early-failure check ([speculate] in [witness_list]). *)
 let int_early (find, record) =
   { fails =
       (fun clock affordable ((o, l) as k) ->
@@ -3051,12 +3058,18 @@ let lia_witness_list ?clock ~reuse search cnf =
     {linear_Z with prover = (fun (_, l) -> search l); early = None}
     cnf
 
-let early_witness_list ~reuse ~early search cnf =
+let early_witness_list ?checker ~reuse ~early search cnf =
+  let check =
+    match checker with
+    | None -> zarith_reuse_check
+    | Some checker -> Option.map (fun c -> {c with checker}) zarith_reuse_check
+  in
   witness_list ~reuse Mc.Z.eqb
     { linear_Z with
       prover = (fun (_, l) -> search l)
     ; early =
-        Some {fails = (fun _ affordable (_, l) -> early affordable l); size = (fun _ -> 1)} }
+        Some {fails = (fun _ affordable (_, l) -> early affordable l); size = (fun _ -> 1)}
+    ; check }
     cnf
 
 (**
