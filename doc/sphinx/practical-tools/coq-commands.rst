@@ -937,8 +937,11 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   must be supplied. Cache inputs must be regular files; node files larger
   than 4 GiB, digest lists larger than 64 MiB or lines longer than 64 KiB
   are ignored. The payload's declared allocation sizes are checked against
-  the available bytes before decoding. None of these options changes which
-  libraries are checked or admitted.
+  the available bytes before decoding. Decoding preserves shared data,
+  limits module paths to 1,024 dotted components and bounds construction
+  and import work proportionally to the input graph's object count. Inputs
+  exceeding these optional-cache budgets are ignored silently. None of
+  these options changes which libraries are checked or admitted.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.

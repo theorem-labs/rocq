@@ -963,7 +963,7 @@ let existing_mbid env uid id dp =
   try module_body 0 (Environ.lookup_module (ModPath.MPfile dp) env); raise Exit
   with Found mbid -> mbid
 
-let decode_node_groups env (root, memory) : saved_node_group list =
+let decode_node_groups env (root, memory) =
   let open Analyze in
   let object_at = function
     | Ptr p -> LargeArray.get memory p
@@ -979,52 +979,91 @@ let decode_node_groups env (root, memory) : saved_node_group list =
     | Struct _ | Int64 _ | Float64 _ -> raise Exit
   in
   let boolean = function Int 0 -> false | Int 1 -> true | _ -> raise Exit in
-  let list decode data =
-    let rec loop acc = function
-      | Int 0 -> List.rev acc
-      | data ->
-        let fields = block 0 2 data in
-        let value = decode fields.(0) in
-        loop (value :: acc) fields.(1)
-    in
-    loop [] data
+  (* Bound both typed construction and subsequent import work. Memoization
+     preserves the wire DAG; this budget is a second line of defence if a
+     schema is interpreted in several contexts or a shared list is visited
+     repeatedly during admission. Exhaustion rejects only the cache. *)
+  let objects = LargeArray.length memory in
+  let remaining = ref (if objects >= max_int / 64 then max_int else 64 * (objects + 1)) in
+  let charge cells =
+    if cells > !remaining then raise Exit;
+    remaining := !remaining - cells
   in
   let memo table decode data = match data with
     | Ptr p ->
       (match Hashtbl.find_opt table p with
        | Some value -> value
-       | None -> let value = decode data in Hashtbl.add table p value; value)
+       | None ->
+         charge 1;
+         let value = decode data in
+         Hashtbl.add table p value; value)
     | Int _ | Atm _ | Fun _ -> decode data
+  in
+  (* Each schema gets its own typed suffix table. Build only the uncached
+     prefix, then attach it to the existing suffix without copying it. *)
+  let list decode =
+    let suffixes = Hashtbl.create 127 in
+    let rec finish pending tail = match pending with
+      | [] -> tail
+      | (p, value) :: rest ->
+        charge 1;
+        let values = value :: tail in
+        Hashtbl.add suffixes p values;
+        finish rest values
+    in
+    let rec loop pending = function
+      | Int 0 -> finish pending []
+      | Ptr p as data ->
+        (match Hashtbl.find_opt suffixes p with
+         | Some values -> finish pending values
+         | None ->
+           let fields = block 0 2 data in
+           let value = decode fields.(0) in
+           charge 2;
+           loop ((p, value) :: pending) fields.(1))
+      | Int _ | Atm _ | Fun _ -> raise Exit
+    in
+    loop []
   in
   let ids = Hashtbl.create 127 and paths = Hashtbl.create 127 in
   let modules = Hashtbl.create 127 and kernels = Hashtbl.create 127 in
   let constants = Hashtbl.create 127 and minds = Hashtbl.create 127 in
+  let mbids = Hashtbl.create 17 and inductives = Hashtbl.create 127 in
+  let references = Hashtbl.create 127 and vrefs = Hashtbl.create 127 in
+  let nodes = Hashtbl.create 127 and entries = Hashtbl.create 127 in
+  let groups = Hashtbl.create 127 in
   let bound = Hashtbl.create 17 in
   let id = memo ids (fun data ->
       let s = string data in
       if not (Id.is_valid s) then raise Exit;
       Id.of_string s) in
-  let dirpath = memo paths (fun data -> DirPath.make (list id data)) in
-  let mbid data =
+  let ids_list = list id in
+  let dirpath = memo paths (fun data -> DirPath.make (ids_list data)) in
+  let mbid = memo mbids (fun data ->
     let fields = block 0 3 data in
     let uid = integer fields.(0) and name = id fields.(1) and dp = dirpath fields.(2) in
     let key = uid, name, dp in
     match Hashtbl.find_opt bound key with
     | Some mbid -> mbid
-    | None -> let mbid = existing_mbid env uid name dp in Hashtbl.add bound key mbid; mbid
+    | None -> let mbid = existing_mbid env uid name dp in Hashtbl.add bound key mbid; mbid)
   in
   let rec modpath depth data =
     if depth > 1024 then raise Exit;
     memo modules (fun data -> match object_at data with
-        | Struct (0, [|dp|]) -> ModPath.MPfile (dirpath dp)
-        | Struct (1, [|name|]) -> ModPath.MPbound (mbid name)
-        | Struct (2, [|parent; label|]) -> ModPath.MPdot (modpath (depth + 1) parent, id label)
+        | Struct (0, [|dp|]) -> charge 1; ModPath.MPfile (dirpath dp), 0
+        | Struct (1, [|name|]) -> charge 1; ModPath.MPbound (mbid name), 0
+        | Struct (2, [|parent; label|]) ->
+          let parent, height = modpath (depth + 1) parent in
+          if height >= 1024 then raise Exit;
+          charge 1;
+          ModPath.MPdot (parent, id label), height + 1
         | _ -> raise Exit) data
   in
   let kername = memo kernels (fun data ->
       let fields = block 0 3 data in
       ignore (integer fields.(2));
-      KerName.make (modpath 0 fields.(0)) (id fields.(1))) in
+      let path, _ = modpath 0 fields.(0) in
+      KerName.make path (id fields.(1))) in
   let constant = memo constants (fun data -> match object_at data with
       | Struct (0, [|kn|]) -> Constant.make1 (kername kn)
       | Struct (1, [|user; canonical|]) -> Constant.make (kername user) (kername canonical)
@@ -1033,13 +1072,13 @@ let decode_node_groups env (root, memory) : saved_node_group list =
       | Struct (0, [|kn|]) -> MutInd.make1 (kername kn)
       | Struct (1, [|user; canonical|]) -> MutInd.make (kername user) (kername canonical)
       | _ -> raise Exit) in
-  let inductive data =
+  let inductive = memo inductives (fun data ->
     let fields = block 0 2 data in
     let index = integer fields.(1) in
     if index < 0 then raise Exit;
-    mind fields.(0), index
+    mind fields.(0), index)
   in
-  let reference data = match object_at data with
+  let reference = memo references (fun data -> match object_at data with
     | Struct (0, [|name|]) -> GlobRef.VarRef (id name)
     | Struct (1, [|name|]) -> GlobRef.ConstRef (constant name)
     | Struct (2, [|name|]) -> GlobRef.IndRef (inductive name)
@@ -1047,34 +1086,40 @@ let decode_node_groups env (root, memory) : saved_node_group list =
       let fields = block 0 2 name in
       let index = integer fields.(1) in
       if index <= 0 then raise Exit;
+      charge 1;
       GlobRef.ConstructRef (inductive fields.(0), index)
-    | _ -> raise Exit
+    | _ -> raise Exit)
   in
-  let vref data =
+  let vref = memo vrefs (fun data ->
     let fields = block 0 2 data in
     let view = match fields.(0) with Int 0 -> Public | Int 1 -> Implementation | _ -> raise Exit in
-    view, reference fields.(1)
+    view, reference fields.(1))
   in
-  let node data =
+  let refs_list = list vref and flags_list = list string in
+  let node = memo nodes (fun data ->
     let fields = block 0 4 data in
-    { refs = list vref fields.(0); axiom = boolean fields.(1);
-      flags = list string fields.(2); resolved = boolean fields.(3) }
+    { refs = refs_list fields.(0); axiom = boolean fields.(1);
+      flags = flags_list fields.(2); resolved = boolean fields.(3) })
   in
-  let entry data =
+  let entry = memo entries (fun data ->
     let fields = block 0 2 data in
-    constant fields.(0), node fields.(1)
+    constant fields.(0), node fields.(1))
   in
-  let group data =
+  let entry_list = list entry in
+  let group = memo groups (fun data ->
     let fields = block 0 3 data in
-    dirpath fields.(0), string fields.(1), list entry fields.(2)
+    dirpath fields.(0), string fields.(1), entry_list fields.(2))
   in
-  list group root
+  let group_list = list group in
+  let groups : saved_node_group list = group_list root in
+  groups, charge
 
 
-let reusable_node st kn n =
+let reusable_node ?(charge = fun _ -> ()) st kn n =
+  charge 1;
   not n.axiom && not n.resolved
   && printable_name st.env (GlobRef.ConstRef kn)
-  && List.for_all (fun (_, obj) -> printable_name st.env obj) n.refs
+  && List.for_all (fun (_, obj) -> charge 1; printable_name st.env obj) n.refs
 
 let read_report_nodes st ~checked (file, admit) =
   try
@@ -1082,7 +1127,7 @@ let read_report_nodes st ~checked (file, admit) =
     let admitted = read_node_digests admit in
     let header = report_nodes_header () in
     let ch, file_size = open_regular_input ~max_bytes:report_nodes_max_bytes file in
-    let groups : saved_node_group list =
+    let groups, charge =
       Fun.protect ~finally:(fun () -> close_in_noerr ch) (fun () ->
           List.iter (fun expected ->
               if not (String.equal (bounded_line ch report_list_max_line) expected) then raise Exit) header;
@@ -1094,6 +1139,7 @@ let read_report_nodes st ~checked (file, admit) =
     in
     let prefetched, cached, _ =
       List.fold_left (fun (prefetched, cached, seen) (dp, sha, nodes) ->
+          charge 1;
           if DirPath.Set.mem dp seen then raise Exit;
           let seen = DirPath.Set.add dp seen in
           let eligible =
@@ -1105,13 +1151,14 @@ let read_report_nodes st ~checked (file, admit) =
           if not eligible then prefetched, cached, seen
           else
             let prefetched, cached = List.fold_left (fun (prefetched, cached) (kn, n) ->
+                charge 1;
                 let belongs = match library_of_constant kn with
                   | Some lib -> DirPath.equal lib dp
                   | None -> false
                 in
                 match Environ.lookup_constant_opt kn st.env with
                 | Some { const_body = OpaqueDef o; _ }
-                  when belongs && opaque_owned_by dp o && reusable_node st kn n ->
+                  when belongs && opaque_owned_by dp o && reusable_node ~charge st kn n ->
                   if Cset_env.mem kn cached then raise Exit;
                   Cmap_env.add kn n prefetched, Cset_env.add kn cached
                 | Some _ | None -> prefetched, cached)

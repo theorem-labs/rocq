@@ -130,22 +130,49 @@ def linked(items):
         value = block(0, item, value)
     return value
 def encode(value):
-    if isinstance(value, int):
-        raw = bytes([0x40 + value]) if 0 <= value < 64 else b'\x02' + struct.pack('>i', value)
-        return raw, 0, 0, 0
-    if isinstance(value, str):
-        raw = value.encode()
-        prefix = bytes([0x20 + len(raw)]) if len(raw) < 32 else b'\x0a' + struct.pack('>I', len(raw))
-        return prefix + raw, 1, 1 + (len(raw) + 4) // 4, 1 + (len(raw) + 8) // 8
-    tag, fields = value
-    prefix = (bytes([0x80 + (len(fields) << 4) + tag]) if tag < 16 and len(fields) < 8
-              else b'\x08' + struct.pack('>I', (len(fields) << 10) | tag))
-    children = [encode(field) for field in fields]
-    allocated = int(bool(fields))
-    return (prefix + b''.join(child[0] for child in children),
-            allocated + sum(child[1] for child in children),
-            allocated * (1 + len(fields)) + sum(child[2] for child in children),
-            allocated * (1 + len(fields)) + sum(child[3] for child in children))
+    # Track object identity in Marshal's preorder allocation order. Keep the
+    # traversal iterative so the shared-prefix depth case needs no Python
+    # recursion-limit change, and never expand a shared subtree in the wire.
+    body = bytearray()
+    seen = {}
+    pending = [value]
+    objects = size32 = size64 = 0
+    while pending:
+        current = pending.pop()
+        if isinstance(current, int):
+            body.extend(bytes([0x40 + current]) if 0 <= current < 64
+                        else b'\x02' + struct.pack('>i', current))
+            continue
+        identity = id(current)
+        if identity in seen:
+            distance = objects - seen[identity]
+            if distance < 256:
+                body.extend(b'\x04' + struct.pack('>B', distance))
+            elif distance < 65536:
+                body.extend(b'\x05' + struct.pack('>H', distance))
+            else:
+                body.extend(b'\x06' + struct.pack('>I', distance))
+            continue
+        if isinstance(current, str):
+            seen[identity] = objects
+            objects += 1
+            raw = current.encode()
+            body.extend(bytes([0x20 + len(raw)]) if len(raw) < 32
+                        else b'\x0a' + struct.pack('>I', len(raw)))
+            body.extend(raw)
+            size32 += 1 + (len(raw) + 4) // 4
+            size64 += 1 + (len(raw) + 8) // 8
+            continue
+        tag, fields = current
+        if fields:
+            seen[identity] = objects
+            objects += 1
+            size32 += 1 + len(fields)
+            size64 += 1 + len(fields)
+        body.extend(bytes([0x80 + (len(fields) << 4) + tag]) if tag < 16 and len(fields) < 8
+                    else b'\x08' + struct.pack('>I', (len(fields) << 10) | tag))
+        pending.extend(reversed(fields))
+    return bytes(body), objects, size32, size64
 def save(name, value):
     body, objects, size32, size64 = encode(value)
     metadata = struct.pack('>IIIII', 0x8495a6be, len(body), objects, size32, size64)
@@ -160,6 +187,30 @@ save('typed-control', groups([]))
 # This block has the native string tag but is NOT an Analyze.String.
 # Generic Obj instantiation would fabricate an unsafe runtime string.
 save('native-string', groups([block(252, -1)]))
+
+# A compact DAG must retain sharing, not merely hit a budget and discard
+# everything: the ordinary proof node must still be consumed. The unknown
+# entries are ignored on import, but all their shared data is decoded first.
+ordinary = block(0, 0, 0, 0, 0)
+known_entry = block(0, constant, ordinary)
+unknown = block(0, block(0, block(0, path), 'not_declared', -1))
+shared_flags = linked(['shared-flag'] * 30_000)
+shared_node = block(0, 0, 0, shared_flags, 0)
+shared_entry = block(0, unknown, shared_node)
+distinct_entries = [block(0, unknown, block(0, 0, 0, shared_flags, 0)) for _ in range(30_000)]
+dag_entries = [known_entry] + distinct_entries + [shared_entry] * 30_000
+save('shared-dag', linked([block(0, path, sha, linked(dag_entries))]))
+
+# Each key adds only 512 new edges before reaching a memoized prefix. Its
+# total path height must nevertheless be checked before constructing a name.
+prefix = block(0, path)
+depth_entries = [known_entry]
+for chunk in range(3):
+    for edge in range(512):
+        prefix = block(2, prefix, 'x')
+    name = block(0, block(0, prefix, 'probe', -1))
+    depth_entries.append(block(0, name, ordinary))
+save('shared-prefix', linked([block(0, path, sha, linked(depth_entries))]))
 for name, body, objects, size32, size64 in [
         ('count-bomb', b'\x40', 0x40000000, 0x40000000, 0x40000000),
         ('block-bomb', b'\x08' + struct.pack('>I', (0x100000 << 10)), 1, 1, 1),
@@ -183,11 +234,23 @@ contained() {
    timeout 60s "$BIN"rocqchk -silent -o -j 1 -Q "$d" "$P" \
      -statement-report "$d/requests" "${carried[@]}" "$@") > "$d/$name.out" 2> "$d/$name.err"
   grep -q '^END STATEMENT REPORT$' "$d/$name.err"
-  same off1 "$name"
+  if test "${COQ_TEST_SUITE_STATEMENT_REPORT_CACHED_NODES-}" = 1; then
+    grep -v '^cached nodes [0-9]*$' "$d/$name.err" > "$d/$name.stripped"
+    diff -u "$d/off1.err" "$d/$name.stripped"
+    diff -u "$d/off1.out" "$d/$name.out"
+  else
+    same off1 "$name"
+  fi
 }
 for file in count-bomb block-bomb string-bomb native-string too-large; do
   contained "$file" -report-nodes-in "$d/$file" -report-nodes-admit "$d/admit"
 done
+COQ_TEST_SUITE_STATEMENT_REPORT_CACHED_NODES=1 \
+  contained shared-dag -report-nodes-in "$d/shared-dag" -report-nodes-admit "$d/admit"
+test "$(count shared-dag)" = 1
+COQ_TEST_SUITE_STATEMENT_REPORT_CACHED_NODES=1 \
+  contained shared-prefix -report-nodes-in "$d/shared-prefix" -report-nodes-admit "$d/admit"
+test "$(count shared-prefix)" = 0
 mkfifo "$d/fifo"
 contained fifo-cache -report-nodes-in "$d/fifo" -report-nodes-admit "$d/admit"
 contained fifo-list -report-nodes-in "$d/nodes" -report-nodes-admit "$d/fifo"
