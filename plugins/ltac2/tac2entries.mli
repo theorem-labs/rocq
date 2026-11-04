@@ -63,8 +63,12 @@ type 'glb syntax_class_decl = {
   interp_synclass : 'glb -> syntax_class_rule;
 }
 
-val register_syntax_class : Id.t -> _ syntax_class_decl -> unit
-(** Create a new syntax class with the provided name *)
+val register_syntax_class : ?strip:('glb -> 'glb) -> Id.t -> 'glb syntax_class_decl -> unit
+(** Create a new syntax class with the provided name. [strip] is the
+    location stripper (see {!LocStrip}) of the internalized argument
+    ['glb]: it must replace every source location and change nothing else.
+    Without it, the interface key of a library that holds a notation using
+    this class cannot be computed. *)
 
 type syntax_class
 
@@ -73,6 +77,11 @@ val intern_syntax_class : sexpr -> used_levels * syntax_class
 
 val interp_syntax_class : syntax_class -> syntax_class_rule
 (** Use this to interpret the syntax class arguments for interpretation functions *)
+
+val strip_syntax_class : syntax_class -> syntax_class
+(** The location stripper of an internalized syntax class: applies the
+    stripper registered for its class. Raises [LocStrip.Unknown] when the
+    class has none. *)
 
 (** {5 Inspecting} *)
 

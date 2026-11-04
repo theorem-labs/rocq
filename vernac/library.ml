@@ -112,6 +112,29 @@ type library_t = {
 
 type load_status = FullLoaded | SafeLoaded
 
+(* [-location-free-label]: store the location-free label as the library's
+   digest, the attempted-resolution records and the keep rule's facts in the
+   library, and read the closures each dependency stored. Off (the default),
+   coqc reads and writes stock's bytes. *)
+let location_free_label = ref false
+
+(* Under [-location-free-label], the assumption closures each interned
+   library's [keepfacts] segment stores ([KeepFacts.t.assumptions]), with the
+   digest of its library segment, read with its other segments
+   ([intern_from_file]): [KeepFacts.compute] takes a constant's closure from
+   here instead of walking it. Each intern of a library sets or removes its
+   entry once the file is known to hold the library asked for
+   ([take_interned], after [intern_library]'s name check), so the entry is
+   that of the file interned last for that name, which is the file loaded (a
+   loaded library is not interned again, and a file that holds another name,
+   such as a loaded library's, writes nothing), and the reader also requires
+   the digest the loaded library has. Not a field of [library_t], whose type
+   the REQUIRE kind's payload reaches (misc/vo-format.sh prints it), and not
+   synchronized, like [libraries_filename_table]. *)
+let stored_closures_table :
+  (Safe_typing.vodigest * (string * string list) list) DirPath.Map.t ref =
+  ref DirPath.Map.empty
+
 (* This is a map from names to loaded libraries *)
 let libraries_table : (load_status * library_t) DirPath.Map.t ref =
   Summary.ref DirPath.Map.empty ~stage:Summary.Stage.Synterp ~name:"LIBRARY"
@@ -191,6 +214,41 @@ let opaque_tables =
 let add_opaque_table dp st =
   opaque_tables := DirPath.Map.add dp st !opaque_tables
 
+(* Where each interned library's opaque proofs are on disk. [opaque_tables]
+   is per-process: a worker process ([par:] runs its tactic in a rocqworker
+   under coqc, and an [-async-proofs] proof runs in one) gets the state but
+   interns no library, so a foreign opaque body read there (a plugin's
+   [Global.body_of_constant], coq-hammer's [sunfolding]) found no table and
+   raised [Not_found]. So the handles are part of the state the worker gets
+   ([opaque_disk_handles], a summary entry), and the worker registers a
+   table from them on first use ([stored_opaque]). [fetch_delayed]
+   unmarshals the segment and then compares the digest stored after it with
+   the one recorded when the library was loaded, so a file rebuilt since with
+   other opaque proofs is refused, never used. (This holds for
+   every worker, too: the keep rule's records from a worker reach the
+   library through the opacity log, and the read they record must then
+   succeed there as in the compiling process.)
+
+   A summary entry is rolled back when a module or a section closes, and a
+   library's intern fills [opaque_handles_interned] only once
+   ([take_interned]), so the entry is also filled where the loaded library
+   itself is registered for the state:
+   [register_one_syntax], which the REQUIRE-SYNTAX object runs when it is
+   cached and when it is replayed (at [End M] after a [Require] inside [M]),
+   from [opaque_handles_interned], which is per-process and never rolled
+   back. The handle is not a field of [library_t], whose type the REQUIRE
+   kind's payload reaches (misc/vo-format.sh prints it). *)
+let opaque_handles_interned : Opaques.opaque_disk delayed DirPath.Map.t ref =
+  ref DirPath.Map.empty
+
+let opaque_disk_handles : Opaques.opaque_disk delayed DirPath.Map.t ref =
+  Summary.ref DirPath.Map.empty ~stage:Summary.Stage.Synterp ~name:"LIBRARY-OPAQUE-HANDLES"
+
+let publish_opaque_handle dp =
+  match DirPath.Map.find_opt dp !opaque_handles_interned with
+  | Some f -> opaque_disk_handles := DirPath.Map.add dp f !opaque_disk_handles
+  | None -> ()
+
 let access_table what tables dp i =
   let t = match DirPath.Map.find dp !tables with
     | Fetched t -> t
@@ -214,8 +272,13 @@ let stored_opaque o =
   let (_sub, _ci, dp, i) = Opaqueproof.repr o in
   if DirPath.equal dp (Global.current_dirpath ()) then
     Opaques.get_current_opaque i
-  else
+  else begin
+    (if not (DirPath.Map.mem dp !opaque_tables) then
+       match DirPath.Map.find_opt dp !opaque_disk_handles with
+       | Some f -> add_opaque_table dp (ToFetch f)
+       | None -> ());
     access_table "opaque proofs" opaque_tables dp i
+  end
 
 let access_opaque_table o =
   let (sub, ci, _, _) = Opaqueproof.repr o in
@@ -307,15 +370,48 @@ let mk_library sd md digests vm =
     library_vm = vm;
   }
 
-let mk_intern_library sum lib digest_lib proofs vm =
-  add_opaque_table sum.md_name (ToFetch proofs);
-  let open Safe_typing in
-  mk_library sum lib (Dvo_or_vi digest_lib) vm
+(* The tables a library's intern fills, under the name its file holds:
+   [libraries_filename_table], [opaque_tables], [opaque_handles_interned] and,
+   under [-location-free-label], [stored_closures_table]. None of them is
+   synchronized, so a [Fail Require] does not roll them back. [intern_from_file]
+   therefore only reads the file; [intern_library] fills them
+   ([take_interned]) once the file is known to hold the library asked for.
+   Before, a failed Require of a file that holds a loaded library's name (for
+   example a copy of that library's file built with other proofs, at another
+   logical path) replaced the loaded library's entries with that file's: its
+   stored closures, which the next save of a dependent took as the loaded
+   library's, and its opaque proofs. A failed Require now leaves a loaded
+   library's entries as they were. It is not free of effects: when a
+   library of its closure passed the name check and a later one failed, the
+   entries of the first stay, under a name that is not loaded, until a
+   later intern of that name fills them again. *)
+let interned_pending : (library_t * (unit -> unit)) option ref = ref None
+
+(* The table writes of [m]'s intern, or nothing for a library this process
+   did not read last. Taking empties the slot, before the name check, and
+   so does a failed intern ([intern_library]). A record that never reaches
+   [take_interned] (an exception after [intern_from_file] returned, or an
+   [Intern.t] that returns another record) stays in the slot until the next
+   intern; that is harmless, since only that exact record can take it. *)
+let take_interned m =
+  let fill = match !interned_pending with
+    | Some (m', fill) when m' == m -> fill
+    | Some _ | None -> ignore
+  in
+  interned_pending := None;
+  fill
 
 let summary_seg : seg_sum ObjFile.id = ObjFile.make_id "summary"
 let library_seg : seg_lib ObjFile.id = ObjFile.make_id "library"
 let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 let vm_seg : seg_vm ObjFile.id = Vmlibrary.vm_segment
+(* [-location-free-label] only: the keep rule's facts ([KeepFacts]). The label
+   does not cover this segment. It is written with no digest of its own
+   ([save_library_base]), so its stored digest is the MD5 of its bytes, which
+   rocq-library-label checks before it reads the segment; coqc reads it under
+   the flag as it reads the other segments ([intern_from_file]); rocqchk does
+   not read it. *)
+let keepfacts_seg : KeepFacts.t ObjFile.id = ObjFile.make_id "keepfacts"
 
 module Intern = struct
   module Provenance = struct
@@ -333,11 +429,40 @@ let intern_from_file file =
   let lmd, digest_lmd = ObjFile.marshal_in_segment ch ~segment:library_seg in
   let del_opaque, _ = in_delayed file ch ~segment:opaques_seg in
   let vmlib = Vmlibrary.load lsd.md_name ~file ch in
+  (* Under [-location-free-label] only: the closures the library stored, read
+     now, from the file whose other segments are loaded
+     ([stored_closures_table]). Read unvalidated, as the other segments are: a
+     change to a RELEASED [KeepFacts.t] needs a vo_magic bump, which refuses
+     older files (the vo-format chain in vernac/libkeyObjects.mli). Its query
+     shape changed before release with none (no released build ever wrote
+     this segment); a file of that unreleased shape stays safe to read here,
+     since this takes only [assumptions], whose shape did not change, and
+     never touches the queries; rocq-library-label, which reads them,
+     validates the segment first. *)
+  let closures =
+    if !location_free_label then
+      Some (match ObjFile.marshal_in_segment ch ~segment:keepfacts_seg with
+          | ({ KeepFacts.assumptions; _ }, _) -> assumptions
+          | exception Not_found -> None)
+    else None
+  in
   ObjFile.close_in ch;
   System.check_caml_version ~caml:lsd.md_ocaml ~file;
-  register_library_filename lsd.md_name file;
   Library_info.warn_library_info ~transitive:true lsd.md_name lsd.md_info;
-  mk_intern_library lsd lmd digest_lmd del_opaque vmlib
+  let m = mk_library lsd lmd (Safe_typing.Dvo_or_vi digest_lmd) vmlib in
+  let fill () =
+    register_library_filename lsd.md_name file;
+    add_opaque_table lsd.md_name (ToFetch del_opaque);
+    opaque_handles_interned := DirPath.Map.add lsd.md_name del_opaque !opaque_handles_interned;
+    match closures with
+    | None -> ()
+    | Some (Some a) ->
+      stored_closures_table :=
+        DirPath.Map.add lsd.md_name (Safe_typing.Dvo_or_vi digest_lmd, a) !stored_closures_table
+    | Some None -> stored_closures_table := DirPath.Map.remove lsd.md_name !stored_closures_table
+  in
+  interned_pending := Some (m, fill);
+  m
 
 let intern_from_file file =
   let provenance = ("file", file) in
@@ -389,9 +514,12 @@ let rec intern_library ~intern (needed, contents as acc) dir =
       (* We intern the library, and then intern the deps *)
       match intern dir with
       | Ok m, provenance ->
+        let fill = take_interned m in
         check_library_expected_name ~provenance dir m.library_name;
+        fill ();
         intern_library_deps ~intern acc dir m
       | Error iexn, provenance ->
+        interned_pending := None;
         error_in_intern provenance dir iexn
 
 and intern_library_deps ~intern (needed, contents) dir m =
@@ -595,7 +723,9 @@ let register_safe_library m =
    are only imported kernel-side. Interleaving the two in one object preserves
    the order (a full library's object replay may rely on an earlier one). *)
 
-let register_one_syntax (mode, root, m) = match mode with
+let register_one_syntax (mode, root, m) =
+  publish_opaque_handle m.library_name;
+  match mode with
   | ModeFull -> register_library_syntax ~root m
   | ModeSafe -> register_safe_library_syntax ~root m
 
@@ -625,7 +755,11 @@ let in_require : require_obj -> obj =
      load_function = load_require;
      open_function = (fun _ _ -> assert false);
      discharge_function = (fun o -> Some o);
-     classify_function = (fun o -> Anticipate) }
+     classify_function = (fun o -> Anticipate);
+     (* An [Anticipate] object: [Declaremods.end_library] drops it from
+        the segments a library stores ([drop_anticipate]), so the label
+        never reads one. *)
+     interface_key = Not_in_key }
 
 let cache_require_syntax needed =
   List.iter register_one_syntax needed
@@ -645,7 +779,9 @@ let in_require_syntax : require_obj_syntax -> obj =
      load_function = load_require_syntax;
      open_function = (fun _ _ -> assert false);
      discharge_function = (fun o -> Some o);
-     classify_function = (fun o -> Anticipate) }
+     classify_function = (fun o -> Anticipate);
+     (* Dropped from the stored segments like REQUIRE above. *)
+     interface_key = Not_in_key }
 
 (* Require libraries, import them if [export <> None], mark them for export
    if [export = Some true] *)
@@ -712,21 +848,41 @@ type 'doc todo_proofs =
 
 (* EJGA: would be nice maybe to have a version that performs extra
    cleanup in the case the computation raises? *)
-let save_library_base f sum lib proofs vmlib =
+let save_library_base f sum lib ~label ?keepfacts proofs vmlib =
   try
     let open Memprof_coq.Resource_bind in
     let& ch = Memprof_coq.Masking.with_resource ~acquire:raw_extern_library ~release:ObjFile.close_out f in
     ObjFile.marshal_out_segment ch ~segment:summary_seg sum;
-    ObjFile.marshal_out_segment ch ~segment:library_seg lib;
+    ObjFile.marshal_out_segment ?hash:label ch ~segment:library_seg lib;
     ObjFile.marshal_out_segment ch ~segment:opaques_seg proofs;
-    ObjFile.marshal_out_segment ch ~segment:vm_seg vmlib
+    ObjFile.marshal_out_segment ch ~segment:vm_seg vmlib;
+    Option.iter (ObjFile.marshal_out_segment ch ~segment:keepfacts_seg) keepfacts
   with exn ->
     let iexn = Exninfo.capture exn in
     Sys.remove f;
     Exninfo.iraise iexn
 
+let set_location_free_label b =
+  location_free_label := b;
+  Attempts.set_enabled b;
+  OpacityLog.set_enabled b
+
 (* This is the basic vo save structure *)
 let save_library_struct ~output_native_objects dir =
+  (* Under [-location-free-label], the attempted resolutions that nothing
+     else in the library records are stored in it ([Attempts]): only a
+     library that made such an attempt gets the object. Off, nothing was
+     logged ([Attempts.set_enabled]). *)
+  let () =
+    (* The libraries loaded in the final state ([libraries_loaded_list], from
+       which the dependencies are written; [library_is_loaded] cannot tell). *)
+    let loaded dir =
+      List.exists (fun (_, d) -> DirPath.equal d dir) !libraries_loaded_list in
+    if !location_free_label then
+      Option.iter (fun t -> Lib.add_leaf (Attempts.inject t))
+        (Attempts.finish ~loaded ~loaded_plugin:Mltop.is_loaded_module);
+    Attempts.reset ()
+  in
   let md_compiled, md_objects, md_syntax_objects, vmlib, ast, info =
     Declaremods.end_library ~output_native_objects dir in
   let sd =
@@ -745,12 +901,37 @@ let save_library_struct ~output_native_objects dir =
     error_recursively_dependent_library dir;
   sd, md, vmlib, ast
 
+(* The summary as the label reads it. The pattern names every field of
+   [summary_disk], and warning 9 (a field left out of a record pattern) is an
+   error here: a field added to the summary stops the build until this says
+   whether the label covers it. [md_ocaml] is [Coq_config.caml_version]
+   (save_library_struct), which the label's header holds. *)
+let[@warning "@9"] label_summary
+    { md_name; md_deps; md_ocaml = _; md_info; md_safe_deps } : LibkeyObjects.summary =
+  { LibkeyObjects.name = md_name; deps = md_deps; safe_deps = md_safe_deps; info = md_info }
+
+(* The location-free label (LibkeyObjects, 32 bytes) of a library's summary
+   and [library] segment, or why it has none. *)
+let label_result (sd : summary_disk) (md : library_disk) =
+  LibkeyObjects.label_result ~summary:(label_summary sd) ~compiled:md.md_compiled
+    ~syntax:md.md_syntax_objects ~objects:md.md_objects
+
+(* The digest a library's file stores for its [library] segment, and that
+   its dependents record, under [-location-free-label]: the first 16 bytes
+   of the location-free label. [None] without the flag, or when the library
+   has no label: the MD5 of the segment's bytes, as stock writes it. Stock
+   [coqc] and [rocqchk] only compare stored copies of this digest, so they
+   read a file written either way. *)
+let library_label sd md =
+  if not !location_free_label then None
+  else Option.map Libkey.stored (Result.to_option (label_result sd md))
+
 let save_library dir : library_t =
   let sd, md, vmlib, _ast = save_library_struct ~output_native_objects:false dir in
-  (* Digest for .vo files is on the md part, for now we also play it
-     safe when we work on-memory and compute the digest for the lib
-     part, even if that's slow. Better safe than sorry. *)
-  let digest = Marshal.to_string md [] |> Digest.string in
+  let digest = match library_label sd md with
+    | Some label -> label
+    | None -> Marshal.to_string md [] |> Digest.string
+  in
   mk_library sd md (Dvo_or_vi digest) (Vmlibrary.inject vmlib)
 
 let save_library_to todo_proofs ~output_native_objects dir f =
@@ -770,13 +951,61 @@ let save_library_to todo_proofs ~output_native_objects dir f =
   let () = assert (not (Future.UUIDSet.is_empty except) ||
     Safe_typing.is_joined_environment (Global.safe_env ()))
   in
+  (* The keep rule's facts, while the library's own constants and opaque
+     proofs are still in the environment. A [.vos] (proofs left out) gets none,
+     even with no proof left out, since its closure would miss the bodies not
+     compiled. A loaded library's stored closures stand in for walking its
+     constants ([KeepFacts.compute]). *)
+  let stored dp = match find_library dp, DirPath.Map.find_opt dp !stored_closures_table with
+    | Some (_, m), Some (digest, a)
+      when Safe_typing.digest_match ~actual:m.library_digests ~required:digest -> Some a
+    | _ -> None
+  in
+  let keepfacts = match todo_proofs with
+    | ProofsTodoNone when !location_free_label ->
+      (* [None] too when the opacity log could not be read back whole *)
+      KeepFacts.compute ~access:indirect_accessor ~stored ~self:dir
+    | ProofsTodoNone | ProofsTodoSomeEmpty _ -> None
+  in
+  OpacityLog.reset ();
   let sd, md, vmlib, ast = save_library_struct ~output_native_objects dir in
   (* Writing vo payload *)
-  save_library_base f sd md opaque_table vmlib;
+  save_library_base f sd md ~label:(library_label sd md) ?keepfacts opaque_table vmlib;
   (* Writing native code files *)
   if output_native_objects then
     let fn = Filename.dirname f ^"/"^ Nativecode.mod_uid_of_dirpath dir in
     Nativelib.compile_library ast fn
+
+type file_label = {
+  name : DirPath.t;
+  stored : string;
+  segment_md5 : string Lazy.t;
+  label : (string, string) result Lazy.t;
+  attempts : Attempts.t option;
+  axiom_report : LibkeyObjects.axiom_report Lazy.t;
+  keep_facts_segment : KeepFacts.t ObjFile.segment option;
+}
+
+let read_file_label f =
+  let ch = raw_intern_library f in
+  let sd, md, stored, seg, keep_facts_segment = Fun.protect ~finally:(fun () -> ObjFile.close_in ch) (fun () ->
+      let sd, _ = ObjFile.marshal_in_segment ch ~segment:summary_seg in
+      let md, stored = ObjFile.marshal_in_segment ch ~segment:library_seg in
+      (* Where the keepfacts segment is, not its value: the reader validates
+         it before it unmarshals it (see the .mli). *)
+      let keep_facts_segment =
+        try Some (ObjFile.get_segment ch ~segment:keepfacts_seg)
+        with Not_found -> None in
+      sd, md, stored, ObjFile.get_segment ch ~segment:library_seg, keep_facts_segment)
+  in
+  let segment_md5 = lazy (In_channel.with_open_bin f (fun ic ->
+      In_channel.seek ic seg.ObjFile.pos;
+      Digest.channel ic (Int64.to_int seg.ObjFile.len)))
+  in
+  { name = sd.md_name; stored; segment_md5; label = lazy (label_result sd md);
+    attempts = Attempts.find md.md_objects;
+    axiom_report = lazy (LibkeyObjects.axiom_report ~compiled:md.md_compiled);
+    keep_facts_segment }
 
 let get_used_load_paths () =
   String.Set.elements

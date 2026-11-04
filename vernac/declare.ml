@@ -448,6 +448,31 @@ let discharge_constant obj = Some obj
 
 let classify_constant cst = Libobject.Substitute
 
+(* The label view of a constant object (label versions 3 and up blind the
+   axiom-or-opaque-proof distinction of a constant's body).
+   - [cst_loc] is the declaration's source location ([Nametab.set_cci_src_loc]):
+     stripped, like every location.
+   - [cst_kind] is the documentation kind ([Dumpglob.add_constant_kind]): an
+     [Axiom]/[Parameter] is [IsAssumption], a [Qed] lemma [IsProof], a
+     [Definition] [IsDefinition], and so on. The library's own [.vo] stores
+     it and a dependent loads it, but in the dependent it reaches only the
+     glob output and vernacular output ([Search is:<kind>] filters on it,
+     vernac/search.ml:85-91), never the [.vo] the dependent writes, and a
+     compile can read printed output only through [Redirect] (a command's
+     output into a file) and a [Load] of that file, which a caller's source
+     rule may refuse. It is the one place, besides the compiled body, where an
+     [Admitted] axiom and a [Qed] proof of the same statement differ (the
+     body the label blinds in [LibkeyObjects.blind_constant]). So the view
+     reads a single canonical kind, which is what makes [Admitted <-> Qed]
+     keep the label. What distinguishes a transparent definition from an
+     opaque proof or an axiom is the compiled body (its transparency class),
+     which the label does read.
+   - [cst_locl] (whether the constant is exported) and [cst_warn] (its
+     deprecation, which a dependent's use replays as a warning) a dependent does
+     observe, so the view keeps them. *)
+let strip_constant obj =
+  { obj with cst_loc = LocStrip.loc_opt obj.cst_loc; cst_kind = Decls.(IsProof Theorem) }
+
 let (objConstant : (Id.t * constant_obj) Libobject.Dyn.tag) =
   let open Libobject in
   declare_named_object_full { (default_object "CONSTANT") with
@@ -456,7 +481,8 @@ let (objConstant : (Id.t * constant_obj) Libobject.Dyn.tag) =
     open_function = filtered_open open_constant;
     classify_function = classify_constant;
     subst_function = ident_subst_function;
-    discharge_function = discharge_constant }
+    discharge_function = discharge_constant;
+    interface_key = Key_stripped strip_constant }
 
 let inConstant v = Libobject.Dyn.Easy.inj v objConstant
 
@@ -724,7 +750,9 @@ type variable_declaration =
 let objVariable : Id.t Libobject.Dyn.tag =
   let open Libobject in
   declare_object_full { (default_object "VARIABLE") with
-    classify_function = (fun _ -> Dispose)}
+    classify_function = (fun _ -> Dispose);
+    (* An identifier: no source location. *)
+    interface_key = Key_as_is}
 
 let inVariable v = Libobject.Dyn.Easy.inj v objVariable
 

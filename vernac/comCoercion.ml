@@ -256,6 +256,9 @@ let inCoercion : coe_info_typ -> obj =
     subst_function = (fun (subst,c) -> subst_coercion subst c);
     classify_function = classify_coercion;
     discharge_function = discharge_coercion;
+    (* Global references, classes (kernel names), flags and a count: no
+       source location. *)
+    interface_key = Key_as_is;
   }
 
 let declare_coercion coef ?(local = false) ~reversible ~isid ~src:cls ~target:clt ~params:ps () =

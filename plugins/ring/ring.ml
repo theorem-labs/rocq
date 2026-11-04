@@ -410,10 +410,19 @@ let subst_th (subst,th) =
       ring_post_tac = posttac' }
 
 
+(* Interface key: only the four glob tactics can hold locations; the
+   other fields are a Names.Id.t and kernel terms. *)
+let strip_ring_info th =
+  { th with
+    ring_cst_tac = Tacstrip.strip_tactic th.ring_cst_tac;
+    ring_pow_tac = Tacstrip.strip_tactic th.ring_pow_tac;
+    ring_pre_tac = Tacstrip.strip_tactic th.ring_pre_tac;
+    ring_post_tac = Tacstrip.strip_tactic th.ring_post_tac }
+
 let theory_to_obj : ring_info -> obj =
-  declare_object @@ global_object_nodischarge "tactic-new-ring-theory"
+  declare_object { (global_object_nodischarge "tactic-new-ring-theory"
     ~cache:add_entry
-    ~subst:(Some subst_th)
+    ~subst:(Some subst_th)) with interface_key = Key_stripped strip_ring_info }
 
 let setoid_of_relation env sigma a r =
   try
@@ -840,10 +849,17 @@ let subst_th (subst,th) =
       field_pre_tac = pretac';
       field_post_tac = posttac' }
 
+let strip_field_info th =
+  { th with
+    field_cst_tac = Tacstrip.strip_tactic th.field_cst_tac;
+    field_pow_tac = Tacstrip.strip_tactic th.field_pow_tac;
+    field_pre_tac = Tacstrip.strip_tactic th.field_pre_tac;
+    field_post_tac = Tacstrip.strip_tactic th.field_post_tac }
+
 let ftheory_to_obj : field_info -> obj =
-  declare_object @@ global_object_nodischarge "tactic-new-field-theory"
+  declare_object { (global_object_nodischarge "tactic-new-field-theory"
     ~cache:add_field_entry
-    ~subst:(Some subst_th)
+    ~subst:(Some subst_th)) with interface_key = Key_stripped strip_field_info }
 
 let field_equality env sigma r inv req =
   match EConstr.kind sigma req with

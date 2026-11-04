@@ -33,7 +33,11 @@ val segments : in_handle -> Obj.t segment CString.Map.t
 
 val open_out : file:string -> out_handle
 val close_out : out_handle -> unit
-val marshal_out_segment : out_handle -> segment:'a id -> 'a -> unit
+val marshal_out_segment : ?hash:Digest.t -> out_handle -> segment:'a id -> 'a -> unit
+(** [marshal_out_segment ~hash oh ~segment v] writes [v] as [segment] and
+    stores [hash] as its digest, in the segment table and after the data.
+    Without [hash], the digest is the MD5 of the bytes written. Readers only
+    compare the two stored copies; none recomputes the digest. *)
 val marshal_out_binary : out_handle -> segment:'a id -> out_channel * (unit -> unit)
 (** [marshal_out_binary oh segment] is a low level, stateful, API returning
     [oc, stop]. Once called no other API can be used on the same [oh] and only
