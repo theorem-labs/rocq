@@ -577,7 +577,7 @@ module TypingMemo = struct
     mutable vars : int Names.Id.Map.t;
   }
   let active () =
-    Evarconv.default_conversion () && Reductionops.reduction_is_plain () && CClosure.conv_is_initial ()
+    Evarconv.default_conversion () && Reductionops.reduction_is_plain ()
     && not (NewProfile.is_profiling ())
   let create () =
     if active () then

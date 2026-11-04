@@ -210,6 +210,3 @@ val get_ref_mask : clos_infos -> clos_tab -> table_key -> bool array
 
 (** Hook for Reduction *)
 val set_conv : (clos_infos -> clos_tab -> fconstr -> fconstr -> bool) -> unit
-
-(** Whether [set_conv] ran at most once: only Conversion's own installation. *)
-val conv_is_initial : unit -> bool
