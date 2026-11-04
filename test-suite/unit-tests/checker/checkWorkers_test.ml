@@ -584,13 +584,15 @@ let () = add_test "Forked: a process stalled in the middle of an answer is dropp
 
 (* The process sends its whole last answer (heap budget of one byte), then
    stops instead of exiting: its answer counts, nothing waits for it, and
-   [stop] kills it. *)
+   [stop] kills it. The item deadline only turns a process that did not
+   retire, and so stopped while still given items, into a failure rather than
+   a wait without end. *)
 let () = add_test "Forked: a process that stops instead of exiting is killed" (fun () ->
     with_answer_writer ~part:Fun.id ~stall:(fun () -> Unix.kill (Unix.getpid ()) Sys.sigstop)
       (fun () ->
          let k = 20 in
          let t0 = Unix.gettimeofday () in
-         let out = run_all ~heap_budget:1 4 (fun i -> Array.length (Array.make 1000 i) + i - 999) k in
+         let out = run_all ~heap_budget:1 ~item_timeout:20. 4 (fun i -> Array.length (Array.make 1000 i) + i - 999) k in
          let took = Unix.gettimeofday () -. t0 in
          assert_bool (Printf.sprintf "it took %.1f s" took) (took < 30.);
          assert_equal ~printer:pr_results (Array.init k (fun i -> Some (i + 1))) out;
@@ -642,7 +644,7 @@ let () = add_test "Forked: retired processes stay within the pool" (fun () ->
          let most = ref 0 in
          let count () = most := max !most (children ()) in
          let f i = Array.length (Array.make 1000 i) + i - 999 in
-         let s = CheckWorkers.Forked.start ~heap_budget:1 n f k in
+         let s = CheckWorkers.Forked.start ~heap_budget:1 ~item_timeout:20. n f k in
          Fun.protect ~finally:(fun () -> CheckWorkers.Forked.stop s) (fun () ->
              count ();
              while CheckWorkers.Forked.poll ~wait:0.05 s (fun i v -> out.(i) <- Some v) do
