@@ -840,19 +840,55 @@ let rec library_of_modpath = function
 
 let library_of_constant kn = library_of_modpath (Constant.modpath kn)
 
+let opaque_owned_by dp o =
+  let _, _, owner, _ = Opaqueproof.repr o in
+  DirPath.equal dp owner
+
 let valid_sha256 s =
   String.length s = 64 && String.for_all (function
       | '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' -> true
       | _ -> false) s
 
+let report_nodes_max_bytes = 4_294_967_296L
+let report_list_max_bytes = 67_108_864L
+let report_list_max_line = 65_536
+
+let open_regular_input ~max_bytes file =
+  let check (info : Unix.LargeFile.stats) =
+    if info.st_kind <> Unix.S_REG || info.st_size < 0L || info.st_size > max_bytes then raise Exit
+  in
+  check (Unix.LargeFile.stat file);
+  (* Nonblocking open and a second check also close the stat/open FIFO race. *)
+  let fd = Unix.openfile file [Unix.O_RDONLY; Unix.O_NONBLOCK] 0 in
+  try
+    let info = Unix.LargeFile.fstat fd in
+    check info;
+    let ch = Unix.in_channel_of_descr fd in
+    set_binary_mode_in ch true;
+    ch, info.st_size
+  with e -> Unix.close fd; raise e
+
+let bounded_line ch limit =
+  let b = Buffer.create (min limit 80) in
+  let rec loop () = match input_char ch with
+    | '\n' -> Buffer.contents b
+    | c ->
+      if Buffer.length b >= limit then raise Exit;
+      Buffer.add_char b c; loop ()
+    | exception End_of_file ->
+      if Buffer.length b = 0 then raise End_of_file else Buffer.contents b
+  in
+  loop ()
+
 (* A malformed list is ignored as a whole, including duplicate libraries.
    Parse identifiers without [Id.of_string]'s warning/error path. *)
 let read_node_digests file =
-  let ch = open_in file in
+  let ch, file_size = open_regular_input ~max_bytes:report_list_max_bytes file in
   Fun.protect ~finally:(fun () -> close_in_noerr ch) (fun () ->
-      let rec loop acc = match input_line ch with
+      let rec loop acc = match bounded_line ch report_list_max_line with
         | exception End_of_file -> acc
         | line ->
+          if LargeFile.pos_in ch > file_size then raise Exit;
           match String.split_on_char ' ' line with
           | [name; sha] when valid_sha256 sha ->
             let ids = String.split_on_char '.' name in
@@ -870,8 +906,8 @@ let report_nodes_header () =
 
 type saved_node_group = DirPath.t * string * (Constant.t * node) list
 
-(* A structurally valid Marshal value can still contain cycles. Reject those
-   before instantiation, so a malformed list or module path cannot loop. *)
+(* Reject cycles before typed decoding, so a malformed list or module path
+   cannot loop. No native block is reconstructed from this reification. *)
 let check_acyclic (root, memory) =
   let open Analyze in
   let seen = LargeArray.make (LargeArray.length memory) 0 in
@@ -887,12 +923,152 @@ let check_acyclic (root, memory) =
         LargeArray.set seen p 1;
         let rest = (p, true) :: rest in
         let rest = match LargeArray.get memory p with
-          | Struct (_, fields) -> Array.fold_right push fields rest
+          | Struct (_, fields) ->
+            let pending = ref rest in
+            for i = Array.length fields - 1 downto 0 do
+              pending := push fields.(i) !pending
+            done;
+            !pending
           | String _ | Int64 _ | Float64 _ -> rest
         in
         loop rest
   in
   loop (push root [])
+
+(* Bound module identifiers cannot be recreated with [MBId.make], which
+   allocates a fresh identity. Recover the existing typed identity from its
+   library's module declarations instead. *)
+let existing_mbid env uid id dp =
+  let exception Found of MBId.t in
+  let check mbid =
+    let n, name, lib = MBId.repr mbid in
+    if n = uid && Id.equal name id && DirPath.equal lib dp then raise (Found mbid)
+  in
+  let rec signature depth = function
+    | _ when depth > 1024 -> raise Exit
+    | MoreFunctor (mbid, mtb, tail) ->
+      check mbid; signature (depth + 1) (mod_type mtb); signature (depth + 1) tail
+    | NoFunctor fields -> structure (depth + 1) fields
+  and structure depth fields =
+    List.iter (fun (_, field) -> match field with
+        | SFBmodule mb -> module_body depth mb
+        | SFBmodtype mtb -> signature depth (mod_type mtb)
+        | SFBconst _ | SFBmind _ | SFBrules _ -> ()) fields
+  and module_body depth mb =
+    signature depth (mod_type mb);
+    match mod_expr mb with
+    | Struct (_, fields) -> structure (depth + 1) fields
+    | Abstract | Algebraic _ | FullStruct -> ()
+  in
+  try module_body 0 (Environ.lookup_module (ModPath.MPfile dp) env); raise Exit
+  with Found mbid -> mbid
+
+let decode_node_groups env (root, memory) : saved_node_group list =
+  let open Analyze in
+  let object_at = function
+    | Ptr p -> LargeArray.get memory p
+    | Int _ | Atm _ | Fun _ -> raise Exit
+  in
+  let block tag size data = match object_at data with
+    | Struct (actual, fields) when actual = tag && Array.length fields = size -> fields
+    | Struct _ | String _ | Int64 _ | Float64 _ -> raise Exit
+  in
+  let integer = function Int n -> n | Ptr _ | Atm _ | Fun _ -> raise Exit in
+  let string data = match object_at data with
+    | String s -> s
+    | Struct _ | Int64 _ | Float64 _ -> raise Exit
+  in
+  let boolean = function Int 0 -> false | Int 1 -> true | _ -> raise Exit in
+  let list decode data =
+    let rec loop acc = function
+      | Int 0 -> List.rev acc
+      | data ->
+        let fields = block 0 2 data in
+        let value = decode fields.(0) in
+        loop (value :: acc) fields.(1)
+    in
+    loop [] data
+  in
+  let memo table decode data = match data with
+    | Ptr p ->
+      (match Hashtbl.find_opt table p with
+       | Some value -> value
+       | None -> let value = decode data in Hashtbl.add table p value; value)
+    | Int _ | Atm _ | Fun _ -> decode data
+  in
+  let ids = Hashtbl.create 127 and paths = Hashtbl.create 127 in
+  let modules = Hashtbl.create 127 and kernels = Hashtbl.create 127 in
+  let constants = Hashtbl.create 127 and minds = Hashtbl.create 127 in
+  let bound = Hashtbl.create 17 in
+  let id = memo ids (fun data ->
+      let s = string data in
+      if not (Id.is_valid s) then raise Exit;
+      Id.of_string s) in
+  let dirpath = memo paths (fun data -> DirPath.make (list id data)) in
+  let mbid data =
+    let fields = block 0 3 data in
+    let uid = integer fields.(0) and name = id fields.(1) and dp = dirpath fields.(2) in
+    let key = uid, name, dp in
+    match Hashtbl.find_opt bound key with
+    | Some mbid -> mbid
+    | None -> let mbid = existing_mbid env uid name dp in Hashtbl.add bound key mbid; mbid
+  in
+  let rec modpath depth data =
+    if depth > 1024 then raise Exit;
+    memo modules (fun data -> match object_at data with
+        | Struct (0, [|dp|]) -> ModPath.MPfile (dirpath dp)
+        | Struct (1, [|name|]) -> ModPath.MPbound (mbid name)
+        | Struct (2, [|parent; label|]) -> ModPath.MPdot (modpath (depth + 1) parent, id label)
+        | _ -> raise Exit) data
+  in
+  let kername = memo kernels (fun data ->
+      let fields = block 0 3 data in
+      ignore (integer fields.(2));
+      KerName.make (modpath 0 fields.(0)) (id fields.(1))) in
+  let constant = memo constants (fun data -> match object_at data with
+      | Struct (0, [|kn|]) -> Constant.make1 (kername kn)
+      | Struct (1, [|user; canonical|]) -> Constant.make (kername user) (kername canonical)
+      | _ -> raise Exit) in
+  let mind = memo minds (fun data -> match object_at data with
+      | Struct (0, [|kn|]) -> MutInd.make1 (kername kn)
+      | Struct (1, [|user; canonical|]) -> MutInd.make (kername user) (kername canonical)
+      | _ -> raise Exit) in
+  let inductive data =
+    let fields = block 0 2 data in
+    let index = integer fields.(1) in
+    if index < 0 then raise Exit;
+    mind fields.(0), index
+  in
+  let reference data = match object_at data with
+    | Struct (0, [|name|]) -> GlobRef.VarRef (id name)
+    | Struct (1, [|name|]) -> GlobRef.ConstRef (constant name)
+    | Struct (2, [|name|]) -> GlobRef.IndRef (inductive name)
+    | Struct (3, [|name|]) ->
+      let fields = block 0 2 name in
+      let index = integer fields.(1) in
+      if index <= 0 then raise Exit;
+      GlobRef.ConstructRef (inductive fields.(0), index)
+    | _ -> raise Exit
+  in
+  let vref data =
+    let fields = block 0 2 data in
+    let view = match fields.(0) with Int 0 -> Public | Int 1 -> Implementation | _ -> raise Exit in
+    view, reference fields.(1)
+  in
+  let node data =
+    let fields = block 0 4 data in
+    { refs = list vref fields.(0); axiom = boolean fields.(1);
+      flags = list string fields.(2); resolved = boolean fields.(3) }
+  in
+  let entry data =
+    let fields = block 0 2 data in
+    constant fields.(0), node fields.(1)
+  in
+  let group data =
+    let fields = block 0 3 data in
+    dirpath fields.(0), string fields.(1), list entry fields.(2)
+  in
+  list group root
 
 
 let reusable_node st kn n =
@@ -902,18 +1078,19 @@ let reusable_node st kn n =
 
 let read_report_nodes st ~checked (file, admit) =
   try
+    if Option.has_some (Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_UNREADABLE") then raise Exit;
     let admitted = read_node_digests admit in
     let header = report_nodes_header () in
-    let ch = open_in_bin file in
+    let ch, file_size = open_regular_input ~max_bytes:report_nodes_max_bytes file in
     let groups : saved_node_group list =
       Fun.protect ~finally:(fun () -> close_in_noerr ch) (fun () ->
-          List.iter (fun expected -> if not (String.equal (input_line ch) expected) then raise Exit) header;
-          let data = Analyze.parse_channel ~quiet:true ch in
-          Validate.validate_silent Values.v_report_nodes data;
+          List.iter (fun expected ->
+              if not (String.equal (bounded_line ch report_list_max_line) expected) then raise Exit) header;
+          let remaining = Int64.sub file_size (LargeFile.pos_in ch) in
+          if remaining <= 0L || remaining > Int64.of_int max_int then raise Exit;
+          let data = Analyze.parse_channel ~quiet:true ~length:(Int64.to_int remaining) ch in
           check_acyclic data;
-          let groups = Obj.obj (Analyze.instantiate data) in
-          (match input_char ch with exception End_of_file -> () | _ -> raise Exit);
-          groups)
+          decode_node_groups st.env data)
     in
     let prefetched, cached, _ =
       List.fold_left (fun (prefetched, cached, seen) (dp, sha, nodes) ->
@@ -933,7 +1110,8 @@ let read_report_nodes st ~checked (file, admit) =
                   | None -> false
                 in
                 match Environ.lookup_constant_opt kn st.env with
-                | Some { const_body = OpaqueDef _; _ } when belongs && reusable_node st kn n ->
+                | Some { const_body = OpaqueDef o; _ }
+                  when belongs && opaque_owned_by dp o && reusable_node st kn n ->
                   if Cset_env.mem kn cached then raise Exit;
                   Cmap_env.add kn n prefetched, Cset_env.add kn cached
                 | Some _ | None -> prefetched, cached)
@@ -944,7 +1122,7 @@ let read_report_nodes st ~checked (file, admit) =
     (* Commit only after the whole file and every group have been read. *)
     st.prefetched <- prefetched;
     st.cached <- cached
-  with _ -> ()
+  with e when CErrors.noncritical e -> ()
 
 let write_report_nodes st (file, digests) =
   try
@@ -952,7 +1130,7 @@ let write_report_nodes st (file, digests) =
     let header = report_nodes_header () in
     let groups = Environ.fold_constants (fun kn cb groups ->
         match cb.const_body, library_of_constant kn with
-        | OpaqueDef _, Some dp when DirPath.Map.mem dp digests ->
+        | OpaqueDef o, Some dp when DirPath.Map.mem dp digests && opaque_owned_by dp o ->
           let n = try
               let n = match GlobRef.Map_env.find_opt (GlobRef.ConstRef kn) st.public_nodes with
                 | Some n -> n
@@ -962,7 +1140,7 @@ let write_report_nodes st (file, digests) =
                   | None -> constant_node ~unreadable:(fun _ _ -> raise Unreadable) st Public kn
               in
               if reusable_node st kn n then Some n else None
-            with _ -> None
+            with e when CErrors.noncritical e -> None
           in
           (match n with
            | None -> groups
@@ -975,16 +1153,19 @@ let write_report_nodes st (file, digests) =
     let tmp, ch = Filename.open_temp_file ~temp_dir:(Filename.dirname file)
         ~mode:[Open_binary] (Filename.basename file ^ ".") ".tmp" in
     Fun.protect
-      ~finally:(fun () -> close_out_noerr ch; try Sys.remove tmp with _ -> ())
+      ~finally:(fun () ->
+          close_out_noerr ch;
+          try Sys.remove tmp with e when CErrors.noncritical e -> ())
       (fun () ->
          List.iter (fun s -> output_string ch s; output_char ch '\n') header;
          Marshal.to_channel ch groups [];
          close_out ch;
          Sys.rename tmp file)
-  with _ -> ()
+  with e when CErrors.noncritical e -> ()
 
 let save_nodes env access ~file ~digests =
-  try write_report_nodes (new_state env access) (file, digests) with _ -> ()
+  try write_report_nodes (new_state env access) (file, digests)
+  with e when CErrors.noncritical e -> ()
 
 let check_printed_name env obj =
   match unprintable_name env obj with

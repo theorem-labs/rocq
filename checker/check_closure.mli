@@ -139,9 +139,12 @@ END STATEMENT REPORT
     [nodes_in] is [(file, admission_list)]. Before the walk, import public
     opaque nodes only from libraries outside [checked], named in the list,
     with a matching whole-file SHA256 digest and this checker's header.
-    [nodes_out] is [(file, digest_list)]; save eligible nodes after the report,
-    reusing nodes already computed. Cache failures are silent. Neither option
-    changes the report, the checker's verdict or its exit status. *)
+    A node's opaque handle must be owned by the group's library, both when
+    exporting and when importing; a handle into another library is computed
+    normally. [nodes_out] is [(file, digest_list)]; save eligible nodes after
+    the report, reusing nodes already computed. Invalid or unavailable cache
+    inputs are ignored silently; critical exceptions propagate. Neither
+    option changes the report or the checker's verdict. *)
 
 val save_nodes : Environ.env ->
   (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) ->
@@ -149,8 +152,11 @@ val save_nodes : Environ.env ->
 (** Save public nodes of the environment's opaque constants, grouped by their
     declaring library, only for libraries named by [digests]. The digest and
     admission lists contain one [<library> <whole-file-sha256>] per line. The
-    file has a format/version/checker-build header and a validated Marshal
-    payload. Omit nodes that fail, have an unreadable body or name an object
-    the report must not print. Write atomically; any failure is silent.
+    file has a format/version/checker-build header and a Marshal payload
+    decoded through typed constructors, not native object instantiation.
+    Inputs must be regular files: node files are limited to 4 GiB, digest
+    lists to 64 MiB and lines to 64 KiB. Omit nodes that fail, have an
+    unreadable or foreign-owned body, or name an object the report must not
+    print. Write atomically; noncritical failures are silent.
     These files must come from a trusted check and a trusted transport: the
     build header identifies the checker, not the provenance of its output. *)

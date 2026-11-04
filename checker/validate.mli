@@ -11,6 +11,3 @@
 open Analyze
 
 val validate : Values.value -> data * obj LargeArray.t -> unit
-
-val validate_silent : Values.value -> data * obj LargeArray.t -> unit
-(** Validate without printing a diagnostic before raising an exception. *)
