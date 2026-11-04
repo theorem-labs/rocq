@@ -26,7 +26,9 @@ open Names
      when the function's equation lemma is one, and a transparent definition
      otherwise ([Gen_principle.make_scheme]);
    - [Global.body_of_constant], the plugin API for a constant's body, answers
-     [None] for an axiom and the forced body for an opaque proof.
+     [None] for an axiom and the forced body for an opaque proof;
+   - lia's fast path runs only when no constant ZTautoChecker reaches is an
+     opaque proof ([Zcheck_oracle.fingerprint], plugins/micromega).
    (Every other reader in this tree, and in each plugin of the audited plugin
    set, was checked for this distinction the same way. Nothing here enforces
    that set. Not every opaque read is logged either: [Global.force_proof] and

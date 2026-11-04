@@ -50,7 +50,16 @@ let debug = CDebug.create ~name:"zcheck" ()
    constant that they reach, and the declarations of every inductive type that
    they reach (constructor types included), in the order in which the traversal
    meets them. Binder names are left out. It returns the MD5 digest of the
-   serialization, the number of opaque constants and the inductive blocks. *)
+   serialization, the number of opaque constants and the inductive blocks.
+
+   The serialization tells an axiom from an opaque proof, and the fast path
+   is taken only with no opaque constant, so whether a constant is one or the
+   other decides which path runs. The library label does not tell them apart
+   (vernac/libkeyObjects.ml), so each such constant is recorded in the keep
+   rule's opacity log ([OpacityLog.record]), as a strategy command records
+   the one it sets: both paths build the same term, but the keep rule then
+   rebuilds a library compiled against the other form rather than reason
+   about that. *)
 let fingerprint env checker =
   let buf = Buffer.create 65536 in
   let add = Buffer.add_string buf in
@@ -136,8 +145,8 @@ let fingerprint env checker =
       term cb.const_type; add "\n";
       (match cb.const_body with
        | Def b -> add "def "; term b
-       | OpaqueDef _ -> incr opaque; add "opaque"
-       | Undef _ -> add "undef"
+       | OpaqueDef _ -> OpacityLog.record c cb; incr opaque; add "opaque"
+       | Undef _ -> OpacityLog.record c cb; add "undef"
        | Primitive p -> add "primitive "; add (CPrimitives.to_string p)
        | Symbol _ -> add "symbol")
     | `Mind m ->
@@ -438,6 +447,10 @@ let state_for env checker =
                 "ZTautoChecker refused: its fingerprint or the registered constructors are not the extraction's");
           None
         | e when CErrors.noncritical e ->
+          (* This also catches the error a worker's opacity log raises when
+             it cannot write a record ([OpacityLog.record]): lia then runs
+             [zchecker] itself, which needs no record, for the rest of this
+             process. *)
           debug (fun () -> Pp.(str "ZTautoChecker refused: " ++ CErrors.print e));
           None
       in

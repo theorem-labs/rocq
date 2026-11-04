@@ -61,7 +61,7 @@ type t = {
   (** Each foreign constant a command told apart as an axiom ([Undef None]) or
       an opaque proof (a non-opaque [Strategy]/[Transparent] command, an
       extraction, a [Functional Scheme] (its equation lemma), a plugin's
-      [Global.body_of_constant]: [OpacityLog]), or whose opaque proof body an
+      [Global.body_of_constant], lia's fast path: [OpacityLog]), or whose opaque proof body an
       extraction or [Global.body_of_constant] read (always [opaque = true],
       with its [table]), with its library and the opacity it saw, sorted by
       name; also a constant of this library whose body an extraction,

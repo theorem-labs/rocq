@@ -18,3 +18,9 @@ val checker : Ltac_plugin.Tacinterp.interp_sign -> Geninterp.Val.t -> unit Proof
 (** For the unit tests. [z_tauto_checker f w] is [Zchecker.zTautoChecker f w], with each check
     of a pair of literals of its CNF conversion computed once ({!Cnf_memo}). *)
 val z_tauto_checker : Zchecker.z Zchecker.formula Zchecker.bFormula -> Zchecker.zArithProof list -> bool
+
+(** For the tests. [fingerprint env c] is the digest of the definitions [c]
+    reaches, the number of opaque constants among them and the inductive
+    blocks they reach; it records each constant it tells apart as an axiom or
+    an opaque proof in the keep rule's opacity log ([OpacityLog.record]). *)
+val fingerprint : Environ.env -> Names.Constant.t -> string * int * Names.MutInd.t list
