@@ -42,8 +42,11 @@ Check (N.f M.A).
   End C.
 
 (* Check subtyping of the context of parameters of the inductive types *)
-(* Only the number of expected uniform parameters and the convertibility *)
-(* of the inductive arities and constructors types are checked *)
+(* The parameters are checked declaration by declaration, so a let-in *)
+(* must face a let-in of a convertible type and body, and an assumption *)
+(* an assumption; the inductive arities and constructor types are *)
+(* checked the same way (rocq-prover/rocq#22387) *)
 
 Module Type S. Inductive I (x:=0) (y:nat): Set := c: x=y -> I y. End S.
-Module P : S.  Inductive I (y':nat) (z:=y'): Set := c : 0=y' -> I y'. End P.
+Module P.  Inductive I (y':nat) (z:=y'): Set := c : 0=y' -> I y'. End P.
+Fail Module PP : S := P.

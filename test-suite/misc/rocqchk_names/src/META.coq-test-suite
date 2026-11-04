@@ -1,0 +1,11 @@
+package "bad_name" (
+    directory = "."
+    version = "dev"
+    description = "A test plugin declaring names that hold a line break"
+    requires = "rocq-runtime.vernac"
+    archive(byte) = "bad_name_plugin.cma"
+    archive(native) = "bad_name_plugin.cmxa"
+    plugin(byte) = "bad_name_plugin.cma"
+    plugin(native) = "bad_name_plugin.cmxs"
+)
+directory = "."
