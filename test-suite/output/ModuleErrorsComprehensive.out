@@ -62,12 +62,11 @@ Signature components for field I1 do not match:
 number of inductive types differs: expected 2 but found 1.
 File "./output/ModuleErrorsComprehensive.v", line 149, characters 0-49:
 The command has indeed failed with message:
-Signature components for field I do not match: number of parameters differs:
-expected 2 but found 1.
+Signature components for field I do not match: parameters differs: expected
+(A B : Type) but found (A : Type).
 File "./output/ModuleErrorsComprehensive.v", line 158, characters 0-49:
 The command has indeed failed with message:
-Signature components for field R do not match:
-type is expected to be a record.
+The field field is missing in ModuleErrorsComprehensive.RecExpTest.
 File "./output/ModuleErrorsComprehensive.v", line 167, characters 0-52:
 The command has indeed failed with message:
 Signature components for field R do not match: projection names differ:

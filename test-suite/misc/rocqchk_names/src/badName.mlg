@@ -1,0 +1,19 @@
+{
+open Stdarg
+open BadNameImpl
+}
+
+DECLARE PLUGIN "coq-test-suite.bad_name"
+
+VERNAC COMMAND EXTEND BadName CLASSIFIED AS SIDEFF
+| [ "Test" "Line" "Break" "Axiom" ident(before) ident(after) ] ->
+  { declare_axiom before after }
+| [ "Test" "Line" "Break" "Inductive" ident(first) ident(before) ident(after) ] ->
+  { declare_inductive first before after }
+| [ "Test" "Line" "Break" "Constructor" ident(typename) ident(before) ident(after) ] ->
+  { declare_constructor typename before after }
+| [ "Test" "Bad" "Parameter" "Path" ident(name) ident(ty) ident(before) ident(after) ] ->
+  { declare_bad_parameter ~bad_path:true name ty before after }
+| [ "Test" "Bad" "Parameter" "Name" ident(name) ident(ty) ident(before) ident(after) ] ->
+  { declare_bad_parameter ~bad_path:false name ty before after }
+END

@@ -22,18 +22,30 @@ export PATH="$BIN:$PATH"
 d=$(mktemp -d)
 mkdir "$d/d1" "$d/d2"
 
-# poc_evil's body is (idb true) in d1 and (idb false) in d2; -noinit keeps the
-# file self-contained so rocqchk has nothing else to load.
+# poc_evil's body is (idb O true) in d1 and (idb O false) in d2; -noinit keeps
+# the file self-contained so rocqchk has nothing else to load.
+#
+# idb is a Fixpoint, not [fun b => b], because the compiler expands a small
+# function body at an application site and compiles the constant again from the
+# body its library segment carries (kernel/vmsymtable.ml). A poc_evil the
+# compiler compiles again would be computed from the honest body, the spliced
+# bytecode would never run, and the attack this test is built on would not
+# happen at all. No [Fix] is ever expanded (kernel/genlambda.ml), so with this
+# idb the compiler runs the bytecode the file carries, as stock does.
 cat > "$d/d1/Defs.v" <<'EOF'
 Unset Elimination Schemes.
 Inductive bool : Set := true | false.
-Definition idb (b : bool) : bool := b.
-Definition poc_evil : bool := idb true.
+Inductive nat : Set := O | S (n : nat).
+Fixpoint idb (n : nat) (b : bool) : bool := match n with O => b | S m => idb m b end.
+Definition poc_evil : bool := idb O true.
 EOF
-sed 's/idb true/idb false/' "$d/d1/Defs.v" > "$d/d2/Defs.v"
+sed 's/idb O true/idb O false/' "$d/d1/Defs.v" > "$d/d2/Defs.v"
 
-rocq c -noinit -R "$d/d1" "" "$d/d1/Defs.v"
-rocq c -noinit -R "$d/d2" "" "$d/d2/Defs.v"
+# Native compilation is off throughout: splicing Defs.vo leaves the .coq-native
+# files of the two builds behind, and compiling Evil against them fails to find
+# the module they were emitted for. The bug under test is about VM bytecode.
+rocq c -noinit -native-compiler no -R "$d/d1" "" "$d/d1/Defs.v"
+rocq c -noinit -native-compiler no -R "$d/d2" "" "$d/d2/Defs.v"
 
 # Splice: library from d1 (body says true), vmlibrary from d2 (bytecode says
 # false), keeping d1's opaques/summary. All per-segment MD5s and the summary
@@ -106,7 +118,7 @@ Definition discr (b : bool) : Prop := match b with true => False | false => True
 Definition oops : discr poc_evil := (I <: discr poc_evil).
 Definition boom : False := oops.
 EOF
-rocq c -noinit -bytecode-compiler yes -R "$d" "" "$d/Evil.v"
+rocq c -noinit -native-compiler no -bytecode-compiler yes -R "$d" "" "$d/Evil.v"
 
 # rocqchk computes with its own bytecode, so the VMcast simply fails to convert
 # and Evil is rejected with the same type error the default checker gives.

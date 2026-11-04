@@ -347,6 +347,14 @@ let input_double_little chan : float =
     (l lsl 24) lor (k lsl 16) lor (j lsl 8) lor (Int64.of_int i) in
   Int64.float_of_bits bits
 
+(* Writes [s] to standard error as [Printf.eprintf] would, through the
+   output functions of [Format.err_formatter], so that whoever holds that
+   output holds this too. The formatter's own state is left alone. *)
+let eprint_raw ?(flush = false) s =
+  let out, flush_out = Format.pp_get_formatter_output_functions Format.err_formatter () in
+  out s 0 (String.length s);
+  if flush then flush_out ()
+
 let parse_object chan =
   let data = input_byte chan in
   if prefix_small_block <= data then
@@ -393,7 +401,7 @@ let parse_object chan =
   | CODE_CUSTOM_FIXED ->
     begin match input_cstring chan with
     | "_j" -> Rint64 (input_intL chan)
-    | s -> Printf.eprintf "Unhandled custom code: %s" s; assert false
+    | s -> eprint_raw (Printf.sprintf "Unhandled custom code: %s" s); assert false
     end
   | CODE_DOUBLE_BIG ->
     RFloat64 (input_double_big chan)
@@ -409,7 +417,7 @@ let parse_object chan =
   | CODE_DOUBLE_ARRAY64_BIG
   | CODE_DOUBLE_ARRAY64_LITTLE
   | CODE_CUSTOM_LEN
-    -> Printf.eprintf "Unhandled code %04x\n%!" data; assert false
+    -> eprint_raw ~flush:true (Printf.sprintf "Unhandled code %04x\n" data); assert false
 
 let parse chan =
   let size = parse_header chan in
