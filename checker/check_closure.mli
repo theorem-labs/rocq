@@ -155,8 +155,11 @@ val save_nodes : Environ.env ->
     file has a format/version/checker-build header and a Marshal payload
     decoded through typed constructors, not native object instantiation.
     Inputs must be regular files: node files are limited to 4 GiB, digest
-    lists to 64 MiB and lines to 64 KiB. Omit nodes that fail, have an
-    unreadable or foreign-owned body, or name an object the report must not
-    print. Write atomically; noncritical failures are silent.
+    lists to 64 MiB and lines to 64 KiB. Typed reconstruction preserves
+    sharing, bounds module-path height to 1024, and budgets constructed
+    cells and import visits proportionally to the reified object count.
+    Omit nodes that fail, have an unreadable or foreign-owned body, or name
+    an object the report must not print. Write atomically; noncritical
+    failures, including an exhausted cache budget, are silent.
     These files must come from a trusted check and a trusted transport: the
     build header identifies the checker, not the provenance of its output. *)
