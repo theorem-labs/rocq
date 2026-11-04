@@ -27,10 +27,13 @@ val default_root_prefix : DirPath.t
 
 val add_load_path : physical_path * logical_path -> unit
 
-val recheck_library : safe_environment ->
+val recheck_library : ?on_check:(DirPath.t -> unit) -> safe_environment ->
   norec:object_file list ->
   admit:object_file list ->
   check:object_file list -> safe_environment * Cset.t Cmap.t
+(** [on_check] is called for each library selected for checking, not for a
+    library imported without checking. It observes the checker's dependency
+    selection, including explicit roots overriding admission. *)
 
 val indirect_accessor : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm
 (** The body of an opaque constant of a loaded library, from that library's

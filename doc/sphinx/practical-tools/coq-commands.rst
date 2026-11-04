@@ -903,6 +903,36 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   would print that is not made of identifiers, for instance the name of a
   constant that a term of an admitted library names but no library declares.
 
+:-report-nodes-out *file*: After checking, save the public report node of
+  each opaque constant in the environment whose declaring library is named
+  by ``-report-nodes-digests``. Constants whose node cannot be computed,
+  whose opaque body cannot be read or whose references contain a name the
+  report must not print are omitted. The file groups nodes by library and
+  records its whole-file SHA256 digest. Its header identifies the format,
+  Rocq version and checker binary. Writing is atomic; a failed write is
+  silent and does not change any output, verdict or exit status. This option
+  does not require ``-statement-report``.
+:-report-nodes-digests *file*: The library digests for ``-report-nodes-out``,
+  one ``<library-dirpath> <sha256-hex>`` per line, separated by one space.
+  A library absent from this list is not saved. A malformed or unreadable
+  list disables the write silently. Both output options must be supplied.
+:-report-nodes-in *file*: Reuse public opaque report nodes produced by a
+  trusted check. A library's nodes are used only if this invocation does
+  not check that library, ``-report-nodes-admit`` names it with the same
+  whole-file SHA256 digest, and the header matches this checker binary.
+  A library selected for checking cannot use saved nodes, even if the
+  admission list names it. Missing, unreadable, malformed or incompatible
+  inputs are silently ignored. The report and checker verdict are unchanged
+  at every ``-j``. The build header is not authentication: the cache and
+  admission list must arrive through a trusted transport.
+:-report-nodes-admit *file*: The libraries admitted unchecked for
+  ``-report-nodes-in``, one ``<library-dirpath> <sha256-hex>`` per line,
+  separated by one space. Use the verified SHA256 of the whole staged
+  ``.vo`` file: Rocq's load digest does not cover its opaque proofs. A
+  malformed or unreadable list disables reuse silently. Both input options
+  must be supplied. None of these options changes which libraries are
+  checked or admitted.
+
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
 

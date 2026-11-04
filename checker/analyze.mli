@@ -23,7 +23,7 @@ end
 (** A data structure similar to arrays but allowing to overcome the 2^22 length
     limitation on 32-bit architecture. *)
 
-val parse_channel : in_channel -> (data * obj LargeArray.t)
+val parse_channel : ?quiet:bool -> in_channel -> (data * obj LargeArray.t)
 val parse_string : string -> (data * obj LargeArray.t)
 
 (** {6 Functorized version} *)
@@ -42,7 +42,7 @@ end
 module type S =
 sig
   type input
-  val parse : input -> (data * obj LargeArray.t)
+  val parse : ?quiet:bool -> input -> (data * obj LargeArray.t)
   (** Return the entry point and the reification of the memory out of a
       marshalled structure. *)
 end

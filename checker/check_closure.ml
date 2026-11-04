@@ -131,6 +131,8 @@ type state = {
   mutable prefetched : node Cmap_env.t;
   (* the nodes of [(Public, ConstRef kn)] that forked processes computed
      ahead of the walk ("Opaque bodies read ahead") *)
+  mutable cached : Cset_env.t;
+  (* the subset of [prefetched] read from a report-node file *)
   mutable ahead : node read_ahead option;
   (* those processes, while they run *)
   mutable gen : int;
@@ -540,7 +542,9 @@ let read_ahead_poll_interval = 0.002
 let read_ahead_order st =
   let entries =
     Environ.fold_constants (fun kn cb acc -> match cb.const_body with
-        | OpaqueDef o -> let _, _, dp, _ = Opaqueproof.repr o in (kn, dp) :: acc
+        | OpaqueDef o when not (Cmap_env.mem kn st.prefetched) ->
+          let _, _, dp, _ = Opaqueproof.repr o in (kn, dp) :: acc
+        | OpaqueDef _ -> acc
         | Def _ | Undef _ | Primitive _ | Symbol _ -> acc)
       st.env []
   in
@@ -568,6 +572,7 @@ let read_ahead_chunks libs =
    from the processes of [start_read_ahead].
    [COQ_TEST_SUITE_STATEMENT_REPORT_READ_AHEAD] prints it. *)
 let read_ahead_used = ref 0
+let cached_nodes_used = ref 0
 
 let start_read_ahead st n =
   let ordered = read_ahead_order st in
@@ -657,7 +662,8 @@ let read_ahead_node st view kn =
         read_ahead_tick st ~miss:opaque;
         if opaque then Cmap_env.find_opt kn st.prefetched else None
   in
-  if Option.has_some n then incr read_ahead_used;
+  if Option.has_some n then
+    if Cset_env.mem kn st.cached then incr cached_nodes_used else incr read_ahead_used;
   n
 
 let node st view obj =
@@ -810,6 +816,175 @@ let unprintable_name env obj =
     | Some _ | None -> None
 
 let printable_name env obj = match unprintable_name env obj with None -> true | Some _ -> false
+
+(** {6 Report nodes saved by a previous check}
+
+    Only public opaque nodes are reusable. The caller supplies whole-file
+    SHA256 digests, not Rocq's load digests, which do not cover opaque bodies.
+    It also supplies the libraries this invocation actually checked: those
+    must never take a saved node, even if the admission list names them.
+    A file is trusted evidence only when its transport is trusted; the header
+    identifies this encoding and checker build, not the file's provenance. *)
+
+let new_state env access = {
+  env; access; fields = ModPath.Map.empty;
+  public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty;
+  prefetched = Cmap_env.empty; cached = Cset_env.empty; ahead = None; gen = 0;
+  keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
+}
+
+let rec library_of_modpath = function
+  | ModPath.MPfile dp -> Some dp
+  | ModPath.MPdot (mp, _) -> library_of_modpath mp
+  | ModPath.MPbound _ -> None
+
+let library_of_constant kn = library_of_modpath (Constant.modpath kn)
+
+let valid_sha256 s =
+  String.length s = 64 && String.for_all (function
+      | '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' -> true
+      | _ -> false) s
+
+(* A malformed list is ignored as a whole, including duplicate libraries.
+   Parse identifiers without [Id.of_string]'s warning/error path. *)
+let read_node_digests file =
+  let ch = open_in file in
+  Fun.protect ~finally:(fun () -> close_in_noerr ch) (fun () ->
+      let rec loop acc = match input_line ch with
+        | exception End_of_file -> acc
+        | line ->
+          match String.split_on_char ' ' line with
+          | [name; sha] when valid_sha256 sha ->
+            let ids = String.split_on_char '.' name in
+            if not (List.for_all Id.is_valid ids) then raise Exit;
+            let dp = DirPath.make (List.rev_map Id.of_string ids) in
+            if DirPath.Map.mem dp acc then raise Exit;
+            loop (DirPath.Map.add dp (String.lowercase_ascii sha) acc)
+          | _ -> raise Exit
+      in
+      loop DirPath.Map.empty)
+
+let report_nodes_header () =
+  ["ROCQCHK REPORT NODES 1"; Coq_config.version;
+   Digest.to_hex (Digest.file Sys.executable_name)]
+
+type saved_node_group = DirPath.t * string * (Constant.t * node) list
+
+(* A structurally valid Marshal value can still contain cycles. Reject those
+   before instantiation, so a malformed list or module path cannot loop. *)
+let check_acyclic (root, memory) =
+  let open Analyze in
+  let seen = LargeArray.make (LargeArray.length memory) 0 in
+  let push data rest = match data with Ptr p -> (p, false) :: rest | _ -> rest in
+  let rec loop = function
+    | [] -> ()
+    | (p, true) :: rest -> LargeArray.set seen p 2; loop rest
+    | (p, false) :: rest ->
+      match LargeArray.get seen p with
+      | 1 -> raise Exit
+      | 2 -> loop rest
+      | _ ->
+        LargeArray.set seen p 1;
+        let rest = (p, true) :: rest in
+        let rest = match LargeArray.get memory p with
+          | Struct (_, fields) -> Array.fold_right push fields rest
+          | String _ | Int64 _ | Float64 _ -> rest
+        in
+        loop rest
+  in
+  loop (push root [])
+
+
+let reusable_node st kn n =
+  not n.axiom && not n.resolved
+  && printable_name st.env (GlobRef.ConstRef kn)
+  && List.for_all (fun (_, obj) -> printable_name st.env obj) n.refs
+
+let read_report_nodes st ~checked (file, admit) =
+  try
+    let admitted = read_node_digests admit in
+    let header = report_nodes_header () in
+    let ch = open_in_bin file in
+    let groups : saved_node_group list =
+      Fun.protect ~finally:(fun () -> close_in_noerr ch) (fun () ->
+          List.iter (fun expected -> if not (String.equal (input_line ch) expected) then raise Exit) header;
+          let data = Analyze.parse_channel ~quiet:true ch in
+          Validate.validate_silent Values.v_report_nodes data;
+          check_acyclic data;
+          let groups = Obj.obj (Analyze.instantiate data) in
+          (match input_char ch with exception End_of_file -> () | _ -> raise Exit);
+          groups)
+    in
+    let prefetched, cached, _ =
+      List.fold_left (fun (prefetched, cached, seen) (dp, sha, nodes) ->
+          if DirPath.Set.mem dp seen then raise Exit;
+          let seen = DirPath.Set.add dp seen in
+          let eligible =
+            not (DirPath.Set.mem dp checked)
+            && match DirPath.Map.find_opt dp admitted with
+            | Some expected -> String.equal sha expected
+            | None -> false
+          in
+          if not eligible then prefetched, cached, seen
+          else
+            let prefetched, cached = List.fold_left (fun (prefetched, cached) (kn, n) ->
+                let belongs = match library_of_constant kn with
+                  | Some lib -> DirPath.equal lib dp
+                  | None -> false
+                in
+                match Environ.lookup_constant_opt kn st.env with
+                | Some { const_body = OpaqueDef _; _ } when belongs && reusable_node st kn n ->
+                  if Cset_env.mem kn cached then raise Exit;
+                  Cmap_env.add kn n prefetched, Cset_env.add kn cached
+                | Some _ | None -> prefetched, cached)
+              (prefetched, cached) nodes in
+            prefetched, cached, seen)
+        (st.prefetched, st.cached, DirPath.Set.empty) groups
+    in
+    (* Commit only after the whole file and every group have been read. *)
+    st.prefetched <- prefetched;
+    st.cached <- cached
+  with _ -> ()
+
+let write_report_nodes st (file, digests) =
+  try
+    let digests = read_node_digests digests in
+    let header = report_nodes_header () in
+    let groups = Environ.fold_constants (fun kn cb groups ->
+        match cb.const_body, library_of_constant kn with
+        | OpaqueDef _, Some dp when DirPath.Map.mem dp digests ->
+          let n = try
+              let n = match GlobRef.Map_env.find_opt (GlobRef.ConstRef kn) st.public_nodes with
+                | Some n -> n
+                | None ->
+                  match Cmap_env.find_opt kn st.prefetched with
+                  | Some n -> n
+                  | None -> constant_node ~unreadable:(fun _ _ -> raise Unreadable) st Public kn
+              in
+              if reusable_node st kn n then Some n else None
+            with _ -> None
+          in
+          (match n with
+           | None -> groups
+           | Some n -> DirPath.Map.update dp
+               (function None -> Some [kn, n] | Some nodes -> Some ((kn, n) :: nodes)) groups)
+        | _ -> groups)
+      st.env DirPath.Map.empty in
+    let groups = DirPath.Map.fold (fun dp nodes acc ->
+        (dp, DirPath.Map.find dp digests, nodes) :: acc) groups [] in
+    let tmp, ch = Filename.open_temp_file ~temp_dir:(Filename.dirname file)
+        ~mode:[Open_binary] (Filename.basename file ^ ".") ".tmp" in
+    Fun.protect
+      ~finally:(fun () -> close_out_noerr ch; try Sys.remove tmp with _ -> ())
+      (fun () ->
+         List.iter (fun s -> output_string ch s; output_char ch '\n') header;
+         Marshal.to_channel ch groups [];
+         close_out ch;
+         Sys.rename tmp file)
+  with _ -> ()
+
+let save_nodes env access ~file ~digests =
+  try write_report_nodes (new_state env access) (file, digests) with _ -> ()
 
 let check_printed_name env obj =
   match unprintable_name env obj with
@@ -1188,7 +1363,7 @@ let resolve_in_impl st name =
     in
     List.rev (split 0 [])
 
-let print ~jobs env access requests =
+let print ~jobs ?nodes_in ?nodes_out ~checked env access requests =
   let index =
     (* Every constant under each printed name: two kernel names can print
        alike (a library P.A with a module B, and a library P.A.B), and a
@@ -1198,17 +1373,14 @@ let print ~jobs env access requests =
           (function None -> Some [c] | Some l -> Some (c :: l)) acc)
       env CString.Map.empty
   in
-  let st = {
-    env; access; fields = ModPath.Map.empty;
-    public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty;
-    prefetched = Cmap_env.empty; ahead = None; gen = 0;
-    keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
-  } in
+  let st = new_state env access in
+  Option.iter (read_report_nodes st ~checked) nodes_in;
   (* One memo for the whole report: the requests share the walk (see
      "One walk for every request"). *)
   let memo = new_memo () in
   walk_visits := 0;
   read_ahead_used := 0;
+  cached_nodes_used := 0;
   line "STATEMENT REPORT %d" format_version;
   test_fault ();
   (* Read ahead only when some request has a model to walk, with one process
@@ -1260,4 +1432,8 @@ let print ~jobs env access requests =
         requests);
   test_walk_count ();
   test_read_ahead_count ();
-  line "END STATEMENT REPORT"
+  (match Sys.getenv_opt "COQ_TEST_SUITE_STATEMENT_REPORT_CACHED_NODES" with
+   | Some "1" -> line "cached nodes %d" !cached_nodes_used
+   | None | Some _ -> ());
+  line "END STATEMENT REPORT";
+  Option.iter (write_report_nodes st) nodes_out

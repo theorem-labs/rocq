@@ -777,7 +777,7 @@ let opaque_sources_ready m =
   LibrarySet.for_all (fun dp ->
       LibraryMap.mem dp !opaque_sources || LibraryMap.mem dp !opaque_cache) libs
 
-let recheck_library_in_order senv ~norec ~admit ~check =
+let recheck_library_in_order ~on_check senv ~norec ~admit ~check =
   let ml = List.map try_locate_qualified_library check in
   let nrl = List.map try_locate_qualified_library norec in
   let al =  List.map try_locate_qualified_library admit in
@@ -841,6 +841,7 @@ let recheck_library_in_order senv ~norec ~admit ~check =
       else begin
         let admit = if admitted then LibrarySet.singleton dir else LibrarySet.empty in
         CheckWorkers.hold_on ();
+        if not admitted then on_check dir;
         match check_one_lib admit !walked lib with
         | senv -> CheckWorkers.hold_off (); walked := senv
         | exception e ->
@@ -918,22 +919,26 @@ let recheck_library_in_order senv ~norec ~admit ~check =
       (List.rev_map (fun (dp, src) -> dp, (fun () -> ignore (read_opaque_table dp src)))
          !hashed_tables) in
   let senv =
+    let check_one senv ((dir, _) as lib) =
+      if not (LibrarySet.mem dir nochk) then on_check dir;
+      check_one_lib nochk senv lib
+    in
     if streaming then begin
       CheckWorkers.release_held ();
       Option.iter Exninfo.iraise !walk_error;
       validate_tables ();
-      List.fold_left (check_one_lib nochk) !walked (List.rev !pending)
+      List.fold_left check_one !walked (List.rev !pending)
     end else begin
       validate_tables ();
-      List.fold_left (check_one_lib nochk) (senv, Cmap.empty) needed
+      List.fold_left check_one (senv, Cmap.empty) needed
     end
   in
   CheckWorkers.finish ();
   Flags.if_verbose Feedback.msg_notice (str"Modules were successfully checked");
   senv
 
-let recheck_library senv ~norec ~admit ~check =
-  try recheck_library_in_order senv ~norec ~admit ~check
+let recheck_library ?(on_check = fun _ -> ()) senv ~norec ~admit ~check =
+  try recheck_library_in_order ~on_check senv ~norec ~admit ~check
   with e ->
     let e = Exninfo.capture e in
     CheckWorkers.abort ();

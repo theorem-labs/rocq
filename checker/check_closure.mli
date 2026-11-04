@@ -23,7 +23,8 @@ val read_requests : string -> request list
     are skipped. A tab or carriage return on any line is an error.
     @raise CErrors.UserError on any other line. *)
 
-val print : jobs:int -> Environ.env ->
+val print : jobs:int -> ?nodes_in:(string * string) ->
+  ?nodes_out:(string * string) -> checked:Names.DirPath.Set.t -> Environ.env ->
   (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) -> request list -> unit
 (** Print the report, one line per message on the feedback channel:
 
@@ -133,4 +134,23 @@ END STATEMENT REPORT
     ([CheckWorkers.Forked]), and the walk takes what they computed when it
     has come. The report is the one printed with [jobs] at 1: a
     process only computes what the main process would compute, and the main
-    process computes whatever a process did not send in time. *)
+    process computes whatever a process did not send in time.
+
+    [nodes_in] is [(file, admission_list)]. Before the walk, import public
+    opaque nodes only from libraries outside [checked], named in the list,
+    with a matching whole-file SHA256 digest and this checker's header.
+    [nodes_out] is [(file, digest_list)]; save eligible nodes after the report,
+    reusing nodes already computed. Cache failures are silent. Neither option
+    changes the report, the checker's verdict or its exit status. *)
+
+val save_nodes : Environ.env ->
+  (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) ->
+  file:string -> digests:string -> unit
+(** Save public nodes of the environment's opaque constants, grouped by their
+    declaring library, only for libraries named by [digests]. The digest and
+    admission lists contain one [<library> <whole-file-sha256>] per line. The
+    file has a format/version/checker-build header and a validated Marshal
+    payload. Omit nodes that fail, have an unreadable body or name an object
+    the report must not print. Write atomically; any failure is silent.
+    These files must come from a trusted check and a trusted transport: the
+    build header identifies the checker, not the provenance of its output. *)
