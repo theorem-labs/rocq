@@ -25,6 +25,12 @@ let name_table =
   Summary.ref (GlobRefMap.empty : Name.t list GlobRefMap.t)
     ~name:"rename-arguments"
 
+type table = Name.t list GlobRefMap.t
+
+let current_table () = !name_table
+
+let same_table (a : table) b = a == b
+
 type req =
   | ReqLocal
   | ReqGlobal

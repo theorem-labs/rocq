@@ -1461,7 +1461,9 @@ and knht info e t stk =
 
 let conv : (clos_infos -> clos_tab -> fconstr -> fconstr -> bool) ref
   = ref (fun _ _ _ _ -> (assert false : bool))
-let set_conv f = conv := f
+let conv_installs = ref 0
+let set_conv f = incr conv_installs; conv := f
+let conv_is_initial () = !conv_installs <= 1
 
 type ('a, 'b) reduction = {
   red_ret : clos_infos -> Table.t -> pat_state:'b -> ?failed:bool -> (fconstr * stack) -> 'a;

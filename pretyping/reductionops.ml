@@ -48,8 +48,6 @@ let reduction_effect_hook env sigma con c =
     effect_function env sigma (Lazy.force c)
   with Not_found -> ()
 
-let reduction_effects_active () = not (Cmap_env.is_empty !constant_effect_table)
-
 let cache_reduction_effect (con,funkey) =
   constant_effect_table := Cmap_env.add con funkey !constant_effect_table
 
@@ -693,7 +691,10 @@ module CredNative = RedNative(CNativeEntries)
     contract_* in any case .
 *)
 
-let debug_RAKAM = CDebug.create ~name:"RAKAM" ()
+let debug_RAKAM_flag, debug_RAKAM = CDebug.create_full ~name:"RAKAM" ()
+
+let reduction_is_plain () =
+  Cmap_env.is_empty !constant_effect_table && not (CDebug.get_flag debug_RAKAM_flag)
 
 let apply_branch env sigma (ind, i) args (ci, u, pms, iv, r, lf) =
   let args = Stack.tail ci.ci_npar args in
