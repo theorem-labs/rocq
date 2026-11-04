@@ -24,21 +24,36 @@
 compile_plain "$d/base" Canon
 printf 'model BadNames.Canon.model\n' > "$d/req"
 
-rc=0
-"$BIN"rocqchk -silent -statement-report "$d/req" -Q "$d/base" BadNames -admit BadNames.Canon \
-  > "$d/honest.log" 2>&1 || rc=$?
-echo "--- honest: exit $rc ---"
-cat -v "$d/honest.log"
-if [ "$rc" -eq 0 ] \
-     && matches -x -F 'axiom model BadNames.Canon.O.D.ax ?BadNames.Canon:O.zqxaXzqxforged.ax' "$d/honest.log" \
-     && matches '^END STATEMENT REPORT$' "$d/honest.log"; then
-  echo "RESULT honest: PASS"
-else
-  echo "RESULT honest: FAIL (the report does not print the canonical half the probe changes)"
+# The same report with -j 4, where the report runs forked read-ahead
+# processes. The forged canonical half sits in the proof of the sealed field
+# O.n, which the report reads through the implementation, and the read-ahead
+# only computes constants the environment holds with their body: so no forked
+# process ever reads it, and the walk checks the name exactly as with -j 1.
+# Both runs must answer alike, and the forged name must stop both alike.
+for jobs in 1 4; do
+  rc=0
+  "$BIN"rocqchk -silent -j "$jobs" -statement-report "$d/req" -Q "$d/base" BadNames \
+    -admit BadNames.Canon > "$d/honest-j$jobs.log" 2>&1 || rc=$?
+  echo "--- honest, -j $jobs: exit $rc ---"
+  cat -v "$d/honest-j$jobs.log"
+  if [ "$rc" -eq 0 ] \
+       && matches -x -F 'axiom model BadNames.Canon.O.D.ax ?BadNames.Canon:O.zqxaXzqxforged.ax' "$d/honest-j$jobs.log" \
+       && matches '^END STATEMENT REPORT$' "$d/honest-j$jobs.log"; then
+    echo "RESULT honest-j$jobs: PASS"
+  else
+    echo "RESULT honest-j$jobs: FAIL (the report does not print the canonical half the probe changes)"
+    status=1
+  fi
+done
+if ! cmp -s "$d/honest-j1.log" "$d/honest-j4.log"; then
+  echo "RESULT honest-same: FAIL (-j 4 and -j 1 differ)"
+  diff "$d/honest-j1.log" "$d/honest-j4.log"
   status=1
 fi
 
 ocaml "$R" "$d/base/Canon.vo" opaques aXzqxforged $'a\nzqxforged'
 both_vm c-canonical stop 'would print the name \"BadNames.Canon:O.zqxa\\nzqxforged.ax\", which' zqxforged \
   -statement-report "$d/req" -Q "$d/base" BadNames -admit BadNames.Canon
+both_vm c-canonical-j4 stop 'would print the name \"BadNames.Canon:O.zqxa\\nzqxforged.ax\", which' zqxforged \
+  -j 4 -statement-report "$d/req" -Q "$d/base" BadNames -admit BadNames.Canon
 exit $status
