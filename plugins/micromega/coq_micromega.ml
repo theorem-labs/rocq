@@ -1696,10 +1696,10 @@ let max_tries = 8
     [Control.Timeout], [Out_of_memory], [Assert_failure], [Match_failure], an anomaly, or any
     exception while [Memprof_coq.is_interrupted ()]) propagates: it reports an interrupt or a
     defect, which the compiler layer handles, not a fact about the clause. *)
+(* CONTROL ONLY, never for a cut: 5d6863db9e's catch, to show the injection tests fail on it. *)
 let speculate default f =
   try f () with
-  | Stack_overflow when not (Memprof_coq.is_interrupted ()) -> default
-  | e when CErrors.noncritical e -> default
+  | e when (match e with Sys.Break | Control.Timeout -> false | _ -> true) -> default
 
 (**
   * [witness_list ~reuse eq_cst prover l] finds a certificate for each
