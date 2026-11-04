@@ -711,11 +711,11 @@ let canonical_kername kn =
   let rec root acc = function
     | ModPath.MPfile dp -> DirPath.to_string dp, acc
     | ModPath.MPbound mbid -> MBId.debug_to_string mbid, acc
-    | ModPath.MPdot (mp, l) -> root (Label.to_string l :: acc) mp
+    | ModPath.MPdot (mp, l) -> root (Id.to_string l :: acc) mp
   in
   let mp, l = KerName.repr kn in
   let r, mods = root [] mp in
-  r ^ ":" ^ String.concat "." (mods @ [Label.to_string l])
+  r ^ ":" ^ String.concat "." (mods @ [Id.to_string l])
 
 (* The canonical token printed for [obj], with the kernel name it prints,
    which the name check reads ([printable_name]): one function, so the name
@@ -777,8 +777,10 @@ let node_sets st n obj = {
   axioms = if n.axiom then CString.Set.singleton (axiom_entry st obj) else CString.Set.empty;
   resolved_fields = if n.resolved then CString.Set.singleton (axiom_entry st obj) else CString.Set.empty;
   flag_set =
-    (let entry = axiom_entry st obj in
-     List.fold_left (fun s kind -> FlagSet.add (kind, entry) s) FlagSet.empty n.flags);
+    (if List.is_empty n.flags then FlagSet.empty
+     else
+       let entry = axiom_entry st obj in
+       List.fold_left (fun s kind -> FlagSet.add (kind, entry) s) FlagSet.empty n.flags);
 }
 
 (* Place 2 of the name check (checkNames.mli), for a name that the check at
@@ -789,22 +791,32 @@ let node_sets st n obj = {
    block it resolves ([mind_node]). This is before the type verdict, whose
    conversion can reach an anomaly that prints an unresolved inductive's name,
    and before the statement's line, so a refusal leaves no END STATEMENT
-   REPORT line. *)
-let printable_name env obj =
-  let canonical_ok () = match snd (canonical_token env obj) with
-    | Some kn -> CheckNames.valid_kername kn
-    | None -> true
+   REPORT line.
+
+   The name of [obj] the report must not print, if there is one: the user
+   half when it is not made of identifiers, else the canonical half printed
+   ([canonical_token]) when that one is not, so a refusal quotes the text that
+   failed. *)
+let unprintable_name env obj =
+  let user_ok = match obj with
+    | GlobRef.ConstRef kn -> CheckNames.valid_kername (Constant.user kn)
+    | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+      CheckNames.valid_kername (MutInd.user mind)
+    | GlobRef.VarRef id -> CheckNames.valid_id id
   in
-  match obj with
-  | GlobRef.ConstRef kn -> CheckNames.valid_kername (Constant.user kn) && canonical_ok ()
-  | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-    CheckNames.valid_kername (MutInd.user mind) && canonical_ok ()
-  | GlobRef.VarRef id -> CheckNames.valid_id id
+  if not user_ok then Some (name_of obj)
+  else match snd (canonical_token env obj) with
+    | Some kn when not (CheckNames.valid_kername kn) -> Some (canonical_kername kn)
+    | Some _ | None -> None
+
+let printable_name env obj = match unprintable_name env obj with None -> true | Some _ -> false
 
 let check_printed_name env obj =
-  if not (printable_name env obj) then
+  match unprintable_name env obj with
+  | None -> ()
+  | Some name ->
     CErrors.user_err
-      Pp.(str ("The statement report would print the name " ^ CheckNames.quote (name_of obj) ^
+      Pp.(str ("The statement report would print the name " ^ CheckNames.quote name ^
                ", which is not made of identifiers."))
 
 
@@ -1160,12 +1172,12 @@ let resolve_in_impl st name =
           else
             let rec descend mp = function
               | [lab] ->
-                let kn = KerName.make mp (Label.of_id lab) in
+                let kn = KerName.make mp lab in
                 (match in_impl st find_constant kn with
                  | Some _ -> Some (Constant.make1 kn)
                  | None -> None
                  | exception Not_found -> None)
-              | m :: rest -> descend (ModPath.MPdot (mp, Label.of_id m)) rest
+              | m :: rest -> descend (ModPath.MPdot (mp, m)) rest
               | [] -> None
             in
             match descend mp0 rest with
