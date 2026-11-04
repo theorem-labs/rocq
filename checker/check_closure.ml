@@ -471,7 +471,7 @@ let name_of = function
    printed for an object the final environment holds is the canonical half of
    the key it is stored under there ([Environ.lookup_constant_key]); an object
    that only an implementation holds prints [?] and the term's own name
-   instead (see [canonical_kn]).
+   instead (see [canonical_token]).
    Two paths to one constant give one canonical name.
 
    It is printed so that two kernel names never print alike: the root of the
@@ -491,31 +491,30 @@ let canonical_kername kn =
   let r, mods = root [] mp in
   r ^ ":" ^ String.concat "." (mods @ [Label.to_string l])
 
-(* The canonical kernel name printed for [obj]; the name check reads the same
-   one ([printable_name]). [None] for an object only an implementation holds:
-   its canonical half comes from the term that names it, which no check ties
-   to a declaration, so it is printed after a [?], which a reader never joins
-   on. The name after the [?] keeps two such objects apart: a bare [?] would
-   give two distinct axioms of one printed path one entry of the closure's
-   set, and the report would list one of them. *)
-let canonical_kn env = function
+(* The canonical token printed for [obj], with the kernel name it prints,
+   which the name check reads ([printable_name]): one function, so the name
+   checked is the name printed. For an object the final environment holds,
+   the canonical half of the key it is stored under there. For one only an
+   implementation holds, the term's own canonical half after a [?], which a
+   reader never joins on: nothing ties that half to a declaration, and the
+   name after the [?] keeps two such objects apart (a bare [?] would give two
+   distinct axioms of one printed path one entry of the closure's set, and
+   the report would list one of them). *)
+let canonical_token env obj =
+  let known kn = canonical_kername kn, Some kn in
+  let unknown kn = "?" ^ canonical_kername kn, Some kn in
+  match obj with
   | GlobRef.ConstRef kn ->
     if Environ.mem_constant kn env then
-      let _, _, can = Environ.lookup_constant_key kn env in Some can
-    else None
+      let _, _, can = Environ.lookup_constant_key kn env in known can
+    else unknown (Constant.canonical kn)
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
     if Environ.mem_mind mind env then
-      let _, _, can = Environ.lookup_mind_key mind env in Some can
-    else None
-  | GlobRef.VarRef _ -> None
+      let _, _, can = Environ.lookup_mind_key mind env in known can
+    else unknown (MutInd.canonical mind)
+  | GlobRef.VarRef _ -> "-", None
 
-let canonical_of st obj =
-  match obj, canonical_kn st.env obj with
-  | _, Some kn -> canonical_kername kn
-  | GlobRef.VarRef _, None -> "-"
-  | GlobRef.ConstRef kn, None -> "?" ^ canonical_kername (Constant.canonical kn)
-  | (GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _)), None ->
-    "?" ^ canonical_kername (MutInd.canonical mind)
+let canonical_of st obj = fst (canonical_token st.env obj)
 
 (* An [axiom] line's two names: the path the term reached the object by, then
    its canonical kernel name. *)
@@ -566,7 +565,7 @@ let node_sets st n obj = {
    and before the statement's line, so a refusal leaves no END STATEMENT
    REPORT line. *)
 let printable_name env obj =
-  let canonical_ok () = match canonical_kn env obj with
+  let canonical_ok () = match snd (canonical_token env obj) with
     | Some kn -> CheckNames.valid_kername kn
     | None -> true
   in
