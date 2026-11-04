@@ -51,6 +51,9 @@ end
 
 type effect_name = string
 
+val reduction_effects_active : unit -> bool
+(** Whether any constant has a reduction effect set. *)
+
 (* [declare_reduction_effect name f] declares [f] under key [name];
    [name] must be a unique in "world". *)
 val declare_reduction_effect : effect_name ->

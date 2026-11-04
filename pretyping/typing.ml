@@ -531,16 +531,117 @@ let check_binder_relevance env sigma s decl =
     in
     sigma, set_annot { (get_annot decl) with binder_relevance = rs } decl
 
+(* A memo of [execute] inside one top-level call, for subterms with no evar, no bound variable, no binder and no
+   universe or sort variable. [build] numbers each such subterm by its structure. A number's type is stored when
+   typing it made no fresh universe, changed no flexible universe and added no pending conversion problem, and it
+   is reused under the same flexible-universe substitution. Off while a reduction effect is registered. *)
+module TypingMemo = struct
+  type ids = Ids of int * ids array
+  let none = Ids (-1, [||])
+  let id (Ids (i, _)) = i
+  let kid (Ids (_, k)) j = if j < Array.length k then k.(j) else none
+  module Leaf = Hashtbl.Make (struct
+    type t = Constr.t
+    let equal = Constr.equal
+    let hash = Constr.hash
+  end)
+  type t = {
+    leaves : int Leaf.t;
+    nodes : (int * int array, int) Hashtbl.t;
+    mutable next : int;
+    judg : (int, EConstr.types * UnivFlex.t) Hashtbl.t;
+  }
+  let create () =
+    { leaves = Leaf.create 64; nodes = Hashtbl.create 64; next = 0; judg = Hashtbl.create 64 }
+  let number_leaf m c = match Leaf.find_opt m.leaves c with
+    | Some i -> i
+    | None -> let i = m.next in m.next <- i + 1; Leaf.add m.leaves c i; i
+  let number_node m k = match Hashtbl.find_opt m.nodes k with
+    | Some i -> i
+    | None -> let i = m.next in m.next <- i + 1; Hashtbl.add m.nodes k i; i
+  let rec ground c = match Constr.kind c with
+    | Evar _ | Meta _ -> false
+    | Sort s -> (match s with Sorts.SProp | Sorts.Prop | Sorts.Set -> true | _ -> false)
+    | Const (_, u) | Ind (_, u) | Construct (_, u) -> UVars.Instance.is_empty u
+    | _ -> Constr.fold (fun b c -> b && ground c) true c
+  let var_ok env vars id = match Names.Id.Map.find_opt id !vars with
+    | Some b -> b
+    | None ->
+      let b = match Environ.lookup_named id env with
+        | Context.Named.Declaration.LocalAssum (_, t) -> ground t
+        | Context.Named.Declaration.LocalDef (_, b, t) -> ground b && ground t
+        | exception Not_found -> false
+      in
+      vars := Names.Id.Map.add id b !vars; b
+  let rec build m env vars c =
+    let c0 = EConstr.Unsafe.to_constr c in
+    match Constr.kind c0 with
+    | Const (_, u) | Ind (_, u) | Construct (_, u) ->
+      if UVars.Instance.is_empty u then Ids (number_leaf m c0, [||]) else none
+    | Int _ | Float _ | String _ -> Ids (number_leaf m c0, [||])
+    | Var id -> if var_ok env vars id then Ids (number_leaf m c0, [||]) else none
+    | Sort s ->
+      begin match s with
+      | Sorts.SProp | Sorts.Prop | Sorts.Set -> Ids (number_leaf m c0, [||])
+      | _ -> none
+      end
+    | App (f, _) when Constr.isEvar f -> none
+    | Cast (c1, _, _) when Constr.isEvar c1 -> none
+    | App (f, args) ->
+      let kids = Array.make (Array.length args + 1) none in
+      kids.(0) <- build m env vars (EConstr.of_constr f);
+      Array.iteri (fun i a -> kids.(i + 1) <- build m env vars (EConstr.of_constr a)) args;
+      if Array.for_all (fun k -> id k >= 0) kids
+      then Ids (number_node m (0, Array.map id kids), kids) else Ids (-1, kids)
+    | Cast (c1, k, t) ->
+      let a = build m env vars (EConstr.of_constr c1) in
+      let b = build m env vars (EConstr.of_constr t) in
+      let tag = match k with Constr.VMcast -> 1 | Constr.NATIVEcast -> 2 | Constr.DEFAULTcast -> 3 in
+      if id a >= 0 && id b >= 0
+      then Ids (number_node m (tag, [| id a; id b |]), [| a; b |]) else Ids (-1, [| a; b |])
+    | Lambda (_, c1, c2) | Prod (_, c1, c2) ->
+      let a = build m env vars (EConstr.of_constr c1) in
+      let b = build m env vars (EConstr.of_constr c2) in
+      Ids (-1, [| a; b |])
+    | LetIn (_, c1, c2, c3) ->
+      let a = build m env vars (EConstr.of_constr c1) in
+      let b = build m env vars (EConstr.of_constr c2) in
+      let d = build m env vars (EConstr.of_constr c3) in
+      Ids (-1, [| a; b; d |])
+    | Rel _ | Evar _ | Meta _ | Case _ | Fix _ | CoFix _ | Proj _ | Array _ -> none
+end
+
 (* cstr must be in n.f. w.r.t. evars and execute returns a judgement
    where both the term and type are in n.f. *)
-let rec execute env sigma cstr =
+let rec execute m ids env sigma cstr =
+  match m with
+  | Some mm when TypingMemo.id ids >= 0 ->
+    let i = TypingMemo.id ids in
+    let subst0 = UState.subst (Evd.ustate sigma) in
+    begin match Hashtbl.find_opt mm.TypingMemo.judg i with
+    | Some (ty, s0) when s0 == subst0 ->
+      sigma, { uj_val = cstr; uj_type = ty }
+    | _ ->
+      let lv0 = fst (Evd.universe_context_set sigma) in
+      let pb0 = Evd.conv_pbs sigma in
+      let sigma, j = execute_node m ids env sigma cstr in
+      if fst (Evd.universe_context_set sigma) == lv0 && UState.subst (Evd.ustate sigma) == subst0
+         && Evd.conv_pbs sigma == pb0 then
+        Hashtbl.replace mm.TypingMemo.judg i (j.uj_type, subst0);
+      sigma, j
+    end
+  | _ -> execute_node m ids env sigma cstr
+
+and execute_node m ids env sigma cstr =
+  let none = TypingMemo.none in
+  let kid = TypingMemo.kid ids in
   let cstr = whd_evar sigma cstr in
   match EConstr.kind sigma cstr with
     | Meta n -> assert false (* Typing should always be performed on meta-free terms *)
 
     | Evar ev ->
         let ty = EConstr.existential_type sigma ev in
-        let sigma, jty = execute env sigma ty in
+        let sigma, jty = execute m none env sigma ty in
         let sigma, jty = assumption_of_judgment env sigma jty in
         sigma, { uj_val = cstr; uj_type = jty }
 
@@ -565,15 +666,15 @@ let rec execute env sigma cstr =
     | Case (ci, u, pms, p, iv, c, lf) ->
         let case = (ci, u, pms, p, iv, c, lf) in
         let (ci, (p,rp), iv, c, lf) = EConstr.expand_case env sigma case in
-        let sigma, cj = execute env sigma c in
-        let sigma, pj = execute env sigma p in
-        let sigma, lfj = execute_array env sigma lf in
+        let sigma, cj = execute m none env sigma c in
+        let sigma, pj = execute m none env sigma p in
+        let sigma, lfj = execute_array m env sigma lf in
         let sigma = match iv with
           | NoInvert -> sigma
           | CaseInvert {indices} ->
             let args = Array.append pms indices in
             let t = mkApp (mkIndU (ci.ci_ind,u), args) in
-            let sigma, tj = execute env sigma t in
+            let sigma, tj = execute m none env sigma t in
             let sigma, tj = type_judgment env sigma tj in
             let sigma = check_actual_type env sigma cj tj.utj_val in
             sigma
@@ -581,13 +682,13 @@ let rec execute env sigma cstr =
         judge_of_case env sigma case ci (pj,rp) iv cj lfj
 
     | Fix ((vn,i as vni),recdef) ->
-        let sigma, (_,tys,_ as recdef') = execute_recdef env sigma recdef in
+        let sigma, (_,tys,_ as recdef') = execute_recdef m env sigma recdef in
         let fix = (vni,recdef') in
         check_fix env sigma fix;
         sigma, make_judge (mkFix fix) tys.(i)
 
     | CoFix (i,recdef) ->
-        let sigma, (_,tys,_ as recdef') = execute_recdef env sigma recdef in
+        let sigma, (_,tys,_ as recdef') = execute_recdef m env sigma recdef in
         let cofix = (i,recdef') in
         check_cofix env sigma cofix;
         sigma, make_judge (mkCoFix cofix) tys.(i)
@@ -604,44 +705,49 @@ let rec execute env sigma cstr =
       end
 
     | Proj (p, _, c) ->
-      let sigma, cj = execute env sigma c in
+      let sigma, cj = execute m none env sigma c in
       sigma, judge_of_projection env sigma p cj
 
     | App (f,args) ->
-        let sigma, fj = execute env sigma f in
-        let sigma, jl = execute_array env sigma args in
+        let sigma, fj = execute m (kid 0) env sigma f in
+        let sigma, jl =
+          let sigma = ref sigma in
+          let jl = Array.mapi (fun i a ->
+              let s, j = execute m (kid (i + 1)) env !sigma a in sigma := s; j) args in
+          !sigma, jl
+        in
         judge_of_apply env sigma fj jl
 
     | Lambda (name,c1,c2) ->
-        let sigma, j = execute env sigma c1 in
+        let sigma, j = execute m (kid 0) env sigma c1 in
         let sigma, var = type_judgment env sigma j in
         let sigma, decl = check_binder_relevance env sigma var.utj_type (LocalAssum (name, var.utj_val)) in
         let env1 = push_rel decl env in
-        let sigma, j' = execute env1 sigma c2 in
+        let sigma, j' = execute m (kid 1) env1 sigma c2 in
         sigma, judge_of_abstraction env1 sigma name.binder_name var j'
 
     | Prod (name,c1,c2) ->
-        let sigma, j = execute env sigma c1 in
+        let sigma, j = execute m (kid 0) env sigma c1 in
         let sigma, varj = type_judgment env sigma j in
         let sigma, decl = check_binder_relevance env sigma varj.utj_type (LocalAssum (name, varj.utj_val)) in
         let env1 = push_rel decl env in
-        let sigma, j' = execute env1 sigma c2 in
+        let sigma, j' = execute m (kid 1) env1 sigma c2 in
         let sigma, varj' = type_judgment env1 sigma j' in
         sigma, judge_of_product env sigma name.binder_name varj varj'
 
      | LetIn (name,c1,c2,c3) ->
-        let sigma, j1 = execute env sigma c1 in
-        let sigma, j2 = execute env sigma c2 in
+        let sigma, j1 = execute m (kid 0) env sigma c1 in
+        let sigma, j2 = execute m (kid 1) env sigma c2 in
         let sigma, j2 = type_judgment env sigma j2 in
         let sigma, _ =  judge_of_cast env sigma j1 DEFAULTcast j2 in
         let sigma, decl = check_binder_relevance env sigma j2.utj_type (LocalDef (name, j1.uj_val, j2.utj_val)) in
         let env1 = push_rel decl env in
-        let sigma, j3 = execute env1 sigma c3 in
+        let sigma, j3 = execute m (kid 2) env1 sigma c3 in
         sigma, judge_of_letin env sigma name.binder_name j1 j2 j3
 
     | Cast (c,k,t) ->
-        let sigma, cj = execute env sigma c in
-        let sigma, tj = execute env sigma t in
+        let sigma, cj = execute m (kid 0) env sigma c in
+        let sigma, tj = execute m (kid 1) env sigma t in
         let sigma, tj = type_judgment env sigma tj in
         judge_of_cast env sigma cj k tj
 
@@ -655,22 +761,31 @@ let rec execute env sigma cstr =
         sigma, judge_of_string env s
 
     | Array(u,t,def,ty) ->
-      let sigma, tyj = execute env sigma ty in
+      let sigma, tyj = execute m none env sigma ty in
       let sigma, tyj = type_judgment env sigma tyj in
-      let sigma, defj = execute env sigma def in
-      let sigma, tj = execute_array env sigma t in
+      let sigma, defj = execute m none env sigma def in
+      let sigma, tj = execute_array m env sigma t in
       judge_of_array env sigma (EInstance.kind sigma u) tj defj tyj
 
-and execute_recdef env sigma (names,lar,vdef) =
-  let sigma, larj = execute_array env sigma lar in
+and execute_recdef m env sigma (names,lar,vdef) =
+  let sigma, larj = execute_array m env sigma lar in
   let sigma, lara = Array.fold_left_map (assumption_of_judgment env) sigma larj in
   let env1 = push_rec_types (names,lara,vdef) env in
-  let sigma, vdefj = execute_array env1 sigma vdef in
+  let sigma, vdefj = execute_array m env1 sigma vdef in
   let vdefv = Array.map j_val vdefj in
   let sigma = check_type_fixpoint env1 sigma names lara vdefj in
   sigma, (names,lara,vdefv)
 
-and execute_array env = Array.fold_left_map (execute env)
+and execute_array m env = Array.fold_left_map (execute m TypingMemo.none env)
+
+let execute env sigma c =
+  if Reductionops.reduction_effects_active () then execute None TypingMemo.none env sigma c
+  else
+    let mm = TypingMemo.create () in
+    let ids = TypingMemo.build mm env (ref Names.Id.Map.empty) c in
+    execute (Some mm) ids env sigma c
+
+let execute_array env = Array.fold_left_map (execute env)
 
 let check env sigma c t =
   let sigma, j = execute env sigma c in

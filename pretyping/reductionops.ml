@@ -48,6 +48,8 @@ let reduction_effect_hook env sigma con c =
     effect_function env sigma (Lazy.force c)
   with Not_found -> ()
 
+let reduction_effects_active () = not (Cmap_env.is_empty !constant_effect_table)
+
 let cache_reduction_effect (con,funkey) =
   constant_effect_table := Cmap_env.add con funkey !constant_effect_table
 
