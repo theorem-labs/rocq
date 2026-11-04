@@ -1670,8 +1670,8 @@ let search_witness_list prover l =
     check looks at and which steps of it start, and which clauses reuse tries) is a function of the
     call's clauses and options and of the state that the same process's earlier calls left (the
     persistent cache, the provers' memos, the model search's rates per unit of size): the same
-    commands in the same order decide the same on any machine under any load. What the check and
-    reuse can change in a call's result is stated at [witness_list]. *)
+    commands in the same order decide the same whatever the load (measured, and what this does and
+    does not change in a call's result: see [witness_list]). *)
 let early_budget k = 32 + (32 * k)
 
 (** The share of the prover's work that the check may spend in a call. With the clock that this
@@ -1741,33 +1741,48 @@ let speculate default f =
   *   call) are each stated to give the value a new computation would. They
   *   do not give the same physical sharing: a hit returns nodes shared with
   *   an earlier search, a miss fresh ones. That sharing reaches the proof
-  *   term, and so the bytes of the object file, though not its value. And
-  *   which earlier searches ran is decided by the budgets, through the
-  *   check's model searches and reuse. On speed-7.5, which budgeted by the
-  *   clock, two files of the tree r187-final-0e134b1a compiled to different
-  *   bytes from one run to another with equal values (INFRA-263,
-  *   micromega-deterministic-20261103.md).
+  *   term, and so the bytes of the object file, though not its value. Which
+  *   earlier searches ran is decided by the budgets, through the check's
+  *   model searches and reuse.
   * - On a call that [search_witness_list] fails or raises on, [witness_list]
   *   need not fail at the same clause, or with the same failure ([Unknown]
   *   or a model) or exception: the check can fail it at a clause after one
   *   on which the prover would fail or raise, and a clause that reuse proves
-  *   is not searched in the first pass. The check fails a call only at a
-  *   clause that no certificate refutes, and reuse proves a clause only with
-  *   a certificate the kernel's checker accepts, and searches it again in
-  *   the second pass.
+  *   is not searched in the first pass. So a call can end as [Unknown] where
+  *   stock raises. The check fails a call only at a clause that no
+  *   certificate refutes, and reuse proves a clause only with a certificate
+  *   the kernel's checker accepts, and searches it again in the second pass.
   * - No exception of the check or of reuse leaves the call but an interrupt
   *   ([Sys.Break], [Control.Timeout]): any other one, a stack overflow
   *   included, counts as nothing known of the clause, or as a try that did
   *   not prove it, and the prover decides the clause as without them
   *   ([speculate]).
   * - All of this is decided by the budgets, which in the tactics read no
-  *   clock (see [early_budget]): the same commands in the same order give the
-  *   same certificates, sharing included, verdicts and failures on every run,
-  *   on any machine under any load. A call that ends on its own ends where
-  *   the budgets decide; an interrupt ends it where it arrives, and as the
-  *   check and reuse add work to the prover's, a call that
-  *   [search_witness_list] finishes just inside an enclosing [Timeout] can
-  *   end outside it.
+  *   clock, only [Mutils.Work]'s count (see [early_budget]). A call that ends
+  *   on its own ends where the budgets decide; an interrupt ends it where it
+  *   arrives, and as the check and reuse add work to the prover's, a call
+  *   that [search_witness_list] finishes just inside an enclosing [Timeout]
+  *   can end outside it.
+  *
+  * What was measured (INFRA-263, micromega-deterministic-20261103.md; the
+  * trees r187-final-0e134b1a, r188-final-730a8094 and r484-final-9dd938b5,
+  * compiled with the grading engine's arguments):
+  * - Verdicts: the same for every call under this budget and under the
+  *   clock budget of speed-7.5 (0 different of 4,613,592 calls). Under the
+  *   clock, idle against 64 competing processes on 32 processors, 0
+  *   different of 1,141,857 calls of r187, though 10,365 of them split their
+  *   clauses differently between the check, reuse and the prover. The case
+  *   above where a call ends as [Unknown] where stock raises is built in the
+  *   unit test budget_load_test.ml, which the clock budget failed. No call of
+  *   the three trees hit it, idle or under load.
+  * - Object files: under this budget, idle and under that load, every .vo
+  *   of the three trees has the same bytes. Under the clock budget, 23 .vo
+  *   of r187 had different bytes idle and under load, with equal values
+  *   where compared (the proofs and their certificates).
+  * The budget does not make any proof correct or incorrect: the kernel
+  * checks each proof whatever the budget. What it changes is that the bytes
+  * of an object file no longer depend on the machine's load, which caches
+  * keyed on those bytes need.
   *
   * [clock], when given, replaces [Mutils.Work]'s count in the budgets with
   * its own (the clock mode: [Sys.time] budgets by processor seconds, as
