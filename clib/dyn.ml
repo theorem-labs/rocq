@@ -44,6 +44,7 @@ sig
   val create : string -> 'a tag
   val eq : 'a tag -> 'b tag -> ('a, 'b) CSig.eq option
   val repr : 'a tag -> string
+  val repr_opt : 'a tag -> string option
 
   val dump : unit -> (int * string) list
 
@@ -111,6 +112,8 @@ module Self : PreS = struct
     with Not_found ->
       let () = Printf.eprintf "Unknown dynamic tag %i\n%!" s in
       assert false
+
+  let repr_opt s = Int.Map.find_opt s !dyntab
 
   let name s =
     let hash = Hashtbl.hash s in

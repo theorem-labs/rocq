@@ -1,0 +1,87 @@
+(************************************************************************)
+(*         *      The Rocq Prover / The Rocq Development Team           *)
+(*  v      *         Copyright INRIA, CNRS and contributors             *)
+(* <O___,, * (see version control and CREDITS file for authors & dates) *)
+(*   \VV/  **************************************************************)
+(*    //   *    This file is distributed under the terms of the         *)
+(*         *     GNU Lesser General Public License Version 2.1          *)
+(*         *     (see LICENSE file for the text of the license)         *)
+(************************************************************************)
+
+(** Functions on binary numbers that the bytecode VM runs as C routines.
+
+    The bytecode compiler asks {!recognize} about the body of each constant.
+    When the body is equal to a reference term of this module (up to binder
+    names, the printing annotation of matches, and the inductive types, which
+    may be any types of the expected shape), the compiler puts the
+    instruction [BINNUM k n] at the start of the code of the function, after
+    its entry sequence. A constant that a reference calls must itself have a
+    body equal to the reference of that callee (read from the environment
+    each time, through aliases). Routine [k] (kernel/byterun/rocq_binnum.c)
+    then computes the result when every node of the arguments that it reads
+    is a constructor of the expected type, and leaves every other call to the
+    bytecode. It reads at least the nodes that the bytecode reads. A
+    positive result that a routine computes whole, of 2 to 62 bits, is one
+    packed block (kernel/byterun/rocq_binnum.h), and so is every chain of 1
+    to 61 nodes in the VM value of a structured constant [Const_val]
+    ({!Vmvalues.val_of_str_const}; no other kind of structured constant);
+    [SWITCH], [PROJ] and {!Vmvalues.whd_val} read a packed block as the
+    chain of its number. The primitive operations that a reference calls
+    match the constants that the environment declares as those primitives.
+
+    Environment variables, for tests and measurement only, read when this
+    module is loaded:
+    - [ROCQ_VM_BINNUM=0] turns recognition off; [ROCQ_VM_BINNUM=-name1,-name2]
+      turns off the listed routines, [-pack] turns all packing off, and
+      [-packlit] the packing of literals. Any other value stops
+      the process.
+    - [ROCQ_VM_BINNUM_STATS=1] prints, at the exit of each process, the
+      calls, refusals and words read of each routine, in total, at function
+      entry and at call sites, the arguments it read as chains, packed
+      blocks and chains over a packed tail, and the packed results it made;
+      the expansions of packed blocks by [SWITCH], [whd_val] and [PROJ], and
+      the literals packed; the constants bound and the near misses of the
+      recognizer at function entry; and the counts of the recognitions at
+      call sites. [2] also prints, for each near miss at function entry, the
+      first node that differs from the reference. When the variable is
+      unset, the routines, [SWITCH], [PROJ], [whd_val] and the packing of
+      literals count nothing. *)
+
+val recognize :
+  ?name:Names.Constant.t -> ?count:bool -> Environ.env -> Constr.t -> int -> int option
+(** [recognize ?name env body] is, for each function index [i] of the
+    top-level fixpoint block of [body] (index 0 for a body that is a
+    function), the routine of the function, if [body] is equal to a
+    reference term and every inductive type in it has the expected shape in
+    [env]. It never raises. [name] is only printed in the statistics.
+    [count:false] keeps this recognition out of the statistics, for a body
+    whose declaration they already counted and whose code one process
+    compiles again ({!Vmsymtable}). *)
+
+val recognize_call : Environ.env -> Names.Constant.t -> int option
+(** [recognize_call env cst] is the routine of the function that [cst]
+    denotes, for a call site of [cst]: [cst] must be a transparent definition
+    with an empty universe context in [env], and its body must be recognized
+    as by {!recognize}. The function is the one at the init index of a
+    fixpoint body, or the body itself. It never raises. *)
+
+val binds_call_ignoring_switch : Environ.env -> Names.Constant.t -> bool
+(** [binds_call_ignoring_switch env cst] is whether {!recognize_call} would
+    answer a routine for [cst] were every routine on, so it does not move with
+    [ROCQ_VM_BINNUM]. A compiler decision about the code of a call of [cst]
+    asks this: [ROCQ_VM_BINNUM] takes BINNUM away and changes nothing else.
+    It counts nothing and never raises. *)
+
+val no_binnum : int -> int option
+(** No routine for any function. *)
+
+val arity : int -> int
+(** The number of arguments of a routine. *)
+
+val reset_stats : unit -> unit
+(** Zeroes the counters, in a process forked from one that has used them. *)
+
+val print_stats : unit -> unit
+(** Prints the counters on stderr if [ROCQ_VM_BINNUM_STATS] is set. The
+    process prints them at exit by itself; this is for processes that end
+    with [Unix._exit]. *)

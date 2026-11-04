@@ -89,6 +89,8 @@ end
 
 module type RefConvertArg = sig
   type t
+  (** [t] must hold no source location (a global reference, an inductive):
+      table entries enter the interface key of a library as they are. *)
   module Set : CSig.USetS with type elt = t
   val encode : Environ.env -> Libnames.qualid -> t
   val subst : Mod_subst.substitution -> t -> t

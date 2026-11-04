@@ -57,10 +57,11 @@ let cache_ref (s,c) =
 
 let (inRocqlibRef : Libobject.locality * (string * GlobRef.t) -> Libobject.obj) =
   let open Libobject in
-  declare_object @@ object_with_locality "COQLIBREF"
+  (* A string and a global reference: no source location. *)
+  declare_object { (object_with_locality "COQLIBREF"
     ~cache:cache_ref
     ~subst:(Some ident_subst_function)
-    ~discharge:(fun x -> x)
+    ~discharge:(fun x -> x)) with interface_key = Key_as_is }
 
 (** Replaces a binding ! *)
 let register_ref local s c =

@@ -19,6 +19,7 @@ struct
   type any = Any : ('a, 'b, 'c) tag -> any
   let eq = DYN.eq
   let repr = DYN.repr
+  let repr_opt = DYN.repr_opt
   let create = DYN.create
   let dump = DYN.dump
   let name s = match DYN.name s with
