@@ -113,17 +113,30 @@ val saturate :
 val app_funs : ('a -> 'b option) list -> 'a -> 'b option
 val command : string -> string array -> 'a -> 'b
 
-(** A count of the work that lia and nia do, in units of work: the budgets of their early-failure
-    check and certificate reuse ([Coq_micromega.witness_list]) count it instead of a clock, so
-    what they decide does not depend on the machine or its load. The plugin adds to it at fixed
-    points of its code, nothing else does, and it reads nothing outside the plugin: each row a
-    simplex pivot rewrites ([Simplex]), each node of an expression that the development of a
-    constraint walks ([Certificate.dev_form]), each node of a constraint that the model search
-    evaluates at a point ([ModelSearch]), each lookup of the persistent cache, each atom that the
-    check sizes, and each formula that reuse hashes or renumbers ([Coq_micromega]). So the count a
-    computation adds is a function of what it computes. *)
+(** The work counter of lia and nia: the one quantity that the budgets of their early-failure
+    check and certificate reuse ([Coq_micromega.witness_list], [ModelSearch.find_model]) read in
+    the tactics, where speed-7.5 read [Sys.time].
+
+    Its inputs, all of them: [tick] is called at these nine places and nowhere else (each place
+    says so in a comment or docstring, and [grep -n "Work\.tick"] in this directory lists exactly
+    them).
+    - [Simplex.pivot_with]: each row a pivot rewrites.
+    - [Certificate.dev_form]: each node of an expression the development of a constraint walks.
+    - [ModelSearch.model_eval]: each node of a constraint the model search evaluates at a point.
+    - [Coq_micromega.int_early]: each lookup of the persistent cache.
+    - [Coq_micromega.witness_list]: each atom the check sizes ([size]); each formula reuse hashes
+      ([positions]), reads for a certificate ([cited]) or renumbers ([renumber]); each try.
+    Each is a step of a computation on the call's clauses and on state the process's earlier
+    calls left, so the count is a function of the commands run, in their order; nothing outside
+    the plugin moves it. Nothing in it reads a clock.
+
+    That is the whole argument that the budgets are independent of the clock. It does not rest on
+    the order of the provers' memo hits: that order exists (the development memo is shared by
+    every call of a process, and the check's model searches go through it too), and the count
+    depends on it (a hit adds no [tick] in [dev_form]), but the order is itself fixed by the
+    commands and by earlier budget decisions, which are functions of this count. *)
 module Work : sig
-  val charge : int -> unit
+  (** adds a unit of work *)
   val tick : unit -> unit
 
   (** [now ()]: the units counted so far in this process, as a float, the type of the budgets *)

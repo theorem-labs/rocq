@@ -444,7 +444,6 @@ end
 
 module Work = struct
   let count = ref 0
-  let charge n = count := !count + n
   let tick () = incr count
   let now () = float_of_int !count
 end

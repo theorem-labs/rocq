@@ -1664,14 +1664,15 @@ let search_witness_list prover l =
     clauses alone let the check cost several times the prover's time (P21: 4,096 parity cubes, 3.5 s
     against stock's 0.51 s).
 
-    The budgets of the tactics read no clock, only [Mutils.Work]'s count, which nothing but the
-    plugin's own computations moves; a clock budgets a call only in the clock mode
-    ([witness_list ~clock]), which no tactic selects. So what the budgets decide (which clauses the
-    check looks at and which steps of it start, and which clauses reuse tries) is a function of the
-    call's clauses and options and of the state that the same process's earlier calls left (the
-    persistent cache, the provers' memos, the model search's rates per unit of size): the same
-    commands in the same order decide the same whatever the load (measured, and what this does and
-    does not change in a call's result: see [witness_list]). *)
+    The budgets of the tactics read no clock, only [Mutils.Work]'s count; [Mutils.Work] lists
+    every input of that count, and why the argument does not rest on the order of memo hits. A
+    clock budgets a call only in the clock mode ([witness_list ~clock]), which no tactic selects.
+    So what the budgets decide (which clauses the check looks at and which steps of it start, and
+    which clauses reuse tries) is a function of the call's clauses and options and of the state
+    that the same process's earlier calls left (the persistent cache, the provers' memos, the
+    model search's rates per unit of size): the same commands in the same order decide the same
+    whatever the load (measured, and what this does and does not change in a call's result: see
+    [witness_list]). *)
 let early_budget k = 32 + (32 * k)
 
 (** The share of the prover's work that the check may spend in a call. With the clock that this
