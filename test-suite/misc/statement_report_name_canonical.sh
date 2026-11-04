@@ -14,7 +14,10 @@
 # come from another path. Then, with zqxaXzqxforged renamed to zqxa, a line
 # break, then zqxforged, in the opaques segment of Canon.vo only, the report
 # must stop before the statement's line, with no END line, and keep the exit
-# status 0: the name it checks is the name it prints.
+# status 0: the name it checks is the name it prints. The stop must quote the
+# canonical half, the text that failed, not the valid user half; the warning
+# that carries the error escapes it once more, so its quotes and line break
+# read \" and \\n.
 
 . misc/rocqchk_names/lib.sh
 
@@ -36,6 +39,6 @@ else
 fi
 
 ocaml "$R" "$d/base/Canon.vo" opaques aXzqxforged $'a\nzqxforged'
-both_vm c-canonical stop 'would print the name' zqxforged \
+both_vm c-canonical stop 'would print the name \"BadNames.Canon:O.zqxa\\nzqxforged.ax\", which' zqxforged \
   -statement-report "$d/req" -Q "$d/base" BadNames -admit BadNames.Canon
 exit $status
