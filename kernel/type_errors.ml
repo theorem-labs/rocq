@@ -225,8 +225,7 @@ let map_ptype_error fr f = function
 | UndeclaredQualities _ | UndeclaredUniverses _ | NotAllowedSProp
 | UnsatisfiedUnivConstraints _
 | UnsatisfiedPConstraints _
-| ReferenceVariables _ | BadInvert | BadVariance _ | UndeclaredUsedVariables _ | IllFormedConstant _ | IllFormedInductive _
-| ArrayTooLong _ as e -> e
+| ReferenceVariables _ | BadInvert | BadVariance _ | UndeclaredUsedVariables _ | IllFormedConstant _ | IllFormedInductive _ as e -> e
 | NotAType j -> NotAType (on_judgment f j)
 | BadAssumption j -> BadAssumption (on_judgment f j)
 | ElimArity (pi, c, ar) -> ElimArity (pi, f c, ar)
@@ -247,3 +246,4 @@ let map_ptype_error fr f = function
   IllTypedRecBody (n, Array.map (Context.map_annot_relevance_het fr) na, Array.map (on_judgment f) jv, Array.map f t)
 | BadBinderRelevance (rlv, decl) -> BadBinderRelevance (fr rlv, Context.Rel.Declaration.map_constr_het fr f decl)
 | BadCaseRelevance (rlv, case) -> BadCaseRelevance (fr rlv, f case)
+| ArrayTooLong _ as e -> e
