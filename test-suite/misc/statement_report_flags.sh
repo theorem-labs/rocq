@@ -14,7 +14,7 @@ $coqc -Q "$d" StmtNeg "$d/Flags.v"
 
 report () {
   "$BIN"rocqchk -silent -statement-report "$d/flag_requests" -Q "$d" StmtNeg "$@" > "$d/out" 2>&1
-  sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
+  sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/out"
   grep -q '^flag guard unsafe-fixpoint StmtNeg.Flags.g StmtNeg.Flags:g$' "$d/out"
   grep -q '^flag tit type-in-type StmtNeg.Flags.tt_T StmtNeg.Flags:tt_T$' "$d/out"
   grep -q '^flag pos assumed-positive StmtNeg.Flags.Bad StmtNeg.Flags:Bad$' "$d/out"

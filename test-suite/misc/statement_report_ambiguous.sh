@@ -19,7 +19,7 @@ $coqc -Q "$d" P "$d/A.v"
 $coqc -Q "$d" P "$d/A/B.v"
 printf 'amb P.A.B.C.ax -\n' > "$d/requests"
 "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" P P.A P.A.B > "$d/out" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/out"
 grep -q '^statement amb P.A.B.C.ax - ambiguous 0 0$' "$d/out"
 if grep -qE '^(axiom|resolved|flag) amb ' "$d/out"; then exit 1; fi
 grep -q '^END STATEMENT REPORT$' "$d/out"

@@ -22,7 +22,7 @@ EOF
 $coqc -Q "$d" StmtRes "$d/Res.v"
 printf 'hidden StmtRes.Res.M.ax -\nfinal StmtRes.Res.P.ax -\nnone StmtRes.Res.M.nothing -\n' > "$d/requests"
 "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtRes StmtRes.Res > "$d/out" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/out"
 grep -q '^statement hidden StmtRes.Res.M.ax - not-requested 1 0$' "$d/out"
 grep -q '^axiom hidden [^ ]* StmtRes.Res:N.ax$' "$d/out"
 grep -q '^statement final StmtRes.Res.P.ax - not-requested 1 0$' "$d/out"
@@ -41,7 +41,7 @@ V
 $coqc -Q "$d" StmtRes "$d/Hid.v"
 printf 'closure StmtRes.Hid.M.ax -\ntyped StmtRes.Hid.M.ax StmtRes.Hid.trusted\nafter StmtRes.Hid.trusted -\n' > "$d/treq"
 "$BIN"rocqchk -silent -statement-report "$d/treq" -Q "$d" StmtRes StmtRes.Hid > "$d/tout" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/tout"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/tout"
 grep -q '^statement closure StmtRes.Hid.M.ax - not-requested 1 0$' "$d/tout"
 grep -q '^statement typed StmtRes.Hid.M.ax StmtRes.Hid.trusted model-missing 0 0$' "$d/tout"
 grep -q '^statement after StmtRes.Hid.trusted - not-requested 0 0$' "$d/tout"
@@ -62,7 +62,7 @@ $coqc -Q "$d/P" P "$d/P/A.v"
 $coqc -Q "$d/P" P "$d/P/A/B.v"
 printf 'pub P.A.B.ax -\n' > "$d/preq"
 "$BIN"rocqchk -silent -statement-report "$d/preq" -Q "$d/P" P P.A P.A.B > "$d/pout" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/pout"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/pout"
 grep -q '^statement pub P.A.B.ax - not-requested 1 0$' "$d/pout"
 grep -q '^axiom pub P.A.B.ax P.A.B:ax$' "$d/pout"
 if grep -q 'P.A:B.ax' "$d/pout"; then exit 1; fi

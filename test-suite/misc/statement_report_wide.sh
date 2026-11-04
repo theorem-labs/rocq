@@ -21,6 +21,6 @@ n=1024
 $coqc -Q "$d" StmtWide "$d/Wide.v"
 printf 'wide StmtWide.Wide.model -\n' > "$d/requests"
 "$BIN"rocqchk -silent -statement-report "$d/requests" -Q "$d" StmtWide StmtWide.Wide > "$d/out" 2>&1
-sed -n '/^STATEMENT REPORT 2$/,/^END STATEMENT REPORT$/p' "$d/out"
+sed -n '/^STATEMENT REPORT 3$/,/^END STATEMENT REPORT$/p' "$d/out"
 awk '$1 == "statement" && $2 == "wide" { found = 1; ok = ($6 == 0 && $7 == 0) }
      END { exit !(found && ok) }' "$d/out"

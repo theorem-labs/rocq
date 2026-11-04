@@ -1,4 +1,4 @@
-STATEMENT REPORT 2
+STATEMENT REPORT 3
 statement ok statement_report.model statement_report.trusted match 1 1
 axiom ok statement_report.ax statement_report:ax
 flag ok indices-not-mattering Corelib.Init.Logic.eq Corelib.Init.Logic:eq
