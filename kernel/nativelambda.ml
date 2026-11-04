@@ -54,5 +54,7 @@ end
 module Lambda = Genlambda.Make(Val)
 
 let lambda_of_constr env sigma c =
-  let lam = Lambda.lambda_of_constr env sigma c in
+  (* The native compiler keeps the stock translation: it compiles to a file, as a library's
+     bytecode is, and only code compiled to run now is compiled with inlining. *)
+  let lam = Lambda.lambda_of_constr ~inline_limit:0 env sigma c in
   optimize lam

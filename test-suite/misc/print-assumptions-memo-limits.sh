@@ -68,7 +68,7 @@
 # - with a cache that keeps every entry until the environment changes,
 #   1,240,000 to 1,280,000 KiB, which runs out here.
 # The cap above leaves 80,000 KiB over the largest of the first three. Builds
-# of the grader bound memory by their cgroup, not by address space.
+# of the check harness bound memory by their cgroup, not by address space.
 #
 # Constants without a body (axioms, parameters, Admitted lemmas) whose types
 # name many objects. The walk without reuse keeps no reference of such a type
@@ -104,6 +104,15 @@ set -e
 
 export PATH=$BIN:$PATH
 export LC_ALL=C
+
+# The caps bound the Print Assumptions walk. On a build configured with
+# -native-compiler yes, rocq c also compiles each file to native code by
+# default, and the caps would then bound ocamlopt on these files instead:
+# Chain50000 runs ocamlopt out of stack under ulimit -s 8192.
+rocq() {
+  if [ "$1" = c ]; then shift; command rocq c -native-compiler no "$@"
+  else command rocq "$@"; fi
+}
 
 case $(rocq --version) in
   *"compiled with OCaml 4."*) ocaml4=true ;;

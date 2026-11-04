@@ -102,42 +102,101 @@ let refcount x = x.refcount
 module Tbl = struct
   type key = t
 
-  (* The API looks like Hashtbl but implemented using Int.Map ref.
+  (* The API looks like Hashtbl, but a table maps each [hash] to the list of
+     every binding whose key has that hash, newest first, and a lookup scans
+     that list for the first binding whose key passes a predicate. [raw_find]
+     lets [of_constr] look up a term that is not hashconsed yet (and a leaf
+     before its subterms are converted) by its hash and a predicate.
 
-     We don't use Hashtbl for 2 reasons:
-     - to provide the pre-hashconsing leaf lookup (not sure why it's so fast but it seems to be)
-       (although note we could do this with Hashtbl by using something like
-       [type key = Real of t | Fake of int (* hash *) * (t -> bool)],
-       equality between [Real] and [Fake] uses the predicate in [Fake],
-       wrap [add] so that we only add [Real] keys,
-       then [raw_find] is [Hashtbl.find_opt] using [Fake].)
+     Upstream kept this map in an [Int.Map.t ref]: it measured that a balanced
+     tree beat [Hashtbl] on an artificial example (a balanced binary tree of
+     distinct primitive ints, with no sharing), and was a bit slower in the
+     real world. On a whole-tree coqchk run the tree walk ([Int.find_opt]) and
+     the path copy of every [add] ([Map.bal], [update]) cost 218 of the 610
+     CPU-seconds of [of_constr], plus the minor GC that promotes the copies.
 
-     - for unclear reasons Int.Map ref is dramatically faster on an artificial example
-       (balanced binary tree whose leaves are all different primitive ints,
-        such that there is no sharing).
-       It is a bit slower in the real world.
-       It seems that hashtbl produces overly large buckets which then need to be linearly scanned.
-       hconsing doesn't seem to have this problem,
-       perhaps because of differences between hashtbl and our hashset implementation. *)
-  type 'a t = (key * 'a) list Int.Map.t ref
+     So the map is an open-addressing table with linear probing: two arrays
+     indexed by slot, one with the hash and one with that hash's list. The
+     list [[]] marks a free slot, as no hash in the table has an empty list.
+     Slot [i] of a hash is the top bits of that hash times an odd constant
+     (Fibonacci hashing), so every bit of the hash moves the slot. At most
+     half of the slots are used, so a probe always reaches a free slot.
 
-  let create () = ref Int.Map.empty
+     The lists, their order and the predicates are the ones the [Int.Map]
+     held, so every lookup returns the binding it returned: the slot only
+     decides where a hash's list is kept, never which list or binding a
+     lookup finds. *)
+  type 'a t = {
+    mutable slot_hashes : int array;
+    mutable slot_bindings : (key * 'a) list array;
+    (* [Sys.int_size] minus log2 of the number of slots *)
+    mutable shift : int;
+    (* slots whose list is not empty *)
+    mutable used : int;
+  }
+
+  let initial_bits = 3
+
+  let create () =
+    let n = 1 lsl initial_bits in
+    { slot_hashes = Array.make n 0; slot_bindings = Array.make n [];
+      shift = Sys.int_size - initial_bits; used = 0 }
+
+  (* 2^63 divided by the golden ratio, rounded to odd. [Int64.to_int] takes it
+     modulo the width of an [int], which keeps it odd. *)
+  let golden = Int64.to_int 0x4F1BBCDCBFA53E0BL
+
+  let home shift h = (h * golden) lsr shift
+
+  (* The slot that holds hash [h], or the free slot where it would go. *)
+  let rec probe hashes bindings mask h i =
+    match Array.unsafe_get bindings i with
+    | [] -> i
+    | _ :: _ ->
+      if Int.equal (Array.unsafe_get hashes i) h then i
+      else probe hashes bindings mask h ((i + 1) land mask)
+
+  let slot tbl h =
+    let bindings = tbl.slot_bindings in
+    probe tbl.slot_hashes bindings (Array.length bindings - 1) h (home tbl.shift h)
+
+  let grow tbl =
+    let old_hashes = tbl.slot_hashes and old_bindings = tbl.slot_bindings in
+    let n = 2 * Array.length old_bindings in
+    let shift = tbl.shift - 1 in
+    let hashes = Array.make n 0 and bindings = Array.make n [] in
+    Array.iteri (fun i l -> match l with
+        | [] -> ()
+        | _ :: _ ->
+          let h = old_hashes.(i) in
+          let j = probe hashes bindings (n - 1) h (home shift h) in
+          hashes.(j) <- h;
+          bindings.(j) <- l)
+      old_bindings;
+    tbl.slot_hashes <- hashes;
+    tbl.slot_bindings <- bindings;
+    tbl.shift <- shift
 
   let add tbl key v =
-    tbl := Int.Map.update key.hash (function
-        | None -> Some [(key,v)]
-        | Some l -> Some ((key,v)::l))
-        !tbl
+    let h = key.hash in
+    let i = slot tbl h in
+    match tbl.slot_bindings.(i) with
+    | [] ->
+      tbl.slot_hashes.(i) <- h;
+      tbl.slot_bindings.(i) <- [(key,v)];
+      tbl.used <- tbl.used + 1;
+      if 2 * tbl.used > Array.length tbl.slot_bindings then grow tbl
+    | l -> tbl.slot_bindings.(i) <- (key,v) :: l
 
   let raw_find tbl h p =
-    match Int.Map.find_opt h !tbl with
-    | None -> None
-    | Some l -> List.find_map (fun (k,v) -> if p k then Some v else None) l
+    match tbl.slot_bindings.(slot tbl h) with
+    | [] -> None
+    | l -> List.find_map (fun (k,v) -> if p k then Some v else None) l
 
   let find_opt tbl key =
-    match Int.Map.find_opt key.hash !tbl with
-    | None -> None
-    | Some l ->
+    match tbl.slot_bindings.(slot tbl key.hash) with
+    | [] -> None
+    | l ->
       List.find_map (fun (k',v) ->
           if equal key k' then Some v else None)
         l
@@ -155,16 +214,19 @@ module Tbl = struct
   }
 
   let stats tbl =
-    Int.Map.fold (fun _ l acc ->
-        let len = List.length l in
-        {
-          hashes = acc.hashes + 1;
-          bindings = acc.bindings + len;
-          most_collisions = max acc.most_collisions len;
-        }
+    Array.fold_left (fun acc l ->
+        match l with
+        | [] -> acc
+        | _ :: _ ->
+          let len = List.length l in
+          {
+            hashes = acc.hashes + 1;
+            bindings = acc.bindings + len;
+            most_collisions = max acc.most_collisions len;
+          }
       )
-      !tbl
       empty_stats
+      tbl.slot_bindings
 
 end
 
