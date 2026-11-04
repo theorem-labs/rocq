@@ -1609,7 +1609,19 @@ type ('option, 'a, 'prf, 'model) prover =
   * datastructure.
   *)
 
+(* DIAGNOSTIC ONLY: MICROMEGA_DIAG_CLEAR=subst|dev|all forgets WithProof.subst's previous call
+   and/or the development memo before every search, to test whether a search's certificate
+   depends on the searches before it. *)
+let diag_clear = Sys.getenv_opt "MICROMEGA_DIAG_CLEAR"
+
 let find_witness p polys1 =
+  (match diag_clear with
+   | Some "subst" -> Polynomial.WithProof.subst_cache_clear ()
+   | Some "dev" -> Certificate.dev_memo_clear ()
+   | Some "all" ->
+     Polynomial.WithProof.subst_cache_clear ();
+     Certificate.dev_memo_clear ()
+   | _ -> ());
   let polys1 = List.map fst polys1 in
   p.prover (p.get_option (), polys1)
 
