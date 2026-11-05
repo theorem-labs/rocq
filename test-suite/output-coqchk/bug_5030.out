@@ -18,3 +18,23 @@ CONTEXT SUMMARY
     Corelib.Init.Datatypes.eq_true
     Corelib.Init.Logic.eq
   
+* Libraries admitted without checking, so the sections above cannot see unsafe flags inside their sealed modules:
+    Corelib.Init.Ltac
+    Corelib.Init.Notations
+    Corelib.Init.Logic
+    Corelib.Init.Datatypes
+    Corelib.Init.Specif
+    Corelib.Init.Sumbool
+    Corelib.Init.Tauto
+    Corelib.Init.Tactics
+    Corelib.Init.Wf
+    Corelib.Init.Decimal
+    Corelib.Init.Hexadecimal
+    Corelib.Init.Number
+    Corelib.Init.Nat
+    Corelib.Init.Peano
+    Corelib.Init.Byte
+    Corelib.Init.Equality
+    Corelib.Init.Prelude
+
+

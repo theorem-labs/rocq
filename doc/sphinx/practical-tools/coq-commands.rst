@@ -455,6 +455,32 @@ and ``rocq repl``, unless stated otherwise:
   when interpreting :cmd:`Require` commands.
 :-vok: Indicate Rocq to check a file completely, to load ``.vos`` files instead
   of ``.vo`` files when interpreting :cmd:`Require` commands. No ``.vo`` file is written.
+:-record-timeouts: *Rocq compile only*. Write ``file.timeouts.json`` beside the
+  output file, holding
+  ``{"format":2,"armed":A,"fired":F,"object_sha256":H}``, where ``A`` counts
+  the timeouts this compilation armed (:tacn:`timeout`, :cmd:`Timeout`,
+  :opt:`Default Timeout` and the Ltac2 ``Control.timeout`` and
+  ``Control.timeoutf``), ``F`` counts those that expired, and ``H`` is the
+  SHA-256 of the bytes of the output file, as 64 lowercase hexadecimal
+  characters in a string, or ``null`` when this compilation wrote no output
+  file. A failing compilation therefore records ``null`` even where the
+  output file of an earlier compilation is still at that path: it did not
+  write those bytes, so its counts do not describe them.
+  The hash binds the record to the object, so a reader can refuse a
+  record that sits beside another object. A record of an
+  earlier compilation is removed before the compilation starts, and the new one
+  is written at exit, after the output file on success and after the error
+  message on failure, so a compilation killed by a signal Rocq does not catch,
+  such as ``SIGKILL``, leaves no record. A tactic worker of the ``par:``
+  selector sends back what it armed and what fired, and a task whose answer is
+  lost counts as one armed timeout that fired, so a compilation that lost one
+  never reports zero; the
+  option refuses ``-async-proofs`` and ``-vos``, whose delegated proofs send
+  nothing back. The record is named after the base name of the output file, so
+  a ``.vo`` and a ``.vok`` compilation of one file share it, and a ``-vok``
+  compilation, which writes no output file, records ``null`` over whatever the
+  ``.vo`` compilation recorded. Without the
+  option nothing is removed or written.
 :-w (all|none|w₁,…,wₙ): Configure the display of warnings. This
   option expects all, none or a comma-separated list of warning names or
   categories (see Section :ref:`controlling-display`).
@@ -726,6 +752,13 @@ It excludes for instance anything related to the concrete syntax of
 objects (customized syntax rules, association between short and long
 names), implicit arguments, etc.
 
+``rocqchk`` refuses a library that holds a name it may print, such as the
+name of the library, of a constant, of an inductive type, of a constructor or
+of a functor parameter, when that name is not made of identifiers, for
+instance when it holds a blank or a line break. Rocq's own commands never
+write such a name: only a plugin, or a modified ``.vo`` file, can. Printed,
+such a name could forge a line of the checker's output.
+
 This tool can be used for several purposes. One is to check that a
 compiled library provided by a third-party has not been forged and
 that loading it cannot introduce inconsistencies [#]_. Another point is
@@ -754,14 +787,121 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   run for longer than its budget (see ``-worker-budget``) stops after the proof
   it is checking and hands its remaining proofs back to the main process,
   which queues them again for another process; each proof is still checked
-  exactly once. More processes use more memory. This option is not available
-  on Windows, and is ignored with ``-profile``.
+  exactly once. With ``-statement-report``, up to *n*-1 processes also read
+  and walk opaque proofs while the report is computed, and the report uses
+  what they have computed; the report is the one ``-j 1`` prints. More
+  processes use more memory. This option is not
+  available on Windows, and is ignored with ``-profile``.
 :-worker-budget *s*: With ``-j``, the time in seconds (default 20) after which
   a worker process stops, once it has completed one check, and gives the proofs
   it has not checked back to the main process. A worker lives for the budget
   plus the time of its last proof. Workers share the memory of the main process
   and copy more of it the longer they live, so a smaller budget bounds the
   memory they use. ``0`` makes a worker check a single proof.
+:-cost-hints *file*: With ``-j``, the expected cost of each library's checks,
+  one ``library seconds`` pair per line, the library by its full name; a later
+  line for a library replaces an earlier one. The queued proofs of costlier
+  libraries are given to workers first, and a worker checks them first in its
+  batch, so a long proof does not wait behind cheaper ones. The costs only
+  decide that order: the same libraries are accepted and rejected with or
+  without them, but when several proofs are wrong, which one is reported, and
+  so the exit code, can differ, as it can between two runs with ``-j``. Lines
+  that are not such a pair are skipped; anything but a regular file of at most
+  16 MiB that can be read to its end is ignored with a warning.
+:-statement-report *file*: After checking, print a report on named
+  constants, before the summary of ``-o``. Each line of *file* is a
+  request ``name model trusted``, its tokens separated by single spaces:
+  *name* is a label printed back as given, and *model* and *trusted* are
+  fully qualified constant names as ``rocqchk`` prints them. *trusted* may
+  be ``-`` or left out. Blank lines and lines starting with ``#`` are skipped;
+  any other line, and any line with a tab or a carriage return, is an error,
+  reported before any library is loaded. For each request, the report says
+  whether ``Definition f := model`` (``Polymorphic`` when *trusted* is) is
+  accepted in a module sealed by a signature that declares *trusted*'s type:
+  ``match`` when the type of *model* is cumulative to the type of *trusted*
+  under universe constraints consistent with the environment (a polymorphic
+  *model* is taken at fresh universes against a monomorphic *trusted*, and
+  against a polymorphic *trusted* its universe context must be *trusted*'s);
+  ``mismatch`` when the types are not convertible; ``universes-differ`` when
+  they need universe constraints that the environment or *trusted* refuses,
+  when the universe contexts differ, and for every polymorphic *model* whose
+  universe context has sort variables or constraints, because elaborating
+  the definition can minimize those and the check does not replay it;
+  ``not-requested`` with no *trusted*;
+  ``model-missing`` or ``trusted-missing`` when a name is not in the
+  environment; ``ambiguous`` or ``trusted-ambiguous`` when it denotes several
+  constants. The verdict is about the two constants as the kernel stores
+  them. Implicit arguments are elaboration data that the kernel never sees,
+  so a *model* declared with maximal implicit arguments reads ``match``
+  when its type is *trusted*'s; whether a bare alias ``Definition f :=
+  model`` then elaborates depends on the context it is written in, which
+  ``rocqchk`` does not see. It also lists the
+  axioms and relaxed typing conditions that its selected proof witness reaches.
+  A public declaration uses the environment; a bodyless public declaration
+  uses its module implementation and then follows references in that
+  implementation view. This prevents an independent signature proof from
+  hiding a relaxed implementation proof. Integer, float and string literals
+  and arrays also reach their registered primitive type.
+  The report is printed between the lines ``STATEMENT REPORT`` and
+  ``END STATEMENT REPORT``, one line per statement, axiom and condition:
+
+  .. code-block:: text
+
+     STATEMENT REPORT 3
+     statement <name> <model> <trusted|-> <verdict> <axiom-count> <condition-count>
+     axiom <name> <constant> <canonical>
+     resolved <name> <field> <canonical>
+     flag <name> <condition> <object> <canonical>
+     END STATEMENT REPORT
+
+  A ``flag`` line names the object by its path and the same canonical token as
+  an ``axiom`` line, so two objects of one printed path that rely on the same
+  condition give two ``flag`` lines.
+
+  The canonical name of a constant or inductive only a module implementation
+  holds is printed ``?`` followed by the term's own canonical name (for
+  instance ``?P.A:B.C.ax``): a reader must never join on a token that starts
+  with ``?``. The name after it only keeps two such axioms apart.
+
+  The number after ``STATEMENT REPORT`` is the format version, 3. Format 2 had
+  no canonical column on ``flag`` lines and no ``?`` token; a reader of format 2
+  must not read format 3. A reader must
+  take the report as whole only when it reads the ``END STATEMENT REPORT``
+  line: a report that stops has printed the statements before it and no end
+  line, and the checker still exits 0. An ``axiom``
+  line names the axiom by the path the closure reached it by, then by its
+  canonical kernel name, which is printed even when it is the same string: two
+  paths to one constant (through an ``Include`` or a module alias) share a
+  canonical name, and two kernel names never print alike: the canonical name
+  is the library's dirpath (or, for a functor argument or bound module,
+  ``<dirpath#name#n>``), then ``:``, then the modules and the label separated
+  by dots, so ``P.A:B.ax`` (module ``B`` of library ``P.A``) and ``P.A.B:ax``
+  (library ``P.A.B``) differ. A ``resolved`` line, after the
+  ``axiom`` lines and before the ``flag`` lines and not counted in either
+  count, names an interface field the closure read through the implementation
+  that defines it; the axioms that implementation rests on are its own
+  ``axiom`` lines.
+
+  A request's model is looked up first among the constants of the final
+  environment. Only a name none of them has is looked up in the module
+  implementations, the way ``Print Assumptions`` finds a constant a seal hides
+  (a field a sealed module's interface leaves out, or one an ``Include`` in it
+  brings). One match is reported as usual; several give the verdict
+  ``ambiguous`` with no ``axiom`` or ``flag`` line; none gives
+  ``model-missing``. A request that names a trusted constant is answered only
+  from the final environment, so such a model answers ``model-missing`` (or
+  ``ambiguous`` when several implementations hold it). A
+  name two constants of the final environment print as answers ``ambiguous``
+  as a model and ``trusted-ambiguous`` as a trusted constant. A name
+  the final environment holds is never looked up in
+  an implementation.
+
+  It does not change the exit status. If the report stops after its start
+  line, it has no ``END STATEMENT REPORT`` line and the checker emits a
+  warning. A program that reads the report must treat such a stream as no
+  report, not as partial evidence. The report stops this way at a name it
+  would print that is not made of identifiers, for instance the name of a
+  constant that a term of an admitted library names but no library declares.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.

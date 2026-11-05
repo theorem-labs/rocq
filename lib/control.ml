@@ -102,7 +102,22 @@ let timeout_fun = match Sys.os_type with
 let timeout_fun_ref = ref timeout_fun
 let set_timeout f = timeout_fun_ref := f
 
-let timeout n f = !timeout_fun_ref.timeout n f
+type timeout_counts = { armed : int; fired : int }
+
+let timeouts_armed = ref 0
+let timeouts_fired = ref 0
+
+let timeout_counts () = { armed = !timeouts_armed; fired = !timeouts_fired }
+
+let add_timeout_counts { armed; fired } =
+  timeouts_armed := !timeouts_armed + armed;
+  timeouts_fired := !timeouts_fired + fired
+
+let timeout n f x =
+  incr timeouts_armed;
+  let res = !timeout_fun_ref.timeout n f x in
+  if Result.is_error res then incr timeouts_fired;
+  res
 
 let protect_sigalrm f x =
   let timed_out = ref false in

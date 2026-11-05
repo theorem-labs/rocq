@@ -47,9 +47,9 @@ let default_flags env =
   let ts = default_transparent_state env in
   default_flags_of ts
 
-let debug_unification = CDebug.create ~name:"unification" ()
+let debug_unification_flag, debug_unification = CDebug.create_full ~name:"unification" ()
 
-let debug_ho_unification = CDebug.create ~name:"ho-unification" ()
+let debug_ho_unification_flag, debug_ho_unification = CDebug.create_full ~name:"ho-unification" ()
 
 (*******************************************)
 (* Functions to deal with impossible cases *)
@@ -1509,6 +1509,12 @@ let evar_conv_x flags env evd pbty term1 term2 =
 let evar_unify = conv_fun evar_conv_x
 
 let evar_conv_hook = ref evar_conv_x
+
+let evar_conv_initial = !evar_conv_hook
+
+let default_conversion () =
+  !evar_conv_hook == evar_conv_initial && (match !active_hooks with [] -> true | _ :: _ -> false)
+  && not (CDebug.get_flag debug_unification_flag) && not (CDebug.get_flag debug_ho_unification_flag)
 
 let evar_conv_x flags = !evar_conv_hook flags
 

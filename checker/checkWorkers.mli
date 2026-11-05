@@ -10,24 +10,45 @@
 
 (** Checking opaque proofs in forked worker processes.
 
-    The check of an opaque body is handed to [defer]. By default it is
-    run immediately. With [-j N] for [N > 1], it is queued instead, and
-    queued checks are run in batches by worker processes created with
-    [Unix.fork]: up to [N-1] while the main process carries on with the
-    rest of the libraries, then up to [N] while it waits for them in
-    [finish], where it checks nothing itself. A worker inherits a
+    The check of an opaque body is handed to [defer], and the read of
+    one library's table of opaque proofs to [defer_table]. By default
+    each is run immediately. With [-j N] for [N > 1], it is queued
+    instead, and queued jobs are run in batches by worker processes
+    created with [Unix.fork]: up to [N-1] while the main process carries
+    on with the rest of the libraries, then up to [N] while it waits for
+    them in [finish], where it checks nothing itself. A worker inherits a
     copy-on-write copy of the whole heap, so it runs the queued closures
     as they are: nothing is marshalled and nothing is shared afterwards.
 
-    A batch is checked only if its worker exits with code 0.
+    A batch is checked only if its worker exits with code 0. It is a run
+    of the queue: the jobs of one library are next to each other there,
+    so a batch holds whole libraries, the libraries next to it go to
+    other workers, and one process parses each table once for the checks.
+    The worker of [validate_tables] reads every table once more, from the
+    start of the walk or, when the walk runs while the libraries are read,
+    from the end of that, so that a malformed one stops the run early, as
+    in stock.
 
     A worker lives for at most a time budget (see [set_budget]): the
     longer a worker lives, the more of the heap it shares with the main
     process it has copied. Once the budget has passed, and the worker
-    has completed at least one check, it stops after the check it is in
-    and reports how many checks of its batch, the first ones in order, it
+    has completed at least one job, it stops after the job it is in
+    and reports how many jobs of its batch, the first ones in order, it
     completed. The main process queues the others again, at the front.
-    So every check is run exactly once, by a process that ends
+    The worker of [validate_tables] is the exception: it has no budget.
+
+    A worker also stops that way on request. When the main process has
+    dealt everything and a worker slot is free, it asks the worker with the
+    largest batch, with SIGUSR1, to give back the jobs it has not
+    started; it asks each worker at most once, and never a batch of one
+    job. The worker answers with a release message saying how many
+    jobs it will complete, which is at least one. The main process reads
+    that message at once and deals the others to the free slots, instead
+    of leaving them behind a long check in a batch that a busy worker
+    holds. The worker then stops after the job it is in, and its final
+    report must equal the number it announced.
+
+    So every job is run exactly once, by a process that ends
     successfully, whichever way the work is cut into batches. *)
 
 val set_jobs : profiling:bool -> int -> unit
@@ -36,6 +57,60 @@ val set_jobs : profiling:bool -> int -> unit
     checked, then [n] workers. It has no effect when [n <= 1], and falls
     back to checking in the main process, with a warning, when profiling
     or when [Unix.fork] is not available. *)
+
+val parallel : unit -> bool
+(** Whether a deferred job is queued for a worker process, which is
+    [-j N] for [N > 1] where [set_jobs] did not fall back to checking
+    sequentially. When it is false, [defer] and [defer_table] run their
+    closure at once, in the main process, and nothing else ever will. *)
+val processes : unit -> int
+(** The number of processes that may work at the same time, as [set_jobs]
+    left it: [n] after [set_jobs ~profiling n], or 1 when it fell back to
+    checking in the main process. *)
+
+(** Running a function on items in forked processes while the main process
+    goes on with its own work. *)
+module Forked : sig
+  type 'a t
+
+  val start : ?lazy_gc:bool -> ?heap_budget:int -> ?item_timeout:float -> int ->
+    (int -> 'a) -> int -> 'a t
+  (** [start ~lazy_gc ~heap_budget ~item_timeout n f k] forks up to [n]
+      processes created with [Unix.fork], which run [f] on the items
+      [0 .. k-1], handed out in that order. Each process inherits the heap as
+      it is when it is forked, at [start] or at a later [poll], prints
+      nothing, and sends back each result marshalled, so a result must hold
+      no closure. [f] must have no effect that anything depends on, and its
+      result must depend on nothing that changes after [start]: a result is
+      used whatever happens to its process afterwards. A process that has
+      allocated more than [heap_budget] bytes in its major heap (default: no
+      bound) stops after the item it is on, and a fresh process takes the
+      items that are left. A process that has not sent the whole answer to an
+      item [item_timeout] seconds (default: no bound) after it was given the
+      item is killed, that item gets no result, and a fresh process takes the
+      items that are left. A process that stops is killed at once, and counts
+      among the [n] until it has been waited for. With [lazy_gc] (default:
+      false), this process's major GC is made lazy while some process runs,
+      so that it copies fewer shared pages, and takes back its own setting as
+      soon as no result can come, and at [stop]; with no process running, it
+      is never changed. *)
+
+  val poll : ?wait:float -> 'a t -> (int -> 'a -> unit) -> bool
+  (** [poll ~wait s deliver] calls [deliver i (f i)] for each result that
+      has come whole since the last [poll], hands out items to free
+      processes, waits without blocking for those that were killed, and forks
+      fresh ones in their places. It waits at most [wait] seconds (default:
+      0) for a result, and never for a process to end. It answers whether a
+      result may still come: false once no process runs and none can take the
+      items that are left. An item whose [f i] raised gets no result. *)
+
+  val stop : ?extra:(unit -> Pp.t) -> 'a t -> unit
+  (** Kill every process that is left, wait for all of them, close what
+      [start] opened, and take back this process's GC. No result is
+      delivered after it. A stop that was interrupted does what is left of it
+      when it is called again. With the debug flag [checker-workers], it
+      prints a summary, followed by [extra ()]. *)
+end
 
 val default_budget : float
 (** Seconds. *)
@@ -46,9 +121,15 @@ val set_budget : float -> unit
     before one check is completed. [t = 0.] makes a worker complete a
     single check. @raise Invalid_argument if [t] is negative or NaN. *)
 
-exception CheckError of Names.Constant.t * exn
-(** The deferred check of the body of a constant raised an exception.
-    Only raised when checks are deferred, i.e. not with [-j 1]. *)
+type job =
+| Proof of Names.Constant.t
+| Table of Names.DirPath.t
+(** What a process is given to do: check the body of one opaque constant,
+    or read one library's table of opaque proofs. *)
+
+exception CheckError of job * exn
+(** A deferred job raised an exception. Only raised when jobs are
+    deferred, i.e. not with [-j 1]. *)
 
 val set_error_printer : (exn -> unit) -> unit
 (** How a worker reports the [CheckError] it caught, before it exits. *)
@@ -56,27 +137,127 @@ val set_error_printer : (exn -> unit) -> unit
 val defer : Names.Constant.t -> (unit -> unit) -> unit
 (** [defer kn check] runs or queues the check of the opaque body of
     [kn]. [check] must not depend on anything that happens after it
-    is queued, nor have effects that anything else depends on. *)
+    is queued, nor have effects that anything else depends on. [defer]
+    reaps the workers that have exited, so it can raise [WorkerFailed]
+    as [finish] does. *)
+
+val defer_table : Names.DirPath.t -> (unit -> unit) -> unit
+(** [defer_table dp read] runs or queues the read of the table of opaque
+    proofs of the library [dp], and opens the group of the jobs that
+    [defer] takes next: they are the checks of that library, and a batch
+    takes them together with this one. After [validate_tables] handed the
+    tables to a worker, it only opens the group. *)
+
+val expect_validator : unit -> unit
+(** Say that [validate_tables] will be called, after checks have started:
+    from now on [defer_table] queues no task, as after [validate_tables],
+    and one worker slot is kept for the validator until it starts. *)
+
+val set_cost_hints : (string * float) list -> unit
+(** [set_cost_hints [(lib, seconds); ...]]: the expected cost of each
+    library's checks, by its full name. With workers, the queued checks of
+    costlier libraries are dealt first, and a worker runs them first in its
+    batch. Costs decide only that order: which checks run, and what is
+    accepted, do not depend on them. A library without a cost costs 0. *)
+
+val debugging : unit -> bool
+(** Whether the checker-workers debug output is on. *)
+
+val capture_available : unit -> bool
+(** Whether a worker can now be given the two files its output is kept
+    in until it is printed. *)
+
+val validate_tables : (Names.DirPath.t * (unit -> unit)) list -> unit
+(** [validate_tables tables] starts one worker that runs each read, in
+    the order given, which is the order stock parses the tables while it
+    interns the libraries; so a malformed table stops the run near where it
+    stops stock. Called before the libraries are checked, or when the walk
+    runs while they are read, once they are all read. It reads every
+    table once more than the checks do, keeps none, has no time budget and
+    is never asked to release. Without workers it does nothing: the tables
+    were parsed when the libraries were interned. *)
+
+val validator_progress : unit -> unit
+(** After a failure: counts as read without error the tables that the
+    worker of [validate_tables] read before the one it failed on, so that
+    [table_checked] holds for them. *)
+
+val note_cook : unit -> unit
+(** Called by the cook of an opaque body ([Mod_checking]): counts it when
+    it runs outside a worker, so in the main process. With [-j] that is a
+    sealed module's constant, whose cooked body the main process needs,
+    and a check that the main process ran itself because it could not
+    fork. The count is printed by [-d checker-workers]. *)
+
+val note_table_read : bytes:int -> unit
+(** Counts one table of opaque proofs read and parsed by this process, and
+    the bytes it read for it, for the debug output. *)
 
 val finish : unit -> unit
 (** Deal everything that is still queued to workers and wait for all of
-    them. Raises [WorkerFailed] if a worker did not exit with code 0, or
-    did not report between 1 and [size] completed checks. *)
+    them. Raises [WorkerFailed] if a worker did not exit with code 0, did
+    not report between 1 and [size] completed checks, wrote a malformed
+    release message or more than one, or completed a number of checks other
+    than the one its release message named. *)
 
 val abort : unit -> unit
 (** Kill all workers, wait for them, and drop the queued checks. *)
 
+val table_checked : Names.DirPath.t -> bool
+(** Whether a process that ended successfully read the table of opaque
+    proofs of this library: the main process, or a worker whose report
+    says it completed that read; and, once a run has failed, whether the
+    worker of [validate_tables] read it without error before it stopped
+    (see [validator_progress]). *)
+
 type batch = {
   size : int;
-  first : Names.Constant.t;
-  last : Names.Constant.t;
+  first : job;
+  last : job;
+  proofs : int;
+  first_proof : Names.Constant.t option;
+  last_proof : Names.Constant.t option;
 }
+(** A worker's jobs: [size] of them from [first] to [last], of which
+    [proofs] are checks of opaque proofs, from [first_proof] to
+    [last_proof]. *)
 
 exception WorkerFailed of int * Unix.process_status * batch
 (** A worker (pid, status) failed while checking the given batch. The
-    other workers have been killed. *)
+    other workers have been killed. The error the worker printed is held
+    until [print_held_output] or [drop_held_output]. *)
+
+val print_held_output : unit -> unit
+(** Print to standard error what the worker whose [WorkerFailed] was
+    raised last printed after its error, and forget it. *)
+
+val drop_held_output : unit -> unit
+(** Forget it, without printing it. *)
+
+val start_holding : unit -> unit
+(** From now on, hold what the walk prints, for when the walk runs before
+    the intern has ended: the main process's messages printed between
+    [hold_on] and [hold_off], and the output of every worker, in order. *)
+
+val hold_on : unit -> unit
+(** Hold the main process's messages from now on, until [hold_off]. *)
+
+val hold_off : unit -> unit
+(** Print the main process's messages again; what was held stays held. *)
+
+val release_held : unit -> unit
+(** Print everything held, in order, and stop holding. *)
+
+val drop_held : unit -> unit
+(** Forget everything held, without printing it, and stop holding. *)
 
 val pr_batch : batch -> Pp.t
+(** The opaque proofs of a batch, in stock's words: "N opaque proofs (the
+    first is X, the last Y)". *)
+
+val pr_doing : job -> Pp.t
+(** What a process doing this job is doing, as "checking the opaque proof
+    of X" or "reading the opaque proofs of X". *)
 
 val signal_name : int -> string
 
@@ -88,3 +269,23 @@ val default_report_writer : Unix.file_descr -> int -> unit
 val set_report_writer : (Unix.file_descr -> int -> unit) -> unit
 (** [set_report_writer f] replaces what a worker does to report the number
     of checks it completed, given the descriptor to write to. *)
+
+val min_batch : int
+(** The size below which no batch is dealt while the libraries are
+    checked, but for one whose lane ran short, of at least [min_batch / 2]:
+    the expected batches of a test depend on it. *)
+
+val set_window : float -> unit
+(** [set_window w]: while the libraries are checked, [defer] deals at
+    most once every [w] seconds (1 by default). A test sets it to
+    [infinity], so that only [end_window] makes [defer] deal. *)
+
+val end_window : unit -> unit
+(** The next [defer] or [defer_table] deals, as once a window has passed. *)
+val default_answer_writer : Unix.file_descr -> bytes -> bytes -> unit
+(** What a process of [Forked] does to send an answer, given the
+    descriptor to write to, the 8 bytes of its length, and the answer. *)
+
+val set_answer_writer : (Unix.file_descr -> bytes -> bytes -> unit) -> unit
+(** [set_answer_writer f] replaces what the processes of [Forked]
+    started after it do to send an answer. *)

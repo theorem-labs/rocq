@@ -592,6 +592,9 @@ let explain_ill_formed_cofix_body env sigma = function
   | RecCallInTypeOfDef c ->
       str "Recursive call forbidden in the type of a recursive definition" ++
       spc () ++ pr_leconstr_env env sigma c
+  | RecCallInNonMainMutual c ->
+    str "Recursive call forbidden in non-main cofix in nested mutual cofixpoints" ++
+    spc () ++ pr_leconstr_env env sigma c
   | RecCallInCaseFun c ->
       str "Invalid recursive call in a branch of" ++
       spc () ++ pr_leconstr_env env sigma c
@@ -1002,6 +1005,11 @@ let explain_ill_formed_inductive env sigma mind kn =
   strbrk "expected canonical name" ++ spc () ++ KerName.print kn ++ spc () ++
   strbrk "but found" ++ spc () ++ KerName.print (MutInd.canonical mind)
 
+let explain_array_too_long len =
+  strbrk "Array literal of length" ++ spc () ++ int len ++ spc () ++
+  strbrk "exceeds the maximum array length" ++ spc () ++
+  str (Uint63.to_string Parray.max_length) ++ str "."
+
 let explain_type_error env sigma err =
   let env = make_all_name_different env sigma in
   match err with
@@ -1063,6 +1071,8 @@ let explain_type_error env sigma err =
     explain_ill_formed_constant env sigma cst kn
   | IllFormedInductive (mind, kn) ->
     explain_ill_formed_inductive env sigma mind kn
+  | ArrayTooLong len ->
+    explain_array_too_long len
 
 let pr_position (cl,pos) =
   let clpos = match cl with
@@ -1266,8 +1276,13 @@ let explain_not_match_error = function
     str "number of inductive types differs:" ++ spc () ++
     str "expected" ++ spc () ++ int expected ++ spc () ++
     str "but found" ++ spc () ++ int got
-  | InductiveParamsNumberField { got; expected } ->
-    str "number of parameters differs:" ++ spc () ++
+  | InductiveParams { env; got; expected } ->
+    let sigma = Evd.from_env env in
+    str "parameters differs:" ++ spc () ++
+    str "expected" ++ spc () ++ pr_rel_context env sigma expected ++ spc () ++
+    str "but found" ++ spc () ++ pr_rel_context env sigma got
+  | InductiveUniformParams { got; expected } ->
+    str "number of uniform parameters differ:" ++ spc () ++
     str "expected" ++ spc () ++ int expected ++ spc () ++
     str "but found" ++ spc () ++ int got
   | RecordFieldExpected isrecord ->
@@ -1290,6 +1305,16 @@ let explain_not_match_error = function
     let status b = if b then str"polymorphic" else str"monomorphic" in
       str "a " ++ status b ++ str" declaration was expected, but a " ++
         status (not b) ++ str" declaration was found"
+  | TemplateStatusExpected b ->
+    let status b = if b then str"template" else str"non-template" in
+    str "a " ++ status b ++ str" declaration was expected, but a " ++
+      status (not b) ++ str" declaration was found"
+  | PrivateStatusExpected b ->
+    let status = function
+    | None -> str"non-private"
+    | Some b -> if b then str"locally private" else str"private"
+    in
+    str "a " ++ status b ++ str" declaration was expected"
   | IncompatibleUniverses { err; env; t1; t2 } ->
     let sigma = Evd.from_env env in
     let t1, t2 = pr_explicit env sigma (EConstr.of_constr t1) (EConstr.of_constr t2) in
