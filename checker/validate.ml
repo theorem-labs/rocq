@@ -117,7 +117,8 @@ let val_tag t mem ctx o =
 
 let val_block mem ctx o =
   if is_block mem o then
-    (if tag mem o > Obj.no_scan_tag then
+    let t = tag mem o in
+    (if not (Obj.first_non_constant_constructor_tag <= t && t <= Obj.last_non_constant_constructor_tag) then
       fail mem ctx o "block: found no scan tag")
   else fail mem ctx o "expected block obj"
 
@@ -228,6 +229,9 @@ let validate v (o, mem) : unit =
   try NewProfile.profile "validate" (fun () -> val_gen v mem mt_ec o) ()
   with ValidObjError(msg,ctx,obj) ->
     let rctx = List.rev_map print_frame ctx in
-    print_endline ("Context: "^String.concat"/"rctx);
+    (* Through the formatter, as [pr_obj] prints, so that whoever holds
+       standard output holds both. *)
+    Format.print_string ("Context: "^String.concat"/"rctx);
+    Format.print_newline ();
     pr_obj mem obj;
     failwith ("Validation failed: "^msg^" (in "^(print_frame (List.hd ctx))^")")

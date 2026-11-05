@@ -15,6 +15,12 @@ open Constr
 val cook_opaque_proofterm : cooking_info list ->
   Opaqueproof.opaque_proofterm -> Opaqueproof.opaque_proofterm
 
+(** The proof term {!cook_opaque_proofterm} gives, built with
+    {!Cooking.abstract_as_body_shared}, so that it keeps the sharing of the
+    stored term. *)
+val cook_opaque_proofterm_shared : cooking_info list ->
+  Opaqueproof.opaque_proofterm -> Opaqueproof.opaque_proofterm
+
 val cook_constant :
   Environ.env -> cooking_info -> constant_body -> (Opaqueproof.opaque, unit) pconstant_body
 
