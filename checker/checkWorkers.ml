@@ -787,6 +787,13 @@ let reaped pid status =
           str " of " ++ int w.batch.size ++ str ", queueing the rest again");
       push_front (Array.sub w.tasks k (w.batch.size - k))
 
+(* [reap_finished] and [finish] wait for any child of this process
+   ([waitpid (-1)]), and [reaped] ignores a pid that is not a batch
+   worker. So these waits must not run while [Forked] processes are
+   alive: a [Forked] process they collect would be lost, with its exit
+   status. Today the two never overlap: [CheckLibrary] calls [finish]
+   before the statement report starts its [Forked] processes. A change
+   that lets them overlap must wait for each batch worker's own pid. *)
 let rec reap_finished () =
   if not (CList.is_empty !running) then
     match waitpid_non_intr [Unix.WNOHANG] (-1) with
