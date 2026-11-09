@@ -477,7 +477,7 @@ type challenge_file = { cf_path : string; cf_sha256 : string }
 type config = {
   cfg_theorems : theorem list;
   cfg_axioms : string list;
-  cfg_flags : string list;
+  cfg_flags : (string * string) list;  (** (kind, object) *)
   cfg_rewrite_rules : bool;
   cfg_prechecked : prechecked list;
   cfg_challenge_files : challenge_file list;
@@ -536,11 +536,34 @@ let read_config file =
                 (get e "permitted_axioms") })
         (as_list "theorems" v)
   in
+  (* A config that names no theorem grades nothing, and a name twice over
+     would write two records a reader cannot tell apart. *)
+  if CList.is_empty theorems then cfg_error "the config names no theorem";
+  let rec no_repeat = function
+    | [] -> ()
+    | th :: tl ->
+      if List.exists (fun o -> String.equal o.th_name th.th_name) tl then
+        cfg_error ("the theorem " ^ th.th_name ^ " is named twice");
+      no_repeat tl
+  in
+  no_repeat theorems;
   let axioms = match get top "permitted_axioms" with
     | None -> [] | Some v -> string_list "permitted_axioms" v
   in
+  (* A tolerated flag names the object it is tolerated on: a relaxed
+     condition the standard library rests on must not tolerate the same
+     condition in the agent's own declaration. *)
   let flags = match get top "tolerated_flags" with
-    | None -> [] | Some v -> string_list "tolerated_flags" v
+    | None -> []
+    | Some v ->
+      List.map (fun e ->
+          let e = as_obj "a tolerated flag" e in
+          fields "a tolerated flag" ["kind"; "object"] e;
+          match get e "kind", get e "object" with
+          | Some k, Some o ->
+            as_string "a tolerated flag's kind" k, as_string "a tolerated flag's object" o
+          | _ -> cfg_error "a tolerated flag needs a kind and an object")
+        (as_list "tolerated_flags" v)
   in
   let rewrite_rules = match get top "rewrite_rules" with
     | None -> false | Some v -> as_bool "rewrite_rules" v
@@ -648,30 +671,80 @@ let map_universe m u v =
   let m = ref m in
   let rest = ref lv in
   let fresh = ref [] in
+  let take_level target n =
+    let rec go seen = function
+      | [] ->
+        diff "universe %s has no %s+%d" (Pp.string_of_ppcmds (Univ.Universe.raw_pr v))
+          (level_name target) n
+      | (l2, n2) :: tl when Univ.Level.equal l2 target && Int.equal n2 n ->
+        List.rev_append seen tl
+      | e :: tl -> go (e :: seen) tl
+    in
+    rest := go [] !rest
+  in
   List.iter (fun (l, n) ->
-      match Univ.Level.Map.find_opt l !m.fwd with
-      | None -> fresh := (l, n) :: !fresh
-      | Some l' ->
-        let rec take seen = function
-          | [] ->
-            diff "universe %s has no %s+%d" (Pp.string_of_ppcmds (Univ.Universe.raw_pr v))
-              (level_name l') n
-          | (l2, n2) :: tl when Univ.Level.equal l2 l' && Int.equal n2 n ->
-            List.rev_append seen tl
-          | e :: tl -> take (e :: seen) tl
-        in
-        rest := take [] !rest)
+      match Univ.Level.var_index l, Univ.Level.name l with
+      (* a level of a polymorphic context, or Set: it stands for itself *)
+      | Some _, _ | None, None -> take_level l n
+      | None, Some _ ->
+        match Univ.Level.Map.find_opt l !m.fwd with
+        | None -> fresh := (l, n) :: !fresh
+        | Some l' -> take_level l' n)
     lu;
-  let fresh = List.rev !fresh in
-  let cmp (_, a) (_, b) = Int.compare a b in
-  let fresh = List.stable_sort cmp fresh and rest = List.stable_sort cmp !rest in
-  List.iter2 (fun (l, n) (l2, n2) ->
-      if not (Int.equal n n2) then
+  (* What is left on each side is unmapped. Pair only what one pass can
+     decide: an entry whose increment is unique among what remains. Each
+     pairing can map a level, which may let an earlier entry be matched by
+     its level on the next pass, so the passes run until none decides
+     anything. Two entries of the same increment and no mapped level are
+     ambiguous, and picking by [Universe.repr]'s order would pick
+     differently on the two sides, so the comparison stops instead. *)
+  let fresh = ref (List.rev !fresh) in
+  let rec passes () =
+    if CList.is_empty !fresh then ()
+    else begin
+      if not (List.length !fresh = List.length !rest) then
         diff "universe %s against %s"
           (Pp.string_of_ppcmds (Univ.Universe.raw_pr u))
           (Pp.string_of_ppcmds (Univ.Universe.raw_pr v));
-      m := map_level !m l l2)
-    fresh rest;
+      let decided = ref false in
+      let keep = ref [] in
+      List.iter (fun (l, n) ->
+          match Univ.Level.Map.find_opt l !m.fwd with
+          | Some l' ->
+            (* mapped since this entry was set aside: match it by level *)
+            let rec take seen = function
+              | [] ->
+                diff "universe %s has no %s+%d"
+                  (Pp.string_of_ppcmds (Univ.Universe.raw_pr v)) (level_name l') n
+              | (l2, n2) :: tl when Univ.Level.equal l2 l' && Int.equal n2 n ->
+                List.rev_append seen tl
+              | e :: tl -> take (e :: seen) tl
+            in
+            rest := take [] !rest;
+            decided := true
+          | None ->
+            match List.filter (fun (_, n2) -> Int.equal n n2) !rest with
+            | [ (l2, _) ] ->
+              m := map_level !m l l2;
+              rest := List.filter (fun (l3, n3) ->
+                  not (Univ.Level.equal l3 l2 && Int.equal n3 n)) !rest;
+              decided := true
+            | [] ->
+              diff "universe %s has no entry of increment %d"
+                (Pp.string_of_ppcmds (Univ.Universe.raw_pr v)) n
+            | _ :: _ :: _ -> keep := (l, n) :: !keep)
+        !fresh;
+      let left = List.rev !keep in
+      if not !decided then
+        diff "universe %s against %s: which level of the answer each level of the \
+              challenge stands for is not decided"
+          (Pp.string_of_ppcmds (Univ.Universe.raw_pr u))
+          (Pp.string_of_ppcmds (Univ.Universe.raw_pr v));
+      fresh := left;
+      passes ()
+    end
+  in
+  passes ();
   !m
 
 let map_quality q1 q2 =
@@ -828,19 +901,50 @@ let eq_universes m u1 u2 = match u1, u2 with
   | Monomorphic, Polymorphic _ -> diff "a monomorphic declaration is polymorphic in the answer"
   | Polymorphic _, Monomorphic -> diff "a polymorphic declaration is monomorphic in the answer"
 
-let eq_const_body m (cb1 : constant_body) (cb2 : constant_body) =
+(* What the challenge leaves without a body, the answer may fill only when
+   that is the task: a proof. [Admitted], [Axiom] and [Parameter] give the
+   same .vo content, so the kind of the declaration cannot tell them apart;
+   its type can. A constant whose type is a proposition is a lemma, and
+   proving it is the whole point. A constant whose type is data -- an
+   [open definition], which the spec lists as a non-goal -- must stay
+   without a body, or the answer could choose the function the statements
+   are about. A theorem the config names is a proof whatever its sort.
+
+   The sort is the one the answer environment gives the answer's own type,
+   which R2 has already found equal to the challenge's. A type the answer
+   environment cannot type is treated as data: the kernel check of the
+   answer would have refused it. *)
+let is_proposition env (cb : constant_body) =
+  let env = match cb.const_universes with
+    | Monomorphic -> env
+    | Polymorphic ctx ->
+      Environ.push_context ~strict:false (UVars.AbstractContext.repr ctx) env
+  in
+  match Typeops.infer_type env cb.const_type with
+  | j ->
+    (match j.Environ.utj_type with
+     | Sorts.Prop | Sorts.SProp -> true
+     | Sorts.Set | Sorts.Type _ | Sorts.QSort _ -> false)
+  | exception e when CErrors.noncritical e -> false
+
+let eq_const_body ~env ~is_theorem m (cb1 : constant_body) (cb2 : constant_body) =
   map_relevance cb1.const_relevance cb2.const_relevance;
   let m = eq_universes m cb1.const_universes cb2.const_universes in
   let m = eq_constr m cb1.const_type cb2.const_type in
   match cb1.const_body, cb2.const_body with
-  (* What the challenge leaves open, the answer may fill: that is the task. *)
-  | Undef _, _ -> m
-  (* An opaque body is never compared, but it stays a proof. *)
-  | OpaqueDef _, (OpaqueDef _ | Def _) -> m
+  | Undef _, Undef _ -> m
+  | Undef _, (Def _ | OpaqueDef _) ->
+    if is_theorem || is_proposition env cb2 then m
+    else diff "the challenge leaves this declaration open and the answer defines it"
+  | Undef _, _ -> diff "an assumption is a primitive or a symbol in the answer"
+  (* An opaque body is never compared, but a proof stays a proof: a Qed in
+     the challenge may not become a transparent definition, which would let
+     the answer's body reach conversion where the challenge's could not. *)
+  | OpaqueDef _, OpaqueDef _ -> m
   | Def b1, Def b2 -> eq_constr m b1 b2
   | Def _, OpaqueDef _ -> diff "a transparent definition is opaque in the answer"
   | Def _, _ -> diff "a transparent definition is not a definition in the answer"
-  | OpaqueDef _, _ -> diff "a proof is not a proof in the answer"
+  | OpaqueDef _, _ -> diff "an opaque proof is not an opaque proof in the answer"
   | Primitive p1, Primitive p2 ->
     if not (CPrimitives.equal p1 p2) then diff "another primitive"; m
   | Primitive _, _ -> diff "a primitive is not a primitive in the answer"
@@ -866,11 +970,32 @@ let eq_variance v1 v2 = match v1, v2 with
       diff "the universe variance"
   | None, Some _ | Some _, None -> diff "the universe variance"
 
+(* The relaxed kernel conditions a declaration was typed under are part of
+   what it claims. The conversion oracle and the performance switches are
+   not: they change how the kernel works, not what it accepted. *)
+let eq_typing_flags (f1 : typing_flags) (f2 : typing_flags) =
+  if f1.check_guarded <> f2.check_guarded
+  || f1.check_positive <> f2.check_positive
+  || f1.check_universes <> f2.check_universes
+  || f1.check_eliminations <> f2.check_eliminations
+  || f1.indices_matter <> f2.indices_matter
+  || f1.impredicative_set <> f2.impredicative_set
+  then diff "the kernel conditions the declaration was typed under"
+
 let eq_one_ind m (mip1 : one_inductive_body) (mip2 : one_inductive_body) =
   if not (Id.equal mip1.mind_typename mip2.mind_typename) then diff "the type's name";
   map_relevance mip1.mind_relevance mip2.mind_relevance;
   let m = eq_rel_context m mip1.mind_arity_ctxt mip2.mind_arity_ctxt in
   let m = eq_constr m mip1.mind_user_arity mip2.mind_user_arity in
+  let m = map_sort m mip1.mind_sort mip2.mind_sort in
+  if not (Int.equal mip1.mind_nrealargs mip2.mind_nrealargs) then diff "the number of indices";
+  if (match mip1.mind_squashed, mip2.mind_squashed with
+      | None, None -> false
+      | Some AlwaysSquashed, Some AlwaysSquashed -> false
+      | Some (SometimesSquashed q1), Some (SometimesSquashed q2) ->
+        not (Sorts.Quality.Set.equal q1 q2)
+      | _ -> true)
+  then diff "the elimination restriction";
   if not (Array.equal Id.equal mip1.mind_consnames mip2.mind_consnames) then
     diff "the constructor names";
   if not (Int.equal (Array.length mip1.mind_user_lc) (Array.length mip2.mind_user_lc)) then
@@ -884,6 +1009,9 @@ let eq_mib_body m (mib1 : mutual_inductive_body) (mib2 : mutual_inductive_body) 
   if not (Int.equal mib1.mind_nparams_rec mib2.mind_nparams_rec) then
     diff "the number of uniform parameters";
   if mib1.mind_private <> mib2.mind_private then diff "the private flag";
+  if Option.has_some mib1.mind_template <> Option.has_some mib2.mind_template then
+    diff "a template-polymorphic inductive type is not template-polymorphic in the answer";
+  eq_typing_flags mib1.mind_typing_flags mib2.mind_typing_flags;
   eq_variance mib1.mind_variance mib2.mind_variance;
   eq_variance mib1.mind_sec_variance mib2.mind_sec_variance;
   let m = eq_universes m mib1.mind_universes mib2.mind_universes in
@@ -907,32 +1035,43 @@ let eq_mib m _env mib1 mib2 =
     module type is compared with the answer's module type of the same path,
     field by field. *)
 
-let rec eq_signature m s1 s2 =
+let rec eq_signature ~env m s1 s2 =
   match s1, s2 with
-  | NoFunctor b1, NoFunctor b2 -> eq_structure m b1 b2
+  | NoFunctor b1, NoFunctor b2 -> eq_structure ~env m b1 b2
   | MoreFunctor (_, t1, s1), MoreFunctor (_, t2, s2) ->
-    eq_signature (eq_modtype m t1 t2) s1 s2
+    eq_signature ~env (eq_modtype ~env m t1 t2) s1 s2
   | NoFunctor _, MoreFunctor _ -> diff "a module type is a functor in the answer"
   | MoreFunctor _, NoFunctor _ -> diff "a functor is not a functor in the answer"
 
-and eq_structure m b1 b2 =
+and eq_structure ~env m b1 b2 =
   List.fold_left (fun m (l, f1) ->
       match List.assoc_opt l b2 with
       | None -> diff "the field %s is missing from the answer" (Id.to_string l)
       | Some f2 ->
         match f1, f2 with
-        | SFBconst c1, SFBconst c2 -> eq_const_body m c1 c2
+        (* A field of a module type is never a config-named theorem: the
+           config names a constant of the environment. *)
+        | SFBconst c1, SFBconst c2 -> eq_const_body ~env ~is_theorem:false m c1 c2
         | SFBmind i1, SFBmind i2 -> eq_mib_body m i1 i2
-        | SFBrules _, SFBrules _ -> m
+        | SFBrules r1, SFBrules r2 ->
+          (* The symbols the block rewrites must be the same ones, in the
+             same order. The machine rules themselves are not compared: a
+             rewrite rule reaches a verdict through the rewrite_rules
+             switch of the config, which refuses every one of them unless
+             the task permits them. *)
+          let names b = List.map fst b.rewrules_rules in
+          if not (CList.equal Constant.CanOrd.equal (names r1) (names r2)) then
+            diff "the field %s rewrites other symbols in the answer" (Id.to_string l);
+          m
         | SFBmodule mb1, SFBmodule mb2 ->
-          eq_signature m (Mod_declarations.mod_type mb1) (Mod_declarations.mod_type mb2)
-        | SFBmodtype t1, SFBmodtype t2 -> eq_modtype m t1 t2
+          eq_signature ~env m (Mod_declarations.mod_type mb1) (Mod_declarations.mod_type mb2)
+        | SFBmodtype t1, SFBmodtype t2 -> eq_modtype ~env m t1 t2
         | (SFBconst _ | SFBmind _ | SFBrules _ | SFBmodule _ | SFBmodtype _), _ ->
           diff "the field %s is of another kind in the answer" (Id.to_string l))
     m b1
 
-and eq_modtype m t1 t2 =
-  eq_signature m (Mod_declarations.mod_type t1) (Mod_declarations.mod_type t2)
+and eq_modtype ~env m t1 t2 =
+  eq_signature ~env m (Mod_declarations.mod_type t1) (Mod_declarations.mod_type t2)
 
 (************************************************************************)
 (** {6 The run} *)
@@ -968,6 +1107,9 @@ let prepare cfg ~dir ~out ~add_challenge_load_path =
         p)
       cfg.cfg_challenge_files
   in
+  (* A run that does not complete must leave no verdict behind: a reader
+     that finds yesterday's file would read a verdict for today's answer. *)
+  (try Sys.remove out with Sys_error _ -> ());
   { cfg; dir; out; files;
     prechecked = List.map (fun p -> dirpath_of_string p.pc_library) cfg.cfg_prechecked;
     add_challenge_load_path }
@@ -1030,8 +1172,7 @@ let load_challenge t senv0 ~answer_deps =
       let challenge_deps = CheckLibrary.challenge_deps needed in
       check_dep_digests t ~challenge:challenge_deps ~answer:answer_deps;
       let senv = CheckLibrary.import_challenge senv0 needed in
-      let libs = List.map fst challenge_deps in
-      Safe_typing.env_of_safe_env senv, libs)
+      Safe_typing.env_of_safe_env senv, challenge_deps)
 
 (************************************************************************)
 (** {6 Comparing the two environments} *)
@@ -1081,7 +1222,7 @@ let check_constraints ~challenge_env ~answer_env m =
 (* Every challenge declaration, in the order the name sorts. A declaration the
    answer does not hold is a failure; a declaration only the answer holds is
    not visited. *)
-let compare_declarations t ~challenge_env ~answer_env ~libs =
+let compare_declarations t ~challenge_env ~answer_env ~libs ~theorems =
   let m = ref (seed_umap t ~challenge_env ~answer_env) in
   let failures = ref [] in
   let fail name reason = failures := { f_name = name; f_reason = reason } :: !failures in
@@ -1095,7 +1236,10 @@ let compare_declarations t ~challenge_env ~answer_env ~libs =
         let name = Constant.to_string c in
         match Environ.lookup_constant_opt c answer_env with
         | None -> fail name "missing"
-        | Some cb' -> step name (fun m -> eq_const_body m cb cb'))
+        | Some cb' ->
+          step name (fun m ->
+              eq_const_body ~env:answer_env ~is_theorem:(CString.Set.mem name theorems)
+                m cb cb'))
     challenge_env ();
   Environ.fold_inductives (fun i mib () ->
       if in_libs libs (MutInd.modpath i) then
@@ -1109,7 +1253,7 @@ let compare_declarations t ~challenge_env ~answer_env ~libs =
         let name = ModPath.to_string mp in
         match ModPath.Map.find_opt mp an_modtypes with
         | None -> fail name "missing"
-        | Some mt' -> step name (fun m -> eq_modtype m mt mt'))
+        | Some mt' -> step name (fun m -> eq_modtype ~env:answer_env m mt mt'))
     (Environ.Internal.View.view challenge_env).Environ.Internal.View.env_modtypes;
   let universes = check_constraints ~challenge_env ~answer_env !m in
   List.rev !failures, universes
@@ -1121,12 +1265,35 @@ let constant_index env =
   Environ.fold_constants (fun c _ acc -> CString.Map.add (Constant.to_string c) c acc)
     env CString.Map.empty
 
-let has_rewrite_rules env =
-  not (Cmap_env.is_empty (Environ.Internal.View.view env).Environ.Internal.View.env_symb_pats)
+(* Only a rewrite rule the answer itself declares is the answer's doing: a
+   pre-checked library may carry its own, and the task did not write it. *)
+let has_rewrite_rules env libs =
+  Cmap_env.exists (fun c _ -> in_libs libs (Constant.modpath c))
+    (Environ.Internal.View.view env).Environ.Internal.View.env_symb_pats
 
 let run t env access senv0 ~answer_deps =
   check_prechecked t;
-  let challenge_env, libs = load_challenge t senv0 ~answer_deps in
+  let challenge_env, all_deps = load_challenge t senv0 ~answer_deps in
+  (* A pre-checked library, and every library it rests on, is one file for
+     both sides: its declarations are equal by construction, and walking
+     them would read the whole standard library on every run. *)
+  let rec closure acc = function
+    | [] -> acc
+    | dp :: tl ->
+      if List.exists (DirPath.equal dp) acc then closure acc tl
+      else
+        let deps = match List.find_opt (fun (l, _) -> DirPath.equal l dp) all_deps with
+          | None -> []
+          | Some (_, a) -> Array.to_list (Array.map fst a)
+        in
+        closure (dp :: acc) (deps @ tl)
+  in
+  let skip = closure [] t.prechecked in
+  let libs =
+    CList.map_filter (fun (dp, _) ->
+        if List.exists (DirPath.equal dp) skip then None else Some dp)
+      all_deps
+  in
   let ch_index = constant_index challenge_env in
   (* A theorem the challenge does not state is a config error, not a verdict. *)
   List.iter (fun th ->
@@ -1135,12 +1302,18 @@ let run t env access senv0 ~answer_deps =
           Pp.(str ("The config names the theorem " ^ th.th_name ^
                    ", which the challenge does not hold.")))
     t.cfg.cfg_theorems;
-  let failures, universes = compare_declarations t ~challenge_env ~answer_env:env ~libs in
+  let theorems =
+    List.fold_left (fun acc th -> CString.Set.add th.th_name acc) CString.Set.empty
+      t.cfg.cfg_theorems
+  in
+  let failures, universes =
+    compare_declarations t ~challenge_env ~answer_env:env ~libs ~theorems
+  in
   let failed_decl =
     List.fold_left (fun acc f -> CString.Map.add f.f_name f.f_reason acc) CString.Map.empty failures
   in
   let an_index = constant_index env in
-  let rewrite_rules = has_rewrite_rules env && not t.cfg.cfg_rewrite_rules in
+  let rewrite_rules = has_rewrite_rules env libs && not t.cfg.cfg_rewrite_rules in
   let st = Check_closure.closure_state env access in
   let records =
     List.map (fun th ->
@@ -1155,7 +1328,7 @@ let run t env access senv0 ~answer_deps =
             let axioms, flags = Check_closure.axioms_and_flags st kn in
             let bad_axioms = List.filter (fun a -> not (List.mem a permitted)) axioms in
             let bad_flags =
-              List.filter (fun (k, _) -> not (List.mem k t.cfg.cfg_flags)) flags
+              List.filter (fun f -> not (List.mem f t.cfg.cfg_flags)) flags
             in
             (* A challenge declaration the answer changed is a changed task,
                whichever theorem names it: the statements are written against

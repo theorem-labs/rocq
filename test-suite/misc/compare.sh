@@ -175,6 +175,10 @@ make_config() {
   local zero=0000000000000000000000000000000000000000000000000000000000000000
   text=${text//"@PRECHECKED_BAD@"/"{\"library\":\"Corelib.Init.Prelude\",\"sha256\":\"$zero\"}"}
   text=${text//"@PRECHECKED@"/$all}
+  # The standard library's eq is built without -indices-matter, so every
+  # honest answer reaches that flag on that object. A tolerated flag names
+  # its object, so tolerating it here tolerates nothing of the agent's own.
+  text=${text//"@TOLERATED@"/'{"kind": "indices-not-mattering", "object": "Corelib.Init.Logic.eq"}'}
   printf '%s\n' "$text" > "$out"
 }
 
@@ -263,6 +267,19 @@ run_case() {
     [ "$code" != "0" ] || fail "$name/$r: the run should not have completed"
     [ ! -f "$work/out.json" ] || fail "$name/$r: a verdict file was written anyway"
     echo "  ok $name/$r"
+  done
+
+  # A config the honest answer must FAIL under, not one that is refused: it
+  # tolerates the right flag kind on the wrong object.
+  local fc
+  for fc in "$c"/fail-config; do
+    [ -d "$fc" ] || continue
+    make_config "$fc/config.tmpl" "$work/challenge" "$work/fail-config.json" "$pre"
+    code=$(run_compare "$work" "$work/answer" "$work/fail-config.json" "$pre")
+    [ "$code" = "0" ] || { cat "$work/log"; fail "$name/fail-config: the run exits $code"; }
+    grep -q '"verdict":"fail"' "$work/out.json" \
+      || { cat "$work/out.json"; fail "$name/fail-config: the honest answer passed"; }
+    echo "  ok $name/fail-config"
   done
 
   # A config whose bytes are not UTF-8. It is written here rather than kept
@@ -354,12 +371,54 @@ case_digest() {
   echo "ok digest"
 }
 
+# ------------------- a pre-checked library under the answer's own root
+#
+# The challenge directory stands in for the answer's directory under each
+# -R root. A pre-checked library may sit under that same root, in a
+# directory of its own; the challenge directory must still stand in, or an
+# honest answer cannot be graded at all.
+case_sibling() {
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/shared" "$work/challenge" "$work/answer"
+  printf '%s\n' 'Definition shared_two : nat := 2.' > "$work/shared/Lib.v"
+  (cd "$work/shared" && coqc -R . Top Lib.v)
+  printf '%s\n' 'Require Import Top.Lib.' 'Definition two := shared_two.' \
+    'Theorem thm : two = 2.' 'Proof.' 'Admitted.' > "$work/challenge/A.v"
+  printf '%s\n' 'Require Import Top.Lib.' 'Definition two := shared_two.' \
+    'Theorem thm : two = 2.' 'Proof. reflexivity. Qed.' > "$work/answer/A.v"
+  (cd "$work/challenge" && coqc -R . Top -R "$work/shared" Top A.v)
+  (cd "$work/answer" && coqc -R . Top -R "$work/shared" Top A.v)
+  local sha lib_sha prelude_sha
+  sha=$(rocqchk -sha256 "$work/challenge/A.vo")
+  lib_sha=$(rocqchk -sha256 "$work/shared/Lib.vo")
+  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  printf '%s\n' \
+    "{\"theorems\": [{\"name\": \"Top.A.thm\"}]," \
+    " \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\", \"object\": \"Corelib.Init.Logic.eq\"}]," \
+    " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}," \
+    "   {\"library\": \"Top.Lib\", \"sha256\": \"$lib_sha\"}]," \
+    " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
+  set +e
+  rocqchk -silent -R "$work/answer" Top -R "$work/shared" Top \
+    -compare "$work/config.json" -challenge "$work/challenge" \
+    -compare-out "$work/out.json" Top.A > "$work/log" 2>&1
+  local code=$?
+  set -e
+  [ "$code" = "0" ] || { cat "$work/log"; fail "sibling: an honest answer exits $code"; }
+  grep -q '"verdict":"pass"' "$work/out.json" \
+    || { cat "$work/out.json"; fail "sibling: the honest answer did not pass"; }
+  rm -rf "$work"
+  echo "ok sibling"
+}
+
 main() {
   if [ $# -gt 0 ]; then
     case "$1" in
       sha256) case_sha256 ;;
       vos) case_vos ;;
       digest) case_digest ;;
+      sibling) case_sibling ;;
       *) run_case "$1" ;;
     esac
   else
@@ -370,6 +429,7 @@ main() {
     done
     case_vos
     case_digest
+    case_sibling
   fi
 }
 

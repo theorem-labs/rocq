@@ -595,22 +595,27 @@ let run_compare env =
   | Some cfg ->
     let dir = Option.get !compare_challenge and out = Option.get !compare_out in
     let answer_deps = CheckLibrary.interned_deps () in
-    (* The challenge directory stands in for each -R/-Q directory of the
-       answer, under the same logical root. A root a pre-checked library
-       lives under is left alone: that library is one file for both sides,
-       and the challenge directory does not hold it. *)
-    let prechecked = Check_compare.prechecked_libraries cfg in
-    let is_prechecked_root root =
+    (* The challenge directory stands in for the answer's directory under
+       each root that an answer library named on the command line lives
+       under. A root that only a pre-checked library or another shared tree
+       uses is left alone: the challenge directory does not hold it. *)
+    let checked_names =
+      List.map (function
+          | CheckLibrary.LogicalFile p ->
+            String.concat "." (List.rev p.CheckLibrary.dirpath @ [p.CheckLibrary.basename])
+          | CheckLibrary.PhysicalFile f -> Filename.remove_extension (Filename.basename f))
+        !compile_list
+    in
+    let substitutes root =
       let r = DirPath.to_string root in
-      List.exists (fun lib -> String.equal lib r || CString.is_prefix (r ^ ".") lib) prechecked
+      List.exists (fun n -> String.equal n r || CString.is_prefix (r ^ ".") n) checked_names
     in
     try
       let t =
         Check_compare.prepare cfg ~dir ~out
           ~add_challenge_load_path:(fun () ->
               List.iter (fun (_, rocq_root) ->
-                  if not (is_prechecked_root rocq_root) then
-                    add_rec_path ~unix_path:dir ~rocq_root)
+                  if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)
                 !user_includes)
       in
       Check_compare.run t env CheckLibrary.indirect_accessor (make_senv ()) ~answer_deps
