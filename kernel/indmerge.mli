@@ -1,0 +1,121 @@
+(************************************************************************)
+(*         *      The Rocq Prover / The Rocq Development Team           *)
+(*  v      *         Copyright INRIA, CNRS and contributors             *)
+(* <O___,, * (see version control and CREDITS file for authors & dates) *)
+(*   \VV/  **************************************************************)
+(*    //   *    This file is distributed under the terms of the         *)
+(*         *     GNU Lesser General Public License Version 2.1          *)
+(*         *     (see LICENSE file for the text of the license)         *)
+(************************************************************************)
+
+(** Treating two matching copies of an inductive type as one type.
+
+    Off by default; turned on by [-merge-inductives] on [rocq c] and on
+    [rocqchk]. With it on, when a compiled library is imported, each of its
+    top-level mutual inductive blocks is compared with the blocks already in
+    the environment. A block that matches an already-loaded one is given that
+    one's {e canonical} name, exactly as [Module M := N] gives [M]'s
+    inductives [N]'s canonical names, so every comparison site in the kernel
+    -- all of which compare inductive names by [Ind.CanOrd] -- sees the two
+    copies as one type. No comparison site changes.
+
+    The renaming uses the existing module substitution machinery: a delta
+    resolver rooted at the library's module path maps each matched inductive's
+    kernel name to the canonical name of the already-loaded copy, and
+    [Mod_declarations.subst_module] rewrites the loaded structure with it.
+
+    Nothing a process writes carries a name only a merge justifies: every
+    merge this process made is undone again in [Safe_typing.export] and on the
+    opaque proof table, so a [.vo] is the same whether or not the option was
+    on, and a reader must earn the merge for itself. *)
+
+(** {6 The option} *)
+
+val set_enabled : bool -> unit
+val enabled : unit -> bool
+
+val set_verbose : bool -> unit
+(** Print one line per merge. *)
+
+(** {6 Comparing two blocks}
+
+    This is the part the Rocq comparator (dispatch://BET-894) calls. *)
+
+type umap
+(** A bijection between universe levels, built while the two terms are walked
+    in parallel and threaded from one call to the next. A level that would
+    have to map to two different levels is a failure, in both directions. *)
+
+type diff
+(** The first difference found. *)
+
+val empty_umap : umap
+
+val pr_diff : diff -> Pp.t
+
+val umap_pairs : umap -> (Univ.Level.t * Univ.Level.t) list
+(** The pairs of the bijection whose two sides differ, left side first. A
+    caller that intends to {e equate} these levels must decide for itself
+    whether it may: see [merge], which refuses a pair unless the left level
+    belongs to the library being loaded and the right one does not, and
+    which compares every constraint mentioning a paired level. *)
+
+val equal_constr : umap -> Constr.t -> Constr.t -> (umap, diff) result
+(** Purely structural equality, modulo the universe bijection and modulo
+    nothing else: no beta, iota, zeta, eta or delta, and no conversion.
+    Global names are compared by their canonical form ([Constant.CanOrd],
+    [Ind.CanOrd], [Construct.CanOrd], [Projection.CanOrd]), so a caller that
+    wants two {e copies} compared must have renamed one side first -- which is
+    what [merge] does before it calls this.
+
+    There is deliberately no delta here. This module implements no
+    conversion-based comparison at all; the only reduction in the whole
+    feature is the kernel's own conversion, which runs later, when the
+    checker file's two statement types are compared. *)
+
+val eq_mib : umap -> Environ.env ->
+  Declarations.mutual_inductive_body -> Declarations.mutual_inductive_body ->
+  (umap, diff) result
+(** Whole-block equality, modulo the universe bijection. Every field that can
+    make two blocks different types is compared: the number and order of the
+    mutual types, each type's name and each constructor's name in order, the
+    parameter context, the numbers of indices and of constructor arguments,
+    each arity and sort, each constructor type (both [mind_user_lc] and
+    [mind_nf_lc]), the universe kind and its constraints (monomorphic levels
+    through the bijection; polymorphic and template contexts positionally,
+    including their elimination constraints), finiteness, the record shape and
+    its projections, template data, [mind_private], variance, the squash and
+    relevance data, the recursive-argument tree, the VM reloc table and the
+    typing flags.
+
+    [env] is not consulted: the comparison is syntactic. It is in the
+    signature because a conversion-based comparison would need it, and
+    callers should not have to change when one appears.
+
+    Not compared, deliberately: [mind_typing_flags.conv_oracle] (transparency
+    settings are not part of a type's identity) and section data, which cannot
+    appear in a loaded library. *)
+
+(** {6 The load-time step} *)
+
+val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
+  Mod_declarations.module_body ->
+  Environ.env * Mod_declarations.module_body
+(** [merge env mp univs mb] is called from [Safe_typing.import] with the
+    library's own universe context. It returns the environment with the
+    universe equalities the accepted merges need, and the library's module
+    body with every matched inductive renamed and with every earlier merge of
+    this process applied. A no-op when [enabled ()] is false. *)
+
+(** {6 Undoing a merge on the way out} *)
+
+val unmerging : unit -> bool
+
+val unmerge_exported :
+  Mod_declarations.structure_body -> Mod_declarations.structure_body
+(** Undo every name {e this process} merged. A cross-file canonical name that
+    came from somewhere else -- a module alias, say -- is left alone. *)
+
+val unmerge_constr : Constr.t -> Constr.t
+(** The same, for one term: used on the opaque proof table, which is written
+    outside the structure. *)

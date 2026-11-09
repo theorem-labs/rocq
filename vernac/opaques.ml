@@ -54,6 +54,10 @@ let get_opaque_disk i t =
   let () = assert (0 <= i && i < Array.length t) in
   t.(i)
 
+(* Rewrite the terms of a dumped table: used to undo a merge before the
+   table is written to the .vo ([-merge-inductives]). *)
+let map_disk f t = Array.map (Option.map (fun (c, u) -> (f c, u))) t
+
 let set_opaque_disk i (c, priv) t =
   let i = Opaqueproof.repr_handle i in
   let () = assert (0 <= i && i < Array.length t) in

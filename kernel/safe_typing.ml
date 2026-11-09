@@ -1565,7 +1565,9 @@ let start_library dir senv =
 let export ~output_native_objects senv dir =
   let () = check_current_library dir senv in
   let mp = senv.modpath in
-  let str = NoFunctor (List.rev senv.revstruct) in
+  (* With -merge-inductives, undo every merge this process made, so that the
+     .vo carries only names its reader can justify for itself. *)
+  let str = NoFunctor (Indmerge.unmerge_exported (List.rev senv.revstruct)) in
   let mb = Mod_declarations.make_module_body str senv.modresolver senv.local_retroknowledge in
   let ast, symbols =
     if output_native_objects then
@@ -1609,6 +1611,12 @@ let import lib vmtab vodigest senv =
   let env = Environ.push_qualities ~rigid:true qualities senv.env in
   let env = Environ.push_context_set ~strict:true univs env in
   let env = Environ.link_vm_library vmtab env in
+  (* With -merge-inductives, give every inductive of this library that
+     matches an already-loaded one that one's canonical name, by rewriting
+     the loaded structure with a delta resolver.  Done before the structure
+     reaches the environment, so the names the environment and every library
+     loaded afterwards see are the merged ones. *)
+  let env, mb = Indmerge.merge env mp univs mb in
   let env =
     let linkinfo = Nativecode.link_info_of_dirpath lib.comp_name in
     Modops.add_linked_module mp mb linkinfo env

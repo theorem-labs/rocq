@@ -54,6 +54,8 @@ type coqargs_config = {
   rcfile      : string option;
   coqlib      : string option;
   enable_VM   : bool;
+  merge_inductives : bool;
+  merge_inductives_verbose : bool;
   native_compiler : native_compiler;
   native_output_dir : CUnix.physical_path;
   native_include_dirs : CUnix.physical_path list;

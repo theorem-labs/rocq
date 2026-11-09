@@ -24,6 +24,10 @@ val get_current_constraints : Opaqueproof.opaque_handle -> Univ.ContextSet.t opt
 
 val dump : ?except:Future.UUIDSet.t -> unit -> opaque_disk * Opaqueproof.opaque_handle Future.UUIDMap.t
 
+(** Rewrite every stored proof term of a dumped table ([-merge-inductives]
+    undoing a merge before the table is written out). *)
+val map_disk : (Constr.t -> Constr.t) -> opaque_disk -> opaque_disk
+
 module Summary :
 sig
   type t
