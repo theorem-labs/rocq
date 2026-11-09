@@ -791,3 +791,87 @@ let recheck_library senv ~norec ~admit ~check =
     in
     CheckWorkers.print_held_output ();
     Exninfo.iraise e
+
+(************************************************************************)
+(*s The challenge side of [rocqchk -compare].
+
+    The challenge libraries carry the same names as the answer's, so they
+    cannot share this module's per-library tables: [libraries_table] would
+    make [intern_library] skip an answer library because a challenge library
+    of that name is already there, and the opaque tables, keyed by library
+    name as well, would let a challenge proof body stand in for an answer
+    one. So the challenge is loaded between [swap_tables] calls: the answer's
+    tables are set aside, the challenge is loaded with tables of its own, and
+    the answer's are put back. The challenge environment is a value and
+    survives the swap; its opaque bodies are not read, because the comparison
+    never looks into an opaque body. *)
+
+type tables = {
+  tb_libraries : library_t LibraryMap.t;
+  tb_opaque_sources : opaque_source LibraryMap.t;
+  tb_opaque_cache : seg_proofs LibraryMap.t;
+  tb_depgraph : (compilation_unit_name * Safe_typing.vodigest) array LibraryMap.t;
+  tb_hashed : (DirPath.t * opaque_source) list;
+  tb_load_paths : CUnix.physical_path list * logical_path list;
+}
+
+(* Empty library tables, with the load path as it is: the challenge load adds
+   its own directories in front of the answer's, so that a library name the
+   two sides share resolves to the challenge's copy, while a pre-checked
+   library, which is one file for both sides, still resolves. *)
+let fresh_tables () = {
+  tb_libraries = LibraryMap.empty;
+  tb_opaque_sources = LibraryMap.empty;
+  tb_opaque_cache = LibraryMap.empty;
+  tb_depgraph = LibraryMap.empty;
+  tb_hashed = [];
+  tb_load_paths = !load_paths;
+}
+
+let swap_tables t =
+  let old = {
+    tb_libraries = !libraries_table;
+    tb_opaque_sources = !opaque_sources;
+    tb_opaque_cache = !opaque_cache;
+    tb_depgraph = !depgraph;
+    tb_hashed = !hashed_tables;
+    tb_load_paths = !load_paths;
+  } in
+  libraries_table := t.tb_libraries;
+  opaque_sources := t.tb_opaque_sources;
+  opaque_cache := t.tb_opaque_cache;
+  depgraph := t.tb_depgraph;
+  hashed_tables := t.tb_hashed;
+  load_paths := t.tb_load_paths;
+  old
+
+type challenge_library = library_t
+
+(* The libraries the challenge files name, in dependency order, with the
+   dependency digests each of them records. Nothing is imported yet: the
+   caller checks those digests against the answer's before any of it reaches
+   an environment. *)
+let intern_challenge files =
+  let locs = List.map (fun f -> try_locate_qualified_library (PhysicalFile f)) files in
+  let needed =
+    List.fold_right (intern_library ~intern_mode:Dep ~validated:LibrarySet.empty
+                       LibrarySet.empty) locs []
+  in
+  List.rev needed
+
+let challenge_deps needed =
+  List.map (fun (dir, m) -> dir, m.library_deps) needed
+
+(* Import the interned libraries without a check: setup checked the challenge
+   files, and a dependency of theirs is either another challenge file or a
+   pre-checked library. *)
+let import_challenge senv needed =
+  List.fold_left
+    (fun senv (_, m) ->
+       Safe_checking.unsafe_import senv m.library_compiled m.library_digest)
+    senv needed
+
+let library_file dir = snd (try_locate_absolute_library dir)
+
+(* The dependency digests every library interned so far records. *)
+let interned_deps () = LibraryMap.bindings !depgraph
