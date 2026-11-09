@@ -578,12 +578,13 @@ let fields_of_body mb = match Mod_declarations.mod_type mb with
 let as_loaded mib =
   if mib.mind_private != None then { mib with mind_private = Some true } else mib
 
-(* v1 does not merge a universe-polymorphic or a template-polymorphic block,
-   whatever [eq_mib] says about it: the verified-grader lead's decision.
-   [eq_mib] still compares them, for the comparator; only this refuses. *)
+(* v1 does not merge a universe-polymorphic block, whatever [eq_mib] says
+   about it. A template-polymorphic block does merge, on [equal_template]'s
+   verdict: an [Inductive w (A : Type)] with no attribute is made template
+   automatically (vernac/comInductive.ml), so refusing template blocks would
+   refuse every parameterised Type-valued type. *)
 let mergeable mib =
-  (match mib.mind_universes with Monomorphic -> true | Polymorphic _ -> false)
-  && Option.is_empty mib.mind_template
+  match mib.mind_universes with Monomorphic -> true | Polymorphic _ -> false
 
 let owned_by dp l = match Univ.Level.name l with
   | Some g -> let (d, _, _) = Univ.UGlobal.repr g in DirPath.equal d dp
