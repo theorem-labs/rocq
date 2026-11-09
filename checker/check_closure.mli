@@ -70,3 +70,19 @@ END STATEMENT REPORT
     [type-in-type], [unsafe-fixpoint], [unchecked-eliminations],
     [assumed-positive], [uip] and [indices-not-mattering]. Statements keep
     request order; axioms and flags are sorted. *)
+
+(** {6 The closure, for [rocqchk -compare]} *)
+
+type closure_state
+
+val closure_state :
+  Environ.env -> (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) -> closure_state
+(** A state the walk's caches live in; share one across the constants of a
+    run. *)
+
+val axioms_and_flags :
+  closure_state -> Names.Constant.t -> string list * (string * string) list
+(** The axioms the constant's proof reaches, sorted, and the relaxed typing
+    flags [(kind, object)] it rests on, sorted. The closure is the one the
+    statement report walks: through a sealed module's implementation, with a
+    bodyless constant, a primitive and a symbol each counting as an axiom. *)

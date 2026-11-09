@@ -642,3 +642,21 @@ let print env access requests =
         FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) flags)
     requests;
   line "END STATEMENT REPORT"
+
+(** {6 The closure, for [rocqchk -compare]} *)
+
+(* The comparator needs the axioms and flags of a constant, not the report's
+   text, and it asks for several constants in one run, so the walk's caches
+   are built once and kept. *)
+
+type closure_state = state
+
+let closure_state env access = {
+  env; access; fields = ModPath.Map.empty;
+  public_nodes = GlobRef.Map_env.empty; implementation_nodes = GlobRef.Map_env.empty; gen = 0;
+  keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
+}
+
+let axioms_and_flags st kn =
+  let axioms, flags = closure st (GlobRef.ConstRef kn) in
+  CString.Set.elements axioms, FlagSet.elements flags
