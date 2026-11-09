@@ -770,12 +770,17 @@ let global_subst = ref Mod_subst.empty_subst
 let in_admitted = ref false
 let set_admitted b = in_admitted := b
 
+(* Also returns every universe equality the accepted merges rested on, for
+   the caller to record in the library's own constraints: a term this
+   library writes out may type-check only under them, and the names alone do
+   not say so (review of 657c3716, P0). *)
 let merge env mp univs mb =
-  if not (enabled ()) || !in_admitted then (env, mb) else
+  if not (enabled ()) || !in_admitted
+  then (env, Univ.UnivConstraints.empty, mb) else
   let new_dp = ModPath.dp mp in
   let () = library_univs := DirPath.Map.add new_dp univs !library_univs in
   match fields_of_body mb with
-  | None -> (env, mb)
+  | None -> (env, Univ.UnivConstraints.empty, mb)
   | Some struc ->
     let gsub = !global_subst in
     let news =
@@ -785,6 +790,10 @@ let merge env mp univs mb =
     let reso = ref (Mod_subst.empty_delta_resolver mp) in
     let envr = ref env in
     let merged_count = ref 0 in
+    (* Every equality an accepted merge rested on. The typing of what this
+       library writes out may depend on them, and the names alone do not
+       record them, so they go into the library's own constraints. *)
+    let used_eqs = ref Univ.UnivConstraints.empty in
     let pending = ref [] in
     let try_block (l, mib) =
       let kn = KerName.make mp l in
@@ -813,7 +822,8 @@ let merge env mp univs mb =
                  if not (pairs_admissible ~new_dp pairs) then first rest
                  else if not (constraints_agree ~new_ctx:univs ~old_ctx pairs)
                  then first rest
-                 else if List.is_empty pairs then Some (cand, trial, !envr)
+                 else if List.is_empty pairs
+                 then Some (cand, trial, !envr, Univ.UnivConstraints.empty)
                  else
                    let eqs =
                      List.fold_left (fun acc (a, b) ->
@@ -826,13 +836,14 @@ let merge env mp univs mb =
                      Environ.push_context_set ~strict:true
                        (Univ.Level.Set.empty, eqs) !envr
                    with
-                   | env' -> Some (cand, trial, env')
+                   | env' -> Some (cand, trial, env', eqs)
                    | exception UGraph.UniverseInconsistency _ -> first rest)
       in
       match (if mergeable mib then first (index_find key) else None) with
-      | Some (cand, trial, env') ->
+      | Some (cand, trial, env', eqs) ->
         reso := trial;
         envr := env';
+        used_eqs := Univ.UnivConstraints.union eqs !used_eqs;
         incr merged_count;
         record_merge kn (MutInd.canonical cand);
         if verbose () then
@@ -851,7 +862,8 @@ let merge env mp univs mb =
         !global_subst
       end
     in
-    if Mod_subst.is_empty_subst subst then (!envr, mb)
-    else
-      (!envr,
-       Mod_declarations.subst_module Mod_declarations.subst_codom subst mp mb)
+    let mb =
+      if Mod_subst.is_empty_subst subst then mb
+      else Mod_declarations.subst_module Mod_declarations.subst_codom subst mp mb
+    in
+    (!envr, !used_eqs, mb)

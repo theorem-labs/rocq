@@ -1619,7 +1619,7 @@ let import lib vmtab vodigest senv =
      the loaded structure with a delta resolver.  Done before the structure
      reaches the environment, so the names the environment and every library
      loaded afterwards see are the merged ones. *)
-  let env, mb = Indmerge.merge env mp univs mb in
+  let env, merge_eqs, mb = Indmerge.merge env mp univs mb in
   let env =
     let linkinfo = Nativecode.link_info_of_dirpath lib.comp_name in
     Modops.add_linked_module mp mb linkinfo env
@@ -1641,6 +1641,12 @@ let import lib vmtab vodigest senv =
     (* Do NOT store the name quotient from the dependencies in the set of
        constraints that will be marshalled on disk. *)
     paramresolver = ParamResolver.add_delta_resolver mp (mod_delta mb) senv.paramresolver;
+    (* The universe equalities a merge rested on ARE stored: what this
+       library writes out may type-check only under them, and a reader that
+       does not re-derive the merge has no other way to learn of them. *)
+    univ =
+      (if Univ.UnivConstraints.is_empty merge_eqs then senv.univ
+       else Univ.ContextSet.add_constraints merge_eqs senv.univ);
     required;
     loads = (mp,mb)::senv.loads;
     sections;

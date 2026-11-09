@@ -104,21 +104,35 @@ val eq_mib : umap -> Environ.env ->
 
 val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
   Mod_declarations.module_body ->
-  Environ.env * Mod_declarations.module_body
+  Environ.env * Univ.UnivConstraints.t * Mod_declarations.module_body
 (** [merge env mp univs mb] is called from [Safe_typing.import] with the
     library's own universe context. It returns the environment with the
-    universe equalities the accepted merges need, and the library's module
-    body with every matched inductive renamed and with every earlier merge of
-    this process applied. A no-op when [enabled ()] is false.
+    universe equalities the accepted merges need, those equalities, and the
+    library's module body with every matched inductive renamed and with
+    every earlier merge of this process applied. A no-op when [enabled ()]
+    is false.
+
+    The caller must record the returned equalities in the compilation unit's
+    own constraints. A term the unit writes out can type-check only under
+    them, and undoing the names does not undo that: without the record, a
+    reader that never heard of the option accepts the term and may then add
+    a contradicting constraint, which is a proof of [False].
 
     A universe-polymorphic block never merges in v1, whatever [eq_mib] says
+    about it; [eq_mib] still compares one, for the comparator's sake, and the
+    refusal is here. A template-polymorphic block does merge, on
+    [equal_template]'s verdict. *)
+
+(** {6 Two directions the merge refuses, both fail-closed} *)
+
+(** A universe-polymorphic block never merges in v1, whatever [eq_mib] says
     about it; [eq_mib] still compares one, for the comparator's sake, and the
     refusal is here. A template-polymorphic block does merge, on
     [equal_template]'s verdict: an [Inductive w (A : Type)] with no attribute
     is made template automatically, so refusing template blocks would refuse
     every parameterised [Type]-valued type.
 
-    {b Two directions this refuses, both fail-closed.}
+
 
     The merge renames the later-loaded copy, and only the loaded structure
     is renamed: the name table still resolves [Agent.tree] to the kerpair
