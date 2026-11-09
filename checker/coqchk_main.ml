@@ -99,6 +99,10 @@ let add_rec_path ~unix_path ~rocq_root =
 
 (* By the option -R/-Q of the command line *)
 let includes = ref []
+(* The same list, kept past [init_with_argv]: the challenge load of
+   [-compare] puts the challenge directory on the load path in place of each
+   of these physical directories, under the same logical root. *)
+let user_includes = ref []
 let push_include (s, alias) = includes := (s,alias) :: !includes
 
 let set_include d p =
@@ -148,6 +152,14 @@ let set_coqlib v = coqlib := Some v
 let indices_matter = ref false
 
 let enable_vm = ref false
+
+let statement_report = ref None
+
+(* [rocqchk -compare CONFIG -challenge DIR -compare-out FILE] *)
+let compare_config = ref None
+let compare_challenge = ref None
+let compare_out = ref None
+let sha256_files = ref []
 
 let jobs = ref 1
 let set_jobs s =
@@ -223,6 +235,16 @@ let print_usage_channel co command =
 \n  -worker-budget s            with -j, a worker process stops after s seconds\
 \n                              (default is 20) and its remaining checks are given\
 \n                              to another one; this bounds the memory it uses\
+\n  -statement-report f         print, for each statement named in f, whether its model\
+\n                              constant has its trusted constant's type and the axioms its\
+\n                              closure uses\
+\n  -compare config             grade the checked answer against a challenge: compare every\
+\n                              challenge declaration with the answer's declaration of the\
+\n                              same kernel name and judge each named theorem's axioms\
+\n                              (needs -challenge and -compare-out)\
+\n  -challenge dir              the directory holding the challenge's .vo files\
+\n  -compare-out f              write the comparator's JSON verdict to f\
+\n  -sha256 f                   print the SHA-256 of f and exit\
 \n\
 \n  -impredicative-set          set sort Set impredicative\
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
@@ -341,6 +363,7 @@ let rec explain_exn = function
       | UndeclaredUsedVariables _ -> str "UndeclaredUsedVariables"
       | IllFormedConstant _ -> str "IllFormedConstant"
       | IllFormedInductive _ -> str "IllFormedInductive"
+      | ArrayTooLong _ -> str "ArrayTooLong"
       ))
 
   | InductiveError (env,e) ->
@@ -355,9 +378,9 @@ let rec explain_exn = function
   | Mod_checking.BadConstant (cst, why) ->
     hov 0 (Constant.print cst ++ spc() ++ why)
 
-  | CheckWorkers.CheckError (cst, e) ->
+  | CheckWorkers.CheckError (job, e) ->
     explain_exn e ++ fnl () ++
-    hov 0 (str "while checking the opaque proof of" ++ spc () ++ Constant.print cst ++ str ".")
+    hov 0 (str "while " ++ CheckWorkers.pr_doing job ++ str ".")
 
   | CheckWorkers.WorkerFailed (pid, status, batch) ->
     let status = match status with
@@ -446,11 +469,47 @@ let parse_args argv =
     | "-worker-budget" :: s :: rem -> set_worker_budget s; parse rem
     | "-worker-budget" :: [] -> usage 1
 
+    | "-statement-report" :: f :: rem ->
+        (* Read now, so that a malformed file stops the run before any
+           library is loaded. *)
+        statement_report := Some (Check_closure.read_requests f); parse rem
+    | "-statement-report" :: [] -> usage 1
+
+    | "-compare" :: f :: rem ->
+        (* Read now, so that a malformed config stops the run before any
+           library is loaded. A pre-checked library loads without a check,
+           through the admit list. *)
+        let cfg = Check_compare.read_config f in
+        List.iter add_admit (Check_compare.prechecked_libraries cfg);
+        compare_config := Some cfg; parse rem
+    | "-compare" :: [] -> usage 1
+
+    | "-challenge" :: d :: rem ->
+        if not (exists_dir d) then
+          fatal_error (str "Directory '" ++ str d ++ str "' does not exist") 1;
+        compare_challenge := Some d; parse rem
+    | "-challenge" :: [] -> usage 1
+
+    | "-compare-out" :: f :: rem -> compare_out := Some f; parse rem
+    | "-compare-out" :: [] -> usage 1
+
+    | "-sha256" :: f :: rem ->
+        print_endline (Check_compare.sha256_of_file f);
+        sha256_files := f :: !sha256_files; parse rem
+    | "-sha256" :: [] -> usage 1
+
     | s :: _ when s<>"" && s.[0]='-' ->
         fatal_error (str "Unknown option " ++ str s) 1
     | s :: rem ->  add_compile s; parse rem
   in
-  parse (List.tl (Array.to_list argv))
+  parse (List.tl (Array.to_list argv));
+  (* [-sha256] is a probe of the comparator's own digest, nothing else. *)
+  if not (CList.is_empty !sha256_files) then exit 0;
+  match !compare_config, !compare_challenge, !compare_out with
+  | None, None, None | Some _, Some _, Some _ -> ()
+  | _ ->
+    fatal_error
+      (str "Options -compare, -challenge and -compare-out go together.") 1
 
 let init_profile ~file =
   let ch = open_out file in
@@ -483,6 +542,7 @@ let init_with_argv argv =
           (fun (unix_path, rocq_root) -> add_rec_path ~unix_path ~rocq_root)
           (List.rev !includes))
       ();
+    user_includes := List.rev !includes;
     includes := [];
     make_senv ()
   with e ->
@@ -510,8 +570,66 @@ let run senv =
     if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
     fatal_error (explain_exn e) (exit_code e)
 
+(* The report is evidence beside the verdict, never the verdict: a report
+   that cannot be completed is left without its end marker, which a reader
+   takes as no report, and the exit status is unchanged. It comes before the
+   context summary. The run goes on to exit 0, so the warning escapes the text
+   of the exception, which can quote a name read from a library (checkNames.mli).
+   The text is the one [explain_exn] returns: it prints the terms of a
+   [CantApplyBadType] type error itself, but nothing in the report raises one. *)
+let print_statement_report env requests =
+  try Check_closure.print env CheckLibrary.indirect_accessor requests
+  with e when (match e with Sys.Break | Out_of_memory -> false | _ -> true) ->
+    Feedback.msg_warning
+      (str "Statement report stopped: " ++
+       str (String.escaped (Pp.string_of_ppcmds (explain_exn e))))
+
+(* The comparator's verdict is the point of the run, not evidence beside it:
+   a run that could not complete -- a challenge file whose sha256 differs, a
+   pre-checked library the two sides disagree on, a theorem the challenge
+   does not hold -- exits non-zero and writes no verdict file. A verdict,
+   whatever it says, leaves the exit status at 0. *)
+let run_compare env =
+  match !compare_config with
+  | None -> ()
+  | Some cfg ->
+    let dir = Option.get !compare_challenge and out = Option.get !compare_out in
+    let answer_deps = CheckLibrary.interned_deps () in
+    (* The challenge directory stands in for the answer's directory under
+       each root that an answer library named on the command line lives
+       under. A root that only a pre-checked library or another shared tree
+       uses is left alone: the challenge directory does not hold it. *)
+    let checked_names =
+      List.map (function
+          | CheckLibrary.LogicalFile p ->
+            String.concat "." (List.rev p.CheckLibrary.dirpath @ [p.CheckLibrary.basename])
+          | CheckLibrary.PhysicalFile f -> Filename.remove_extension (Filename.basename f))
+        !compile_list
+    in
+    let substitutes root =
+      let r = DirPath.to_string root in
+      List.exists (fun n -> String.equal n r || CString.is_prefix (r ^ ".") n) checked_names
+    in
+    try
+      let t =
+        Check_compare.prepare cfg ~dir ~out
+          ~add_challenge_load_path:(fun () ->
+              List.iter (fun (_, rocq_root) ->
+                  if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)
+                !user_includes)
+      in
+      Check_compare.run t env CheckLibrary.indirect_accessor (make_senv ()) ~answer_deps
+    with e ->
+      if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
+      fatal_error (explain_exn e) (exit_code e)
+
+
 let main () =
   let senv = init() in
+  Check_stat.start_summary !Check_stat.output_context;
   let senv, opac = run senv in
-  Check_stat.stats (Safe_typing.env_of_safe_env senv) opac;
+  let env = Safe_typing.env_of_safe_env senv in
+  Option.iter (print_statement_report env) !statement_report;
+  run_compare env;
+  Check_stat.stats env opac;
   exit 0
