@@ -606,12 +606,57 @@ let unmerge_kn kn =
 
 let unmerge_delta reso =
   if KerName.Set.is_empty !merge_targets then reso
-  else Mod_subst.map_kn_delta_resolver unmerge_kn reso
+  else Mod_subst.map_kn_delta_resolver ~fc:unmerge_constr unmerge_kn reso
+
+(* Both sides of a rewrite rule: the right-hand term, and the inductives,
+   constructors and projections its left-hand pattern matches on. *)
+let rec unmerge_pat_elim e = match e with
+  | PEApp args ->
+    let args' = Array.Smart.map unmerge_pat_arg args in
+    if args' == args then e else PEApp args'
+  | PECase (ind, p, br) ->
+    let ind' = unmerge_ind ind in
+    let p' = unmerge_pat_arg p in
+    let br' = Array.Smart.map unmerge_pat_arg br in
+    if ind' == ind && p' == p && br' == br then e else PECase (ind', p', br')
+  | PEProj p ->
+    let p' = Projection.Repr.map unmerge_mind p in
+    if p' == p then e else PEProj p'
+
+and unmerge_head h = match h with
+  | PHInd (ind, m) ->
+    let ind' = unmerge_ind ind in
+    if ind' == ind then h else PHInd (ind', m)
+  | PHConstr ((ind, j), m) ->
+    let ind' = unmerge_ind ind in
+    if ind' == ind then h else PHConstr ((ind', j), m)
+  | PHLambda (args, he) ->
+    let args' = Array.Smart.map unmerge_pat_arg args in
+    let he' = unmerge_head_elim he in
+    if args' == args && he' == he then h else PHLambda (args', he')
+  | PHProd (args, a) ->
+    let args' = Array.Smart.map unmerge_pat_arg args in
+    let a' = unmerge_pat_arg a in
+    if args' == args && a' == a then h else PHProd (args', a')
+  | PHRel _ | PHSort _ | PHSymbol _ | PHInt _ | PHFloat _ | PHString _ -> h
+
+and unmerge_head_elim ((h, elims) as he) =
+  let h' = unmerge_head h in
+  let elims' = List.Smart.map unmerge_pat_elim elims in
+  if h' == h && elims' == elims then he else (h', elims')
+
+and unmerge_pat_arg a = match a with
+  | EHole _ | EHoleIgnored -> a
+  | ERigid he ->
+    let he' = unmerge_head_elim he in
+    if he' == he then a else ERigid he'
 
 let unmerge_rules rrb =
-  let rules = List.Smart.map (fun (c, ({ rhs; _ } as r) as orig) ->
+  let rules = List.Smart.map (fun (c, ({ rhs; lhs_pat = (m, elims); _ } as r) as orig) ->
       let rhs' = unmerge_constr rhs in
-      if rhs' == rhs then orig else (c, { r with rhs = rhs' }))
+      let elims' = List.Smart.map unmerge_pat_elim elims in
+      if rhs' == rhs && elims' == elims then orig
+      else (c, { r with rhs = rhs'; lhs_pat = (m, elims') }))
       rrb.rewrules_rules
   in
   if rules == rrb.rewrules_rules then rrb else { rewrules_rules = rules }

@@ -116,7 +116,27 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
     refusal is here. A template-polymorphic block does merge, on
     [equal_template]'s verdict: an [Inductive w (A : Type)] with no attribute
     is made template automatically, so refusing template blocks would refuse
-    every parameterised [Type]-valued type. *)
+    every parameterised [Type]-valued type.
+
+    {b Two directions this refuses, both fail-closed.}
+
+    The merge renames the later-loaded copy, and only the loaded structure
+    is renamed: the name table still resolves [Agent.tree] to the kerpair
+    the agent's library declared, because that globref is built from
+    [Safe_typing.mind_of_delta_kn_senv], which this does not touch. So an
+    ascription in the direction the grader needs -- [Definition chk :
+    Spec.Stmt := Agent.thm], the already-loaded copy's statement with the
+    later copy's term -- works, while the opposite one, [Definition x :
+    Agent.tree := Spec.Leaf], is refused with a message that prints the same
+    name on both sides. Making it work means rewriting that globref too;
+    that is not done here, and until it is, a checker file must be written
+    in the first direction.
+
+    A module alias whose resolver points at a name this run merged into is
+    refused even when the alias itself needed no merge ([Module MS := Spec.]
+    in a run that merged something else into [Spec]): which copy an alias
+    names cannot be read back out of its resolver, so the refusal is the
+    conservative answer rather than a guess. *)
 
 (** {6 Undoing a merge on the way out} *)
 
