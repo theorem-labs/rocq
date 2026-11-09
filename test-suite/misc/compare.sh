@@ -412,6 +412,85 @@ case_sibling() {
   echo "ok sibling"
 }
 
+# ---------------------------------------------------- the recorded forgeries
+#
+# Six proofs of False that a kernel defect once accepted (rocq#22378,
+# #22383, #22391, #22675, the VM forgery of dispatch://BET-357 and the
+# array forgery of dispatch://BET-630). The cut this branch sits on carries
+# the fix for each, so none of them may reach a passing verdict. Three
+# outcomes count as not-pass, and the case prints which one each takes:
+# the forgery does not compile, rocqchk refuses it, or the verdict is fail.
+#
+# The trees are read-only recordings; COMPARE_FORGERIES points at them and
+# the case is skipped where they are not mounted.
+: "${COMPARE_FORGERIES:=/mnt/durable/sami/eval-driven-development/round4/verified-grading/wrong-answers-e2e/trees}"
+
+case_forgeries() {
+  if [ ! -d "$COMPARE_FORGERIES" ]; then
+    echo "skip forgeries (no $COMPARE_FORGERIES)"
+    return
+  fi
+  local f
+  for f in os-22378 os-22383 os-22391 os-22675 os-vm357 os-parray630; do
+    local src="$COMPARE_FORGERIES/$f/plain/Lib"
+    [ -d "$src" ] || fail "forgeries: no $src"
+    local work
+    work=$(mktemp -d)
+    mkdir -p "$work/challenge" "$work/answer"
+    local side
+    for side in challenge answer; do
+      cp "$src/Forge.v" "$work/$side/Forge.v"
+      [ -f "$src/hurkens.v" ] && cp "$src/hurkens.v" "$work/$side/hurkens.v"
+    done
+    printf '%s\n' 'Require Import Forge.' 'Theorem forged : False.' 'Proof.' 'Admitted.' \
+      > "$work/challenge/Main.v"
+    printf '%s\n' 'Require Import Forge.' 'Theorem forged : False.' \
+      'Proof. exact contradiction. Qed.' > "$work/answer/Main.v"
+    local order="Forge.v Main.v"
+    [ -f "$src/hurkens.v" ] && order="hurkens.v Forge.v Main.v"
+    local ok="" v
+    for v in $order; do
+      (cd "$work/challenge" && coqc -R . Top "$v") > "$work/cc" 2>&1 \
+        || { ok="the challenge does not compile: $(grep -m1 -i error "$work/cc" | cut -c1-110)"; break; }
+    done
+    if [ -z "$ok" ]; then
+      for v in $order; do
+        (cd "$work/answer" && coqc -R . Top "$v") > "$work/ac" 2>&1 \
+          || { ok="the answer does not compile: $(grep -m1 -i error "$work/ac" | cut -c1-110)"; break; }
+      done
+    fi
+    if [ -z "$ok" ]; then
+      local sha prelude_sha
+      sha=$(rocqchk -sha256 "$work/challenge/Main.vo")
+      prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+      printf '%s\n' \
+        "{\"theorems\": [{\"name\": \"Top.Main.forged\"}]," \
+        " \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\", \"object\": \"Corelib.Init.Logic.eq\"}]," \
+        " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}]," \
+        " \"challenge_files\": [{\"path\": \"Main.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
+      local libs=() g
+      for g in "$work/answer"/*.vo; do libs+=("Top.$(basename "$g" .vo)"); done
+      set +e
+      rocqchk -silent -R "$work/answer" Top -compare "$work/config.json" \
+        -challenge "$work/challenge" -compare-out "$work/out.json" "${libs[@]}" \
+        > "$work/log" 2>&1
+      local code=$?
+      set -e
+      if [ "$code" != "0" ]; then
+        ok="rocqchk refuses it: $(grep -m1 -i error "$work/log" | cut -c1-110)"
+      elif grep -q '"verdict":"fail"' "$work/out.json"; then
+        ok="the verdict is fail"
+      else
+        cat "$work/out.json"
+        fail "forgeries/$f: the forgery PASSES"
+      fi
+    fi
+    echo "  ok forgeries/$f: $ok"
+    rm -rf "$work"
+  done
+  echo "ok forgeries"
+}
+
 main() {
   if [ $# -gt 0 ]; then
     case "$1" in
@@ -419,6 +498,7 @@ main() {
       vos) case_vos ;;
       digest) case_digest ;;
       sibling) case_sibling ;;
+      forgeries) case_forgeries ;;
       *) run_case "$1" ;;
     esac
   else
@@ -430,6 +510,7 @@ main() {
     case_vos
     case_digest
     case_sibling
+    case_forgeries
   fi
 }
 
