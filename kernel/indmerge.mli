@@ -105,7 +105,11 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
     library's own universe context. It returns the environment with the
     universe equalities the accepted merges need, and the library's module
     body with every matched inductive renamed and with every earlier merge of
-    this process applied. A no-op when [enabled ()] is false. *)
+    this process applied. A no-op when [enabled ()] is false.
+
+    A universe-polymorphic or template-polymorphic block never merges in v1,
+    whatever [eq_mib] says about it. [eq_mib] still compares such blocks, for
+    the comparator's sake; the refusal is here. *)
 
 (** {6 Undoing a merge on the way out} *)
 

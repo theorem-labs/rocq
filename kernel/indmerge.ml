@@ -578,6 +578,13 @@ let fields_of_body mb = match Mod_declarations.mod_type mb with
 let as_loaded mib =
   if mib.mind_private != None then { mib with mind_private = Some true } else mib
 
+(* v1 does not merge a universe-polymorphic or a template-polymorphic block,
+   whatever [eq_mib] says about it: the verified-grader lead's decision.
+   [eq_mib] still compares them, for the comparator; only this refuses. *)
+let mergeable mib =
+  (match mib.mind_universes with Monomorphic -> true | Polymorphic _ -> false)
+  && Option.is_empty mib.mind_template
+
 let owned_by dp l = match Univ.Level.name l with
   | Some g -> let (d, _, _) = Univ.UGlobal.repr g in DirPath.equal d dp
   | None -> false
@@ -684,7 +691,7 @@ let merge env mp univs mb =
                    | env' -> Some (cand, trial, env')
                    | exception UGraph.UniverseInconsistency _ -> first rest)
       in
-      match first (index_find key) with
+      match (if mergeable mib then first (index_find key) else None) with
       | Some (cand, trial, env') ->
         reso := trial;
         envr := env';
