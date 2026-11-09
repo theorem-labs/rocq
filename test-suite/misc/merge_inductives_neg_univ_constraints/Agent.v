@@ -1,8 +1,7 @@
-(* Spec.v's block with one constraint more in the block's own universe
-   context. *)
+Universe u.
+Universe v.
+#[universes(template=no)]
+Inductive b (A : Type@{u}) (B : Type@{v}) := B0 : A -> B -> b A B.
 
-#[universes(polymorphic)]
-Inductive b@{u v | u <= v} (A1 : Type@{u}) (A2 : Type@{v}) := Mk : A1 -> A2 -> b A1 A2.
-
-Theorem thm : forall x : b@{Set Set} nat nat, x = x.
+Theorem thm : forall x : b nat bool, x = x.
 Proof. reflexivity. Qed.

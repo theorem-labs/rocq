@@ -37,6 +37,10 @@ val enabled : unit -> bool
 val set_verbose : bool -> unit
 (** Print one line per merge. *)
 
+val set_admitted : bool -> unit
+(** rocqchk's [-admit] loads a library without checking it. While this is
+    set, no library takes part in a merge, in either direction. *)
+
 (** {6 Comparing two blocks}
 
     This is the part the Rocq comparator (dispatch://BET-894) calls. *)
@@ -126,3 +130,9 @@ val unmerge_exported :
 val unmerge_constr : Constr.t -> Constr.t
 (** The same, for one term: used on the opaque proof table, which is written
     outside the structure. *)
+
+val unmerge_delta : Mod_subst.delta_resolver -> Mod_subst.delta_resolver
+(** The same, for the delta resolver a library exports beside its structure.
+    A resolver entry that points at a name this run merged into cannot be
+    undone -- which copy an alias names is not recoverable from it -- so this
+    refuses to write the library rather than guess. *)

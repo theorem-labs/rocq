@@ -208,6 +208,20 @@ let add_kn_delta_resolver kn kn' =
 
 let add_mp_delta_resolver mp1 mp2 = Deltamap.add_mp mp1 mp2
 
+(* Rewrite the canonical names a resolver points at, leaving its domain and
+   its module equivalences alone: used where a substitution cannot express
+   the rewrite ([-merge-inductives] undoing its own merges). *)
+let map_kn_delta_resolver f resolver =
+  let mp_id mkey mequ rslv = Deltamap.add_mp mkey mequ rslv in
+  let kn_map kkey hint rslv = match hint with
+    | Equiv kn ->
+      let kn' = f kn in
+      Deltamap.add_kn kkey (if kn' == kn then hint else Equiv kn') rslv
+    | Inline _ -> Deltamap.add_kn kkey hint rslv
+  in
+  Deltamap.fold mp_id kn_map resolver
+    (empty_delta_resolver (Deltamap.root resolver))
+
 (** Extending a [substitution] without sequential composition *)
 
 let add_mbid mbid mp resolve s =

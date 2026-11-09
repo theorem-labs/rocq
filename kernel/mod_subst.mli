@@ -33,6 +33,11 @@ val add_mp_delta_resolver :
 val add_kn_delta_resolver :
   KerName.t -> KerName.t -> delta_resolver -> delta_resolver
 
+(** [map_kn_delta_resolver f reso] rewrites the canonical name each [Equiv]
+    hint points at, leaving the domain and the module equivalences alone. *)
+val map_kn_delta_resolver :
+  (KerName.t -> KerName.t) -> delta_resolver -> delta_resolver
+
 (** [add_inline_delta_resolver kn v reso] assumes that root(reso) ⊆ modpath(kn). *)
 val add_inline_delta_resolver :
   KerName.t -> (int * constr UVars.univ_abstracted option) -> delta_resolver -> delta_resolver

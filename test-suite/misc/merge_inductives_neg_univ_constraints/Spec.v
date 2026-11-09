@@ -1,7 +1,11 @@
-#[universes(polymorphic)]
-Inductive b@{u v} (A1 : Type@{u}) (A2 : Type@{v}) := Mk : A1 -> A2 -> b A1 A2.
+(* Two monomorphic blocks whose own universe levels carry different
+   constraints: Spec relates u and v, Agent leaves them unrelated. The two
+   declarations read the same; what differs is what each file says about the
+   levels a merge would equate. *)
+Universe u.
+Universe v.
+Constraint u < v.
+#[universes(template=no)]
+Inductive b (A : Type@{u}) (B : Type@{v}) := B0 : A -> B -> b A B.
 
-(* The instance is spelled out so that both libraries speak of the same one:
-   [Set <= Set] holds, so it satisfies the agent's extra constraint too, and
-   what is left to tell the two blocks apart is the constraint itself. *)
-Definition Stmt := forall x : b@{Set Set} nat nat, x = x.
+Definition Stmt := forall x : b nat bool, x = x.

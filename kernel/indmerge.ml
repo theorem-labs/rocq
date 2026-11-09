@@ -159,10 +159,15 @@ let rec equal_constr u c1 c2 =
   | Cast (a1, k1, t1), Cast (a2, k2, t2) ->
     if not (k1 = k2) then Error (DTerm (c1, c2))
     else let* u = equal_constr u a1 a2 in equal_constr u t1 t2
-  | Prod (_, t1, b1), Prod (_, t2, b2)
-  | Lambda (_, t1, b1), Lambda (_, t2, b2) ->
+  (* The relevance a binder carries is cached, not recomputed from the type
+     beside it, so two declarations can disagree on it while their types
+     agree.  Compare it. *)
+  | Prod (n1, t1, b1), Prod (n2, t2, b2)
+  | Lambda (n1, t1, b1), Lambda (n2, t2, b2) ->
+    let* u = unify_relevance u n1.Context.binder_relevance n2.Context.binder_relevance in
     let* u = equal_constr u t1 t2 in equal_constr u b1 b2
-  | LetIn (_, v1, t1, b1), LetIn (_, v2, t2, b2) ->
+  | LetIn (n1, v1, t1, b1), LetIn (n2, v2, t2, b2) ->
+    let* u = unify_relevance u n1.Context.binder_relevance n2.Context.binder_relevance in
     let* u = equal_constr u v1 v2 in
     let* u = equal_constr u t1 t2 in
     equal_constr u b1 b2
@@ -204,9 +209,15 @@ let rec equal_constr u c1 c2 =
          || not (Array.equal Int.equal ci1.ci_cstr_nargs ci2.ci_cstr_nargs)
     then Error (DField "case info")
     else
+      let binders u a1 a2 =
+        fold_array2 (fun u a b ->
+            unify_relevance u a.Context.binder_relevance b.Context.binder_relevance)
+          u a1 a2 (DField "case binders")
+      in
       let* u = unify_instance u i1 i2 in
       let* u = fold_array2 equal_constr u pms1 pms2 (DTerm (c1, c2)) in
       let* u = unify_relevance u pr1 pr2 in
+      let* u = binders u (fst p1) (fst p2) in
       let* u = equal_constr u (snd p1) (snd p2) in
       let* u = match iv1, iv2 with
         | NoInvert, NoInvert -> Ok u
@@ -215,17 +226,24 @@ let rec equal_constr u c1 c2 =
         | (NoInvert | CaseInvert _), _ -> Error (DField "case inversion")
       in
       let* u = equal_constr u s1 s2 in
-      fold_array2 (fun u (_, b1) (_, b2) -> equal_constr u b1 b2)
+      fold_array2 (fun u (n1, b1) (n2, b2) ->
+          let* u = binders u n1 n2 in equal_constr u b1 b2)
         u br1 br2 (DTerm (c1, c2))
-  | Fix ((ln1, i1), (_, tl1, bl1)), Fix ((ln2, i2), (_, tl2, bl2)) ->
+  | Fix ((ln1, i1), (na1, tl1, bl1)), Fix ((ln2, i2), (na2, tl2, bl2)) ->
     if not (Array.equal Int.equal ln1 ln2) || not (Int.equal i1 i2)
     then Error (DField "fixpoint structure")
     else
+      let* u = fold_array2 (fun u a b ->
+          unify_relevance u a.Context.binder_relevance b.Context.binder_relevance)
+          u na1 na2 (DField "fixpoint structure") in
       let* u = fold_array2 equal_constr u tl1 tl2 (DTerm (c1, c2)) in
       fold_array2 equal_constr u bl1 bl2 (DTerm (c1, c2))
-  | CoFix (i1, (_, tl1, bl1)), CoFix (i2, (_, tl2, bl2)) ->
+  | CoFix (i1, (na1, tl1, bl1)), CoFix (i2, (na2, tl2, bl2)) ->
     if not (Int.equal i1 i2) then Error (DField "cofixpoint structure")
     else
+      let* u = fold_array2 (fun u a b ->
+          unify_relevance u a.Context.binder_relevance b.Context.binder_relevance)
+          u na1 na2 (DField "cofixpoint structure") in
       let* u = fold_array2 equal_constr u tl1 tl2 (DTerm (c1, c2)) in
       fold_array2 equal_constr u bl1 bl2 (DTerm (c1, c2))
   | Array (i1, t1, d1, ty1), Array (i2, t2, d2, ty2) ->
@@ -282,10 +300,19 @@ let equal_record u r1 r2 = match r1, r2 with
   | (NotRecord | FakeRecord | PrimRecord _), _ -> Error (DField "record shape")
 
 (* Every typing flag except the conversion oracle, which is a transparency
-   setting and not part of a type's identity.  Written as a record update so
-   that a flag added later is compared without this function changing. *)
+   setting, and the three that only pick how reduction is carried out --
+   share_reduction, enable_VM, enable_native_compiler. None of the four is
+   part of a type's identity, and comparing them would refuse every merge
+   between a spec built with, say, -bytecode-compiler yes and an agent built
+   without it. What stays compared is check_guarded, check_positive,
+   check_universes, check_eliminations where that field exists,
+   indices_matter, impredicative_set, sprop_allowed, allow_uip -- and, by the
+   record update, any flag added later. *)
 let equal_flags f1 f2 =
-  let strip f = { f with conv_oracle = Conv_oracle.empty } in
+  let strip f =
+    { f with conv_oracle = Conv_oracle.empty; share_reduction = true;
+             enable_VM = true; enable_native_compiler = true }
+  in
   strip f1 = strip f2
 
 (* Abstract contexts quantify over [Level.var i] and [QVar.make_var i], so
@@ -477,14 +504,35 @@ let library_univs : Univ.ContextSet.t DirPath.Map.t ref = ref DirPath.Map.empty
 
 let merged : KerName.t KerName.Map.t ref = ref KerName.Map.empty
 
-let record_merge user canon = merged := KerName.Map.add user canon !merged
+let merge_targets = ref KerName.Set.empty
+
+let record_merge user canon =
+  merged := KerName.Map.add user canon !merged;
+  merge_targets := KerName.Set.add canon !merge_targets
+
+(* A name whose canonical half this run produced goes back to its own user
+   name. A name whose canonical half is one this run merged INTO but whose
+   user half is not a merge of ours was acquired some other way -- through
+   `Module A := Agent.` or an `Include`, which composes the alias with the
+   merged canonical -- and which copy it names cannot be read back out of
+   it. That is not guessed: writing the library is refused, with the name in
+   the message. The price is that a genuine alias of the library a merge
+   pointed at is refused too, in a run that merged; the alternative is
+   writing a name the reader never earned. *)
+let refuse_alias kn =
+  CErrors.user_err
+    Pp.(strbrk "-merge-inductives cannot write this library: it mentions " ++
+        KerName.print kn ++
+        strbrk ", which this run merged into, under another name -- through a \
+                module alias or an Include. Compile it without the option \
+                (dispatch://BET-895).")
 
 let unmerge_mind mind =
   let u = MutInd.user mind and c = MutInd.canonical mind in
   if KerName.equal u c then mind
   else match KerName.Map.find_opt u !merged with
     | Some c' when KerName.equal c c' -> MutInd.make1 u
-    | _ -> mind
+    | _ -> if KerName.Set.mem c !merge_targets then refuse_alias c else mind
 
 let unmerge_ind (mind, i as ind) =
   let mind' = unmerge_mind mind in
@@ -549,16 +597,49 @@ let unmerge_const_body cb =
       Option.map (Vmemitcodes.map_body_code unmerge_ind (fun c -> c))
         cb.const_body_code }
 
+(* The same for the targets a delta resolver points at: the resolver of a
+   module alias in this library records the merged canonical name, which its
+   reader never earned, and which copy the alias names is not recoverable
+   from it either. *)
+let unmerge_kn kn =
+  if KerName.Set.mem kn !merge_targets then refuse_alias kn else kn
+
+let unmerge_delta reso =
+  if KerName.Set.is_empty !merge_targets then reso
+  else Mod_subst.map_kn_delta_resolver unmerge_kn reso
+
+let unmerge_rules rrb =
+  let rules = List.Smart.map (fun (c, ({ rhs; _ } as r) as orig) ->
+      let rhs' = unmerge_constr rhs in
+      if rhs' == rhs then orig else (c, { r with rhs = rhs' }))
+      rrb.rewrules_rules
+  in
+  if rules == rrb.rewrules_rules then rrb else { rewrules_rules = rules }
+
+let unmerge_retro a =
+  let open Retroknowledge in
+  match a with
+  | Register_ind (p, ind) ->
+    let ind' = unmerge_ind ind in
+    if ind' == ind then a else Register_ind (p, ind')
+  | Register_type _ -> a
+
+(* Everything a library writes out goes through this, not only its top-level
+   constants and inductives: a merged name inside a Module, a Module Type, a
+   functor's signature, a `with Definition`, a module alias's resolver or a
+   rewrite rule would otherwise reach the .vo and be taken on trust by a
+   reader that never compared anything. *)
+let unmerge_name_map = {
+  Mod_declarations.nmap_const = unmerge_const_body;
+  nmap_mind = unmerge_mind_body;
+  nmap_rules = unmerge_rules;
+  nmap_constr = unmerge_constr;
+  nmap_delta = unmerge_delta;
+  nmap_retro = unmerge_retro;
+}
+
 let unmerge_structure struc =
-  List.Smart.map (fun (l, field as orig) -> match field with
-      | SFBconst cb ->
-        let cb' = unmerge_const_body cb in
-        if cb' == cb then orig else (l, SFBconst cb')
-      | SFBmind mib ->
-        let mib' = unmerge_mind_body mib in
-        if mib' == mib then orig else (l, SFBmind mib')
-      | SFBmodule _ | SFBmodtype _ | SFBrules _ -> orig)
-    struc
+  Mod_declarations.map_structure unmerge_name_map struc
 
 let unmerging () = enabled () && not (KerName.Map.is_empty !merged)
 
@@ -637,8 +718,15 @@ let constraints_agree ~new_ctx ~old_ctx pairs =
    so nothing already in the environment ever needs rewriting. *)
 let global_subst = ref Mod_subst.empty_subst
 
+(* rocqchk's -admit loads a library without checking it. Such a library may
+   not take part in a merge, in either direction: its declarations were
+   never re-derived, so neither side of a comparison against it means
+   anything (review finding P3-3). *)
+let in_admitted = ref false
+let set_admitted b = in_admitted := b
+
 let merge env mp univs mb =
-  if not (enabled ()) then (env, mb) else
+  if not (enabled ()) || !in_admitted then (env, mb) else
   let new_dp = ModPath.dp mp in
   let () = library_univs := DirPath.Map.add new_dp univs !library_univs in
   match fields_of_body mb with
@@ -660,7 +748,11 @@ let merge env mp univs mb =
         | [] -> None
         | cand :: rest ->
           let ckn = MutInd.canonical cand in
-          let cand_dp = ModPath.dp (KerName.modpath ckn) in
+          (* The library whose constraints must be compared is the one that
+             DECLARED the candidate, which is its user name's: a candidate
+             that was itself merged carries another library's canonical half
+             (review finding P1-2). *)
+          let cand_dp = ModPath.dp (KerName.modpath (MutInd.user cand)) in
           if not (Id.equal (KerName.label kn) (KerName.label ckn)) then first rest
           else match DirPath.Map.find_opt cand_dp !library_univs with
             | None -> first rest

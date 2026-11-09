@@ -36,5 +36,14 @@ let import senv opac clib vmtab digest : _ * _ =
     (fun () ->import senv opac clib vmtab digest)
     ()
 
+(* An admitted library is loaded without being checked, so it may not take
+   part in a merge, in either direction: neither side of a comparison
+   against declarations nobody re-derived means anything. *)
 let unsafe_import senv clib vmtab digest =
-  let (_,senv) = Safe_typing.import clib vmtab digest senv in senv
+  Indmerge.set_admitted true;
+  let (_, senv) =
+    try Safe_typing.import clib vmtab digest senv
+    with e -> Indmerge.set_admitted false; raise e
+  in
+  Indmerge.set_admitted false;
+  senv

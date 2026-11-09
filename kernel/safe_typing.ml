@@ -1568,7 +1568,10 @@ let export ~output_native_objects senv dir =
   (* With -merge-inductives, undo every merge this process made, so that the
      .vo carries only names its reader can justify for itself. *)
   let str = NoFunctor (Indmerge.unmerge_exported (List.rev senv.revstruct)) in
-  let mb = Mod_declarations.make_module_body str senv.modresolver senv.local_retroknowledge in
+  let mb =
+    Mod_declarations.make_module_body str
+      (Indmerge.unmerge_delta senv.modresolver) senv.local_retroknowledge
+  in
   let ast, symbols =
     if output_native_objects then
       Nativelibrary.dump_library mp senv.env str

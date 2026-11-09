@@ -113,6 +113,26 @@ val subst_module : subst_kind -> substitution ->
 val subst_modtype : subst_kind -> substitution ->
   ModPath.t -> module_type_body -> module_type_body
 
+(** {6 Rewriting the names a module body mentions}
+
+    The traversal [subst_module] makes, driven by plain functions instead of
+    a module substitution, for a rewrite a substitution cannot express:
+    [-merge-inductives] undoing its own merges before a library is written
+    out. Every field [subst_module] visits is visited here too. *)
+
+type name_map = {
+  nmap_const : constant_body -> constant_body;
+  nmap_mind : mutual_inductive_body -> mutual_inductive_body;
+  nmap_rules : rewrite_rules_body -> rewrite_rules_body;
+  nmap_constr : Constr.t -> Constr.t;
+      (** applied to the term of a [with Definition] constraint *)
+  nmap_delta : Mod_subst.delta_resolver -> Mod_subst.delta_resolver;
+  nmap_retro : Retroknowledge.action -> Retroknowledge.action;
+}
+
+val map_structure : name_map -> structure_body -> structure_body
+val map_module : name_map -> module_body -> module_body
+
 (** {6 Hashconsing} *)
 
 val hcons_generic_module_body : 'a generic_module_body -> 'a generic_module_body
