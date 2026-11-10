@@ -412,6 +412,90 @@ case_sibling() {
   echo "ok sibling"
 }
 
+# ------------------------- the answer libraries named only by -norec
+#
+# The grading side names each answer library with -norec and nothing
+# positionally: check exactly these, load the rest. That selection must
+# reach the same verdict as the positional one, so the case runs both
+# forms over the same trees -- an honest answer, which must pass, and a
+# wrong one, which must not. Before the fix of dispatch://BET-901 the
+# -norec arm named no root for the challenge directory to stand in for,
+# so the first challenge file failed to intern and no verdict was
+# written at all.
+#
+# The libraries sit under a root with a dotted prefix and in
+# subdirectories, the shape a task tree takes (-Q tree Top, Sub/B.v).
+case_norec() {
+  local work
+  work=$(mktemp -d)
+  local side
+  for side in challenge answer bad; do
+    mkdir -p "$work/$side/SubA" "$work/$side/SubB"
+    printf '%s\n' 'Definition two : nat := 2.' > "$work/$side/SubA/Defs.v"
+  done
+  printf '%s\n' 'Require Import Top.SubA.Defs.' \
+    'Theorem thm : two = 2.' 'Proof.' 'Admitted.' > "$work/challenge/SubB/Proof.v"
+  printf '%s\n' 'Require Import Top.SubA.Defs.' \
+    'Theorem thm : two = 2.' 'Proof. reflexivity. Qed.' > "$work/answer/SubB/Proof.v"
+  # A wrong answer: the theorem is there under the right name, with another
+  # statement. The comparator must not pass it.
+  printf '%s\n' 'Require Import Top.SubA.Defs.' \
+    'Theorem thm : two = two.' 'Proof. reflexivity. Qed.' > "$work/bad/SubB/Proof.v"
+  for side in challenge answer bad; do
+    (cd "$work/$side" && coqc -R . Top SubA/Defs.v) \
+      || fail "norec: $side/Defs.v does not compile"
+    (cd "$work/$side" && coqc -R . Top SubB/Proof.v) \
+      || fail "norec: $side/Proof.v does not compile"
+  done
+  local spec_sha proof_sha prelude_sha
+  spec_sha=$(rocqchk -sha256 "$work/challenge/SubA/Defs.vo")
+  proof_sha=$(rocqchk -sha256 "$work/challenge/SubB/Proof.vo")
+  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  printf '%s\n' \
+    "{\"theorems\": [{\"name\": \"Top.SubB.Proof.thm\"}]," \
+    " \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\", \"object\": \"Corelib.Init.Logic.eq\"}]," \
+    " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}]," \
+    " \"challenge_files\": [{\"path\": \"SubA/Defs.vo\", \"sha256\": \"$spec_sha\"}," \
+    "   {\"path\": \"SubB/Proof.vo\", \"sha256\": \"$proof_sha\"}]}" > "$work/config.json"
+
+  # <selection-form> <answer tree> -> prints the exit code, verdict in out.json
+  norec_run() {
+    local form=$1 tree=$2
+    local sel=()
+    case "$form" in
+      norec) sel=(-norec Top.SubA.Defs -norec Top.SubB.Proof) ;;
+      positional) sel=(Top.SubA.Defs Top.SubB.Proof) ;;
+    esac
+    rm -f "$work/out.json"
+    set +e
+    rocqchk -silent -Q "$tree" Top -compare "$work/config.json" \
+      -challenge "$work/challenge" -compare-out "$work/out.json" "${sel[@]}" \
+      > "$work/log" 2>&1
+    local code=$?
+    set -e
+    echo "$code"
+  }
+
+  local form code
+  for form in norec positional; do
+    code=$(norec_run "$form" "$work/answer")
+    [ "$code" = "0" ] || { cat "$work/log"; fail "norec/$form: the honest answer exits $code"; }
+    [ -f "$work/out.json" ] || fail "norec/$form: no verdict file"
+    grep -q '"verdict":"pass"' "$work/out.json" \
+      || { cat "$work/out.json"; fail "norec/$form: the honest answer did not pass"; }
+    code=$(norec_run "$form" "$work/bad")
+    if [ "$code" = "0" ]; then
+      grep -q '"verdict":"fail"' "$work/out.json" \
+        || { cat "$work/out.json"; fail "norec/$form: the wrong answer did not fail"; }
+    else
+      [ ! -f "$work/out.json" ] || fail "norec/$form: a verdict file was written anyway"
+    fi
+    echo "  ok norec/$form"
+  done
+  rm -rf "$work"
+  echo "ok norec"
+}
+
 # ---------------------------------------------------- the recorded forgeries
 #
 # Six proofs of False that a kernel defect once accepted (rocq#22378,
@@ -498,6 +582,7 @@ main() {
       vos) case_vos ;;
       digest) case_digest ;;
       sibling) case_sibling ;;
+      norec) case_norec ;;
       forgeries) case_forgeries ;;
       *) run_case "$1" ;;
     esac
@@ -510,6 +595,7 @@ main() {
     case_vos
     case_digest
     case_sibling
+    case_norec
     case_forgeries
   fi
 }

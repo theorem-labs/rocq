@@ -598,13 +598,22 @@ let run_compare env =
     (* The challenge directory stands in for the answer's directory under
        each root that an answer library named on the command line lives
        under. A root that only a pre-checked library or another shared tree
-       uses is left alone: the challenge directory does not hold it. *)
+       uses is left alone: the challenge directory does not hold it.
+
+       Both selection forms that name a library to CHECK count: the
+       positional names ([compile_list], checked with their dependencies)
+       and -norec ([norec_list], checked alone), which is the form the
+       grading side sends. -admit names a library to load WITHOUT
+       checking it and never selects an answer library, so [admit_list]
+       is left out -- it also holds the config's pre-checked libraries,
+       which are exactly the ones the challenge does not stand in for. *)
+    let name_of = function
+      | CheckLibrary.LogicalFile p ->
+        String.concat "." (List.rev p.CheckLibrary.dirpath @ [p.CheckLibrary.basename])
+      | CheckLibrary.PhysicalFile f -> Filename.remove_extension (Filename.basename f)
+    in
     let checked_names =
-      List.map (function
-          | CheckLibrary.LogicalFile p ->
-            String.concat "." (List.rev p.CheckLibrary.dirpath @ [p.CheckLibrary.basename])
-          | CheckLibrary.PhysicalFile f -> Filename.remove_extension (Filename.basename f))
-        !compile_list
+      List.map name_of !compile_list @ List.map name_of !norec_list
     in
     let substitutes root =
       let r = DirPath.to_string root in
