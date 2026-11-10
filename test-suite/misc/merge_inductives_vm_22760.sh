@@ -24,9 +24,15 @@ set -eu
 
 mi_setup misc/merge_inductives_vm_22760
 
-mi_coqc Spec -merge-inductives
-mi_coqc Agent -merge-inductives
-mi_coqc Bad -merge-inductives-verbose
+# -native-compiler no is not optional here: OCaml refuses more than 246
+# non-constant constructors, so an install with the native compiler on by
+# default cannot compile a 250-constructor inductive at all. Upstream's own
+# copy of this reproducer is named d760_issue22760_nonative.v for the same
+# reason. Without the flag this test passes only where native happens to be
+# off, which is how it reached the branch.
+mi_coqc Spec -native-compiler no -merge-inductives
+mi_coqc Agent -native-compiler no -merge-inductives
+mi_coqc Bad -native-compiler no -merge-inductives-verbose
 # Without this the file could stop being about a merged type and nothing
 # here would notice.
 mi_says 'Merged inductive' "a merge of the two Big copies"
