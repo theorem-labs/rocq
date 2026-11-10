@@ -50,11 +50,20 @@ type config
 
 val read_config : string -> config
 (** The config is one JSON object with the keys [theorems] (each
-    [{name, permitted_axioms?}]), [permitted_axioms], [tolerated_flags],
-    [rewrite_rules], [prechecked] ([{library, sha256}]) and
-    [challenge_files] ([{path, sha256}]). Any other key, a duplicate key, a
-    byte after the top-level value, a byte sequence that is not UTF-8 or a
-    name that is not a string is an error.
+    [{name, permitted_axioms?}]), [permitted_axioms], [tolerated_flags]
+    (each [{kind, object?}]), [rewrite_rules], [prechecked]
+    ([{library, sha256}]) and [challenge_files] ([{path, sha256}]). Any
+    other key, a duplicate key, a byte after the top-level value, a byte
+    sequence that is not UTF-8 or a name that is not a string is an error.
+
+    A tolerated flag with an [object] tolerates that kind on that object
+    alone, so a relaxed condition the standard library rests on does not
+    tolerate the same condition in the agent's own declaration. One without
+    tolerates the kind wherever it appears, which a task needs for a kind
+    carried by every object of an image built without the matching option:
+    [indices-not-mattering] is on all of them, and naming them would be a
+    list of the standard library. The route the comparator replaces always
+    allowed that kind (grading-tools [_axiom_kinds._ALWAYS_ALLOWED_KINDS]).
     @raise CErrors.UserError on any of them. *)
 
 val prechecked_libraries : config -> string list

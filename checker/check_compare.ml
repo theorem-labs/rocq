@@ -477,7 +477,8 @@ type challenge_file = { cf_path : string; cf_sha256 : string }
 type config = {
   cfg_theorems : theorem list;
   cfg_axioms : string list;
-  cfg_flags : (string * string) list;  (** (kind, object) *)
+  cfg_flags : (string * string option) list;
+      (** (kind, object): [None] is the kind on any object *)
   cfg_rewrite_rules : bool;
   cfg_prechecked : prechecked list;
   cfg_challenge_files : challenge_file list;
@@ -550,9 +551,15 @@ let read_config file =
   let axioms = match get top "permitted_axioms" with
     | None -> [] | Some v -> string_list "permitted_axioms" v
   in
-  (* A tolerated flag names the object it is tolerated on: a relaxed
-     condition the standard library rests on must not tolerate the same
-     condition in the agent's own declaration. *)
+  (* A tolerated flag names the kind, and may name the object it is
+     tolerated on. With an object, a relaxed condition the standard library
+     rests on does not tolerate the same condition in the agent's own
+     declaration. Without one, the kind is tolerated wherever it appears,
+     which is what the route's own rule does for a kind no declaration can
+     claim anything by: [indices-not-mattering] is on every object of an
+     image built without [-indices-matter], and naming them all would be a
+     list of the standard library (grading-tools
+     [_axiom_kinds._ALWAYS_ALLOWED_KINDS]). *)
   let flags = match get top "tolerated_flags" with
     | None -> []
     | Some v ->
@@ -561,8 +568,10 @@ let read_config file =
           fields "a tolerated flag" ["kind"; "object"] e;
           match get e "kind", get e "object" with
           | Some k, Some o ->
-            as_string "a tolerated flag's kind" k, as_string "a tolerated flag's object" o
-          | _ -> cfg_error "a tolerated flag needs a kind and an object")
+            as_string "a tolerated flag's kind" k,
+            Some (as_string "a tolerated flag's object" o)
+          | Some k, None -> as_string "a tolerated flag's kind" k, None
+          | None, _ -> cfg_error "a tolerated flag needs a kind")
         (as_list "tolerated_flags" v)
   in
   let rewrite_rules = match get top "rewrite_rules" with
@@ -1488,9 +1497,15 @@ let run t env access senv0 ~answer_deps =
           | Some kn ->
             let axioms, flags = Check_closure.axioms_and_flags st kn in
             let bad_axioms = List.filter (fun a -> not (List.mem a permitted)) axioms in
-            let bad_flags =
-              List.filter (fun f -> not (List.mem f t.cfg.cfg_flags)) flags
+            (* A config entry tolerates a flag when it names the same kind
+               and either the same object or no object at all. *)
+            let tolerated (kind, obj) =
+              List.exists (fun (k, o) ->
+                  String.equal k kind
+                  && (match o with None -> true | Some o -> String.equal o obj))
+                t.cfg.cfg_flags
             in
+            let bad_flags = List.filter (fun f -> not (tolerated f)) flags in
             (* A challenge declaration the answer changed is a changed task,
                whichever theorem names it: the statements are written against
                those definitions, so no theorem of the run can pass. The
