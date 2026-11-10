@@ -1,0 +1,517 @@
+#!/usr/bin/env bash
+# The checks of rocqchk -compare (dispatch://BET-894, dispatch://BET-901).
+#
+# Each case is a directory under misc/compare/<case>/:
+#
+#   challenge/*.v     the task as the agent receives it, proofs Admitted
+#   answer/*.v        an honest answer; it must pass
+#   bad-<name>/*.v    an answer that must fail: at least one theorem's
+#                     verdict is fail, or, with a file `refuse` in the case
+#                     directory, the run itself must exit non-zero
+#   pre/*.v           optional, a library both sides share, compiled once
+#                     and declared pre-checked: it stands for the standard
+#                     library, which a test must not compile
+#   config.tmpl       the config, with @SHA256:<file>@ for a challenge
+#                     file's digest and @PRECHECKED@ for the pre-checked
+#                     array
+#   expected.json     the verdict the honest answer must give; only the
+#                     (name, verdict) pairs are compared, because a reason
+#                     is prose
+#   order             optional, the order to compile the .v files in
+#                     (default: alphabetical)
+#   refuse-<name>/    optional, a directory holding a raw config.json that
+#                     the run must refuse with a non-zero exit
+#
+# The runner takes a case name, or runs every case when given none.
+#
+# The challenge and the answer are compiled from the SAME source layout, at
+# the same paths and under the same logical root (Top), which is what the
+# grader does: nothing is renamed.
+
+set -eu
+
+: "${BIN:=$(dirname "$(command -v rocq)")/}"
+export PATH="$BIN:$PATH"
+
+here=$(cd "$(dirname "$0")" && pwd)
+cases_dir="$here/compare"
+
+fail() { >&2 echo "FAILURE: $*"; exit 1; }
+
+# The (name, verdict) pairs of a verdict file, sorted. A reason is prose and
+# is not compared; its presence is.
+verdicts() {
+  grep -o '"name":"[^"]*","verdict":"[^"]*"' "$1" | sort
+}
+
+prelude_vo() {
+  local w p
+  w=$(rocq -where)
+  for p in "$w/theories/Corelib/Init/Prelude.vo" "$w/theories/Init/Prelude.vo"; do
+    [ -f "$p" ] && { echo "$p"; return; }
+  done
+  fail "cannot find Prelude.vo under $w"
+}
+
+# The verdict file parses, when a JSON reader is at hand. A reader that is
+# not there leaves the check out rather than passing it silently; the suite
+# prints which.
+json_valid() {
+  if command -v python3 > /dev/null; then
+    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$1"
+  else
+    echo "  (no python3: the verdict file is not parsed)" >&2
+  fi
+}
+
+# ---------------------------------------------------------------- sha256
+#
+# The comparator carries its own SHA-256, because the checker links no
+# digest library. It is trusted code, so it is checked against FIPS 180-4's
+# vectors and against sha256sum here, and compare.sh compares it with
+# sha256sum on every challenge file it builds (see run_case).
+case_sha256() {
+  local d
+  d=$(mktemp -d)
+  local n=0
+  check_vector() { # <content-producer> <expected>
+    n=$((n + 1))
+    "$1" > "$d/v$n"
+    local got
+    got=$(rocqchk -sha256 "$d/v$n")
+    [ "$got" = "$2" ] || fail "sha256 vector $n is $got, expected $2"
+    if command -v sha256sum > /dev/null; then
+      local ref
+      ref=$(sha256sum "$d/v$n" | cut -d' ' -f1)
+      [ "$got" = "$ref" ] || fail "sha256 vector $n is $got, sha256sum says $ref"
+    fi
+  }
+  v_empty() { printf ''; }
+  v_abc() { printf 'abc'; }
+  v_448() { printf 'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq'; }
+  v_896() { printf '%s' 'abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu'; }
+  v_million() { for _ in $(seq 1 1000); do printf '%01000d' 0 | tr '0' 'a'; done; }
+  check_vector v_empty e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  check_vector v_abc ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  check_vector v_448 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+  check_vector v_896 cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1
+  check_vector v_million cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0
+  # a file of 1 MiB of random bytes, against sha256sum
+  if command -v sha256sum > /dev/null; then
+    head -c 1048576 /dev/urandom > "$d/rand"
+    local got ref
+    got=$(rocqchk -sha256 "$d/rand")
+    ref=$(sha256sum "$d/rand" | cut -d' ' -f1)
+    [ "$got" = "$ref" ] || fail "sha256 of a random file is $got, sha256sum says $ref"
+  fi
+  rm -rf "$d"
+  echo "ok sha256"
+}
+
+# ---------------------------------------------------------------- a case
+
+# Compile every .v of <src> into <dst>, under the logical root Top, with the
+# pre-checked library of <pre> on the load path when there is one.
+build_tree() {
+  local src=$1 dst=$2 pre=$3 order=$4
+  mkdir -p "$dst"
+  cp "$src"/*.v "$dst"/
+  local args=(-R "$dst" Top)
+  [ -n "$pre" ] && args+=(-R "$pre" Pre)
+  # A tree may need a flag of its own, for example -allow-rewrite-rules.
+  if [ -f "$src/coqc-flags" ]; then
+    local extra
+    read -r extra < "$src/coqc-flags"
+    args+=($extra)
+  fi
+  local f
+  for f in $order; do
+    (cd "$dst" && coqc "${args[@]}" "$f") || fail "$src/$f does not compile"
+  done
+}
+
+file_order() {
+  local src=$1
+  if [ -f "$src/../order" ]; then
+    cat "$src/../order"
+  else
+    (cd "$src" && ls *.v | sort)
+  fi
+}
+
+# The config: @SHA256:<file>@ becomes that challenge file's digest and
+# @PRECHECKED@ the pre-checked array.
+make_config() {
+  local tmpl=$1 chdir=$2 out=$3 pre=$4
+  local pre_json=""
+  if [ -n "$pre" ]; then
+    local sha
+    sha=$(rocqchk -sha256 "$pre/Shared.vo")
+    pre_json="{\"library\":\"Pre.Shared\",\"sha256\":\"$sha\"}"
+  fi
+  local prelude
+  prelude=$(prelude_vo)
+  local prelude_sha
+  prelude_sha=$(rocqchk -sha256 "$prelude")
+  local all="{\"library\":\"Corelib.Init.Prelude\",\"sha256\":\"$prelude_sha\"}"
+  [ -n "$pre_json" ] && all="$all,$pre_json"
+  local text
+  text=$(cat "$tmpl")
+  local f
+  for f in "$chdir"/*.vo; do
+    local base sha
+    base=$(basename "$f")
+    sha=$(rocqchk -sha256 "$f")
+    # Every digest the comparator writes into a config is also checked
+    # against sha256sum, so a defect in the comparator's SHA-256 cannot hide
+    # behind its own agreement with itself.
+    if command -v sha256sum > /dev/null; then
+      local ref
+      ref=$(sha256sum "$f" | cut -d' ' -f1)
+      [ "$sha" = "$ref" ] || fail "rocqchk -sha256 $f is $sha, sha256sum says $ref"
+    fi
+    text=${text//"@SHA256:$base@"/$sha}
+  done
+  local zero=0000000000000000000000000000000000000000000000000000000000000000
+  text=${text//"@PRECHECKED_BAD@"/"{\"library\":\"Corelib.Init.Prelude\",\"sha256\":\"$zero\"}"}
+  text=${text//"@PRECHECKED@"/$all}
+  # The standard library's eq is built without -indices-matter, so every
+  # honest answer reaches that flag on that object. A tolerated flag names
+  # its object, so tolerating it here tolerates nothing of the agent's own.
+  text=${text//"@TOLERATED@"/'{"kind": "indices-not-mattering", "object": "Corelib.Init.Logic.eq"}'}
+  printf '%s\n' "$text" > "$out"
+}
+
+# Run the comparator on one answer tree. Prints the exit code; the verdict
+# file is $work/out.json.
+run_compare() {
+  local work=$1 answer=$2 config=$3 pre=$4
+  local args=(-silent -Q "$answer" Top)
+  [ -n "$pre" ] && args+=(-Q "$pre" Pre)
+  local libs=()
+  local f
+  for f in "$answer"/*.vo; do libs+=("Top.$(basename "$f" .vo)"); done
+  set +e
+  rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
+    -compare-out "$work/out.json" "${libs[@]}" > "$work/log" 2>&1
+  local code=$?
+  set -e
+  echo "$code"
+}
+
+run_case() {
+  local name=$1
+  local c="$cases_dir/$name"
+  [ -d "$c" ] || fail "no case $name"
+  local work
+  work=$(mktemp -d)
+
+  local pre=""
+  if [ -d "$c/pre" ]; then
+    pre="$work/pre"
+    mkdir -p "$pre"
+    cp "$c/pre"/*.v "$pre"/
+    (cd "$pre" && coqc -Q . Pre Shared.v) || fail "$name: the shared library does not compile"
+  fi
+
+  local order
+  order=$(file_order "$c/challenge")
+  build_tree "$c/challenge" "$work/challenge" "$pre" "$order"
+  make_config "$c/config.tmpl" "$work/challenge" "$work/config.json" "$pre"
+
+  # the honest answer
+  local order_a code
+  order_a=$(file_order "$c/answer")
+  build_tree "$c/answer" "$work/answer" "$pre" "$order_a"
+  code=$(run_compare "$work" "$work/answer" "$work/config.json" "$pre")
+  [ "$code" = "0" ] || { cat "$work/log"; fail "$name: the honest answer exits $code"; }
+  [ -f "$work/out.json" ] || fail "$name: no verdict file"
+  json_valid "$work/out.json" || fail "$name: the verdict file is not valid JSON"
+  diff <(verdicts "$work/out.json") <(verdicts "$c/expected.json") \
+    || { cat "$work/out.json"; fail "$name: the honest answer's verdicts differ"; }
+
+  # the answers that must fail
+  local bad
+  for bad in "$c"/bad-*; do
+    [ -d "$bad" ] || continue
+    local b
+    b=$(basename "$bad")
+    local bdir="$work/$b"
+    local border
+    border=$(file_order "$bad")
+    build_tree "$bad" "$bdir" "$pre" "$border"
+    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre")
+    if [ -f "$bad/refuse" ]; then
+      [ "$code" != "0" ] || fail "$name/$b: the run should not have completed"
+    else
+      [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b: the run exits $code"; }
+      grep -q '"verdict":"fail"' "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name/$b: no theorem failed"; }
+    fi
+    echo "  ok $name/$b"
+  done
+
+  # configs that must be refused
+  local ref
+  for ref in "$c"/refuse-*; do
+    [ -d "$ref" ] || continue
+    local r
+    r=$(basename "$ref")
+    rm -f "$work/out.json"
+    if [ -f "$ref/config.tmpl" ]; then
+      make_config "$ref/config.tmpl" "$work/challenge" "$work/bad-config.json" "$pre"
+    else
+      cp "$ref/config.json" "$work/bad-config.json"
+    fi
+    code=$(run_compare "$work" "$work/answer" "$work/bad-config.json" "$pre")
+    [ "$code" != "0" ] || fail "$name/$r: the run should not have completed"
+    [ ! -f "$work/out.json" ] || fail "$name/$r: a verdict file was written anyway"
+    echo "  ok $name/$r"
+  done
+
+  # A config the honest answer must FAIL under, not one that is refused: it
+  # tolerates the right flag kind on the wrong object.
+  local fc
+  for fc in "$c"/fail-config; do
+    [ -d "$fc" ] || continue
+    make_config "$fc/config.tmpl" "$work/challenge" "$work/fail-config.json" "$pre"
+    code=$(run_compare "$work" "$work/answer" "$work/fail-config.json" "$pre")
+    [ "$code" = "0" ] || { cat "$work/log"; fail "$name/fail-config: the run exits $code"; }
+    grep -q '"verdict":"fail"' "$work/out.json" \
+      || { cat "$work/out.json"; fail "$name/fail-config: the honest answer passed"; }
+    echo "  ok $name/fail-config"
+  done
+
+  # A config whose bytes are not UTF-8. It is written here rather than kept
+  # as a file, because a repository's text files are UTF-8.
+  if [ -f "$c/utf8-refusal" ]; then
+    rm -f "$work/out.json"
+    printf '{"theorems": [{"name": "Top.A.\xff"}], "challenge_files": [{"path": "A.vo", "sha256": "%s"}]}\n' \
+      "$(rocqchk -sha256 "$work/challenge/A.vo")" > "$work/bad-config.json"
+    code=$(run_compare "$work" "$work/answer" "$work/bad-config.json" "$pre")
+    [ "$code" != "0" ] || fail "$name: a config that is not UTF-8 was accepted"
+    [ ! -f "$work/out.json" ] || fail "$name: a verdict file was written anyway"
+    echo "  ok $name/refuse-invalid-utf8"
+  fi
+
+  rm -rf "$work"
+  echo "ok $name"
+}
+
+# ------------------------------------------------- an answer without proofs
+#
+# A library built with -vos holds no opaque proof. The kernel reaches for a
+# body that is not there and the run fails, so such an answer can never be
+# graded. The sources are written here: a case directory would hold a tree
+# that no other check uses.
+case_vos() {
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/challenge" "$work/answer"
+  printf '%s\n' 'Definition two := 2.' 'Theorem thm : two = 2.' 'Proof.' 'Admitted.' \
+    > "$work/challenge/A.v"
+  printf '%s\n' 'Definition two := 2.' 'Theorem thm : two = 2.' 'Proof. reflexivity. Qed.' \
+    > "$work/answer/A.v"
+  (cd "$work/challenge" && coqc -R . Top A.v)
+  (cd "$work/answer" && coqc -R . Top -vos A.v)
+  # The grader receives .vo files; a -vos build renamed to .vo is the shape
+  # an answer without its proofs takes.
+  mv "$work/answer/A.vos" "$work/answer/A.vo"
+  local sha prelude_sha
+  sha=$(rocqchk -sha256 "$work/challenge/A.vo")
+  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  printf '%s\n' \
+    "{\"theorems\": [{\"name\": \"Top.A.thm\"}], \"tolerated_flags\": [\"indices-not-mattering\"]," \
+    " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}]," \
+    " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
+  local code
+  code=$(run_compare "$work" "$work/answer" "$work/config.json" "")
+  [ "$code" != "0" ] || { cat "$work/log"; fail "vos: an answer without its proofs was graded"; }
+  [ ! -f "$work/out.json" ] || fail "vos: a verdict file was written anyway"
+  rm -rf "$work"
+  echo "ok vos"
+}
+
+# ------------------------------- the two sides on different shared libraries
+#
+# The challenge and the answer must record the same digest for a pre-checked
+# library. Here the answer is built against another copy of the shared
+# library, so the digests differ and the run stops before the challenge
+# reaches an environment.
+case_digest() {
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/pre" "$work/pre2" "$work/challenge" "$work/answer"
+  printf '%s\n' 'Definition shared_two : nat := 2.' > "$work/pre/Shared.v"
+  printf '%s\n' 'Definition shared_two : nat := 2.' 'Definition extra : nat := 3.' \
+    > "$work/pre2/Shared.v"
+  (cd "$work/pre" && coqc -R . Pre Shared.v)
+  (cd "$work/pre2" && coqc -R . Pre Shared.v)
+  printf '%s\n' 'Require Import Pre.Shared.' 'Definition two := shared_two.' \
+    'Theorem thm : two = 2.' 'Proof.' 'Admitted.' > "$work/challenge/A.v"
+  printf '%s\n' 'Require Import Pre.Shared.' 'Definition two := shared_two.' \
+    'Theorem thm : two = 2.' 'Proof. reflexivity. Qed.' > "$work/answer/A.v"
+  (cd "$work/challenge" && coqc -R . Top -R "$work/pre" Pre A.v)
+  (cd "$work/answer" && coqc -R . Top -R "$work/pre2" Pre A.v)
+  local sha pre_sha prelude_sha
+  sha=$(rocqchk -sha256 "$work/challenge/A.vo")
+  pre_sha=$(rocqchk -sha256 "$work/pre2/Shared.vo")
+  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  printf '%s\n' \
+    "{\"theorems\": [{\"name\": \"Top.A.thm\"}], \"tolerated_flags\": [\"indices-not-mattering\"]," \
+    " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}," \
+    "   {\"library\": \"Pre.Shared\", \"sha256\": \"$pre_sha\"}]," \
+    " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
+  local code
+  code=$(run_compare "$work" "$work/answer" "$work/config.json" "$work/pre2")
+  [ "$code" != "0" ] \
+    || { cat "$work/log"; fail "digest: the two sides' shared libraries differ and the run passed"; }
+  [ ! -f "$work/out.json" ] || fail "digest: a verdict file was written anyway"
+  rm -rf "$work"
+  echo "ok digest"
+}
+
+# ------------------- a pre-checked library under the answer's own root
+#
+# The challenge directory stands in for the answer's directory under each
+# -R root. A pre-checked library may sit under that same root, in a
+# directory of its own; the challenge directory must still stand in, or an
+# honest answer cannot be graded at all.
+case_sibling() {
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/shared" "$work/challenge" "$work/answer"
+  printf '%s\n' 'Definition shared_two : nat := 2.' > "$work/shared/Lib.v"
+  (cd "$work/shared" && coqc -R . Top Lib.v)
+  printf '%s\n' 'Require Import Top.Lib.' 'Definition two := shared_two.' \
+    'Theorem thm : two = 2.' 'Proof.' 'Admitted.' > "$work/challenge/A.v"
+  printf '%s\n' 'Require Import Top.Lib.' 'Definition two := shared_two.' \
+    'Theorem thm : two = 2.' 'Proof. reflexivity. Qed.' > "$work/answer/A.v"
+  (cd "$work/challenge" && coqc -R . Top -R "$work/shared" Top A.v)
+  (cd "$work/answer" && coqc -R . Top -R "$work/shared" Top A.v)
+  local sha lib_sha prelude_sha
+  sha=$(rocqchk -sha256 "$work/challenge/A.vo")
+  lib_sha=$(rocqchk -sha256 "$work/shared/Lib.vo")
+  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  printf '%s\n' \
+    "{\"theorems\": [{\"name\": \"Top.A.thm\"}]," \
+    " \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\", \"object\": \"Corelib.Init.Logic.eq\"}]," \
+    " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}," \
+    "   {\"library\": \"Top.Lib\", \"sha256\": \"$lib_sha\"}]," \
+    " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
+  set +e
+  rocqchk -silent -R "$work/answer" Top -R "$work/shared" Top \
+    -compare "$work/config.json" -challenge "$work/challenge" \
+    -compare-out "$work/out.json" Top.A > "$work/log" 2>&1
+  local code=$?
+  set -e
+  [ "$code" = "0" ] || { cat "$work/log"; fail "sibling: an honest answer exits $code"; }
+  grep -q '"verdict":"pass"' "$work/out.json" \
+    || { cat "$work/out.json"; fail "sibling: the honest answer did not pass"; }
+  rm -rf "$work"
+  echo "ok sibling"
+}
+
+# ---------------------------------------------------- the recorded forgeries
+#
+# Six proofs of False that a kernel defect once accepted (rocq#22378,
+# #22383, #22391, #22675, the VM forgery of dispatch://BET-357 and the
+# array forgery of dispatch://BET-630). The cut this branch sits on carries
+# the fix for each, so none of them may reach a passing verdict. Three
+# outcomes count as not-pass, and the case prints which one each takes:
+# the forgery does not compile, rocqchk refuses it, or the verdict is fail.
+#
+# The trees are read-only recordings; COMPARE_FORGERIES points at them and
+# the case is skipped where they are not mounted.
+: "${COMPARE_FORGERIES:=/mnt/durable/sami/eval-driven-development/round4/verified-grading/wrong-answers-e2e/trees}"
+
+case_forgeries() {
+  if [ ! -d "$COMPARE_FORGERIES" ]; then
+    echo "skip forgeries (no $COMPARE_FORGERIES)"
+    return
+  fi
+  local f
+  for f in os-22378 os-22383 os-22391 os-22675 os-vm357 os-parray630; do
+    local src="$COMPARE_FORGERIES/$f/plain/Lib"
+    [ -d "$src" ] || fail "forgeries: no $src"
+    local work
+    work=$(mktemp -d)
+    mkdir -p "$work/challenge" "$work/answer"
+    local side
+    for side in challenge answer; do
+      cp "$src/Forge.v" "$work/$side/Forge.v"
+      [ -f "$src/hurkens.v" ] && cp "$src/hurkens.v" "$work/$side/hurkens.v"
+    done
+    printf '%s\n' 'Require Import Forge.' 'Theorem forged : False.' 'Proof.' 'Admitted.' \
+      > "$work/challenge/Main.v"
+    printf '%s\n' 'Require Import Forge.' 'Theorem forged : False.' \
+      'Proof. exact contradiction. Qed.' > "$work/answer/Main.v"
+    local order="Forge.v Main.v"
+    [ -f "$src/hurkens.v" ] && order="hurkens.v Forge.v Main.v"
+    local ok="" v
+    for v in $order; do
+      (cd "$work/challenge" && coqc -R . Top "$v") > "$work/cc" 2>&1 \
+        || { ok="the challenge does not compile: $(grep -m1 -i error "$work/cc" | cut -c1-110)"; break; }
+    done
+    if [ -z "$ok" ]; then
+      for v in $order; do
+        (cd "$work/answer" && coqc -R . Top "$v") > "$work/ac" 2>&1 \
+          || { ok="the answer does not compile: $(grep -m1 -i error "$work/ac" | cut -c1-110)"; break; }
+      done
+    fi
+    if [ -z "$ok" ]; then
+      local sha prelude_sha
+      sha=$(rocqchk -sha256 "$work/challenge/Main.vo")
+      prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+      printf '%s\n' \
+        "{\"theorems\": [{\"name\": \"Top.Main.forged\"}]," \
+        " \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\", \"object\": \"Corelib.Init.Logic.eq\"}]," \
+        " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}]," \
+        " \"challenge_files\": [{\"path\": \"Main.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
+      local libs=() g
+      for g in "$work/answer"/*.vo; do libs+=("Top.$(basename "$g" .vo)"); done
+      set +e
+      rocqchk -silent -R "$work/answer" Top -compare "$work/config.json" \
+        -challenge "$work/challenge" -compare-out "$work/out.json" "${libs[@]}" \
+        > "$work/log" 2>&1
+      local code=$?
+      set -e
+      if [ "$code" != "0" ]; then
+        ok="rocqchk refuses it: $(grep -m1 -i error "$work/log" | cut -c1-110)"
+      elif grep -q '"verdict":"fail"' "$work/out.json"; then
+        ok="the verdict is fail"
+      else
+        cat "$work/out.json"
+        fail "forgeries/$f: the forgery PASSES"
+      fi
+    fi
+    echo "  ok forgeries/$f: $ok"
+    rm -rf "$work"
+  done
+  echo "ok forgeries"
+}
+
+main() {
+  if [ $# -gt 0 ]; then
+    case "$1" in
+      sha256) case_sha256 ;;
+      vos) case_vos ;;
+      digest) case_digest ;;
+      sibling) case_sibling ;;
+      forgeries) case_forgeries ;;
+      *) run_case "$1" ;;
+    esac
+  else
+    case_sha256
+    local c
+    for c in "$cases_dir"/*/; do
+      run_case "$(basename "$c")"
+    done
+    case_vos
+    case_digest
+    case_sibling
+    case_forgeries
+  fi
+}
+
+main "$@"

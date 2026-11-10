@@ -13,14 +13,28 @@ open Constr
 open Declarations
 open Environ
 
+(** [inline_limit] (default 0, no inlining) is the size under which an applied constant's body is
+    expanded instead of called; see [Genlambda.inlinable_body]. Code that goes into a library file
+    is compiled with the default, so a library's bytes do not depend on it. *)
 val compile :
   fail_on_error:bool ->
+  ?inline_limit:int ->
   env -> Genlambda.evars -> constr ->
   (bool array * to_patch * patches) option
+(** In every compiled term, a call of a constant with as many arguments as
+    the routine that {!Vmbinnum.recognize_call} gives it goes through
+    BINNUMCALL first. *)
 
-val compile_constant_body : fail_on_error:bool ->
+val compile_constant_body : ?name:Names.Constant.t -> ?count:bool -> fail_on_error:bool ->
+  ?inline_limit:int ->
   env -> universes -> (Constr.t, 'opaque, 'symb) constant_def ->
   body_code option
+(** The code of a constant's body. When {!Vmbinnum.recognize} binds the body
+    to routines, the code of each bound function starts with BINNUM; calls
+    in the body go through BINNUMCALL as in {!compile}. [name] is only
+    printed in the statistics of {!Vmbinnum}, and [count] is passed to
+    {!Vmbinnum.recognize}: a body compiled again in one process is not
+    counted again. *)
 
 (** Shortcut of the previous function used during module strengthening *)
 

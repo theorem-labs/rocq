@@ -85,6 +85,9 @@ let print_usage_common co command =
 \n  -allow-sprop           allow using the proof irrelevant SProp sort\
 \n  -disallow-sprop        forbid using the proof irrelevant SProp sort\
 \n  -allow-rewrite-rules   allows declaring symbols and rewrite rules\
+\n  -merge-inductives      treat a loaded inductive type that matches one already\
+\n                           loaded as the same type (off by default)\
+\n  -merge-inductives-verbose  -merge-inductives, and print each merge\
 \n  -indices-matter        levels of indices (and nonuniform parameters) contribute to the level of inductives\
 \n  -type-in-type          disable universe consistency checking\
 \n  -skip-qed-typecheck    do not typecheck opaque proofs at Qed (rocqchk still checks them)\
