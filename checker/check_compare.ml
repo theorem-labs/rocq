@@ -1282,9 +1282,45 @@ let seed_umap t ~challenge_env ~answer_env =
         then add_level m u u else m)
     (UGraph.domain gch) empty_umap
 
-let check_constraints ~challenge_env ~answer_env m =
+(* The two directions are not the same question.
+
+   Every challenge constraint, mapped, must hold in the answer: the answer
+   must stand where the challenge stands. Because the answer's graph is
+   consistent -- the kernel checked it -- an answer that passes this
+   direction has a graph whose union with the challenge's is satisfiable, so
+   a cycle the answer introduces against a challenge constraint is caught
+   here and nowhere else.
+
+   The other direction asks what the answer ADDS, and it is asked only of
+   the levels the challenge's own files declare. A proof adds constraints
+   between the IMAGE's levels as a matter of course: it instantiates the
+   image's definitions, and the kernel records what that costs. Those are
+   not the answer's claim about the task, they are the price of using the
+   library, and today's grade of record -- a Checker file compiled against
+   the task's statements, where the kernel merges the proof's constraints
+   into one environment -- accepts every one of them. Two runs of the real
+   task show what demanding otherwise costs: the key failed on
+   LinuxProcessSemantics.LinuxProcessSem.Fs.33 <= Stdlib.Logic.Classical_Pred_Type.21
+   and the untouched control on Fs.33 < Corelib.Init.Logic.22, both between
+   the image's own levels (dispatch://BET-901).
+
+   A constraint between two levels of the challenge's own files is the
+   answer's claim about the task: the statements stand on those levels, and
+   an answer that relates two of them proves less than the challenge asks --
+   it equates, or orders, universes the challenge left apart. Those are
+   compared, through [constraints_for], which projects a path that runs
+   through the image's levels onto the two ends that matter. *)
+let check_constraints t ~challenge_env ~answer_env m =
   let gch = Environ.universes challenge_env and gan = Environ.universes answer_env in
-  let kept_ch = Univ.Level.Map.domain m.fwd and kept_an = Univ.Level.Map.domain m.bwd in
+  let own u = match Univ.Level.name u with
+    | None -> false
+    | Some ug -> let dp, _, _ = Univ.UGlobal.repr ug in t.under_challenge_root dp
+  in
+  let kept_ch = Univ.Level.Map.domain m.fwd in
+  let kept_an =
+    Univ.Level.Map.fold (fun u v acc -> if own u then Univ.Level.Set.add v acc else acc)
+      m.fwd Univ.Level.Set.empty
+  in
   let image map u = match Univ.Level.Map.find_opt u map with Some v -> Some v | None -> None in
   let fails map graph cs =
     Univ.UnivConstraints.fold (fun (u, k, v) acc ->
@@ -1306,7 +1342,9 @@ let check_constraints ~challenge_env ~answer_env m =
   | Some e -> Some ("the challenge has a universe constraint the answer does not: " ^ e)
   | None ->
     match fails m.bwd gch (UGraph.constraints_for ~kept:kept_an gan) with
-    | Some e -> Some ("the answer has a universe constraint the challenge does not: " ^ e)
+    | Some e ->
+      Some ("the answer relates two of the challenge's own universes and the challenge \
+             does not: " ^ e)
     | None -> None
 
 (* Every challenge declaration, in the order the name sorts. A declaration the
@@ -1345,7 +1383,7 @@ let compare_declarations t ~challenge_env ~answer_env ~libs ~theorems =
         | None -> fail name "missing"
         | Some mt' -> step name (fun m -> eq_modtype ~env:answer_env m mt mt'))
     (Environ.Internal.View.view challenge_env).Environ.Internal.View.env_modtypes;
-  let universes = check_constraints ~challenge_env ~answer_env !m in
+  let universes = check_constraints t ~challenge_env ~answer_env !m in
   List.rev !failures, universes
 
 (************************************************************************)
