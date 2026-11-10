@@ -1338,19 +1338,27 @@ let check_constraints t ~challenge_env ~answer_env m =
     | Some ug -> let dp, _, _ = Univ.UGlobal.repr ug in t.under_challenge_root dp
   in
   let kept_ch = Univ.Level.Map.domain m.fwd and kept_an = Univ.Level.Map.domain m.bwd in
-  let image map u = Univ.Level.Map.find_opt u map in
+  (* [constraints_for ~kept] emits only constraints between kept levels, and
+     the kept set IS the map's domain, so a level with no image cannot reach
+     here. It is an anomaly rather than a pass: a constraint passed over in
+     silence is a check that did not run. *)
+  let image map u = match Univ.Level.Map.find_opt u map with
+    | Some v -> v
+    | None ->
+      CErrors.anomaly
+        Pp.(str ("The comparator projected a universe constraint onto " ^
+                 Univ.Level.to_string u ^ ", which its level map does not hold."))
+  in
   let shown = 5 in
   let fails ~skip map graph cs =
     let bad = Univ.UnivConstraints.fold (fun (u, k, v) acc ->
-        match image map u, image map v with
-        | Some u', Some v' when not (skip u' v') ->
-          if UGraph.check_constraint graph (u', k, v') then acc
-          else
-            Printf.sprintf "%s %s %s"
-              (Univ.Level.to_string u)
-              (match k with Univ.UnivConstraint.Lt -> "<" | Le -> "<=" | Eq -> "=")
-              (Univ.Level.to_string v) :: acc
-        | _ -> acc)
+        let u' = image map u and v' = image map v in
+        if skip u' v' || UGraph.check_constraint graph (u', k, v') then acc
+        else
+          Printf.sprintf "%s %s %s"
+            (Univ.Level.to_string u)
+            (match k with Univ.UnivConstraint.Lt -> "<" | Le -> "<=" | Eq -> "=")
+            (Univ.Level.to_string v) :: acc)
         cs []
     in
     match List.sort String.compare bad with
