@@ -32,6 +32,7 @@ type 'constr pcofix_guard_error =
   | RecCallInTypeOfAbstraction of 'constr
   | RecCallInNonRecArgOfConstructor of 'constr
   | RecCallInTypeOfDef of 'constr
+  | RecCallInNonMainMutual of 'constr
   | RecCallInCaseFun of 'constr
   | RecCallInCaseArg of 'constr
   | RecCallInCasePred of 'constr
@@ -84,6 +85,7 @@ type ('constr, 'types, 'r) ptype_error =
   | UndeclaredUsedVariables of { declared_vars : Id.Set.t; inferred_vars : Id.Set.t }
   | IllFormedConstant of Constant.t * KerName.t
   | IllFormedInductive of MutInd.t * KerName.t
+  | ArrayTooLong of int
 
 type type_error = (constr, types, Sorts.relevance) ptype_error
 
@@ -197,6 +199,9 @@ let error_ill_formed_constant env cst kn =
 let error_ill_formed_inductive env ind kn =
   raise (TypeError (env, IllFormedInductive (ind, kn)))
 
+let error_array_too_long env len =
+  raise (TypeError (env, ArrayTooLong len))
+
 let map_pfix_guard_error f = function
 | NotEnoughAbstractionInFixBody _ | NotEnoughArgumentsForFixCall _ as e -> e
 | RecursionNotOnInductiveType c -> RecursionNotOnInductiveType (f c)
@@ -210,6 +215,7 @@ let map_pcofix_guard_error f = function
 | RecCallInTypeOfAbstraction c -> RecCallInTypeOfAbstraction (f c)
 | RecCallInNonRecArgOfConstructor c -> RecCallInNonRecArgOfConstructor (f c)
 | RecCallInTypeOfDef c -> RecCallInTypeOfDef (f c)
+| RecCallInNonMainMutual c -> RecCallInNonMainMutual (f c)
 | RecCallInCaseFun c -> RecCallInCaseFun (f c)
 | RecCallInCaseArg c -> RecCallInCaseArg (f c)
 | RecCallInCasePred c -> RecCallInCasePred (f c)
@@ -246,3 +252,4 @@ let map_ptype_error fr f = function
   IllTypedRecBody (n, Array.map (Context.map_annot_relevance_het fr) na, Array.map (on_judgment f) jv, Array.map f t)
 | BadBinderRelevance (rlv, decl) -> BadBinderRelevance (fr rlv, Context.Rel.Declaration.map_constr_het fr f decl)
 | BadCaseRelevance (rlv, case) -> BadCaseRelevance (fr rlv, f case)
+| ArrayTooLong _ as e -> e
