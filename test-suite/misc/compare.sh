@@ -8,15 +8,22 @@
 #   bad-<name>/*.v    an answer that must fail: at least one theorem's
 #                     verdict is fail, or, with a file `refuse` in the case
 #                     directory, the run itself must exit non-zero
-#   pre/*.v           optional, libraries both sides share: they stand for
-#                     the standard library, which a test must not compile.
-#                     Shared.v alone is compiled and declared pre-checked;
-#                     with pre-order, every named file is compiled and none
-#                     is pre-checked
+#   pre/*.v           optional, libraries bound with -Q under the root Pre,
+#                     in pre-order or alphabetically. Shared.vo, when there
+#                     is one, is declared pre-checked; Pin.vo is pinned only
+#                     by a config that writes @PRECHECKED_PIN@
 #   pre-order         optional, the order to compile pre/*.v in
+#   shared/*.v        optional, libraries under the root Img, reached
+#                     through ROCQPATH and bound by no -Q: they stand for
+#                     the IMAGE's own installed libraries, which a test must
+#                     neither compile nor write into
+#   shared-order      optional, the order to compile shared/*.v in
 #   bad-<name>/vendor/*.v
 #                     optional, a tree the bad answer binds under a second
 #                     root, Vendor, that no challenge file lives under
+#   bad-<name>/vendor-root
+#                     optional, the root that tree is bound to (default
+#                     Vendor)
 #   config.tmpl       the config, with @SHA256:<file>@ for a challenge
 #                     file's digest and @PRECHECKED@ for the pre-checked
 #                     array
@@ -116,15 +123,22 @@ case_sha256() {
 
 # ---------------------------------------------------------------- a case
 
+# The image stand-in: when a case ships shared/, every coqc and rocqchk of
+# that case runs with ROCQPATH pointing at a directory holding those
+# libraries under the root Img. A -Q would make them the answer's side; the
+# image's own libraries are bound by no -Q, and a test must not write into
+# the installation it runs against.
+rocq_env=()
+
 # Compile every .v of <src> into <dst>, under the logical root Top, with the
 # pre-checked library of <pre> on the load path when there is one.
 build_tree() {
-  local src=$1 dst=$2 pre=$3 order=$4 vendor=${5:-}
+  local src=$1 dst=$2 pre=$3 order=$4 vendor=${5:-} vroot=${6:-Vendor}
   mkdir -p "$dst"
   cp "$src"/*.v "$dst"/
   local args=(-R "$dst" Top)
   [ -n "$pre" ] && args+=(-R "$pre" Pre)
-  [ -n "$vendor" ] && args+=(-R "$vendor" Vendor)
+  [ -n "$vendor" ] && args+=(-R "$vendor" "$vroot")
   # A tree may need a flag of its own, for example -allow-rewrite-rules.
   if [ -f "$src/coqc-flags" ]; then
     local extra
@@ -133,7 +147,7 @@ build_tree() {
   fi
   local f
   for f in $order; do
-    (cd "$dst" && coqc "${args[@]}" "$f") || fail "$src/$f does not compile"
+    (cd "$dst" && "${rocq_env[@]}" coqc "${args[@]}" "$f") || fail "$src/$f does not compile"
   done
 }
 
@@ -146,23 +160,22 @@ file_order() {
   fi
 }
 
-# The config: @SHA256:<file>@ becomes that challenge file's digest and
-# @PRECHECKED@ the pre-checked array.
+# The config: @SHA256:<file>@ becomes that challenge file's digest,
+# @PRECHECKED@ the pre-checked array and @PRECHECKED_PIN@ the entry for
+# pre/Pin.vo, which only a config that asks for it pins.
 make_config() {
   local tmpl=$1 chdir=$2 out=$3 pre=$4
-  # Every shared library a case ships is pre-checked: a root the challenge
-  # does not stand in for must have each of its libraries pinned, or the
-  # comparator refuses the run. The image's own libraries need no -Q and are
-  # not such a root.
   local pre_json=""
-  if [ -n "$pre" ]; then
-    local pv base sha
-    for pv in "$pre"/*.vo; do
-      base=$(basename "$pv" .vo)
-      sha=$(rocqchk -sha256 "$pv")
-      [ -n "$pre_json" ] && pre_json="$pre_json,"
-      pre_json="$pre_json{\"library\":\"Pre.$base\",\"sha256\":\"$sha\"}"
-    done
+  if [ -n "$pre" ] && [ -f "$pre/Shared.vo" ]; then
+    local sha
+    sha=$(rocqchk -sha256 "$pre/Shared.vo")
+    pre_json="{\"library\":\"Pre.Shared\",\"sha256\":\"$sha\"}"
+  fi
+  local pin_json=""
+  if [ -n "$pre" ] && [ -f "$pre/Pin.vo" ]; then
+    local pin_sha
+    pin_sha=$(rocqchk -sha256 "$pre/Pin.vo")
+    pin_json=",{\"library\":\"Pre.Pin\",\"sha256\":\"$pin_sha\"}"
   fi
   local prelude
   prelude=$(prelude_vo)
@@ -190,6 +203,7 @@ make_config() {
   local zero=0000000000000000000000000000000000000000000000000000000000000000
   text=${text//"@PRECHECKED_BAD@"/"{\"library\":\"Corelib.Init.Prelude\",\"sha256\":\"$zero\"}"}
   text=${text//"@PRECHECKED@"/$all}
+  text=${text//"@PRECHECKED_PIN@"/$pin_json}
   # The standard library's eq is built without -indices-matter, so every
   # honest answer reaches that flag on that object. A tolerated flag names
   # its object, so tolerating it here tolerates nothing of the agent's own.
@@ -200,15 +214,15 @@ make_config() {
 # Run the comparator on one answer tree. Prints the exit code; the verdict
 # file is $work/out.json.
 run_compare() {
-  local work=$1 answer=$2 config=$3 pre=$4 vendor=${5:-}
+  local work=$1 answer=$2 config=$3 pre=$4 vendor=${5:-} vroot=${6:-Vendor}
   local args=(-silent -Q "$answer" Top)
   [ -n "$pre" ] && args+=(-Q "$pre" Pre)
-  [ -n "$vendor" ] && args+=(-Q "$vendor" Vendor)
+  [ -n "$vendor" ] && args+=(-Q "$vendor" "$vroot")
   local libs=()
   local f
   for f in "$answer"/*.vo; do libs+=("Top.$(basename "$f" .vo)"); done
   set +e
-  rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
+  "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
     -compare-out "$work/out.json" "${libs[@]}" > "$work/log" 2>&1
   local code=$?
   set -e
@@ -222,19 +236,34 @@ run_case() {
   local work
   work=$(mktemp -d)
 
+  # The image stand-in, reached through ROCQPATH and bound by no -Q.
+  rocq_env=()
+  if [ -d "$c/shared" ]; then
+    mkdir -p "$work/rocqpath/Img"
+    cp "$c/shared"/*.v "$work/rocqpath/Img"/
+    local sorder
+    if [ -f "$c/shared-order" ]; then sorder=$(cat "$c/shared-order")
+    else sorder=$(cd "$work/rocqpath/Img" && ls *.v | sort); fi
+    local sf
+    for sf in $sorder; do
+      (cd "$work/rocqpath/Img" && ROCQPATH="$work/rocqpath" coqc -Q . Img "$sf") \
+        || fail "$name: the image library $sf does not compile"
+    done
+    rocq_env=(env "ROCQPATH=$work/rocqpath")
+  fi
+
   local pre=""
   if [ -d "$c/pre" ]; then
     pre="$work/pre"
     mkdir -p "$pre"
     cp "$c/pre"/*.v "$pre"/
-    # A case with one shared library ships Shared.v and is declared
-    # pre-checked; a case with several ships pre-order and is not, so that
-    # its libraries are compared as the task's own are.
     local porder
-    if [ -f "$c/pre-order" ]; then porder=$(cat "$c/pre-order"); else porder="Shared.v"; fi
+    if [ -f "$c/pre-order" ]; then porder=$(cat "$c/pre-order")
+    else porder=$(cd "$pre" && ls *.v | sort); fi
     local pf
     for pf in $porder; do
-      (cd "$pre" && coqc -Q . Pre "$pf") || fail "$name: the shared library $pf does not compile"
+      (cd "$pre" && "${rocq_env[@]}" coqc -Q . Pre "$pf") \
+        || fail "$name: the library $pf does not compile"
     done
   fi
 
@@ -265,20 +294,23 @@ run_case() {
     border=$(file_order "$bad")
     # A bad answer may ship a tree of its own under a SECOND root, bound
     # with -Q and holding no challenge counterpart: a library the answer
-    # wrote that the comparator must not take for one of the image's.
-    local bvendor=""
+    # wrote that the comparator must not take for one of the image's. The
+    # root is Vendor, or the name in vendor-root, which a case uses to bind
+    # a name the image itself serves.
+    local bvendor="" vroot="Vendor"
+    if [ -f "$bad/vendor-root" ]; then read -r vroot < "$bad/vendor-root"; fi
     if [ -d "$bad/vendor" ]; then
       bvendor="$work/$b-vendor"
       mkdir -p "$bvendor"
       cp "$bad/vendor"/*.v "$bvendor"/
       local vf
       for vf in $(cd "$bvendor" && ls *.v | sort); do
-        (cd "$bvendor" && coqc -R . Vendor ${pre:+-R "$pre" Pre} "$vf") \
+        (cd "$bvendor" && "${rocq_env[@]}" coqc -R . "$vroot" ${pre:+-R "$pre" Pre} "$vf") \
           || fail "$name/$b: the vendor library $vf does not compile"
       done
     fi
-    build_tree "$bad" "$bdir" "$pre" "$border" "$bvendor"
-    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor")
+    build_tree "$bad" "$bdir" "$pre" "$border" "$bvendor" "$vroot"
+    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor" "$vroot")
     if [ -f "$bad/refuse" ]; then
       [ "$code" != "0" ] || fail "$name/$b: the run should not have completed"
     else

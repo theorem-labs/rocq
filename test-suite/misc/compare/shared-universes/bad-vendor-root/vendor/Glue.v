@@ -1,4 +1,4 @@
-Require Pre.Base.
-Require Pre.Third.
+Require Img.Base.
+Require Img.Third.
 
-Monomorphic Constraint Pre.Base.b < Pre.Third.t.
+Monomorphic Constraint Img.Base.b < Img.Third.t.

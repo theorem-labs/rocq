@@ -110,7 +110,26 @@ let set_include d p =
   let p = dirpath_of_string p in
   push_include (d,p)
 
-(* Initializes the LoadPath *)
+
+(* The top-level names the load path can serve WITHOUT a -Q: the corelib
+   root, and the subdirectories of every directory bound under the empty
+   root -- user-contrib, the XDG directories, ROCQPATH and the working
+   directory. A -compare run refuses a -Q that binds one of them, or the
+   empty root, which would let the answer's directory shadow a library the
+   challenge reads from the image. Filled by [init_load_path]; empty under
+   -boot, which a graded run never uses. *)
+let image_roots = ref []
+
+let note_image_roots ~unix_path ~rocq_root =
+  match List.rev (DirPath.repr rocq_root) with
+  | id :: _ -> image_roots := Id.to_string id :: !image_roots
+  | [] ->
+    if Sys.file_exists unix_path && Sys.is_directory unix_path then
+      Array.iter (fun e ->
+          if Sys.is_directory (Filename.concat unix_path e) then
+            image_roots := e :: !image_roots)
+        (Sys.readdir unix_path)
+
 let init_load_path rocqenv =
   (* the to_string casting won't be necessary once Boot handles
      include paths *)
@@ -119,6 +138,10 @@ let init_load_path rocqenv =
   let user_contrib = Boot.Env.user_contrib rocqenv |> Boot.Path.to_string in
   let xdg_dirs = Envars.xdg_dirs in
   let rocqpath = Envars.coqpath in
+  let add_rec_path ~unix_path ~rocq_root =
+    note_image_roots ~unix_path ~rocq_root;
+    add_rec_path ~unix_path ~rocq_root
+  in
   (* NOTE: These directories are searched from last to first *)
   (* first standard library *)
   add_rec_path ~unix_path:theories ~rocq_root:(Names.DirPath.make[rocq_root]);
@@ -133,6 +156,7 @@ let init_load_path rocqenv =
   (* then directories in ROCQPATH *)
   List.iter (fun s -> add_rec_path ~unix_path:s ~rocq_root:CheckLibrary.default_root_prefix) (rocqpath());
   (* then current directory *)
+  note_image_roots ~unix_path:"." ~rocq_root:CheckLibrary.default_root_prefix;
   add_path ~unix_path:"." ~rocq_root:CheckLibrary.default_root_prefix
 
 let init_load_path env : unit =
@@ -646,6 +670,32 @@ let run_compare env =
           if substitutes rocq_root then None else Some (rocq_root, unix_path))
         !user_includes
     in
+    (* A -Q that binds one of the image's own top-level names, or the empty
+       root, puts the answer's directory where a library the challenge reads
+       from the image is looked up: the two sides would then read different
+       files under one name, and the one the answer wrote would decide. The
+       empty root binds EVERY name. Refused outright, because no config can
+       make it safe, and nothing a graded run does needs it: the route binds
+       one root, the project's own. *)
+    List.iter (fun (unix_path, rocq_root) ->
+        let head = match List.rev (DirPath.repr rocq_root) with
+          | [] -> None
+          | id :: _ -> Some (Id.to_string id)
+        in
+        match head with
+        | None ->
+          fatal_error
+            (str ("The directory " ^ unix_path ^ " is bound to the empty root, which binds \
+                   every library name the image serves. A -compare run refuses it."))
+            1
+        | Some h when List.exists (String.equal h) !image_roots ->
+          fatal_error
+            (str ("The directory " ^ unix_path ^ " is bound to " ^ DirPath.to_string rocq_root ^
+                  ", a name the image's own load path serves. A -compare run refuses it: the \
+                   two sides would read different files under one library name."))
+            1
+        | Some _ -> ())
+      !user_includes;
     try
       let t =
         Check_compare.prepare cfg ~dir ~out ~under_challenge_root ~open_roots

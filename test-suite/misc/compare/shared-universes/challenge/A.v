@@ -1,11 +1,11 @@
-Require Pre.Base.
-Require Pre.Extra.
-Require Pre.Third.
+Require Img.Base.
+Require Img.Extra.
+Require Img.Third.
 
-Monomorphic Definition stmt : Type@{Pre.Base.b} := Pre.Base.Carrier.
-Monomorphic Definition stmt2 : Type@{Pre.Extra.e} := Pre.Extra.Other.
-Monomorphic Definition stmt3 : Type@{Pre.Third.t} := Pre.Third.Yet.
+Monomorphic Definition stmt : Type@{Img.Base.b} := Img.Base.Carrier.
+Monomorphic Definition stmt2 : Type@{Img.Extra.e} := Img.Extra.Other.
+Monomorphic Definition stmt3 : Type@{Img.Third.t} := Img.Third.Yet.
 
-Theorem thm : stmt = Pre.Base.Carrier.
+Theorem thm : stmt = Img.Base.Carrier.
 Proof.
 Admitted.

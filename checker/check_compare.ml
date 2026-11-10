@@ -1242,8 +1242,20 @@ let load_challenge t senv0 ~answer_deps =
   let restore () = ignore (CheckLibrary.swap_tables saved) in
   Fun.protect ~finally:restore (fun () ->
       t.add_challenge_load_path ();
+      (* A pre-checked library is NOT a shared one, whatever root it sits
+         under. The config names it, and the option puts it on the admit
+         list, so the answer's environment holds it whether its tree
+         Requires it or not; were it shared too, a config could add a
+         library to the CHALLENGE's graph and so decide what the challenge
+         stands on. The config pins bytes; it does not say what the
+         challenge is. In production this changes nothing -- a pre-checked
+         library is a registered answer object, under the root the
+         challenge stands in for -- and the challenge still loads one
+         whose own files Require it, through its closure. *)
       let shared =
-        CList.map_filter (fun (dp, _) -> if t.under_challenge_root dp then None else Some dp)
+        CList.map_filter (fun (dp, _) ->
+            if t.under_challenge_root dp || List.exists (DirPath.equal dp) t.prechecked
+            then None else Some dp)
           answer_deps
       in
       let needed, all = CheckLibrary.intern_challenge t.files shared in

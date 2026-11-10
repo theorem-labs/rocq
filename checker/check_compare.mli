@@ -19,7 +19,32 @@
     and writes a JSON verdict.
 
     The comparison is structural after a one-to-one renaming of universe
-    levels: no conversion, no reduction, and no constant is unfolded. *)
+    levels: no conversion, no reduction, and no constant is unfolded.
+
+    {2 Where a shared library may come from}
+
+    The answer's tree may Require more of the image than the challenge
+    files do, so the challenge environment loads the same SHARED libraries
+    the answer loaded -- those outside the roots the challenge stands in
+    for -- and a constraint one of them carries is then not read as one the
+    answer invented. That rests on a shared library being something the
+    answer cannot write, so the one trusted source of them is the IMAGE's
+    installed load path: the corelib directory and user-contrib.
+
+    A graded run therefore binds exactly one root with [-Q], the answer's
+    project root, and leaves [ROCQPATH], [COQPATH], [-coqlib] and the XDG
+    directories unset, and starts in a working directory that holds no
+    [.vo] -- each of those is a load path the answer's side could otherwise
+    fill. The option refuses what it can see: a bound root the challenge
+    does not stand in for and whose libraries the config does not pin
+    (every library of such a root must be pre-checked), and any bound root
+    that is empty or is one of the image's own top-level names. What is
+    left -- the environment the grader hands the process -- is the
+    grader's to get right, and dispatch://BET-894's R5 and R1 are where it
+    is written down.
+
+    The test suite stands in for the image with [ROCQPATH], because a test
+    must not write into the installation it runs against. *)
 
 type config
 
@@ -35,7 +60,14 @@ val read_config : string -> config
 val prechecked_libraries : config -> string list
 (** The libraries the config declares pre-checked. They load through the
     existing [-admit] path, so the option adds each of them to the admit
-    list; the config is the only place that names them. *)
+    list; the config is the only place that names them.
+
+    A pre-checked library is never a shared one: the admit list puts it in
+    the ANSWER's environment whether the answer's tree Requires it or not,
+    and the challenge environment takes it only through its own files'
+    Require closure. A config pins bytes; it cannot add a library to the
+    challenge's universe graph and so decide what the challenge stands
+    on. *)
 
 type t
 
