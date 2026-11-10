@@ -725,15 +725,25 @@ let owned_by dp l = match Univ.Level.name l with
   | Some g -> let (d, _, _) = Univ.UGlobal.repr g in DirPath.equal d dp
   | None -> false
 
-(* Which level pairs this process may turn into equalities: each side must
-   belong to the library that declared its own copy. A level that belongs
-   to neither -- [Set], [Prop], a level of a library the two copies share --
-   must map to itself, because equating it would move a level a third party
-   can name. Checking only the left side was not enough: it let the already
-   loaded copy's level be equated with a THIRD library's level, whenever
-   that is what the candidate's declaration happens to mention. *)
+(* Which level pairs this process may turn into equalities: the left level
+   must belong to the library being loaded, the right one to the library
+   that declared the candidate, and the right one must not belong to the
+   library being loaded. A level that belongs to neither -- [Set], [Prop],
+   a level of a library the two copies share -- must map to itself, because
+   equating it would move a level a third party can name.
+
+   Checking only the first two was not enough in each direction. Without
+   the second, the already-loaded copy's level could be equated with a
+   THIRD library's level, whenever that is what the candidate's declaration
+   mentions. Without the third, two blocks of ONE library (where the
+   candidate's library is the library being loaded) could have their levels
+   equated, which the first rule alone used to forbid. All three together
+   only ever refuse more than any one of them. *)
 let pairs_admissible ~new_dp ~cand_dp pairs =
-  List.for_all (fun (a, b) -> owned_by new_dp a && owned_by cand_dp b) pairs
+  List.for_all
+    (fun (a, b) ->
+       owned_by new_dp a && owned_by cand_dp b && not (owned_by new_dp b))
+    pairs
 
 (* Every constraint that mentions a level about to be equated must appear, in
    both directions, on the other side too. A constraint between a mapped level
@@ -824,12 +834,13 @@ let merge env mp univs mb =
               let subst = Mod_subst.add_mp mp mp trial gsub in
               let mib' = as_loaded (Declareops.subst_mind_body subst mib) in
               let cmib = Environ.lookup_mind cand !envr in
-              (* [mergeable] rules out a private block on the loading side.
-                 The already-loaded side needs its own guard: [eq_mib]
-                 compares the two privacy fields after [as_loaded] has
-                 normalised the loading one, which would let a private
-                 candidate match a private newcomer, and a private block
-                 must never be merged whichever side it is on. *)
+              (* Defence in depth, and today it cannot fire: [mergeable]
+                 has already refused a private block on the loading side,
+                 and [eq_mib] refuses a private candidate against the
+                 non-private newcomer that is all that reaches here. It
+                 states the rule the other two only imply -- a private
+                 block never merges, whichever side it is on -- so that
+                 weakening either of them cannot quietly allow one. *)
               if not (Option.is_empty cmib.mind_private) then first rest else
               (match eq_mib empty_umap !envr mib' cmib with
                | Error _ -> first rest

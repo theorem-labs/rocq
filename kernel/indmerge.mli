@@ -181,11 +181,18 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
       loaded first is the canonical one and the later one is renamed into
       it. Together with the direction above -- a term may name the copy
       that was loaded first, not the one renamed into it -- this makes the
-      result depend on the order the libraries arrive in. [rocq c] loads
-      them in [Require] order, while [rocqchk] loads its [-norec]
-      arguments in reverse, so the same set of files can be accepted by one
-      and refused by the other, and reordering [rocqchk]'s arguments can
-      change the verdict. Every such difference is a refusal, never an
+      result depend on the order the libraries arrive in, and the two
+      binaries do not use the same one. [rocq c] loads them in [Require]
+      order. [rocqchk] builds its list in
+      [CheckLibrary.recheck_library]: each argument's dependency closure,
+      dependencies before dependents, but the whole list reversed at the
+      end, so the arguments are taken last-first and the plainly checked
+      ones come before the [-norec] ones. (The [List.rev] in
+      [coqchk_main.compile_files] only undoes the prepending its argument
+      parser does; it is the reversal in [recheck_library] that decides
+      this.) So the same set of files can be accepted by one binary and
+      refused by the other, and reordering [rocqchk]'s arguments can change
+      the verdict. Every such difference is a refusal, never an
       acceptance. *)
 
 (** {6 Undoing a merge on the way out} *)

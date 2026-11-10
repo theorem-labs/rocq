@@ -19,6 +19,8 @@ mi_coqc Spec -merge-inductives
 mi_coqc Agent -merge-inductives
 
 mi_coqc_fails Checker -merge-inductives
-mi_says b "b"
+mi_says 'cannot unify' "the two copies staying apart"
+mi_says 'Spec.b nat' "the spec's block"
+mi_says 'Agent.b nat' "the agent's block"
 
 mi_rocqchk -merge-inductives "$mi_root.Spec" "$mi_root.Agent"
