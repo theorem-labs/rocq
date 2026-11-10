@@ -148,6 +148,33 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
     names cannot be read back out of its resolver, so the refusal is the
     conservative answer rather than a guess. *)
 
+(** A {e private} block never merges either. Only the file that declared one
+    may match on it, so a file may axiomatise a distinction away and stay
+    consistent; two files that declare the same private type are two
+    quotients, not one type, and identifying them lets one file's match see
+    through the other's axiom, which is a proof of [False]. [eq_mib] still
+    compares them, for the comparator; the refusal is in [merge]. *)
+
+(** {6 Known limits, none of them fixed here}
+
+    - A reader's VM or native conversion can accept an equality across the
+      two names that the kernel's own conversion refuses, so a term that is
+      ill-typed for [rocqchk -bytecode-compiler no] can pass
+      [rocqchk -bytecode-compiler yes]. The grader runs both, and the
+      stricter run is the one that decides.
+
+    - This module's state ([index], [library_univs], [merged],
+      [merge_targets], [global_subst]) lives in plain refs, not in the
+      kernel summary, so it is not rolled back. A [Require] inside a
+      [Section], a [Succeed Require] or a [Fail Fail Require] with the
+      option on ends in an anomaly rather than a clean error. It fails
+      closed, and no batch [rocq c] or [rocqchk] run reaches it.
+
+    - A merge nobody asked for is still a merge: its universe equalities go
+      into the graph and into the compilation unit's constraints, so two
+      libraries that are each valid can become unloadable together. The
+      option has no "merge only against library X" mode. *)
+
 (** {6 Undoing a merge on the way out} *)
 
 val unmerging : unit -> bool

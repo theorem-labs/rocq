@@ -708,9 +708,18 @@ let as_loaded mib =
    about it. A template-polymorphic block does merge, on [equal_template]'s
    verdict: an [Inductive w (A : Type)] with no attribute is made template
    automatically (vernac/comInductive.ml), so refusing template blocks would
-   refuse every parameterised Type-valued type. *)
+   refuse every parameterised Type-valued type.
+
+   A PRIVATE block never merges. Its whole point is that only the file that
+   declared it may match on it, and two files that declare the same private
+   type are two quotients, not one: the first may axiomatise away a
+   distinction the second's matches can see. Merging them gives False --
+   `Private Inductive pos := mk : nat -> pos.` with `Axiom pos_irr : forall
+   n m, mk n = mk m.` on one side, and a match on the other. eq_mib still
+   compares them, for the comparator; the refusal is here. *)
 let mergeable mib =
-  match mib.mind_universes with Monomorphic -> true | Polymorphic _ -> false
+  Option.is_empty mib.mind_private
+  && (match mib.mind_universes with Monomorphic -> true | Polymorphic _ -> false)
 
 let owned_by dp l = match Univ.Level.name l with
   | Some g -> let (d, _, _) = Univ.UGlobal.repr g in DirPath.equal d dp
