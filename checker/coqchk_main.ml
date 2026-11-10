@@ -112,23 +112,32 @@ let set_include d p =
 
 
 (* The top-level names the load path can serve WITHOUT a -Q: the corelib
-   root, and the subdirectories of every directory bound under the empty
-   root -- user-contrib, the XDG directories, ROCQPATH and the working
-   directory. A -compare run refuses a -Q that binds one of them, or the
-   empty root, which would let the answer's directory shadow a library the
-   challenge reads from the image. Filled by [init_load_path]; empty under
-   -boot, which a graded run never uses. *)
+   root, and the subdirectories of every directory bound RECURSIVELY under
+   the empty root -- user-contrib, the XDG directories and ROCQPATH. The
+   working directory is bound non-recursively, so its subdirectories serve
+   no library and are not names here; its own top-level .vo files are
+   served under one-word names this check cannot see, which is why a
+   graded run starts in a working directory that holds no .vo. A -compare
+   run refuses a -Q that binds one of these names, or the empty root,
+   which would let the answer's directory shadow a library the challenge
+   reads from the image. Filled by [init_load_path]; empty under -boot,
+   which a graded run never uses. *)
 let image_roots = ref []
 
 let note_image_roots ~unix_path ~rocq_root =
   match List.rev (DirPath.repr rocq_root) with
   | id :: _ -> image_roots := Id.to_string id :: !image_roots
   | [] ->
-    if Sys.file_exists unix_path && Sys.is_directory unix_path then
+    if exists_dir unix_path then
+      (* a directory we cannot list, or one removed since the test
+         above, gives no root rather than raising, as [all_subdirs]
+         does through [System]'s own guarded readdir; a root we cannot
+         see shadows nothing *)
+      let entries = try Sys.readdir unix_path with Sys_error _ -> [||] in
       Array.iter (fun e ->
-          if Sys.is_directory (Filename.concat unix_path e) then
+          if exists_dir (Filename.concat unix_path e) then
             image_roots := e :: !image_roots)
-        (Sys.readdir unix_path)
+        entries
 
 let init_load_path rocqenv =
   (* the to_string casting won't be necessary once Boot handles
@@ -155,8 +164,8 @@ let init_load_path rocqenv =
     (xdg_dirs ~warn:(fun x -> Feedback.msg_warning (str x)));
   (* then directories in ROCQPATH *)
   List.iter (fun s -> add_rec_path ~unix_path:s ~rocq_root:CheckLibrary.default_root_prefix) (rocqpath());
-  (* then current directory *)
-  note_image_roots ~unix_path:"." ~rocq_root:CheckLibrary.default_root_prefix;
+  (* then current directory: bound non-recursively, so it adds no image
+     root (see [image_roots]) *)
   add_path ~unix_path:"." ~rocq_root:CheckLibrary.default_root_prefix
 
 let init_load_path env : unit =
