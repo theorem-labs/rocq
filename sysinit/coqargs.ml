@@ -59,6 +59,8 @@ type coqargs_config = {
   rcfile      : string option;
   coqlib      : string option;
   enable_VM   : bool;
+  merge_inductives : bool;
+  merge_inductives_verbose : bool;
   native_compiler : native_compiler;
   native_output_dir : CUnix.physical_path;
   native_include_dirs : CUnix.physical_path list;
@@ -123,6 +125,8 @@ let default_config = {
   rcfile       = None;
   coqlib       = None;
   enable_VM    = true;
+  merge_inductives = false;
+  merge_inductives_verbose = false;
   native_compiler = default_native;
   native_output_dir = ".coq-native";
   native_include_dirs = [];
@@ -392,6 +396,12 @@ let parse_args ~init arglist : t * string list =
     |"-diffs" ->
       add_set_option oval ["Diffs"] @@ OptionSet (Some (next ()))
     |"-emacs" -> set_emacs oval
+    |"-merge-inductives" ->
+      { oval with config = { oval.config with merge_inductives = true } }
+    |"-merge-inductives-verbose" ->
+      { oval with config = { oval.config with
+                             merge_inductives = true;
+                             merge_inductives_verbose = true } }
     |"-impredicative-set" ->
       set_logic (fun o -> { o with impredicative_set = true }) oval
     |"-allow-sprop" ->
