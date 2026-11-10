@@ -175,6 +175,8 @@ let init_document opts =
   List.iter (fun x -> Loadpath.add_vo_path @@ to_vo_path x) opts.pre.vo_includes;
 
   (* Kernel configuration *)
+  Indmerge.set_enabled opts.config.merge_inductives;
+  Indmerge.set_verbose opts.config.merge_inductives_verbose;
   Global.set_impredicative_set opts.config.logic.impredicative_set;
   Global.set_indices_matter opts.config.logic.indices_matter;
   Global.set_check_universes (not opts.config.logic.type_in_type);
