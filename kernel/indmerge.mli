@@ -158,10 +158,12 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
 (** {6 Known limits, none of them fixed here}
 
     - A reader's VM or native conversion can accept an equality across the
-      two names that the kernel's own conversion refuses, so a term that is
-      ill-typed for [rocqchk -bytecode-compiler no] can pass
-      [rocqchk -bytecode-compiler yes]. The grader runs both, and the
-      stricter run is the one that decides.
+      two names that the kernel's own conversion refuses. So a term that
+      [rocqchk -bytecode-compiler no] rejects as ill-typed can pass
+      [rocqchk -bytecode-compiler yes], and a reader that checks only with
+      the bytecode VM accepts it. The VM-off check is the one that refuses
+      it, so a consumer that turns this option on should check with the VM
+      off as well, not only with it on.
 
     - This module's state ([index], [library_univs], [merged],
       [merge_targets], [global_subst]) lives in plain refs, not in the
