@@ -63,3 +63,68 @@ jobs:
 
       - name: 🐛 Test Rocq
         run: opam exec -- make -j 4 -C test-suite TIMED=1 DISABLED_SUBSYSTEMS='${{ matrix.test_disabled }}'
+
+  forge:
+    name: Grade-mode forge check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: APT update
+        run: sudo apt-get update
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ocaml-variants.4.14.2+options,ocaml-option-flambda
+          dune-cache: true
+
+      - name: Get dependencies
+        run: opam install --deps-only ./coqide-server.opam ./rocq*.opam
+
+      - name: Build the commit under test
+        run: env -u ROCQLIB -u COQLIB -u ROCQRUNTIMELIB opam exec -- make world
+
+      # For each forge, build a copy of this commit with unfix.patch applied,
+      # then run check.sh. Every forge runs; the step fails if any forge fails.
+      # No -e here, so one failure does not stop the loop.
+      - name: Check each forge
+        shell: bash --noprofile --norc -uo pipefail {0}
+        run: |
+          status=0
+          for d in dev/ci/forge/*/; do
+            [ -d "$d" ] || continue
+            d=${d%/}
+            name=$(basename "$d")
+            copy="$RUNNER_TEMP/reverted-$name"
+            mkdir -p "$copy"
+            if ! git archive HEAD | tar -x -C "$copy"; then
+              echo "FAIL $name: cannot copy the source tree"
+              status=1
+              continue
+            fi
+            if ! (cd "$copy" && git apply "$GITHUB_WORKSPACE/$d/unfix.patch"); then
+              echo "FAIL $name: unfix.patch does not apply"
+              status=1
+              continue
+            fi
+            echo "::group::Build the reverted copy ($name)"
+            # The opam switch is local to the workspace, so name it here.
+            (cd "$copy" && env -u ROCQLIB -u COQLIB -u ROCQRUNTIMELIB \
+              opam exec --switch="$GITHUB_WORKSPACE" -- make world)
+            built=$?
+            echo "::endgroup::"
+            if [ "$built" -ne 0 ]; then
+              echo "FAIL $name: the reverted copy does not build"
+              status=1
+              continue
+            fi
+            if ! env -u ROCQLIB -u COQLIB -u ROCQRUNTIMELIB opam exec -- \
+              dev/ci/forge/check.sh "$d" "$copy/_build/install/default" \
+              "$GITHUB_WORKSPACE/_build/install/default"; then
+              status=1
+            fi
+          done
+          exit "$status"
