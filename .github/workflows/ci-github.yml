@@ -121,7 +121,7 @@ jobs:
               status=1
               continue
             fi
-            if ! env -u ROCQLIB -u COQLIB -u ROCQRUNTIMELIB opam exec -- \
+            if ! opam exec -- \
               dev/ci/forge/check.sh "$d" "$copy/_build/install/default" \
               "$GITHUB_WORKSPACE/_build/install/default"; then
               status=1

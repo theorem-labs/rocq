@@ -24,7 +24,7 @@ reverted=$(cd "$2" && pwd) || { echo "cannot open install root $2" >&2; exit 2; 
 base=$(cd "$3" && pwd) || { echo "cannot open install root $3" >&2; exit 2; }
 dir=$(basename "$forge")
 
-unset ROCQLIB COQLIB ROCQRUNTIMELIB
+unset ROCQLIB COQLIB ROCQRUNTIMELIB COQCORELIB
 
 scratch=$(mktemp -d) || { echo "cannot make a scratch dir" >&2; exit 1; }
 trap 'rm -rf "$scratch"' EXIT
