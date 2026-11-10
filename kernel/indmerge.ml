@@ -725,13 +725,15 @@ let owned_by dp l = match Univ.Level.name l with
   | Some g -> let (d, _, _) = Univ.UGlobal.repr g in DirPath.equal d dp
   | None -> false
 
-(* Which level pairs this process may turn into equalities.
-
-   A level that is not the loading library's own -- [Set], [Prop], a level of
-   a library both copies depend on -- must map to itself. Equating it with
-   anything else would move a level a third party can name. *)
-let pairs_admissible ~new_dp pairs =
-  List.for_all (fun (a, b) -> owned_by new_dp a && not (owned_by new_dp b)) pairs
+(* Which level pairs this process may turn into equalities: each side must
+   belong to the library that declared its own copy. A level that belongs
+   to neither -- [Set], [Prop], a level of a library the two copies share --
+   must map to itself, because equating it would move a level a third party
+   can name. Checking only the left side was not enough: it let the already
+   loaded copy's level be equated with a THIRD library's level, whenever
+   that is what the candidate's declaration happens to mention. *)
+let pairs_admissible ~new_dp ~cand_dp pairs =
+  List.for_all (fun (a, b) -> owned_by new_dp a && owned_by cand_dp b) pairs
 
 (* Every constraint that mentions a level about to be equated must appear, in
    both directions, on the other side too. A constraint between a mapped level
@@ -822,11 +824,18 @@ let merge env mp univs mb =
               let subst = Mod_subst.add_mp mp mp trial gsub in
               let mib' = as_loaded (Declareops.subst_mind_body subst mib) in
               let cmib = Environ.lookup_mind cand !envr in
+              (* [mergeable] rules out a private block on the loading side.
+                 The already-loaded side needs its own guard: [eq_mib]
+                 compares the two privacy fields after [as_loaded] has
+                 normalised the loading one, which would let a private
+                 candidate match a private newcomer, and a private block
+                 must never be merged whichever side it is on. *)
+              if not (Option.is_empty cmib.mind_private) then first rest else
               (match eq_mib empty_umap !envr mib' cmib with
                | Error _ -> first rest
                | Ok umap ->
                  let pairs = umap_pairs umap in
-                 if not (pairs_admissible ~new_dp pairs) then first rest
+                 if not (pairs_admissible ~new_dp ~cand_dp pairs) then first rest
                  else if not (constraints_agree ~new_ctx:univs ~old_ctx pairs)
                  then first rest
                  else if List.is_empty pairs

@@ -175,7 +175,18 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
     - A merge nobody asked for is still a merge: its universe equalities go
       into the graph and into the compilation unit's constraints, so two
       libraries that are each valid can become unloadable together. The
-      option has no "merge only against library X" mode. *)
+      option has no "merge only against library X" mode.
+
+    - Which of two copies keeps its name is decided by load order: the one
+      loaded first is the canonical one and the later one is renamed into
+      it. Together with the direction above -- a term may name the copy
+      that was loaded first, not the one renamed into it -- this makes the
+      result depend on the order the libraries arrive in. [rocq c] loads
+      them in [Require] order, while [rocqchk] loads its [-norec]
+      arguments in reverse, so the same set of files can be accepted by one
+      and refused by the other, and reordering [rocqchk]'s arguments can
+      change the verdict. Every such difference is a refusal, never an
+      acceptance. *)
 
 (** {6 Undoing a merge on the way out} *)
 
