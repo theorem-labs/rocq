@@ -1,4 +1,5 @@
 /Makefile*
 /log
 /chklog
+/srlog
 /src/elimFlag.ml

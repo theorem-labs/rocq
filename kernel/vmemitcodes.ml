@@ -166,6 +166,17 @@ let subst s reloc = match reloc with
   if cst' == cst then reloc else SReloc_getglobal cst'
 | SReloc_indirect _ -> reloc
 
+(* The same rewrite driven by plain functions instead of a module
+   substitution, so that -merge-inductives can undo a merge on export. *)
+let map fi fc reloc = match reloc with
+| SReloc_Const_ind ind ->
+  let ind' = fi ind in
+  if ind' == ind then reloc else SReloc_Const_ind ind'
+| SReloc_getglobal cst ->
+  let cst' = fc cst in
+  if cst' == cst then reloc else SReloc_getglobal cst'
+| SReloc_indirect _ -> reloc
+
 end
 
 (* Most of the words of the bytecode are comprised of a byte followed by three
@@ -442,6 +453,11 @@ let check_caml_prim_op = function
 | CAML_Stringsub -> opCHECKCAMLCALL3
 | CAML_Stringcat | CAML_Stringcompare -> opCHECKCAMLCALL2
 
+let znative_op_code = function
+| ZNadd -> opCHECKZADD
+| ZNpossub -> opCHECKZPOSSUB
+| ZNposadd -> opCHECKPOSADD
+
 let inplace_prim_op = function
   | Float64next_up | Float64next_down -> true
   | _ -> false
@@ -540,6 +556,9 @@ let emit_instr env = function
   | Ksequence _ -> invalid_arg "Vmemitcodes.emit_instr"
   | Kproj p -> out env opPROJ; out_int env p
   | Kensurestackcapacity size -> out env opENSURESTACKCAPACITY; out_int env size
+  | Kbinnum (k, n) -> out env opBINNUM; out_int env k; out_int env n
+  | Kbinnumcall (k, n, lbl) ->
+      out env opBINNUMCALL; out_int env k; out_int env n; out_label env lbl
   | Kbranch lbl -> out env opBRANCH; out_label env lbl
   | Kprim (op, (q,_u)) ->
       out env (check_prim_op op);
@@ -549,6 +568,8 @@ let emit_instr env = function
     out env (check_caml_prim_op op);
     out_label env lbl;
     slot_for_caml_prim env op
+
+  | Kznative op -> out env (znative_op_code op)
 
   | Kstop -> out env opSTOP
 
@@ -638,6 +659,15 @@ type body_code = to_patch pbody_code
 let subst_body_code s = function
 | BCdefined (m, x, tp) -> BCdefined (m, x, subst_patches s tp)
 | BCalias cu -> BCalias (subst_constant s cu)
+| BCconstant -> BCconstant
+
+let map_patches fi fc p =
+  let infos = CArray.Smart.map (fun r -> Reloc.map fi fc r) p.reloc_infos in
+  { reloc_infos = infos }
+
+let map_body_code fi fc = function
+| BCdefined (m, x, tp) -> BCdefined (m, x, map_patches fi fc tp)
+| BCalias cu -> BCalias (fc cu)
 | BCconstant -> BCconstant
 
 let to_memory fv code =

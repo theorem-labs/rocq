@@ -1,0 +1,2 @@
+The run must not complete: a bound root is a name the image's own load path
+serves.
