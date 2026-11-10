@@ -554,12 +554,20 @@ let read_config file =
   (* A tolerated flag names the kind, and may name the object it is
      tolerated on. With an object, a relaxed condition the standard library
      rests on does not tolerate the same condition in the agent's own
-     declaration. Without one, the kind is tolerated wherever it appears,
-     which is what the route's own rule does for a kind no declaration can
-     claim anything by: [indices-not-mattering] is on every object of an
-     image built without [-indices-matter], and naming them all would be a
-     list of the standard library (grading-tools
-     [_axiom_kinds._ALWAYS_ALLOWED_KINDS]). *)
+     declaration.
+
+     Without one, the kind is tolerated wherever it appears, and only two
+     kinds may be written that way: [indices-not-mattering], which is on
+     every inductive of an image built without [-indices-matter] and which
+     the route this replaces always allows (grading-tools
+     [_axiom_kinds._ALWAYS_ALLOWED_KINDS]), and [uip], which that route
+     allows on any object when the task sets [allow_uip]. The rest --
+     [assumed-positive], [unsafe-fixpoint], [type-in-type],
+     [unchecked-eliminations] -- are how a proof of False is written, and
+     that route denies them by name or vouches for one object at a time, so
+     a kind-only entry for them is refused here rather than left to a
+     config to get right. *)
+  let kind_only_allowed = ["indices-not-mattering"; "uip"] in
   let flags = match get top "tolerated_flags" with
     | None -> []
     | Some v ->
@@ -570,7 +578,13 @@ let read_config file =
           | Some k, Some o ->
             as_string "a tolerated flag's kind" k,
             Some (as_string "a tolerated flag's object" o)
-          | Some k, None -> as_string "a tolerated flag's kind" k, None
+          | Some k, None ->
+            let k = as_string "a tolerated flag's kind" k in
+            if not (List.exists (String.equal k) kind_only_allowed) then
+              cfg_error ("the tolerated flag " ^ k ^ " needs an object: only " ^
+                         String.concat " and " kind_only_allowed ^
+                         " may be tolerated on every object");
+            k, None
           | None, _ -> cfg_error "a tolerated flag needs a kind")
         (as_list "tolerated_flags" v)
   in

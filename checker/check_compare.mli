@@ -59,11 +59,16 @@ val read_config : string -> config
     A tolerated flag with an [object] tolerates that kind on that object
     alone, so a relaxed condition the standard library rests on does not
     tolerate the same condition in the agent's own declaration. One without
-    tolerates the kind wherever it appears, which a task needs for a kind
-    carried by every object of an image built without the matching option:
-    [indices-not-mattering] is on all of them, and naming them would be a
-    list of the standard library. The route the comparator replaces always
-    allowed that kind (grading-tools [_axiom_kinds._ALWAYS_ALLOWED_KINDS]).
+    tolerates the kind wherever it appears, and only [indices-not-mattering]
+    and [uip] may be written that way: the first is on every inductive of an
+    image built without [-indices-matter], and the route the comparator
+    replaces always allows it (grading-tools
+    [_axiom_kinds._ALWAYS_ALLOWED_KINDS]), while the second that route
+    allows on any object when the task sets [allow_uip]. Every other kind
+    without an object is an error: [assumed-positive], [unsafe-fixpoint],
+    [type-in-type] and [unchecked-eliminations] are how a proof of False is
+    written, and that route denies them by name or vouches for one object at
+    a time.
     @raise CErrors.UserError on any of them. *)
 
 val prechecked_libraries : config -> string list

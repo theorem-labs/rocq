@@ -391,7 +391,7 @@ case_vos() {
   sha=$(rocqchk -sha256 "$work/challenge/A.vo")
   prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
   printf '%s\n' \
-    "{\"theorems\": [{\"name\": \"Top.A.thm\"}], \"tolerated_flags\": [\"indices-not-mattering\"]," \
+    "{\"theorems\": [{\"name\": \"Top.A.thm\"}], \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\"}]," \
     " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}]," \
     " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
   local code
@@ -428,7 +428,7 @@ case_digest() {
   pre_sha=$(rocqchk -sha256 "$work/pre2/Shared.vo")
   prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
   printf '%s\n' \
-    "{\"theorems\": [{\"name\": \"Top.A.thm\"}], \"tolerated_flags\": [\"indices-not-mattering\"]," \
+    "{\"theorems\": [{\"name\": \"Top.A.thm\"}], \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\"}]," \
     " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}," \
     "   {\"library\": \"Pre.Shared\", \"sha256\": \"$pre_sha\"}]," \
     " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
