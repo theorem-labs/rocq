@@ -1,0 +1,25 @@
+- : int = -3
+File "./output/ltac2_fast_calls_bt.v", line 18, characters 0-29:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+File "./output/ltac2_fast_calls_bt.v", line 21, characters 0-29:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E
+Backtrace:
+Call g5
+Call g4
+Call g3
+Call g2
+Call fail1
+Prim <rocq-runtime.plugins.ltac2:throw>
+
+File "./output/ltac2_fast_calls_bt.v", line 22, characters 0-40:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: Out_of_bounds
+Backtrace:
+Call aget
+Prim <rocq-runtime.plugins.ltac2:array_get>
+
+File "./output/ltac2_fast_calls_bt.v", line 24, characters 0-29:
+The command has indeed failed with message:
+Uncaught Ltac2 exception: E

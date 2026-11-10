@@ -1,0 +1,4 @@
+# <statement-name> <model-constant> [<trusted-constant>|-]
+# The model constant lives in StmtAdmit.Model, which is admitted and reached
+# from no checked library. trusted is '-': the report walks the model closure.
+unreached StmtAdmit.Model.m -
