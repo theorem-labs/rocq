@@ -88,14 +88,17 @@ jobs:
         run: env -u ROCQLIB -u COQLIB -u ROCQRUNTIMELIB opam exec -- make world
 
       # For each forge, build a copy of this commit with unfix.patch applied,
-      # then run check.sh. Every forge runs; the step fails if any forge fails.
+      # then run dev/ci/forge-check.sh. Every forge runs; the step fails if any
+      # forge fails, or if there is no forge directory to check.
       # No -e here, so one failure does not stop the loop.
       - name: Check each forge
         shell: bash --noprofile --norc -uo pipefail {0}
         run: |
           status=0
+          checked=0
           for d in dev/ci/forge/*/; do
             [ -d "$d" ] || continue
+            checked=$((checked + 1))
             d=${d%/}
             name=$(basename "$d")
             copy="$RUNNER_TEMP/reverted-$name"
@@ -122,9 +125,13 @@ jobs:
               continue
             fi
             if ! opam exec -- \
-              dev/ci/forge/check.sh "$d" "$copy/_build/install/default" \
+              dev/ci/forge-check.sh "$d" "$copy/_build/install/default" \
               "$GITHUB_WORKSPACE/_build/install/default"; then
               status=1
             fi
           done
+          if [ "$checked" -eq 0 ]; then
+            echo "FAIL: no forge directory under dev/ci/forge/"
+            exit 1
+          fi
           exit "$status"

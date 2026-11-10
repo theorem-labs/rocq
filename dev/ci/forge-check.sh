@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Grade-mode forge check for one forge directory.
 #
-# Usage: check.sh <forge dir> <reverted install root> <base install root>
+# Usage: forge-check.sh <forge dir> <reverted install root> <base install root>
 #
 # An install root is <tree>/_build/install/default. The reverted tree has the
 # forge's unfix.patch applied, so its checker still has the bug.
