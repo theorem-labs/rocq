@@ -604,10 +604,14 @@ let read_config file =
 
     One map for the whole run, a bijection between the challenge's
     monomorphic levels and the answer's. It is seeded with the identity on
-    every level a library both sides share declares -- the pre-checked
-    libraries, the standard library first -- so that a constraint an answer
-    adds between a level of its own and a shared level is a constraint
-    between two mapped levels, which the constraint check below sees. The
+    every level of a SHARED library -- one outside the roots the challenge
+    stands in for, which is one file for both sides -- and on every
+    pre-checked library's, so that a constraint between a level of the
+    challenge's own and one of those is a constraint between two mapped
+    levels, which the constraint check below sees. Without the seed a level
+    no compared term names is not in the map at all, and a constraint
+    reaching it is passed over: an opaque body is never compared, so a
+    challenge proof's own constraint on such a level would be lost. The
     rest of the map is built while the declarations are compared.
 
     A level of a polymorphic context is a [Level.var], bound by position, so
@@ -1269,7 +1273,12 @@ let load_challenge t senv0 ~answer_deps =
 
 type failure = { f_name : string; f_reason : string }
 
-(* The identity seed: a level of a library both sides share. *)
+(* The identity seed: a level of a library that is one file for both sides.
+   That is every shared library -- outside the roots the challenge stands in
+   for -- and every pre-checked one. A level no compared declaration names
+   is in the map only through this: the body of an opaque proof is never
+   compared, so a challenge proof's constraint on such a level would
+   otherwise never be asked of the answer. *)
 let seed_umap t ~challenge_env ~answer_env =
   let gch = Environ.universes challenge_env and gan = Environ.universes answer_env in
   let an = UGraph.domain gan in
@@ -1278,73 +1287,88 @@ let seed_umap t ~challenge_env ~answer_env =
       | None -> m
       | Some ug ->
         let dp, _, _ = Univ.UGlobal.repr ug in
-        if List.exists (DirPath.equal dp) t.prechecked && Univ.Level.Set.mem u an
-        then add_level m u u else m)
+        let one_file =
+          List.exists (DirPath.equal dp) t.prechecked || not (t.under_challenge_root dp)
+        in
+        if one_file && Univ.Level.Set.mem u an then add_level m u u else m)
     (UGraph.domain gch) empty_umap
 
 (* The two directions are not the same question.
 
    Every challenge constraint, mapped, must hold in the answer: the answer
-   must stand where the challenge stands. Because the answer's graph is
-   consistent -- the kernel checked it -- an answer that passes this
-   direction has a graph whose union with the challenge's is satisfiable, so
-   a cycle the answer introduces against a challenge constraint is caught
-   here and nowhere else.
+   must stand where the challenge stands. It is also where an answer that
+   contradicts the challenge is caught: the answer's graph alone is
+   consistent, since the kernel checked it, so if the answer entails every
+   challenge constraint the union of the two is satisfiable.
 
-   The other direction asks what the answer ADDS, and it is asked only of
-   the levels the challenge's own files declare. A proof adds constraints
-   between the IMAGE's levels as a matter of course: it instantiates the
-   image's definitions, and the kernel records what that costs. Those are
-   not the answer's claim about the task, they are the price of using the
-   library, and today's grade of record -- a Checker file compiled against
-   the task's statements, where the kernel merges the proof's constraints
-   into one environment -- accepts every one of them. Two runs of the real
-   task show what demanding otherwise costs: the key failed on
+   The other direction asks what the answer ADDS, and passes over one shape
+   alone: a constraint between two of the IMAGE's levels. A proof adds
+   those as a matter of course -- it instantiates the image's definitions,
+   and the kernel records what that costs -- and they say nothing about the
+   task, since the challenge's statements do not stand on the image's
+   levels relative to each other. Today's grade of record, a Checker file
+   compiled against the task's statements with the kernel merging the
+   proof's constraints into one environment, accepts all of them, and two
+   runs of the real task show what refusing them costs: the key failed on
    LinuxProcessSemantics.LinuxProcessSem.Fs.33 <= Stdlib.Logic.Classical_Pred_Type.21
-   and the untouched control on Fs.33 < Corelib.Init.Logic.22, both between
-   the image's own levels (dispatch://BET-901).
+   and the untouched control on Fs.33 < Corelib.Init.Logic.22, each between
+   two of the image's levels, every theorem of both runs failing on that
+   one line (dispatch://BET-901).
 
-   A constraint between two levels of the challenge's own files is the
-   answer's claim about the task: the statements stand on those levels, and
-   an answer that relates two of them proves less than the challenge asks --
-   it equates, or orders, universes the challenge left apart. Those are
-   compared, through [constraints_for], which projects a path that runs
-   through the image's levels onto the two ends that matter. *)
+   Every other pair is compared, the challenge's own levels to each other
+   AND to the image's. An answer that relates one of the challenge's own
+   universes to one of the image's has fixed where that universe sits, and
+   a statement over it then says less than the challenge's does: a
+   statement that injects Type@{u} into a type at an image level is not
+   provable while u and that level are apart, and is provable once the
+   answer puts u below it. That is a forgery, and it carries no Constraint
+   command -- the Qed records it (the adversarial review of 0de0865d26).
+
+   Both directions compare the PROJECTION of one graph onto the mapped
+   levels ([constraints_for], which walks on through a level it does not
+   keep), so a path through levels the map does not hold is compared like a
+   direct edge, and a forgery cannot be routed around.
+
+   Every failing constraint is reported, not the first: a run that names
+   one costs another run to learn whether there are more. *)
 let check_constraints t ~challenge_env ~answer_env m =
   let gch = Environ.universes challenge_env and gan = Environ.universes answer_env in
   let own u = match Univ.Level.name u with
     | None -> false
     | Some ug -> let dp, _, _ = Univ.UGlobal.repr ug in t.under_challenge_root dp
   in
-  let kept_ch = Univ.Level.Map.domain m.fwd in
-  let kept_an =
-    Univ.Level.Map.fold (fun u v acc -> if own u then Univ.Level.Set.add v acc else acc)
-      m.fwd Univ.Level.Set.empty
+  let kept_ch = Univ.Level.Map.domain m.fwd and kept_an = Univ.Level.Map.domain m.bwd in
+  let image map u = Univ.Level.Map.find_opt u map in
+  let shown = 5 in
+  let fails ~skip map graph cs =
+    let bad = Univ.UnivConstraints.fold (fun (u, k, v) acc ->
+        match image map u, image map v with
+        | Some u', Some v' when not (skip u' v') ->
+          if UGraph.check_constraint graph (u', k, v') then acc
+          else
+            Printf.sprintf "%s %s %s"
+              (Univ.Level.to_string u)
+              (match k with Univ.UnivConstraint.Lt -> "<" | Le -> "<=" | Eq -> "=")
+              (Univ.Level.to_string v) :: acc
+        | _ -> acc)
+        cs []
+    in
+    match List.sort String.compare bad with
+    | [] -> None
+    | l ->
+      let n = List.length l in
+      let head = CList.firstn (min shown n) l in
+      Some (Printf.sprintf "the constraint %s does not hold on the other side%s"
+              (String.concat ", " head)
+              (if n > shown then Printf.sprintf " (and %d more)" (n - shown) else ""))
   in
-  let image map u = match Univ.Level.Map.find_opt u map with Some v -> Some v | None -> None in
-  let fails map graph cs =
-    Univ.UnivConstraints.fold (fun (u, k, v) acc ->
-        match acc with
-        | Some _ -> acc
-        | None ->
-          match image map u, image map v with
-          | Some u', Some v' ->
-            if UGraph.check_constraint graph (u', k, v') then None
-            else
-              Some (Printf.sprintf "the constraint %s %s %s does not hold on the other side"
-                      (Univ.Level.to_string u)
-                      (match k with Univ.UnivConstraint.Lt -> "<" | Le -> "<=" | Eq -> "=")
-                      (Univ.Level.to_string v))
-          | _ -> None)
-      cs None
-  in
-  match fails m.fwd gan (UGraph.constraints_for ~kept:kept_ch gch) with
+  let never _ _ = false in
+  match fails ~skip:never m.fwd gan (UGraph.constraints_for ~kept:kept_ch gch) with
   | Some e -> Some ("the challenge has a universe constraint the answer does not: " ^ e)
   | None ->
-    match fails m.bwd gch (UGraph.constraints_for ~kept:kept_an gan) with
-    | Some e ->
-      Some ("the answer relates two of the challenge's own universes and the challenge \
-             does not: " ^ e)
+    let both_image u' v' = not (own u') && not (own v') in
+    match fails ~skip:both_image m.bwd gch (UGraph.constraints_for ~kept:kept_an gan) with
+    | Some e -> Some ("the answer has a universe constraint the challenge does not: " ^ e)
     | None -> None
 
 (* Every challenge declaration, in the order the name sorts. A declaration the
