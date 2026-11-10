@@ -55,9 +55,14 @@ mi_coqc_fails () {
   mi_no_anomaly "$base.v"
 }
 
+# Every rocqchk call of this family takes $mi_chk_extra as well, so that the
+# whole family can be re-run with the bytecode VM on (or off) and the two
+# verdicts compared:  mi_chk_extra='-bytecode-compiler yes' make ... misc
+mi_chk_extra=${mi_chk_extra:-}
+
 # mi_rocqchk <argument>...: check the named libraries, which must succeed.
 mi_rocqchk () {
-  "$BIN"rocqchk -R "$d" $mi_root "$@" > "$d/last.log" 2>&1 \
+  "$BIN"rocqchk -R "$d" $mi_root $mi_chk_extra "$@" > "$d/last.log" 2>&1 \
     || mi_fail "rocqchk $* was refused"
 }
 
@@ -65,7 +70,7 @@ mi_rocqchk () {
 # refused, and cleanly. Exit code in $mi_status, output in $d/last.log.
 mi_rocqchk_fails () {
   set +e
-  "$BIN"rocqchk -R "$d" $mi_root "$@" > "$d/last.log" 2>&1
+  "$BIN"rocqchk -R "$d" $mi_root $mi_chk_extra "$@" > "$d/last.log" 2>&1
   mi_status=$?
   set -e
   [ "$mi_status" != 0 ] || mi_fail "rocqchk $* accepted"

@@ -165,13 +165,17 @@ val apply_earlier_merges : Names.ModPath.t ->
 
 (** {6 Known limits, none of them fixed here}
 
-    - A reader's VM or native conversion can accept an equality across the
-      two names that the kernel's own conversion refuses. So a term that
-      [rocqchk -bytecode-compiler no] rejects as ill-typed can pass
-      [rocqchk -bytecode-compiler yes], and a reader that checks only with
-      the bytecode VM accepts it. The VM-off check is the one that refuses
-      it, so a consumer that turns this option on should check with the VM
-      off as well, not only with it on.
+    - The bytecode VM compares constructed values by tag and arity, the
+      kernel compares constructor names, so the two can disagree about a
+      term that mixes two copies' constructors -- which only a library
+      built with this option contains. With the option on they agree: a
+      check may use [-bytecode-compiler yes]. The one disagreement needs
+      all three of the option OFF, the mixed-name library admitted
+      unchecked ([-norec] or [-admit], so nothing re-derives it), and the
+      VM on; there the VM accepts what the kernel refuses. A reader
+      without the option must therefore not admit a merge-written library
+      unchecked. [merge_inductives_vm_agree] pins every cell of that,
+      including the one that disagrees.
 
     - This module's state ([index], [library_univs], [merged],
       [merge_targets], [global_subst]) lives in plain refs, not in the

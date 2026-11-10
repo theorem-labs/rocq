@@ -32,10 +32,10 @@ mi_c_fails () {
   [ "$mi_status" != 0 ] || mi_fail "$* was accepted"
   mi_no_anomaly "$*"
 }
-chk () { "$BIN"rocqchk $Q "$@" > "$d/last.log" 2>&1 \
+chk () { "$BIN"rocqchk $Q ${mi_chk_extra:-} "$@" > "$d/last.log" 2>&1 \
            || { echo "FAILED: rocqchk $* was refused"; cat "$d/last.log"; exit 1; }; }
 chk_fails () {
-  set +e; "$BIN"rocqchk $Q "$@" > "$d/last.log" 2>&1; mi_status=$?; set -e
+  set +e; "$BIN"rocqchk $Q ${mi_chk_extra:-} "$@" > "$d/last.log" 2>&1; mi_status=$?; set -e
   [ "$mi_status" != 0 ] || mi_fail "rocqchk $* was accepted"
   mi_no_anomaly "rocqchk $*"
 }
