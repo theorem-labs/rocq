@@ -638,9 +638,17 @@ let run_compare env =
           substitutes rocq_root && (String.equal l r || CString.is_prefix (r ^ ".") l))
         !user_includes
     in
+    (* The bound roots the challenge does NOT stand in for. The answer's
+       build can write under one of them, so the comparator refuses a run
+       that loaded a library from one unless the config pins it. *)
+    let open_roots =
+      CList.map_filter (fun (unix_path, rocq_root) ->
+          if substitutes rocq_root then None else Some (rocq_root, unix_path))
+        !user_includes
+    in
     try
       let t =
-        Check_compare.prepare cfg ~dir ~out ~under_challenge_root
+        Check_compare.prepare cfg ~dir ~out ~under_challenge_root ~open_roots
           ~add_challenge_load_path:(fun () ->
               List.iter (fun (_, rocq_root) ->
                   if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)

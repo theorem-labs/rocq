@@ -14,6 +14,9 @@
 #                     with pre-order, every named file is compiled and none
 #                     is pre-checked
 #   pre-order         optional, the order to compile pre/*.v in
+#   bad-<name>/vendor/*.v
+#                     optional, a tree the bad answer binds under a second
+#                     root, Vendor, that no challenge file lives under
 #   config.tmpl       the config, with @SHA256:<file>@ for a challenge
 #                     file's digest and @PRECHECKED@ for the pre-checked
 #                     array
@@ -116,11 +119,12 @@ case_sha256() {
 # Compile every .v of <src> into <dst>, under the logical root Top, with the
 # pre-checked library of <pre> on the load path when there is one.
 build_tree() {
-  local src=$1 dst=$2 pre=$3 order=$4
+  local src=$1 dst=$2 pre=$3 order=$4 vendor=${5:-}
   mkdir -p "$dst"
   cp "$src"/*.v "$dst"/
   local args=(-R "$dst" Top)
   [ -n "$pre" ] && args+=(-R "$pre" Pre)
+  [ -n "$vendor" ] && args+=(-R "$vendor" Vendor)
   # A tree may need a flag of its own, for example -allow-rewrite-rules.
   if [ -f "$src/coqc-flags" ]; then
     local extra
@@ -146,11 +150,19 @@ file_order() {
 # @PRECHECKED@ the pre-checked array.
 make_config() {
   local tmpl=$1 chdir=$2 out=$3 pre=$4
+  # Every shared library a case ships is pre-checked: a root the challenge
+  # does not stand in for must have each of its libraries pinned, or the
+  # comparator refuses the run. The image's own libraries need no -Q and are
+  # not such a root.
   local pre_json=""
-  if [ -n "$pre" ] && [ -f "$pre/Shared.vo" ]; then
-    local sha
-    sha=$(rocqchk -sha256 "$pre/Shared.vo")
-    pre_json="{\"library\":\"Pre.Shared\",\"sha256\":\"$sha\"}"
+  if [ -n "$pre" ]; then
+    local pv base sha
+    for pv in "$pre"/*.vo; do
+      base=$(basename "$pv" .vo)
+      sha=$(rocqchk -sha256 "$pv")
+      [ -n "$pre_json" ] && pre_json="$pre_json,"
+      pre_json="$pre_json{\"library\":\"Pre.$base\",\"sha256\":\"$sha\"}"
+    done
   fi
   local prelude
   prelude=$(prelude_vo)
@@ -188,9 +200,10 @@ make_config() {
 # Run the comparator on one answer tree. Prints the exit code; the verdict
 # file is $work/out.json.
 run_compare() {
-  local work=$1 answer=$2 config=$3 pre=$4
+  local work=$1 answer=$2 config=$3 pre=$4 vendor=${5:-}
   local args=(-silent -Q "$answer" Top)
   [ -n "$pre" ] && args+=(-Q "$pre" Pre)
+  [ -n "$vendor" ] && args+=(-Q "$vendor" Vendor)
   local libs=()
   local f
   for f in "$answer"/*.vo; do libs+=("Top.$(basename "$f" .vo)"); done
@@ -250,8 +263,22 @@ run_case() {
     local bdir="$work/$b"
     local border
     border=$(file_order "$bad")
-    build_tree "$bad" "$bdir" "$pre" "$border"
-    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre")
+    # A bad answer may ship a tree of its own under a SECOND root, bound
+    # with -Q and holding no challenge counterpart: a library the answer
+    # wrote that the comparator must not take for one of the image's.
+    local bvendor=""
+    if [ -d "$bad/vendor" ]; then
+      bvendor="$work/$b-vendor"
+      mkdir -p "$bvendor"
+      cp "$bad/vendor"/*.v "$bvendor"/
+      local vf
+      for vf in $(cd "$bvendor" && ls *.v | sort); do
+        (cd "$bvendor" && coqc -R . Vendor ${pre:+-R "$pre" Pre} "$vf") \
+          || fail "$name/$b: the vendor library $vf does not compile"
+      done
+    fi
+    build_tree "$bad" "$bdir" "$pre" "$border" "$bvendor"
+    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor")
     if [ -f "$bad/refuse" ]; then
       [ "$code" != "0" ] || fail "$name/$b: the run should not have completed"
     else

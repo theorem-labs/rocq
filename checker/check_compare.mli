@@ -41,13 +41,18 @@ type t
 
 val prepare :
   config -> dir:string -> out:string -> add_challenge_load_path:(unit -> unit) ->
-  under_challenge_root:(Names.DirPath.t -> bool) -> t
+  under_challenge_root:(Names.DirPath.t -> bool) ->
+  open_roots:(Names.DirPath.t * string) list -> t
 (** Resolve the challenge files under [dir] and check the sha256 of each.
     [add_challenge_load_path] puts [dir] on the load path in place of the
     answer's directories; it is called once, inside the challenge load.
     [under_challenge_root] says whether a library name lives under one of
     those roots: those are the answer's own libraries, and every other
     library the answer loaded is a shared one, which the challenge loads too.
+    [open_roots] are the bound roots the challenge does NOT stand in for,
+    with the directory each is bound to; the run is refused when the answer
+    loaded a library from under one of them that the config does not
+    pre-check.
     @raise CErrors.UserError when a file is missing or its sha256 differs. *)
 
 val run :

@@ -1088,6 +1088,12 @@ type t = {
           for? Those are the answer's own libraries. Every other library the
           answer loaded is a shared one: it comes from the image, by the same
           name and the same file on both sides. *)
+  open_roots : (DirPath.t * string) list;
+      (** The roots the command line binds that the challenge does NOT stand
+          in for, with the directory each is bound to. A library under one of
+          them is the answer's side of the run and the challenge has no
+          counterpart for it, so [check_open_roots] refuses the run unless
+          the config pins it. *)
 }
 
 let dirpath_of_string s =
@@ -1097,7 +1103,7 @@ let dirpath_of_string s =
 
 (* Before anything is loaded: the files the config pins must be there and have
    the sha256 it gives. *)
-let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root =
+let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root ~open_roots =
   let files =
     List.map (fun f ->
         let p = if Filename.is_relative f.cf_path then Filename.concat dir f.cf_path
@@ -1117,7 +1123,7 @@ let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root =
   (try Sys.remove out with Sys_error _ -> ());
   { cfg; dir; out; files;
     prechecked = List.map (fun p -> dirpath_of_string p.pc_library) cfg.cfg_prechecked;
-    add_challenge_load_path; under_challenge_root }
+    add_challenge_load_path; under_challenge_root; open_roots }
 
 (* The pre-checked libraries are resolved on the answer's load path, which is
    the one in place when this runs. *)
@@ -1131,6 +1137,37 @@ let check_prechecked t =
           (Pp.str ("The pre-checked library " ^ p.pc_library ^ " is " ^ file ^
                    ", whose sha256 is " ^ got ^ ", and the config pins " ^ p.pc_sha256 ^ ".")))
     t.cfg.cfg_prechecked
+
+(* A root the command line binds that the challenge does not stand in for is
+   an open root: the answer's build put files there, and the challenge
+   directory holds nothing under it. Such a library is neither compared
+   (the challenge has no counterpart) nor pinned, and loading it into the
+   challenge environment as a shared one would let a file the answer wrote
+   decide a universe constraint on BOTH sides, which is the forgery this
+   refuses: the run stops unless the config pre-checks every library the
+   answer loaded from under that root, which pins its sha256.
+
+   Production binds one root, the answer's project root, which every checked
+   answer library lives under and the challenge therefore stands in for, so
+   the list is empty there. A test harness that binds a stand-in for the
+   image's libraries pre-checks them, as the config's pre-checked list is
+   for. *)
+let check_open_roots t ~answer_deps =
+  let under root lib =
+    let r = DirPath.to_string root and l = DirPath.to_string lib in
+    String.equal l r || CString.is_prefix (r ^ ".") l
+  in
+  List.iter (fun (lib, _) ->
+      List.iter (fun (root, path) ->
+          if under root lib && not (List.exists (DirPath.equal lib) t.prechecked) then
+            CErrors.user_err
+              Pp.(str ("The answer loaded the library " ^ DirPath.to_string lib ^
+                       " from " ^ path ^ ", bound to " ^ DirPath.to_string root ^
+                       ", which the challenge does not stand in for and the config \
+                        does not declare pre-checked. Every library of such a root \
+                        must be pre-checked, so that its bytes are pinned.")))
+        t.open_roots)
+    answer_deps
 
 let rec mp_root mp = match mp with
   | ModPath.MPfile dp -> Some dp
@@ -1186,9 +1223,20 @@ let check_dep_digests t ~challenge ~answer =
    (dispatch://BET-901). What is left for the constraint check to catch is a
    constraint the answer's OWN libraries add, which is the answer's doing.
 
-   Only the challenge files' closure is compared declaration by declaration:
-   a shared library is one file for both sides, as the digest check above
-   has just established. *)
+   Only the challenge files' closure is compared declaration by declaration.
+
+   What pins a shared library the answer alone Requires, and so what this
+   load rests on: the config's sha256 when it is pre-checked, and otherwise
+   only (1) that it is resolved on the same load path, which the challenge
+   load changes solely by putting the challenge directory in front of the
+   roots it stands in for, so a library outside those roots resolves to the
+   same file for both sides; (2) that every library naming it as a
+   dependency records the same digest on both sides, which the check above
+   has just established; and (3) [check_open_roots], which has already
+   refused the run if a root the answer could write to were left open. A
+   library that none of the three reaches does not exist: a library comes
+   from a bound root or from the image's own load path. Each of the three
+   refuses the run rather than reporting a verdict. *)
 let load_challenge t senv0 ~answer_deps =
   let saved = CheckLibrary.swap_tables (CheckLibrary.fresh_tables ()) in
   let restore () = ignore (CheckLibrary.swap_tables saved) in
@@ -1302,6 +1350,7 @@ let has_rewrite_rules env libs =
     (Environ.Internal.View.view env).Environ.Internal.View.env_symb_pats
 
 let run t env access senv0 ~answer_deps =
+  check_open_roots t ~answer_deps;
   check_prechecked t;
   let challenge_env, all_deps = load_challenge t senv0 ~answer_deps in
   (* A pre-checked library, and every library it rests on, is one file for
