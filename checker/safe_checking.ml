@@ -25,6 +25,9 @@ let import senv opac clib vmtab digest =
   let env = push_context_set ~strict:true univs env in
   let env = Modops.add_retroknowledge (Mod_declarations.mod_retroknowledge mb) env in
   let env = Environ.link_vm_library vmtab env in
+  (* The environment already carries the merges made for earlier libraries,
+     so the body checked against it has to name them the same way. *)
+  let mb = Indmerge.apply_earlier_merges (Names.ModPath.MPfile dp) mb in
   let opac = Mod_checking.check_module env opac (Names.ModPath.MPfile dp) mb in
   let (_,senv) = Safe_typing.import clib vmtab digest senv in senv, opac
 

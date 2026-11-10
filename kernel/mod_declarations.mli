@@ -95,6 +95,10 @@ val set_retroknowledge : module_body -> Retroknowledge.action list -> module_bod
 
 (** {6 Substitution} *)
 
+val set_delta : Mod_subst.delta_resolver ->
+  'a generic_module_body -> 'a generic_module_body
+(** Replace the delta resolver, keeping everything else. *)
+
 type subst_kind
 val subst_dom : subst_kind
 val subst_codom : subst_kind

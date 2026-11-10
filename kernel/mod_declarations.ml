@@ -109,6 +109,11 @@ let replace_module_body struc delta mb =
     mod_type_alg = None;
     mod_delta = delta }
 
+(* [-merge-inductives]: the loaded structure has been rewritten to the
+   merged names, so the resolver the environment keys its entries with has
+   to say the same thing. *)
+let set_delta delta mb = if delta == mb.mod_delta then mb else { mb with mod_delta = delta }
+
 let module_type_of_module mb =
   { mb with mod_expr = ModTypeNul; mod_type_alg = None;
     mod_retroknowledge = ModTypeNul; }

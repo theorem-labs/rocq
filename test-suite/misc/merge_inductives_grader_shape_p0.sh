@@ -30,9 +30,9 @@ mi_says "Universe inconsistency" "a universe inconsistency"
 
 # And the merge itself still happens when the merged libraries are the
 # unchecked ones: only Mid is listed, so Spec and Agent are both loaded as
-# its dependencies, unchecked. Mid's own check is then refused -- it is the
-# shape the review calls P2, a library whose own terms name a merged
-# inductive -- so both halves are asserted: that a merge happened with the
-# spec side unchecked, and that the refusal is a clean one.
-mi_rocqchk_fails -merge-inductives-verbose -o -norec "$mi_root.Mid"
+# its dependencies, unchecked. Mid names the merged inductive in its own
+# terms, which is the shape that used to be refused here; the checker now
+# applies the merges already made before it checks a library, so it is
+# accepted, in whichever order the libraries arrive.
+mi_rocqchk -merge-inductives-verbose -o -norec "$mi_root.Mid"
 mi_says 'Merged inductive' "a merge with the spec library unchecked"

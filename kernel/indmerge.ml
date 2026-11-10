@@ -784,6 +784,20 @@ let constraints_agree ~new_ctx ~old_ctx pairs =
    so nothing already in the environment ever needs rewriting. *)
 let global_subst = ref Mod_subst.empty_subst
 
+(* The merges this process has already made, applied to a library's body
+   without looking for new ones. The checker type-checks a library in the
+   environment those merges produced, so the body it checks has to name
+   them the way that environment does: a checker file naming the statement
+   library's inductive directly carries that name unmerged, as it was
+   written out, and the declaration it is compared against now has the
+   other copy's canonical name. [merge] applies the same substitution again
+   afterwards, which is idempotent. *)
+let apply_earlier_merges mp mb =
+  if not (enabled ()) || Mod_subst.is_empty_subst !global_subst then mb
+  else
+    Mod_declarations.subst_module Mod_declarations.subst_codom
+      !global_subst mp mb
+
 (* A library the checker loads without checking it -- named by -admit, or
    reached as a dependency of a -norec library -- DOES take part in merges,
    as source and as target. This is the grader's ordinary shape: it lists
@@ -892,5 +906,15 @@ let merge env mp univs mb =
     let mb =
       if Mod_subst.is_empty_subst subst then mb
       else Mod_declarations.subst_module Mod_declarations.subst_codom subst mp mb
+    in
+    (* The structure now names the merged inductives, so the resolver the
+       environment keys its entries with has to agree: [Modops.add_structure]
+       reads it to build each entry's name, and [Typeops] refuses any term
+       whose canonical half differs from the one the entry records. *)
+    let mb =
+      if Int.equal !merged_count 0 then mb
+      else
+        Mod_declarations.set_delta
+          (Mod_subst.add_delta_resolver !reso (Mod_declarations.mod_delta mb)) mb
     in
     (!envr, !used_eqs, mb)

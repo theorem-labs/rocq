@@ -119,6 +119,14 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
     refusal is here. A template-polymorphic block does merge, on
     [equal_template]'s verdict. *)
 
+val apply_earlier_merges : Names.ModPath.t ->
+  Mod_declarations.module_body -> Mod_declarations.module_body
+(** The merges already made, applied to a library's body without looking for
+    new ones. A checker that type-checks a library in the environment those
+    merges produced must give it a body that names them the way that
+    environment does; [merge] applies the same substitution again
+    afterwards, which is idempotent. *)
+
 (** {6 Two directions the merge refuses, both fail-closed} *)
 
 (** A universe-polymorphic block never merges in v1, whatever [eq_mib] says
@@ -177,12 +185,9 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
       libraries that are each valid can become unloadable together. The
       option has no "merge only against library X" mode.
 
-    - Which of two copies keeps its name is decided by load order: the one
-      loaded first is the canonical one and the later one is renamed into
-      it. Together with the direction above -- a term may name the copy
-      that was loaded first, not the one renamed into it -- this makes the
-      result depend on the order the libraries arrive in, and the two
-      binaries do not use the same one. [rocq c] loads them in [Require]
+    - Which of two copies keeps its name is still decided by load order --
+      the one loaded first is the canonical one -- and the two binaries do
+      not use the same order. [rocq c] loads them in [Require]
       order. [rocqchk] builds its list in
       [CheckLibrary.recheck_library]: each argument's dependency closure,
       dependencies before dependents, but the whole list reversed at the
@@ -190,10 +195,21 @@ val merge : Environ.env -> Names.ModPath.t -> Univ.ContextSet.t ->
       ones come before the [-norec] ones. (The [List.rev] in
       [coqchk_main.compile_files] only undoes the prepending its argument
       parser does; it is the reversal in [recheck_library] that decides
-      this.) So the same set of files can be accepted by one binary and
-      refused by the other, and reordering [rocqchk]'s arguments can change
-      the verdict. Every such difference is a refusal, never an
-      acceptance. *)
+      this.) A library's own terms no longer care, because the checker
+      applies the merges it has already made to a library's body before it
+      checks it ([apply_earlier_merges]) and the loaded body's resolver is
+      updated to match, so a checker file that names a statement library's
+      inductive directly is accepted in every order. What is still order
+      dependent is which name appears in a message, and the direction
+      recorded above. Every difference it makes is a refusal, never an
+      acceptance.
+
+    - A library that aliases another whose inductive this run merged
+      ([Module A := Agent.] after [Agent]'s block was merged) cannot be
+      written out: the alias's resolver records the merged canonical name
+      and which copy it names is not recoverable from it, so the compile is
+      refused rather than guessed at. Compiling that file without the
+      option is the way out. *)
 
 (** {6 Undoing a merge on the way out} *)
 
