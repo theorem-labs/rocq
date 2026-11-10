@@ -8,9 +8,12 @@
 #   bad-<name>/*.v    an answer that must fail: at least one theorem's
 #                     verdict is fail, or, with a file `refuse` in the case
 #                     directory, the run itself must exit non-zero
-#   pre/*.v           optional, a library both sides share, compiled once
-#                     and declared pre-checked: it stands for the standard
-#                     library, which a test must not compile
+#   pre/*.v           optional, libraries both sides share: they stand for
+#                     the standard library, which a test must not compile.
+#                     Shared.v alone is compiled and declared pre-checked;
+#                     with pre-order, every named file is compiled and none
+#                     is pre-checked
+#   pre-order         optional, the order to compile pre/*.v in
 #   config.tmpl       the config, with @SHA256:<file>@ for a challenge
 #                     file's digest and @PRECHECKED@ for the pre-checked
 #                     array
@@ -144,7 +147,7 @@ file_order() {
 make_config() {
   local tmpl=$1 chdir=$2 out=$3 pre=$4
   local pre_json=""
-  if [ -n "$pre" ]; then
+  if [ -n "$pre" ] && [ -f "$pre/Shared.vo" ]; then
     local sha
     sha=$(rocqchk -sha256 "$pre/Shared.vo")
     pre_json="{\"library\":\"Pre.Shared\",\"sha256\":\"$sha\"}"
@@ -211,7 +214,15 @@ run_case() {
     pre="$work/pre"
     mkdir -p "$pre"
     cp "$c/pre"/*.v "$pre"/
-    (cd "$pre" && coqc -Q . Pre Shared.v) || fail "$name: the shared library does not compile"
+    # A case with one shared library ships Shared.v and is declared
+    # pre-checked; a case with several ships pre-order and is not, so that
+    # its libraries are compared as the task's own are.
+    local porder
+    if [ -f "$c/pre-order" ]; then porder=$(cat "$c/pre-order"); else porder="Shared.v"; fi
+    local pf
+    for pf in $porder; do
+      (cd "$pre" && coqc -Q . Pre "$pf") || fail "$name: the shared library $pf does not compile"
+    done
   fi
 
   local order

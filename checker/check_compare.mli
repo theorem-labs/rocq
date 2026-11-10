@@ -40,10 +40,14 @@ val prechecked_libraries : config -> string list
 type t
 
 val prepare :
-  config -> dir:string -> out:string -> add_challenge_load_path:(unit -> unit) -> t
+  config -> dir:string -> out:string -> add_challenge_load_path:(unit -> unit) ->
+  under_challenge_root:(Names.DirPath.t -> bool) -> t
 (** Resolve the challenge files under [dir] and check the sha256 of each.
     [add_challenge_load_path] puts [dir] on the load path in place of the
     answer's directories; it is called once, inside the challenge load.
+    [under_challenge_root] says whether a library name lives under one of
+    those roots: those are the answer's own libraries, and every other
+    library the answer loaded is a shared one, which the challenge loads too.
     @raise CErrors.UserError when a file is missing or its sha256 differs. *)
 
 val run :

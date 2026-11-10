@@ -53,9 +53,14 @@ val swap_tables : tables -> tables
 
 type challenge_library
 
-val intern_challenge : physical_path list -> (DirPath.t * challenge_library) list
-(** Read the given [.vo] files and their dependencies, in dependency order,
-    without importing any of them into an environment. *)
+val intern_challenge :
+  physical_path list -> DirPath.t list ->
+  (DirPath.t * challenge_library) list * (DirPath.t * challenge_library) list
+(** [intern_challenge files shared] reads the challenge [files] and their
+    dependencies, then the [shared] libraries and theirs, in dependency
+    order, without importing any of them into an environment. The first
+    result is the files' closure, the second every library read, the files'
+    closure first. A library both reach is read once. *)
 
 val challenge_deps :
   (DirPath.t * challenge_library) list -> (DirPath.t * (DirPath.t * vodigest) array) list

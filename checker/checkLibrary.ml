@@ -847,17 +847,28 @@ let swap_tables t =
 
 type challenge_library = library_t
 
-(* The libraries the challenge files name, in dependency order, with the
-   dependency digests each of them records. Nothing is imported yet: the
-   caller checks those digests against the answer's before any of it reaches
-   an environment. *)
-let intern_challenge files =
+(* The libraries the challenge files name, then the given shared libraries,
+   each with its dependencies, in dependency order, with the dependency
+   digests each of them records. Nothing is imported yet: the caller checks
+   those digests against the answer's before any of it reaches an
+   environment.
+
+   A shared library is one the answer loaded from outside the roots the
+   challenge stands in for -- the image's installed libraries. The challenge
+   files' own closure reaches only the ones their Require lines name, and the
+   answer may load more; a universe constraint one of those carries between
+   two levels the challenge does know would otherwise look like a constraint
+   the answer invented (dispatch://BET-901). They are interned into the same
+   tables, so a library both lists reach is read once.
+
+   The two results are the files' closure, which is what the comparison
+   walks, and every library to import, the files' closure first. *)
+let intern_challenge files shared =
+  let intern = intern_library ~intern_mode:Dep ~validated:LibrarySet.empty LibrarySet.empty in
   let locs = List.map (fun f -> try_locate_qualified_library (PhysicalFile f)) files in
-  let needed =
-    List.fold_right (intern_library ~intern_mode:Dep ~validated:LibrarySet.empty
-                       LibrarySet.empty) locs []
-  in
-  List.rev needed
+  let needed = List.fold_right intern locs [] in
+  let all = List.fold_right intern (List.map try_locate_absolute_library shared) needed in
+  List.rev needed, List.rev all
 
 let challenge_deps needed =
   List.map (fun (dir, m) -> dir, m.library_deps) needed

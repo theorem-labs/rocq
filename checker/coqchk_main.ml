@@ -619,9 +619,28 @@ let run_compare env =
       let r = DirPath.to_string root in
       List.exists (fun n -> String.equal n r || CString.is_prefix (r ^ ".") n) checked_names
     in
+    (* A library under one of those roots is the answer's own: the challenge
+       directory holds its counterpart. Every other library the answer
+       loaded is a shared one -- the image's installed libraries -- and the
+       challenge environment loads the same ones, so that a constraint one
+       of them carries is not read as a constraint the answer invented.
+
+       The premise is the one R5 of dispatch://BET-894 already states: every
+       answer library is CHECKED in this run. A library of the answer's own
+       therefore lives under a root some checked name lives under, which is
+       a root the challenge stands in for; what is left over is the image's.
+       A run that loaded an answer library without checking it would be
+       refused long before this, and nothing here weakens that. *)
+    let under_challenge_root lib =
+      let l = DirPath.to_string lib in
+      List.exists (fun (_, rocq_root) ->
+          let r = DirPath.to_string rocq_root in
+          substitutes rocq_root && (String.equal l r || CString.is_prefix (r ^ ".") l))
+        !user_includes
+    in
     try
       let t =
-        Check_compare.prepare cfg ~dir ~out
+        Check_compare.prepare cfg ~dir ~out ~under_challenge_root
           ~add_challenge_load_path:(fun () ->
               List.iter (fun (_, rocq_root) ->
                   if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)

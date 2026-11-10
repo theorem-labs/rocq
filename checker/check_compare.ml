@@ -1083,6 +1083,11 @@ type t = {
   files : string list;           (** the challenge files, absolute or as given *)
   prechecked : DirPath.t list;
   add_challenge_load_path : unit -> unit;
+  under_challenge_root : DirPath.t -> bool;
+      (** Is this library name under a root the challenge directory stands in
+          for? Those are the answer's own libraries. Every other library the
+          answer loaded is a shared one: it comes from the image, by the same
+          name and the same file on both sides. *)
 }
 
 let dirpath_of_string s =
@@ -1092,7 +1097,7 @@ let dirpath_of_string s =
 
 (* Before anything is loaded: the files the config pins must be there and have
    the sha256 it gives. *)
-let prepare cfg ~dir ~out ~add_challenge_load_path =
+let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root =
   let files =
     List.map (fun f ->
         let p = if Filename.is_relative f.cf_path then Filename.concat dir f.cf_path
@@ -1112,7 +1117,7 @@ let prepare cfg ~dir ~out ~add_challenge_load_path =
   (try Sys.remove out with Sys_error _ -> ());
   { cfg; dir; out; files;
     prechecked = List.map (fun p -> dirpath_of_string p.pc_library) cfg.cfg_prechecked;
-    add_challenge_load_path }
+    add_challenge_load_path; under_challenge_root }
 
 (* The pre-checked libraries are resolved on the answer's load path, which is
    the one in place when this runs. *)
@@ -1137,9 +1142,12 @@ let in_libs libs mp = match mp_root mp with
   | Some dp -> List.exists (DirPath.equal dp) libs
 
 (* The dependency digests a challenge library and its answer library record
-   for a pre-checked library must be equal: otherwise the two sides were built
-   against different copies of the standard library, and their kernel names
-   would name different objects. Checked before the challenge is imported. *)
+   for a library both sides load must be equal: otherwise the two sides were
+   built against different copies of it, and their kernel names would name
+   different objects. That is every pre-checked library, and every shared
+   library -- one outside the roots the challenge stands in for, which both
+   sides read from the image by the same name. Checked before the challenge
+   is imported. *)
 let check_dep_digests t ~challenge ~answer =
   let digest_of deps dp =
     Array.fold_left (fun acc (d, dg) -> if DirPath.equal d dp then Some dg else acc) None deps
@@ -1149,29 +1157,51 @@ let check_dep_digests t ~challenge ~answer =
       match List.find_opt (fun (l, _) -> DirPath.equal l lib) answer with
       | None -> ()
       | Some (_, an_deps) ->
-        List.iter (fun pre ->
-            match digest_of ch_deps pre, digest_of an_deps pre with
-            | Some a, Some b when not (same a b) ->
-              CErrors.user_err
-                Pp.(str ("The library " ^ DirPath.to_string lib ^
-                         " depends on the pre-checked library " ^ DirPath.to_string pre ^
-                         " with a different digest on the challenge side and on the answer side."))
-            | _ -> ())
-          t.prechecked)
+        Array.iter (fun (dep, ch_digest) ->
+            let prechecked = List.exists (DirPath.equal dep) t.prechecked in
+            if prechecked || not (t.under_challenge_root dep) then
+              match digest_of an_deps dep with
+              | Some an_digest when not (same ch_digest an_digest) ->
+                CErrors.user_err
+                  Pp.(str ("The library " ^ DirPath.to_string lib ^
+                           " depends on the " ^
+                           (if prechecked then "pre-checked" else "shared") ^
+                           " library " ^ DirPath.to_string dep ^
+                           " with a different digest on the challenge side and on the \
+                            answer side."))
+              | _ -> ())
+          ch_deps)
     challenge
 
 (* The challenge load, between two swaps of this process's per-library tables.
    The challenge libraries have the answer's names, so they need tables of
-   their own; nothing of the challenge is left in them afterwards. *)
+   their own; nothing of the challenge is left in them afterwards.
+
+   The challenge files' own Require lines decide which shared libraries their
+   closure reaches, and the answer's tree may Require more of the image than
+   they do. A shared library carries universe constraints, and some of them
+   relate levels of OTHER shared libraries, which both sides do know; loading
+   one more of the image is not something the answer asserted, so the
+   challenge environment loads the same shared libraries the answer did
+   (dispatch://BET-901). What is left for the constraint check to catch is a
+   constraint the answer's OWN libraries add, which is the answer's doing.
+
+   Only the challenge files' closure is compared declaration by declaration:
+   a shared library is one file for both sides, as the digest check above
+   has just established. *)
 let load_challenge t senv0 ~answer_deps =
   let saved = CheckLibrary.swap_tables (CheckLibrary.fresh_tables ()) in
   let restore () = ignore (CheckLibrary.swap_tables saved) in
   Fun.protect ~finally:restore (fun () ->
       t.add_challenge_load_path ();
-      let needed = CheckLibrary.intern_challenge t.files in
+      let shared =
+        CList.map_filter (fun (dp, _) -> if t.under_challenge_root dp then None else Some dp)
+          answer_deps
+      in
+      let needed, all = CheckLibrary.intern_challenge t.files shared in
       let challenge_deps = CheckLibrary.challenge_deps needed in
-      check_dep_digests t ~challenge:challenge_deps ~answer:answer_deps;
-      let senv = CheckLibrary.import_challenge senv0 needed in
+      check_dep_digests t ~challenge:(CheckLibrary.challenge_deps all) ~answer:answer_deps;
+      let senv = CheckLibrary.import_challenge senv0 all in
       Safe_typing.env_of_safe_env senv, challenge_deps)
 
 (************************************************************************)
