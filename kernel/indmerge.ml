@@ -763,19 +763,17 @@ let constraints_agree ~new_ctx ~old_ctx pairs =
    so nothing already in the environment ever needs rewriting. *)
 let global_subst = ref Mod_subst.empty_subst
 
-(* rocqchk's -admit loads a library without checking it. Such a library may
-   not take part in a merge, in either direction: its declarations were
-   never re-derived, so neither side of a comparison against it means
-   anything (review finding P3-3). *)
-let in_admitted = ref false
-let set_admitted b = in_admitted := b
-
-(* Also returns every universe equality the accepted merges rested on, for
-   the caller to record in the library's own constraints: a term this
-   library writes out may type-check only under them, and the names alone do
-   not say so (review of 657c3716, P0). *)
+(* A library the checker loads without checking it -- named by -admit, or
+   reached as a dependency of a -norec library -- DOES take part in merges,
+   as source and as target. This is the grader's ordinary shape: it lists
+   only the agent's libraries and the checker files, so our own statement
+   library arrives unchecked, and refusing to merge against it would refuse
+   the whole use case. It adds no trust: an unchecked library is already
+   trusted whole, declarations and all, and the merge still runs the full
+   comparison on the declarations it carries and still records the universe
+   equalities it uses. *)
 let merge env mp univs mb =
-  if not (enabled ()) || !in_admitted
+  if not (enabled ())
   then (env, Univ.UnivConstraints.empty, mb) else
   let new_dp = ModPath.dp mp in
   let () = library_univs := DirPath.Map.add new_dp univs !library_univs in

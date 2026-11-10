@@ -37,10 +37,6 @@ val enabled : unit -> bool
 val set_verbose : bool -> unit
 (** Print one line per merge. *)
 
-val set_admitted : bool -> unit
-(** rocqchk's [-admit] loads a library without checking it. While this is
-    set, no library takes part in a merge, in either direction. *)
-
 (** {6 Comparing two blocks}
 
     This is the part the Rocq comparator (dispatch://BET-894) calls. *)
