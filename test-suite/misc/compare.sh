@@ -30,10 +30,25 @@
 #   expected.json     the verdict the honest answer must give; only the
 #                     (name, verdict) pairs are compared, because a reason
 #                     is prose
+#   expected-flags    optional, one flag kind per line that the honest
+#                     answer's passing verdict must record
+#   expected-flag-object
+#                     optional, a regular expression the recorded flag object
+#                     of the honest answer must match
 #   order             optional, the order to compile the .v files in
 #                     (default: alphabetical)
 #   refuse-<name>/    optional, a directory holding a raw config.json that
 #                     the run must refuse with a non-zero exit
+#   fail-config/expected-reason
+#                     optional, a regular expression the failed reason must
+#                     match
+
+#   bad-<name>/tolerate-<flag>.tmpl
+#                     optional, a config that tolerates <flag>: that bad
+#                     answer must pass under it with the flag recorded
+#   bad-<name>/expected-reason
+#                     optional, a regular expression the failed reason must
+#                     match
 #
 # The runner takes a case name, or runs every case when given none.
 #
@@ -282,6 +297,22 @@ run_case() {
   json_valid "$work/out.json" || fail "$name: the verdict file is not valid JSON"
   diff <(verdicts "$work/out.json") <(verdicts "$c/expected.json") \
     || { cat "$work/out.json"; fail "$name: the honest answer's verdicts differ"; }
+  if [ -f "$c/expected-flags" ]; then
+    local flag
+    while IFS= read -r flag; do
+      [ -z "$flag" ] && continue
+      grep -q "\"kind\":\"$flag\"" "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name: the passing verdict does not record $flag"; }
+    done < "$c/expected-flags"
+  fi
+  if [ -f "$c/expected-flag-object" ]; then
+    local object
+    while IFS= read -r object; do
+      [ -z "$object" ] && continue
+      grep -Eq -- "$object" "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name: the recorded flag object does not match $object"; }
+    done < "$c/expected-flag-object"
+  fi
 
   # the answers that must fail
   local bad
@@ -317,8 +348,39 @@ run_case() {
       [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b: the run exits $code"; }
       grep -q '"verdict":"fail"' "$work/out.json" \
         || { cat "$work/out.json"; fail "$name/$b: no theorem failed"; }
+      if [ -f "$bad/expected-reason" ]; then
+        local reason
+        while IFS= read -r reason; do
+          [ -z "$reason" ] && continue
+          grep -Eq -- "$reason" "$work/out.json" \
+            || { cat "$work/out.json"; fail "$name/$b: the failure does not match $reason"; }
+        done < "$bad/expected-reason"
+      fi
     fi
     echo "  ok $name/$b"
+    # A named tolerance is a documented cost: it must turn this exact bad
+    # answer into a pass and the verdict must say that it did.
+    local tolerate
+    for tolerate in "$bad"/tolerate-*.tmpl; do
+      [ -f "$tolerate" ] || continue
+      local flag
+      flag=$(basename "$tolerate" .tmpl)
+      flag=${flag#tolerate-}
+      make_config "$tolerate" "$work/challenge" "$work/tolerated-config.json" "$pre"
+      code=$(run_compare "$work" "$bdir" "$work/tolerated-config.json" "$pre" "$bvendor" "$vroot")
+      [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b/$flag: the run exits $code"; }
+      grep -q '"verdict":"pass"' "$work/out.json" \
+        && ! grep -q '"verdict":"fail"' "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name/$b/$flag: the tolerated answer did not pass"; }
+      grep -q "\"kind\":\"$flag\"" "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name/$b/$flag: the passing verdict does not record $flag"; }
+      echo "  ok $name/$b/$flag"
+      code=$(run_compare "$work" "$work/answer" "$work/tolerated-config.json" "$pre")
+      [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b/$flag: the unchanged answer exits $code"; }
+      grep -q '"verdict":"pass"' "$work/out.json" \
+        && ! grep -q "\"kind\":\"$flag\"" "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name/$b/$flag: an unused tolerance was recorded"; }
+    done
   done
 
   # configs that must be refused
@@ -339,8 +401,8 @@ run_case() {
     echo "  ok $name/$r"
   done
 
-  # A config the honest answer must FAIL under, not one that is refused: it
-  # tolerates the right flag kind on the wrong object.
+  # A config under which the honest answer must fail, rather than one the
+  # comparator refuses.
   local fc
   for fc in "$c"/fail-config; do
     [ -d "$fc" ] || continue
@@ -349,6 +411,14 @@ run_case() {
     [ "$code" = "0" ] || { cat "$work/log"; fail "$name/fail-config: the run exits $code"; }
     grep -q '"verdict":"fail"' "$work/out.json" \
       || { cat "$work/out.json"; fail "$name/fail-config: the honest answer passed"; }
+    if [ -f "$fc/expected-reason" ]; then
+      local reason
+      while IFS= read -r reason; do
+        [ -z "$reason" ] && continue
+        grep -Eq -- "$reason" "$work/out.json" \
+          || { cat "$work/out.json"; fail "$name/fail-config: the failure does not match $reason"; }
+      done < "$fc/expected-reason"
+    fi
     echo "  ok $name/fail-config"
   done
 
@@ -645,7 +715,20 @@ case_forgeries() {
   echo "ok forgeries"
 }
 
+compare_provenance() {
+  local root rev
+  root=$(cd "$here/../.." && pwd)
+  if rev=$(git -C "$root" rev-parse HEAD 2>/dev/null); then
+    printf 'compare suite revision: %s\n' "$rev"
+  else
+    echo "compare suite revision: unavailable"
+  fi
+  printf 'compare rocqchk: %s\n' "$(command -v rocqchk)"
+  rocqchk --version
+}
+
 main() {
+  compare_provenance
   if [ $# -gt 0 ]; then
     case "$1" in
       sha256) case_sha256 ;;
