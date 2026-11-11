@@ -35,7 +35,6 @@
 #   expected-flag-object
 #                     optional, a regular expression the recorded flag object
 #                     of the honest answer must match
-
 #   order             optional, the order to compile the .v files in
 #                     (default: alphabetical)
 #   refuse-<name>/    optional, a directory holding a raw config.json that
@@ -716,7 +715,20 @@ case_forgeries() {
   echo "ok forgeries"
 }
 
+compare_provenance() {
+  local root rev
+  root=$(cd "$here/../.." && pwd)
+  if rev=$(git -C "$root" rev-parse HEAD 2>/dev/null); then
+    printf 'compare suite revision: %s\n' "$rev"
+  else
+    echo "compare suite revision: unavailable"
+  fi
+  printf 'compare rocqchk: %s\n' "$(command -v rocqchk)"
+  rocqchk --version
+}
+
 main() {
+  compare_provenance
   if [ $# -gt 0 ]; then
     case "$1" in
       sha256) case_sha256 ;;
