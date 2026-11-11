@@ -43,6 +43,25 @@ let import senv opac clib digest =
   let mb = Safe_typing.module_of_library clib in
   (* The environment already carries the merges made for earlier libraries,
      so the body checked against it has to name them the same way. *)
+  (* The bytecode above was compiled from the module as the file holds it,
+     BEFORE this rewrite, so the recompilation of [Mod_checking] no longer
+     gives VM/kernel agreement by construction (see its comment). It still
+     holds here, and only because:
+       - every relocation that names a global lives in the declaration's
+         patch table, which [Indmerge.apply_earlier_merges] rewrites with
+         the same substitution as the term it patches
+         ([Declareops.subst_const_body] -> [Vmemitcodes.subst_body_code]);
+       - the non-substituted table, which no substitution reaches, holds no
+         global name: [Vmemitcodes.names_global] says which relocations name
+         one, and [Vmemitcodes.to_memory] refuses to store such a relocation
+         there;
+       - the environment the VM resolves those names in is keyed by user
+         name, which a merge is free to keep;
+       - and a merge happens only between blocks [Indmerge.eq_mib] accepts,
+         which pins constructor tags and arities, so the compiled code reads
+         the same layout either way.
+     Move a global relocation into the non-substituted table and the VM would
+     keep the pre-merge name while the kernel checks the merged one. *)
   let mb = Indmerge.apply_earlier_merges (Names.ModPath.MPfile dp) mb in
   let opac = Mod_checking.check_module env opac (Names.ModPath.MPfile dp) mb in
   let vmtab = Vmlibrary.inject (Vmlibrary.export vmtab) in
