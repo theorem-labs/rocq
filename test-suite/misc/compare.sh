@@ -237,10 +237,14 @@ run_compare() {
   local f
   for f in "$answer"/*.vo; do libs+=("Top.$(basename "$f" .vo)"); done
   set +e
-  "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
+  timeout "${COMPARE_TIMEOUT:-120s}" "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
     -compare-out "$work/out.json" "${libs[@]}" > "$work/log" 2>&1
   local code=$?
   set -e
+  if [ "$code" -ge 124 ]; then
+    cat "$work/log" >&2
+    fail "rocqchk could not complete (exit $code)"
+  fi
   echo "$code"
 }
 
@@ -349,12 +353,14 @@ run_case() {
       grep -q '"verdict":"fail"' "$work/out.json" \
         || { cat "$work/out.json"; fail "$name/$b: no theorem failed"; }
       if [ -f "$bad/expected-reason" ]; then
-        local reason
-        while IFS= read -r reason; do
-          [ -z "$reason" ] && continue
+        local reason reason_count=0
+        while IFS= read -r reason || [ -n "$reason" ]; do
+          [[ $reason =~ [^[:space:]] ]] || continue
+          reason_count=$((reason_count + 1))
           grep -Eq -- "$reason" "$work/out.json" \
             || { cat "$work/out.json"; fail "$name/$b: the failure does not match $reason"; }
         done < "$bad/expected-reason"
+        [ "$reason_count" -gt 0 ] || fail "$name/$b: expected-reason has no patterns"
       fi
     fi
     echo "  ok $name/$b"
@@ -412,12 +418,14 @@ run_case() {
     grep -q '"verdict":"fail"' "$work/out.json" \
       || { cat "$work/out.json"; fail "$name/fail-config: the honest answer passed"; }
     if [ -f "$fc/expected-reason" ]; then
-      local reason
-      while IFS= read -r reason; do
-        [ -z "$reason" ] && continue
+      local reason reason_count=0
+      while IFS= read -r reason || [ -n "$reason" ]; do
+        [[ $reason =~ [^[:space:]] ]] || continue
+        reason_count=$((reason_count + 1))
         grep -Eq -- "$reason" "$work/out.json" \
           || { cat "$work/out.json"; fail "$name/fail-config: the failure does not match $reason"; }
       done < "$fc/expected-reason"
+      [ "$reason_count" -gt 0 ] || fail "$name/fail-config: expected-reason has no patterns"
     fi
     echo "  ok $name/fail-config"
   done

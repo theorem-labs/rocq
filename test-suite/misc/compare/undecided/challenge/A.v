@@ -1,0 +1,17 @@
+(* The comparator visits every constant before every inductive.  D therefore
+   reaches max(a,b) before X, Y and Z map its levels. *)
+Unset Elimination Schemes.
+
+Monomorphic Universes a b c.
+
+Polymorphic Definition tag@{u} : nat := 0.
+
+Definition D : forall _ : Type@{max(a,b)}, nat := fun _ => tag@{a}.
+
+Inductive X : Type@{a} := cx.
+Inductive Y : Type@{b} := cy.
+Inductive Z : Type@{c} := cz.
+
+Theorem thm : forall n : nat, n = n.
+Proof.
+Admitted.
