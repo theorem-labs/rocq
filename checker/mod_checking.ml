@@ -15,7 +15,14 @@ open Environ
     either: both are attacker-controlled data that the typechecker has no way to
     validate. Instead it recompiles the bytecode of every constant from the body
     it is about to check, and records it in a table of its own, so that the code
-    the VM runs agrees with the checked body by construction. *)
+    the VM runs agrees with the checked body by construction.
+
+    With [-merge-inductives] the body it compiles is the one the file holds, and
+    the body it checks is that one with the merges of earlier libraries applied
+    ([Safe_checking.import]), so the two are no longer the same term and the
+    agreement is no longer by construction. It still holds, by the four-part
+    argument stated where the merge is applied; a change to the relocation
+    tables of [Vmemitcodes] can break it. *)
 
 let push_bytecode vmtab code =
   let open Vmemitcodes in

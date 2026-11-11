@@ -664,6 +664,12 @@ exception Diff of diff
 
 let diff fmt = Printf.ksprintf (fun s -> raise (Diff s)) fmt
 
+(* A universe whose levels no comparison so far has mapped, and that one
+   pass cannot map alone (two entries of one increment). The declaration is
+   compared again once the others have been, since a later declaration --
+   the one that introduced those levels -- may map them. *)
+exception Undecided of diff
+
 let level_name u = Univ.Level.to_string u
 
 let add_level m u v =
@@ -774,10 +780,11 @@ let map_universe m u v =
         !fresh;
       let left = List.rev !keep in
       if not !decided then
-        diff "universe %s against %s: which level of the answer each level of the \
-              challenge stands for is not decided"
+        raise (Undecided (Printf.sprintf
+          "universe %s against %s: which level of the answer each level of the \
+           challenge stands for is not decided"
           (Pp.string_of_ppcmds (Univ.Universe.raw_pr u))
-          (Pp.string_of_ppcmds (Univ.Universe.raw_pr v));
+          (Pp.string_of_ppcmds (Univ.Universe.raw_pr v))));
       fresh := left;
       passes ()
     end
@@ -910,7 +917,7 @@ and eq_recdecl m (nas1, tl1, bl1) (nas2, tl2, bl2) =
 let equal_constr m c1 c2 =
   match eq_constr m c1 c2 with
   | m -> Ok m
-  | exception Diff d -> Error d
+  | exception (Diff d | Undecided d) -> Error d
 
 (************************************************************************)
 (** {6 Declarations} *)
@@ -1063,7 +1070,7 @@ let eq_mib_body m (mib1 : mutual_inductive_body) (mib2 : mutual_inductive_body) 
 let eq_mib m _env mib1 mib2 =
   match eq_mib_body m mib1 mib2 with
   | m -> Ok m
-  | exception Diff d -> Error d
+  | exception (Diff d | Undecided d) -> Error d
 
 (************************************************************************)
 (** {6 Module types}
@@ -1429,10 +1436,12 @@ let compare_declarations t ~challenge_env ~answer_env ~libs ~theorems =
   let m = ref (seed_umap t ~challenge_env ~answer_env) in
   let failures = ref [] in
   let fail name reason = failures := { f_name = name; f_reason = reason } :: !failures in
+  let deferred = ref [] in
   let step name f =
     match f !m with
     | m' -> m := m'
     | exception Diff d -> fail name d
+    | exception Undecided d -> deferred := (name, f, d) :: !deferred
   in
   Environ.fold_constants (fun c cb () ->
       if in_libs libs (Constant.modpath c) then
@@ -1458,6 +1467,24 @@ let compare_declarations t ~challenge_env ~answer_env ~libs ~theorems =
         | None -> fail name "missing"
         | Some mt' -> step name (fun m -> eq_modtype ~env:answer_env m mt mt'))
     (Environ.Internal.View.view challenge_env).Environ.Internal.View.env_modtypes;
+  (* The declarations set aside as undecided, again, until a pass decides
+     none of them. Each pending entry keeps the reason of its last
+     comparison, so what is still undecided fails with that reason; no
+     declaration is left both uncompared and unfailed. *)
+  let rec again pending =
+    let progress = ref false in
+    let still = CList.map_filter (fun (name, f, _) ->
+        match f !m with
+        | m' -> m := m'; progress := true; None
+        | exception Diff d -> fail name d; progress := true; None
+        | exception Undecided d -> Some (name, f, d))
+        pending
+    in
+    if not (CList.is_empty still) then
+      if !progress then again still
+      else List.iter (fun (name, _, d) -> fail name d) still
+  in
+  again (List.rev !deferred);
   let universes, skipped_answer_constraints =
     check_constraints t ~challenge_env ~answer_env !m
   in
