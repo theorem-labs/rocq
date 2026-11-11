@@ -1441,7 +1441,7 @@ let compare_declarations t ~challenge_env ~answer_env ~libs ~theorems =
     match f !m with
     | m' -> m := m'
     | exception Diff d -> fail name d
-    | exception Undecided _ -> deferred := (name, f) :: !deferred
+    | exception Undecided d -> deferred := (name, f, d) :: !deferred
   in
   Environ.fold_constants (fun c cb () ->
       if in_libs libs (Constant.modpath c) then
@@ -1468,22 +1468,21 @@ let compare_declarations t ~challenge_env ~answer_env ~libs ~theorems =
         | Some mt' -> step name (fun m -> eq_modtype ~env:answer_env m mt mt'))
     (Environ.Internal.View.view challenge_env).Environ.Internal.View.env_modtypes;
   (* The declarations set aside as undecided, again, until a pass decides
-     none of them; what is still undecided then fails with its reason. *)
+     none of them. Each pending entry keeps the reason of its last
+     comparison, so what is still undecided fails with that reason; no
+     declaration is left both uncompared and unfailed. *)
   let rec again pending =
     let progress = ref false in
-    let still = List.filter (fun (name, f) ->
+    let still = CList.map_filter (fun (name, f, _) ->
         match f !m with
-        | m' -> m := m'; progress := true; false
-        | exception Diff d -> fail name d; progress := true; false
-        | exception Undecided _ -> true)
+        | m' -> m := m'; progress := true; None
+        | exception Diff d -> fail name d; progress := true; None
+        | exception Undecided d -> Some (name, f, d))
         pending
     in
     if not (CList.is_empty still) then
       if !progress then again still
-      else List.iter (fun (name, f) ->
-          match f !m with
-          | _ -> ()
-          | exception (Diff d | Undecided d) -> fail name d) still
+      else List.iter (fun (name, _, d) -> fail name d) still
   in
   again (List.rev !deferred);
   let universes, skipped_answer_constraints =

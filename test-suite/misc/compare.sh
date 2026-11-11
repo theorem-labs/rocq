@@ -66,6 +66,18 @@ cases_dir="$here/compare"
 
 fail() { >&2 echo "FAILURE: $*"; exit 1; }
 
+# Every rocqchk run is bounded, so a hang fails the suite rather than
+# stalling it. COMPARE_TIMEOUT sets the bound.
+bounded() { timeout "${COMPARE_TIMEOUT:-120s}" "$@"; }
+
+# A run that timed out (124), could not start (125-127) or died on a signal
+# (128 and above) gave no verdict, whatever the case expects of it.
+completed() { # <exit code> <log>
+  [ "$1" -lt 124 ] && return
+  cat "$2" >&2
+  fail "rocqchk could not complete (exit $1)"
+}
+
 # The (name, verdict) pairs of a verdict file, sorted. A reason is prose and
 # is not compared; its presence is.
 verdicts() {
@@ -106,7 +118,7 @@ case_sha256() {
     n=$((n + 1))
     "$1" > "$d/v$n"
     local got
-    got=$(rocqchk -sha256 "$d/v$n")
+    got=$(bounded rocqchk -sha256 "$d/v$n")
     [ "$got" = "$2" ] || fail "sha256 vector $n is $got, expected $2"
     if command -v sha256sum > /dev/null; then
       local ref
@@ -128,7 +140,7 @@ case_sha256() {
   if command -v sha256sum > /dev/null; then
     head -c 1048576 /dev/urandom > "$d/rand"
     local got ref
-    got=$(rocqchk -sha256 "$d/rand")
+    got=$(bounded rocqchk -sha256 "$d/rand")
     ref=$(sha256sum "$d/rand" | cut -d' ' -f1)
     [ "$got" = "$ref" ] || fail "sha256 of a random file is $got, sha256sum says $ref"
   fi
@@ -183,19 +195,19 @@ make_config() {
   local pre_json=""
   if [ -n "$pre" ] && [ -f "$pre/Shared.vo" ]; then
     local sha
-    sha=$(rocqchk -sha256 "$pre/Shared.vo")
+    sha=$(bounded rocqchk -sha256 "$pre/Shared.vo")
     pre_json="{\"library\":\"Pre.Shared\",\"sha256\":\"$sha\"}"
   fi
   local pin_json=""
   if [ -n "$pre" ] && [ -f "$pre/Pin.vo" ]; then
     local pin_sha
-    pin_sha=$(rocqchk -sha256 "$pre/Pin.vo")
+    pin_sha=$(bounded rocqchk -sha256 "$pre/Pin.vo")
     pin_json=",{\"library\":\"Pre.Pin\",\"sha256\":\"$pin_sha\"}"
   fi
   local prelude
   prelude=$(prelude_vo)
   local prelude_sha
-  prelude_sha=$(rocqchk -sha256 "$prelude")
+  prelude_sha=$(bounded rocqchk -sha256 "$prelude")
   local all="{\"library\":\"Corelib.Init.Prelude\",\"sha256\":\"$prelude_sha\"}"
   [ -n "$pre_json" ] && all="$all,$pre_json"
   local text
@@ -204,7 +216,7 @@ make_config() {
   for f in "$chdir"/*.vo; do
     local base sha
     base=$(basename "$f")
-    sha=$(rocqchk -sha256 "$f")
+    sha=$(bounded rocqchk -sha256 "$f")
     # Every digest the comparator writes into a config is also checked
     # against sha256sum, so a defect in the comparator's SHA-256 cannot hide
     # behind its own agreement with itself.
@@ -237,14 +249,11 @@ run_compare() {
   local f
   for f in "$answer"/*.vo; do libs+=("Top.$(basename "$f" .vo)"); done
   set +e
-  timeout "${COMPARE_TIMEOUT:-120s}" "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
+  bounded "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
     -compare-out "$work/out.json" "${libs[@]}" > "$work/log" 2>&1
   local code=$?
   set -e
-  if [ "$code" -ge 124 ]; then
-    cat "$work/log" >&2
-    fail "rocqchk could not complete (exit $code)"
-  fi
+  completed "$code" "$work/log"
   echo "$code"
 }
 
@@ -435,7 +444,7 @@ run_case() {
   if [ -f "$c/utf8-refusal" ]; then
     rm -f "$work/out.json"
     printf '{"theorems": [{"name": "Top.A.\xff"}], "challenge_files": [{"path": "A.vo", "sha256": "%s"}]}\n' \
-      "$(rocqchk -sha256 "$work/challenge/A.vo")" > "$work/bad-config.json"
+      "$(bounded rocqchk -sha256 "$work/challenge/A.vo")" > "$work/bad-config.json"
     code=$(run_compare "$work" "$work/answer" "$work/bad-config.json" "$pre")
     [ "$code" != "0" ] || fail "$name: a config that is not UTF-8 was accepted"
     [ ! -f "$work/out.json" ] || fail "$name: a verdict file was written anyway"
@@ -466,8 +475,8 @@ case_vos() {
   # an answer without its proofs takes.
   mv "$work/answer/A.vos" "$work/answer/A.vo"
   local sha prelude_sha
-  sha=$(rocqchk -sha256 "$work/challenge/A.vo")
-  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  sha=$(bounded rocqchk -sha256 "$work/challenge/A.vo")
+  prelude_sha=$(bounded rocqchk -sha256 "$(prelude_vo)")
   printf '%s\n' \
     "{\"theorems\": [{\"name\": \"Top.A.thm\"}], \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\"}]," \
     " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}]," \
@@ -502,9 +511,9 @@ case_digest() {
   (cd "$work/challenge" && coqc -R . Top -R "$work/pre" Pre A.v)
   (cd "$work/answer" && coqc -R . Top -R "$work/pre2" Pre A.v)
   local sha pre_sha prelude_sha
-  sha=$(rocqchk -sha256 "$work/challenge/A.vo")
-  pre_sha=$(rocqchk -sha256 "$work/pre2/Shared.vo")
-  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  sha=$(bounded rocqchk -sha256 "$work/challenge/A.vo")
+  pre_sha=$(bounded rocqchk -sha256 "$work/pre2/Shared.vo")
+  prelude_sha=$(bounded rocqchk -sha256 "$(prelude_vo)")
   printf '%s\n' \
     "{\"theorems\": [{\"name\": \"Top.A.thm\"}], \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\"}]," \
     " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}," \
@@ -538,9 +547,9 @@ case_sibling() {
   (cd "$work/challenge" && coqc -R . Top -R "$work/shared" Top A.v)
   (cd "$work/answer" && coqc -R . Top -R "$work/shared" Top A.v)
   local sha lib_sha prelude_sha
-  sha=$(rocqchk -sha256 "$work/challenge/A.vo")
-  lib_sha=$(rocqchk -sha256 "$work/shared/Lib.vo")
-  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  sha=$(bounded rocqchk -sha256 "$work/challenge/A.vo")
+  lib_sha=$(bounded rocqchk -sha256 "$work/shared/Lib.vo")
+  prelude_sha=$(bounded rocqchk -sha256 "$(prelude_vo)")
   printf '%s\n' \
     "{\"theorems\": [{\"name\": \"Top.A.thm\"}]," \
     " \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\", \"object\": \"Corelib.Init.Logic.eq\"}]," \
@@ -548,11 +557,12 @@ case_sibling() {
     "   {\"library\": \"Top.Lib\", \"sha256\": \"$lib_sha\"}]," \
     " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
   set +e
-  rocqchk -silent -R "$work/answer" Top -R "$work/shared" Top \
+  bounded rocqchk -silent -R "$work/answer" Top -R "$work/shared" Top \
     -compare "$work/config.json" -challenge "$work/challenge" \
     -compare-out "$work/out.json" Top.A > "$work/log" 2>&1
   local code=$?
   set -e
+  completed "$code" "$work/log"
   [ "$code" = "0" ] || { cat "$work/log"; fail "sibling: an honest answer exits $code"; }
   grep -q '"verdict":"pass"' "$work/out.json" \
     || { cat "$work/out.json"; fail "sibling: the honest answer did not pass"; }
@@ -596,9 +606,9 @@ case_norec() {
       || fail "norec: $side/Proof.v does not compile"
   done
   local spec_sha proof_sha prelude_sha
-  spec_sha=$(rocqchk -sha256 "$work/challenge/SubA/Defs.vo")
-  proof_sha=$(rocqchk -sha256 "$work/challenge/SubB/Proof.vo")
-  prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+  spec_sha=$(bounded rocqchk -sha256 "$work/challenge/SubA/Defs.vo")
+  proof_sha=$(bounded rocqchk -sha256 "$work/challenge/SubB/Proof.vo")
+  prelude_sha=$(bounded rocqchk -sha256 "$(prelude_vo)")
   printf '%s\n' \
     "{\"theorems\": [{\"name\": \"Top.SubB.Proof.thm\"}]," \
     " \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\", \"object\": \"Corelib.Init.Logic.eq\"}]," \
@@ -616,11 +626,12 @@ case_norec() {
     esac
     rm -f "$work/out.json"
     set +e
-    rocqchk -silent -Q "$tree" Top -compare "$work/config.json" \
+    bounded rocqchk -silent -Q "$tree" Top -compare "$work/config.json" \
       -challenge "$work/challenge" -compare-out "$work/out.json" "${sel[@]}" \
       > "$work/log" 2>&1
     local code=$?
     set -e
+    completed "$code" "$work/log"
     echo "$code"
   }
 
@@ -693,8 +704,8 @@ case_forgeries() {
     fi
     if [ -z "$ok" ]; then
       local sha prelude_sha
-      sha=$(rocqchk -sha256 "$work/challenge/Main.vo")
-      prelude_sha=$(rocqchk -sha256 "$(prelude_vo)")
+      sha=$(bounded rocqchk -sha256 "$work/challenge/Main.vo")
+      prelude_sha=$(bounded rocqchk -sha256 "$(prelude_vo)")
       printf '%s\n' \
         "{\"theorems\": [{\"name\": \"Top.Main.forged\"}]," \
         " \"tolerated_flags\": [{\"kind\": \"indices-not-mattering\", \"object\": \"Corelib.Init.Logic.eq\"}]," \
@@ -703,11 +714,12 @@ case_forgeries() {
       local libs=() g
       for g in "$work/answer"/*.vo; do libs+=("Top.$(basename "$g" .vo)"); done
       set +e
-      rocqchk -silent -R "$work/answer" Top -compare "$work/config.json" \
+      bounded rocqchk -silent -R "$work/answer" Top -compare "$work/config.json" \
         -challenge "$work/challenge" -compare-out "$work/out.json" "${libs[@]}" \
         > "$work/log" 2>&1
       local code=$?
       set -e
+      completed "$code" "$work/log"
       if [ "$code" != "0" ]; then
         ok="rocqchk refuses it: $(grep -m1 -i error "$work/log" | cut -c1-110)"
       elif grep -q '"verdict":"fail"' "$work/out.json"; then
@@ -732,7 +744,7 @@ compare_provenance() {
     echo "compare suite revision: unavailable"
   fi
   printf 'compare rocqchk: %s\n' "$(command -v rocqchk)"
-  rocqchk --version
+  bounded rocqchk --version
 }
 
 main() {
