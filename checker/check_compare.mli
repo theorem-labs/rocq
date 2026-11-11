@@ -58,18 +58,25 @@ val read_config : string -> config
 
     A tolerated flag with an [object] tolerates that kind on that object
     alone, so a relaxed condition the standard library rests on does not
-    tolerate the same condition in the agent's own declaration. One without
-    tolerates the kind wherever it appears, and only [indices-not-mattering]
-    and [uip] may be written that way: the first is on every inductive of an
-    image built without [-indices-matter], and the route the comparator
-    replaces always allows it (grading-tools
-    [_axiom_kinds._ALWAYS_ALLOWED_KINDS]), while the second that route
-    allows on any object when the task sets [allow_uip]. Every other kind
-    without an object is an error: [assumed-positive], [unsafe-fixpoint],
-    [type-in-type] and [unchecked-eliminations] are how a proof of False is
-    written, and that route denies them by name or vouches for one object at
-    a time.
-    @raise CErrors.UserError on any of them. *)
+    tolerate the same condition in the agent's own declaration. Without an
+    object, [indices-not-mattering] applies wherever it appears: every
+    inductive of an image built without [-indices-matter] may carry it, and
+    the replaced route always allows it. [uip] applies to every object only
+    when the task enables [allow_uip].
+
+    [answer-universe-constraints] is a kind-only tolerance for the global
+    universe comparison, and one that names an object is an error. It skips
+    only the answer-to-challenge direction; the challenge-to-answer
+    direction, declaration comparison, axiom checks and kernel checking
+    still run. If that skipped direction would have failed, the record of
+    every theorem the answer holds carries the flag with object
+    [<universes>]. It is not recorded when the direction already passes.
+
+    Every other kind without an object is an error:
+    [assumed-positive], [unsafe-fixpoint], [type-in-type] and
+    [unchecked-eliminations] are how a proof of False is written, and the
+    replaced route denies them by name or vouches for one object at a time.
+    @raise CErrors.UserError on any of these errors. *)
 
 val prechecked_libraries : config -> string list
 (** The libraries the config declares pre-checked. They load through the

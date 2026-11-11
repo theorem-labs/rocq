@@ -30,10 +30,19 @@
 #   expected.json     the verdict the honest answer must give; only the
 #                     (name, verdict) pairs are compared, because a reason
 #                     is prose
+#   expected-flags    optional, one flag kind per line that the honest
+#                     answer's passing verdict must record
 #   order             optional, the order to compile the .v files in
 #                     (default: alphabetical)
 #   refuse-<name>/    optional, a directory holding a raw config.json that
 #                     the run must refuse with a non-zero exit
+#   fail-config/expected-reason
+#                     optional, a regular expression the failed reason must
+#                     match
+
+#   bad-<name>/tolerate-<flag>.tmpl
+#                     optional, a config that tolerates <flag>: that bad
+#                     answer must pass under it with the flag recorded
 #
 # The runner takes a case name, or runs every case when given none.
 #
@@ -282,6 +291,14 @@ run_case() {
   json_valid "$work/out.json" || fail "$name: the verdict file is not valid JSON"
   diff <(verdicts "$work/out.json") <(verdicts "$c/expected.json") \
     || { cat "$work/out.json"; fail "$name: the honest answer's verdicts differ"; }
+  if [ -f "$c/expected-flags" ]; then
+    local flag
+    while IFS= read -r flag; do
+      [ -z "$flag" ] && continue
+      grep -q "\"kind\":\"$flag\"" "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name: the passing verdict does not record $flag"; }
+    done < "$c/expected-flags"
+  fi
 
   # the answers that must fail
   local bad
@@ -319,6 +336,29 @@ run_case() {
         || { cat "$work/out.json"; fail "$name/$b: no theorem failed"; }
     fi
     echo "  ok $name/$b"
+    # A named tolerance is a documented cost: it must turn this exact bad
+    # answer into a pass and the verdict must say that it did.
+    local tolerate
+    for tolerate in "$bad"/tolerate-*.tmpl; do
+      [ -f "$tolerate" ] || continue
+      local flag
+      flag=$(basename "$tolerate" .tmpl)
+      flag=${flag#tolerate-}
+      make_config "$tolerate" "$work/challenge" "$work/tolerated-config.json" "$pre"
+      code=$(run_compare "$work" "$bdir" "$work/tolerated-config.json" "$pre" "$bvendor" "$vroot")
+      [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b/$flag: the run exits $code"; }
+      grep -q '"verdict":"pass"' "$work/out.json" \
+        && ! grep -q '"verdict":"fail"' "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name/$b/$flag: the tolerated answer did not pass"; }
+      grep -q "\"kind\":\"$flag\",\"object\":\"<universes>\"" "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name/$b/$flag: the passing verdict does not record $flag"; }
+      echo "  ok $name/$b/$flag"
+      code=$(run_compare "$work" "$work/answer" "$work/tolerated-config.json" "$pre")
+      [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b/$flag: the unchanged answer exits $code"; }
+      grep -q '"verdict":"pass"' "$work/out.json" \
+        && ! grep -q "\"kind\":\"$flag\"" "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name/$b/$flag: an unused tolerance was recorded"; }
+    done
   done
 
   # configs that must be refused
@@ -339,8 +379,8 @@ run_case() {
     echo "  ok $name/$r"
   done
 
-  # A config the honest answer must FAIL under, not one that is refused: it
-  # tolerates the right flag kind on the wrong object.
+  # A config under which the honest answer must fail, rather than one the
+  # comparator refuses.
   local fc
   for fc in "$c"/fail-config; do
     [ -d "$fc" ] || continue
@@ -349,6 +389,14 @@ run_case() {
     [ "$code" = "0" ] || { cat "$work/log"; fail "$name/fail-config: the run exits $code"; }
     grep -q '"verdict":"fail"' "$work/out.json" \
       || { cat "$work/out.json"; fail "$name/fail-config: the honest answer passed"; }
+    if [ -f "$fc/expected-reason" ]; then
+      local reason
+      while IFS= read -r reason; do
+        [ -z "$reason" ] && continue
+        grep -Eq -- "$reason" "$work/out.json" \
+          || { cat "$work/out.json"; fail "$name/fail-config: the failure does not match $reason"; }
+      done < "$fc/expected-reason"
+    fi
     echo "  ok $name/fail-config"
   done
 
