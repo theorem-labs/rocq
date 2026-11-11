@@ -25,8 +25,12 @@
 #                     optional, the root that tree is bound to (default
 #                     Vendor)
 #   config.tmpl       the config, with @SHA256:<file>@ for a challenge
-#                     file's digest and @PRECHECKED@ for the pre-checked
-#                     array
+#                     file's digest, @PRECHECKED@ for the pre-checked
+#                     array and @PRECHECKED_TOP:<dir>/<file>@ for a further
+#                     pre-checked entry, the library Top.<dir>.<file> at the
+#                     digest of the challenge's <dir>/<file>.vo (an
+#                     unchanged file of the task, which the answer's tree
+#                     holds at the same bytes)
 #   expected.json     the verdict the honest answer must give; only the
 #                     (name, verdict) pairs are compared, because a reason
 #                     is prose
@@ -36,7 +40,9 @@
 #                     optional, a regular expression the recorded flag object
 #                     of the honest answer must match
 #   order             optional, the order to compile the .v files in
-#                     (default: alphabetical)
+#                     (default: alphabetical); an entry <dir>/<file>.v is
+#                     copied from each tree's <dir>/ and compiled as the
+#                     library Top.<dir>.<file>
 #   refuse-<name>/    optional, a directory holding a raw config.json that
 #                     the run must refuse with a non-zero exit
 #   fail-config/expected-reason
@@ -173,6 +179,13 @@ build_tree() {
     args+=($extra)
   fi
   local f
+  # A file the order names under a subdirectory is copied from the same
+  # subdirectory of the tree.
+  for f in $order; do
+    case $f in
+      */*) mkdir -p "$dst/$(dirname "$f")"; cp "$src/$f" "$dst/$f" ;;
+    esac
+  done
   for f in $order; do
     (cd "$dst" && "${rocq_env[@]}" coqc "${args[@]}" "$f") || fail "$src/$f does not compile"
   done
@@ -188,8 +201,10 @@ file_order() {
 }
 
 # The config: @SHA256:<file>@ becomes that challenge file's digest,
-# @PRECHECKED@ the pre-checked array and @PRECHECKED_PIN@ the entry for
-# pre/Pin.vo, which only a config that asks for it pins.
+# @PRECHECKED@ the pre-checked array, @PRECHECKED_PIN@ the entry for
+# pre/Pin.vo, which only a config that asks for it pins, and
+# @PRECHECKED_TOP:<dir>/<file>@ the entry for the library Top.<dir>.<file>
+# at the digest of the challenge's <dir>/<file>.vo.
 make_config() {
   local tmpl=$1 chdir=$2 out=$3 pre=$4
   local pre_json=""
@@ -231,6 +246,20 @@ make_config() {
   text=${text//"@PRECHECKED_BAD@"/"{\"library\":\"Corelib.Init.Prelude\",\"sha256\":\"$zero\"}"}
   text=${text//"@PRECHECKED@"/$all}
   text=${text//"@PRECHECKED_PIN@"/$pin_json}
+  local top_path top_sha
+  while [[ $text =~ @PRECHECKED_TOP:([A-Za-z0-9_/]+)@ ]]; do
+    top_path=${BASH_REMATCH[1]}
+    [ -f "$chdir/$top_path.vo" ] || fail "no challenge file $top_path.vo to pre-check"
+    top_sha=$(rocqchk -sha256 "$chdir/$top_path.vo")
+    if command -v sha256sum > /dev/null; then
+      local top_ref
+      top_ref=$(sha256sum "$chdir/$top_path.vo" | cut -d' ' -f1)
+      [ "$top_sha" = "$top_ref" ] || fail "rocqchk -sha256 $top_path.vo is $top_sha, sha256sum says $top_ref"
+    fi
+    local top_lib=${top_path//\//.}
+    local top_json=",{\"library\":\"Top.$top_lib\",\"sha256\":\"$top_sha\"}"
+    text=${text//"@PRECHECKED_TOP:$top_path@"/$top_json}
+  done
   # The standard library's eq is built without -indices-matter, so every
   # honest answer reaches that flag on that object. A tolerated flag names
   # its object, so tolerating it here tolerates nothing of the agent's own.
