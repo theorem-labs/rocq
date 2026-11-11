@@ -166,6 +166,17 @@ let subst s reloc = match reloc with
   if cst' == cst then reloc else SReloc_getglobal cst'
 | SReloc_indirect _ -> reloc
 
+(* The same rewrite driven by plain functions instead of a module
+   substitution, so that -merge-inductives can undo a merge on export. *)
+let map fi fc reloc = match reloc with
+| SReloc_Const_ind ind ->
+  let ind' = fi ind in
+  if ind' == ind then reloc else SReloc_Const_ind ind'
+| SReloc_getglobal cst ->
+  let cst' = fc cst in
+  if cst' == cst then reloc else SReloc_getglobal cst'
+| SReloc_indirect _ -> reloc
+
 end
 
 (* Most of the words of the bytecode are comprised of a byte followed by three
@@ -648,6 +659,15 @@ type body_code = to_patch pbody_code
 let subst_body_code s = function
 | BCdefined (m, x, tp) -> BCdefined (m, x, subst_patches s tp)
 | BCalias cu -> BCalias (subst_constant s cu)
+| BCconstant -> BCconstant
+
+let map_patches fi fc p =
+  let infos = CArray.Smart.map (fun r -> Reloc.map fi fc r) p.reloc_infos in
+  { reloc_infos = infos }
+
+let map_body_code fi fc = function
+| BCdefined (m, x, tp) -> BCdefined (m, x, map_patches fi fc tp)
+| BCalias cu -> BCalias (fc cu)
 | BCconstant -> BCconstant
 
 let to_memory fv code =

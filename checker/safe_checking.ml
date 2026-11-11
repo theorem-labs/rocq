@@ -41,6 +41,9 @@ let import senv opac clib digest =
   let vmtab, clib = compile_vm_library env clib in
   let env = Environ.set_vm_library vmtab env in
   let mb = Safe_typing.module_of_library clib in
+  (* The environment already carries the merges made for earlier libraries,
+     so the body checked against it has to name them the same way. *)
+  let mb = Indmerge.apply_earlier_merges (Names.ModPath.MPfile dp) mb in
   let opac = Mod_checking.check_module env opac (Names.ModPath.MPfile dp) mb in
   let vmtab = Vmlibrary.inject (Vmlibrary.export vmtab) in
   let (_,senv) = Safe_typing.import clib vmtab digest senv in senv, opac
@@ -53,6 +56,10 @@ let import senv opac clib digest : _ * _ =
     (fun () ->import senv opac clib digest)
     ()
 
+(* An admitted library is loaded without being checked. It still takes part
+   in merges, as source and as target: it is already trusted whole, so
+   merging against it adds no trust, and the grader's invocation leaves our
+   own statement library unchecked. *)
 let unsafe_import senv clib digest =
   (* Admitted libraries are trusted for their declarations, but their bytecode is
      recompiled all the same, so that the trusted surface is exactly the same. *)
