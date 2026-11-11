@@ -99,6 +99,10 @@ let add_rec_path ~unix_path ~rocq_root =
 
 (* By the option -R/-Q of the command line *)
 let includes = ref []
+(* The same list, kept past [init_with_argv]: the challenge load of
+   [-compare] puts the challenge directory on the load path in place of each
+   of these physical directories, under the same logical root. *)
+let user_includes = ref []
 let push_include (s, alias) = includes := (s,alias) :: !includes
 
 let set_include d p =
@@ -106,7 +110,35 @@ let set_include d p =
   let p = dirpath_of_string p in
   push_include (d,p)
 
-(* Initializes the LoadPath *)
+
+(* The top-level names the load path can serve WITHOUT a -Q: the corelib
+   root, and the subdirectories of every directory bound RECURSIVELY under
+   the empty root -- user-contrib, the XDG directories and ROCQPATH. The
+   working directory is bound non-recursively, so its subdirectories serve
+   no library and are not names here; its own top-level .vo files are
+   served under one-word names this check cannot see, which is why a
+   graded run starts in a working directory that holds no .vo. A -compare
+   run refuses a -Q that binds one of these names, or the empty root,
+   which would let the answer's directory shadow a library the challenge
+   reads from the image. Filled by [init_load_path]; empty under -boot,
+   which a graded run never uses. *)
+let image_roots = ref []
+
+let note_image_roots ~unix_path ~rocq_root =
+  match List.rev (DirPath.repr rocq_root) with
+  | id :: _ -> image_roots := Id.to_string id :: !image_roots
+  | [] ->
+    if exists_dir unix_path then
+      (* a directory we cannot list, or one removed since the test
+         above, gives no root rather than raising, as [all_subdirs]
+         does through [System]'s own guarded readdir; a root we cannot
+         see shadows nothing *)
+      let entries = try Sys.readdir unix_path with Sys_error _ -> [||] in
+      Array.iter (fun e ->
+          if exists_dir (Filename.concat unix_path e) then
+            image_roots := e :: !image_roots)
+        entries
+
 let init_load_path rocqenv =
   (* the to_string casting won't be necessary once Boot handles
      include paths *)
@@ -115,6 +147,10 @@ let init_load_path rocqenv =
   let user_contrib = Boot.Env.user_contrib rocqenv |> Boot.Path.to_string in
   let xdg_dirs = Envars.xdg_dirs in
   let rocqpath = Envars.coqpath in
+  let add_rec_path ~unix_path ~rocq_root =
+    note_image_roots ~unix_path ~rocq_root;
+    add_rec_path ~unix_path ~rocq_root
+  in
   (* NOTE: These directories are searched from last to first *)
   (* first standard library *)
   add_rec_path ~unix_path:theories ~rocq_root:(Names.DirPath.make[rocq_root]);
@@ -128,7 +164,8 @@ let init_load_path rocqenv =
     (xdg_dirs ~warn:(fun x -> Feedback.msg_warning (str x)));
   (* then directories in ROCQPATH *)
   List.iter (fun s -> add_rec_path ~unix_path:s ~rocq_root:CheckLibrary.default_root_prefix) (rocqpath());
-  (* then current directory *)
+  (* then current directory: bound non-recursively, so it adds no image
+     root (see [image_roots]) *)
   add_path ~unix_path:"." ~rocq_root:CheckLibrary.default_root_prefix
 
 let init_load_path env : unit =
@@ -150,6 +187,12 @@ let indices_matter = ref false
 let enable_vm = ref false
 
 let statement_report = ref None
+
+(* [rocqchk -compare CONFIG -challenge DIR -compare-out FILE] *)
+let compare_config = ref None
+let compare_challenge = ref None
+let compare_out = ref None
+let sha256_files = ref []
 
 let jobs = ref 1
 let set_jobs s =
@@ -228,6 +271,13 @@ let print_usage_channel co command =
 \n  -statement-report f         print, for each statement named in f, whether its model\
 \n                              constant has its trusted constant's type and the axioms its\
 \n                              closure uses\
+\n  -compare config             grade the checked answer against a challenge: compare every\
+\n                              challenge declaration with the answer's declaration of the\
+\n                              same kernel name and judge each named theorem's axioms\
+\n                              (needs -challenge and -compare-out)\
+\n  -challenge dir              the directory holding the challenge's .vo files\
+\n  -compare-out f              write the comparator's JSON verdict to f\
+\n  -sha256 f                   print the SHA-256 of f and exit\
 \n\
 \n  -impredicative-set          set sort Set impredicative\
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
@@ -468,11 +518,41 @@ let parse_args argv =
         statement_report := Some (Check_closure.read_requests f); parse rem
     | "-statement-report" :: [] -> usage 1
 
+    | "-compare" :: f :: rem ->
+        (* Read now, so that a malformed config stops the run before any
+           library is loaded. A pre-checked library loads without a check,
+           through the admit list. *)
+        let cfg = Check_compare.read_config f in
+        List.iter add_admit (Check_compare.prechecked_libraries cfg);
+        compare_config := Some cfg; parse rem
+    | "-compare" :: [] -> usage 1
+
+    | "-challenge" :: d :: rem ->
+        if not (exists_dir d) then
+          fatal_error (str "Directory '" ++ str d ++ str "' does not exist") 1;
+        compare_challenge := Some d; parse rem
+    | "-challenge" :: [] -> usage 1
+
+    | "-compare-out" :: f :: rem -> compare_out := Some f; parse rem
+    | "-compare-out" :: [] -> usage 1
+
+    | "-sha256" :: f :: rem ->
+        print_endline (Check_compare.sha256_of_file f);
+        sha256_files := f :: !sha256_files; parse rem
+    | "-sha256" :: [] -> usage 1
+
     | s :: _ when s<>"" && s.[0]='-' ->
         fatal_error (str "Unknown option " ++ str s) 1
     | s :: rem ->  add_compile s; parse rem
   in
-  parse (List.tl (Array.to_list argv))
+  parse (List.tl (Array.to_list argv));
+  (* [-sha256] is a probe of the comparator's own digest, nothing else. *)
+  if not (CList.is_empty !sha256_files) then exit 0;
+  match !compare_config, !compare_challenge, !compare_out with
+  | None, None, None | Some _, Some _, Some _ -> ()
+  | _ ->
+    fatal_error
+      (str "Options -compare, -challenge and -compare-out go together.") 1
 
 let init_profile ~file =
   let ch = open_out file in
@@ -505,6 +585,7 @@ let init_with_argv argv =
           (fun (unix_path, rocq_root) -> add_rec_path ~unix_path ~rocq_root)
           (List.rev !includes))
       ();
+    user_includes := List.rev !includes;
     includes := [];
     make_senv ()
   with e ->
@@ -546,11 +627,114 @@ let print_statement_report env requests =
       (str "Statement report stopped: " ++
        str (String.escaped (Pp.string_of_ppcmds (explain_exn e))))
 
+(* The comparator's verdict is the point of the run, not evidence beside it:
+   a run that could not complete -- a challenge file whose sha256 differs, a
+   pre-checked library the two sides disagree on, a theorem the challenge
+   does not hold -- exits non-zero and writes no verdict file. A verdict,
+   whatever it says, leaves the exit status at 0. *)
+let run_compare env =
+  match !compare_config with
+  | None -> ()
+  | Some cfg ->
+    let dir = Option.get !compare_challenge and out = Option.get !compare_out in
+    let answer_deps = CheckLibrary.interned_deps () in
+    (* The challenge directory stands in for the answer's directory under
+       each root that an answer library named on the command line lives
+       under. A root that only a pre-checked library or another shared tree
+       uses is left alone: the challenge directory does not hold it.
+
+       Both selection forms that name a library to CHECK count: the
+       positional names ([compile_list], checked with their dependencies)
+       and -norec ([norec_list], checked alone), which is the form the
+       grading side sends. -admit names a library to load WITHOUT
+       checking it and never selects an answer library, so [admit_list]
+       is left out -- it also holds the config's pre-checked libraries,
+       which are exactly the ones the challenge does not stand in for. *)
+    let name_of = function
+      | CheckLibrary.LogicalFile p ->
+        String.concat "." (List.rev p.CheckLibrary.dirpath @ [p.CheckLibrary.basename])
+      | CheckLibrary.PhysicalFile f -> Filename.remove_extension (Filename.basename f)
+    in
+    let checked_names =
+      List.map name_of !compile_list @ List.map name_of !norec_list
+    in
+    let substitutes root =
+      let r = DirPath.to_string root in
+      List.exists (fun n -> String.equal n r || CString.is_prefix (r ^ ".") n) checked_names
+    in
+    (* A library under one of those roots is the answer's own: the challenge
+       directory holds its counterpart. Every other library the answer
+       loaded is a shared one -- the image's installed libraries -- and the
+       challenge environment loads the same ones, so that a constraint one
+       of them carries is not read as a constraint the answer invented.
+
+       The premise is the one R5 of dispatch://BET-894 already states: every
+       answer library is CHECKED in this run. A library of the answer's own
+       therefore lives under a root some checked name lives under, which is
+       a root the challenge stands in for; what is left over is the image's.
+       A run that loaded an answer library without checking it would be
+       refused long before this, and nothing here weakens that. *)
+    let under_challenge_root lib =
+      let l = DirPath.to_string lib in
+      List.exists (fun (_, rocq_root) ->
+          let r = DirPath.to_string rocq_root in
+          substitutes rocq_root && (String.equal l r || CString.is_prefix (r ^ ".") l))
+        !user_includes
+    in
+    (* The bound roots the challenge does NOT stand in for. The answer's
+       build can write under one of them, so the comparator refuses a run
+       that loaded a library from one unless the config pins it. *)
+    let open_roots =
+      CList.map_filter (fun (unix_path, rocq_root) ->
+          if substitutes rocq_root then None else Some (rocq_root, unix_path))
+        !user_includes
+    in
+    (* A -Q that binds one of the image's own top-level names, or the empty
+       root, puts the answer's directory where a library the challenge reads
+       from the image is looked up: the two sides would then read different
+       files under one name, and the one the answer wrote would decide. The
+       empty root binds EVERY name. Refused outright, because no config can
+       make it safe, and nothing a graded run does needs it: the route binds
+       one root, the project's own. *)
+    List.iter (fun (unix_path, rocq_root) ->
+        let head = match List.rev (DirPath.repr rocq_root) with
+          | [] -> None
+          | id :: _ -> Some (Id.to_string id)
+        in
+        match head with
+        | None ->
+          fatal_error
+            (str ("The directory " ^ unix_path ^ " is bound to the empty root, which binds \
+                   every library name the image serves. A -compare run refuses it."))
+            1
+        | Some h when List.exists (String.equal h) !image_roots ->
+          fatal_error
+            (str ("The directory " ^ unix_path ^ " is bound to " ^ DirPath.to_string rocq_root ^
+                  ", a name the image's own load path serves. A -compare run refuses it: the \
+                   two sides would read different files under one library name."))
+            1
+        | Some _ -> ())
+      !user_includes;
+    try
+      let t =
+        Check_compare.prepare cfg ~dir ~out ~under_challenge_root ~open_roots
+          ~add_challenge_load_path:(fun () ->
+              List.iter (fun (_, rocq_root) ->
+                  if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)
+                !user_includes)
+      in
+      Check_compare.run t env CheckLibrary.indirect_accessor (make_senv ()) ~answer_deps
+    with e ->
+      if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
+      fatal_error (explain_exn e) (exit_code e)
+
+
 let main () =
   let senv = init() in
   Check_stat.start_summary !Check_stat.output_context;
   let senv, opac = run senv in
   let env = Safe_typing.env_of_safe_env senv in
   Option.iter (print_statement_report env) !statement_report;
+  run_compare env;
   Check_stat.stats env opac;
   exit 0
