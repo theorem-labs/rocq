@@ -56,6 +56,16 @@ val read_config : string -> config
     other key, a duplicate key, a byte after the top-level value, a byte
     sequence that is not UTF-8 or a name that is not a string is an error.
 
+    A permitted axiom is named by the name it prints, and is the task's
+    declaration of that name: an axiom a theorem's proof reaches passes only
+    when its name is in the theorem's permitted list AND the answer's
+    constant of that kernel name is declared by the challenge environment
+    or lives in a module rooted at a pre-checked library. A module path and
+    a library path print alike (the constant [g] of a module [Q] of the
+    library [R.P] prints [R.P.Q.g]), so a constant that only prints a
+    permitted name fails with the reason that it is not the task's
+    declaration of that name.
+
     A tolerated flag with an [object] tolerates that kind on that object
     alone, so a relaxed condition the standard library rests on does not
     tolerate the same condition in the agent's own declaration. Without an

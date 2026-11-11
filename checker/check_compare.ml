@@ -1504,6 +1504,24 @@ let has_rewrite_rules env libs =
   Cmap_env.exists (fun c _ -> in_libs libs (Constant.modpath c))
     (Environ.Internal.View.view env).Environ.Internal.View.env_symb_pats
 
+(* A permitted axiom is a declaration the task hands the agent, so it is
+   matched by its kernel name, not by the name it prints: a module path and
+   a library path can print alike, and the constant [g] of a module [Q] of
+   the library [R.P] prints [R.P.Q.g], the name of the constant [g] of the
+   library [R.P.Q]. An axiom the answer's proof reaches is the task's
+   declaration when the answer declares it and either the challenge declares
+   the same kernel name (the challenge's own files, which the declaration
+   comparison holds the answer to, and the libraries both sides read from
+   one file), or its module path is rooted at a pre-checked library, whose
+   bytes the config pins and which the comparison does not walk. An object
+   that is no constant is an axiom only when no library declares it, and
+   is no declaration of the task's. *)
+let task_declares t ~challenge_env ~answer_env = function
+  | GlobRef.ConstRef c ->
+    Environ.mem_constant c answer_env
+    && (Environ.mem_constant c challenge_env || in_libs t.prechecked (Constant.modpath c))
+  | GlobRef.IndRef _ | GlobRef.ConstructRef _ | GlobRef.VarRef _ -> false
+
 let run t env access senv0 ~answer_deps =
   check_open_roots t ~answer_deps;
   check_prechecked t;
@@ -1566,7 +1584,16 @@ let run t env access senv0 ~answer_deps =
                 (answer_universe_constraints, constraints) :: flags
               | None -> flags
             in
-            let bad_axioms = List.filter (fun a -> not (List.mem a permitted)) axioms in
+            let bad_axioms = List.filter (fun (a, _) -> not (List.mem a permitted)) axioms in
+            (* A permitted name the proof reaches through an object the
+               task did not declare: a forgery of that name. *)
+            let forged_axioms =
+              List.filter (fun (a, obj) ->
+                  List.mem a permitted
+                  && not (task_declares t ~challenge_env ~answer_env:env obj))
+                axioms
+            in
+            let axioms = CString.Set.elements (CString.Set.of_list (List.map fst axioms)) in
             (* A config entry tolerates a flag when it names the same kind
                and either the same object or no object at all. *)
             let tolerated (kind, obj) =
@@ -1593,7 +1620,11 @@ let run t env access senv0 ~answer_deps =
                   | None ->
                     if rewrite_rules then Some "the answer declares a rewrite rule"
                     else match bad_axioms with
-                      | a :: _ -> Some ("the axiom " ^ a ^ " is not permitted")
+                      | (a, _) :: _ -> Some ("the axiom " ^ a ^ " is not permitted")
+                      | [] ->
+                      match forged_axioms with
+                      | (a, _) :: _ ->
+                        Some ("the axiom " ^ a ^ " is not the task's declaration of that name")
                       | [] ->
                         match bad_flags with
                         | (k, o) :: _ ->

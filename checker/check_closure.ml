@@ -468,8 +468,12 @@ module FlagSet = Stdlib.Set.Make (struct
       if Int.equal c 0 then String.compare o1 o2 else c
   end)
 
-(** The axioms and flags of every object reachable from [root]. A name the
-    report must not print stops it ([check_printed_name]). *)
+(** The axioms and flags of every object reachable from [root]. The axioms
+    are the objects themselves, not their printed names: two objects can
+    print the same name (a constant [Q.g] of a module [Q] of the library
+    [R.P] prints as the constant [g] of the library [R.P.Q]), and the
+    comparator must tell them apart. A name the report must not print stops
+    the walk ([check_printed_name]). *)
 let closure st root =
   let rec loop public_seen implementation_seen axioms flags = function
     | [] -> axioms, flags
@@ -482,7 +486,7 @@ let closure st root =
       else
         let n = node st view obj in
         if n.axiom || not (List.is_empty n.flags) then check_printed_name obj;
-        let axioms = if n.axiom then CString.Set.add (name_of obj) axioms else axioms in
+        let axioms = if n.axiom then GlobRef.Set_env.add obj axioms else axioms in
         let flags = List.fold_left (fun flags f -> FlagSet.add f flags) flags n.flags in
         let public_seen, implementation_seen = match view with
           | Public -> GlobRef.Set_env.add obj public_seen, implementation_seen
@@ -490,7 +494,10 @@ let closure st root =
         in
         loop public_seen implementation_seen axioms flags (List.rev_append n.refs todo)
   in
-  loop GlobRef.Set_env.empty GlobRef.Set_env.empty CString.Set.empty FlagSet.empty [Public, root]
+  loop GlobRef.Set_env.empty GlobRef.Set_env.empty GlobRef.Set_env.empty FlagSet.empty [Public, root]
+
+let axiom_names axioms =
+  GlobRef.Set_env.fold (fun obj acc -> CString.Set.add (name_of obj) acc) axioms CString.Set.empty
 
 (** {6 The type match} *)
 
@@ -629,6 +636,7 @@ let print env access requests =
       | None -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
       | Some model ->
         let axioms, flags = closure st (GlobRef.ConstRef model) in
+        let axioms = axiom_names axioms in
         let verdict = match r.req_trusted with
           | None -> "not-requested"
           | Some t ->
@@ -659,4 +667,5 @@ let closure_state env access = {
 
 let axioms_and_flags st kn =
   let axioms, flags = closure st (GlobRef.ConstRef kn) in
-  CString.Set.elements axioms, FlagSet.elements flags
+  let axioms = List.map (fun obj -> name_of obj, obj) (GlobRef.Set_env.elements axioms) in
+  List.stable_sort (fun (a, _) (b, _) -> String.compare a b) axioms, FlagSet.elements flags
