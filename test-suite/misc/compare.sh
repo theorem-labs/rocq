@@ -32,6 +32,10 @@
 #                     is prose
 #   expected-flags    optional, one flag kind per line that the honest
 #                     answer's passing verdict must record
+#   expected-flag-object
+#                     optional, a regular expression the recorded flag object
+#                     of the honest answer must match
+
 #   order             optional, the order to compile the .v files in
 #                     (default: alphabetical)
 #   refuse-<name>/    optional, a directory holding a raw config.json that
@@ -301,6 +305,14 @@ run_case() {
       grep -q "\"kind\":\"$flag\"" "$work/out.json" \
         || { cat "$work/out.json"; fail "$name: the passing verdict does not record $flag"; }
     done < "$c/expected-flags"
+  fi
+  if [ -f "$c/expected-flag-object" ]; then
+    local object
+    while IFS= read -r object; do
+      [ -z "$object" ] && continue
+      grep -Eq -- "$object" "$work/out.json" \
+        || { cat "$work/out.json"; fail "$name: the recorded flag object does not match $object"; }
+    done < "$c/expected-flag-object"
   fi
 
   # the answers that must fail
