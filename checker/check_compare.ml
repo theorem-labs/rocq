@@ -561,11 +561,12 @@ let read_config file =
      Without an object, [indices-not-mattering] tolerates the kind wherever
      it appears: every inductive of an image built without [-indices-matter]
      may carry it, and the route this comparator replaces always allows it.
-     [uip] similarly applies to every object only when the task enables
-     [allow_uip]. [answer-universe-constraints] is also kind-only, but has a
-     narrower meaning: it skips only the answer-to-challenge universe
-     comparison. It names no declaration, so an object would not make the
-     requested relaxation more precise.
+     [uip] is allowed by the route this comparator replaces when the task
+     enables [allow_uip]; this comparator accepts a kind-only [uip] entry
+     when its config requests one. [answer-universe-constraints] is also
+     kind-only, but has a narrower meaning: it skips only the
+     answer-to-challenge universe comparison. It names no declaration, so an
+     object would not make the requested relaxation more precise.
 
      The rest -- [assumed-positive], [unsafe-fixpoint], [type-in-type],
      [unchecked-eliminations] -- are how a proof of False is written, and
@@ -1360,9 +1361,10 @@ let seed_umap t ~challenge_env ~answer_env =
    A config that tolerates [answer-universe-constraints] skips this
    direction alone, and only once the challenge-to-answer direction has
    passed; the declaration comparison, the axiom checks and the kernel
-   check are untouched. The flag is recorded on every theorem only when
-   this direction would have failed, so a passing verdict says what it
-   cost.
+   check are untouched. The flag is recorded on every theorem the answer
+   holds only when this direction would have failed. Its object is the
+   bounded summary of the skipped constraints, so a passing verdict says
+   what it cost.
 
    Both directions compare the PROJECTION of one graph onto the mapped
    levels ([constraints_for], which walks on through a level it does not
@@ -1412,13 +1414,13 @@ let check_constraints t ~challenge_env ~answer_env m =
   in
   let never _ _ = false in
   match fails ~skip:never m.fwd gan (UGraph.constraints_for ~kept:kept_ch gch) with
-  | Some e -> Some ("the challenge has a universe constraint the answer does not: " ^ e), false
+  | Some e -> Some ("the challenge has a universe constraint the answer does not: " ^ e), None
   | None ->
     let both_image u' v' = not (own u') && not (own v') in
     match fails ~skip:both_image m.bwd gch (UGraph.constraints_for ~kept:kept_an gan) with
-    | Some _ when List.mem_assoc answer_universe_constraints t.cfg.cfg_flags -> None, true
-    | Some e -> Some ("the answer has a universe constraint the challenge does not: " ^ e), false
-    | None -> None, false
+    | Some e when List.mem_assoc answer_universe_constraints t.cfg.cfg_flags -> None, Some e
+    | Some e -> Some ("the answer has a universe constraint the challenge does not: " ^ e), None
+    | None -> None, None
 
 (* Every challenge declaration, in the order the name sorts. A declaration the
    answer does not hold is a failure; a declaration only the answer holds is
@@ -1456,10 +1458,10 @@ let compare_declarations t ~challenge_env ~answer_env ~libs ~theorems =
         | None -> fail name "missing"
         | Some mt' -> step name (fun m -> eq_modtype ~env:answer_env m mt mt'))
     (Environ.Internal.View.view challenge_env).Environ.Internal.View.env_modtypes;
-  let universes, answer_universe_constraints_tolerated =
+  let universes, skipped_answer_constraints =
     check_constraints t ~challenge_env ~answer_env !m
   in
-  List.rev !failures, universes, answer_universe_constraints_tolerated
+  List.rev !failures, universes, skipped_answer_constraints
 
 (************************************************************************)
 (** {6 The verdict} *)
@@ -1510,7 +1512,7 @@ let run t env access senv0 ~answer_deps =
     List.fold_left (fun acc th -> CString.Set.add th.th_name acc) CString.Set.empty
       t.cfg.cfg_theorems
   in
-  let failures, universes, answer_universe_constraints_tolerated =
+  let failures, universes, skipped_answer_constraints =
     compare_declarations t ~challenge_env ~answer_env:env ~libs ~theorems
   in
   let failed_decl =
@@ -1531,9 +1533,10 @@ let run t env access senv0 ~answer_deps =
           | Some kn ->
             let axioms, flags = Check_closure.axioms_and_flags st kn in
             let flags =
-              if answer_universe_constraints_tolerated then
-                (answer_universe_constraints, "<universes>") :: flags
-              else flags
+              match skipped_answer_constraints with
+              | Some constraints ->
+                (answer_universe_constraints, constraints) :: flags
+              | None -> flags
             in
             let bad_axioms = List.filter (fun a -> not (List.mem a permitted)) axioms in
             (* A config entry tolerates a flag when it names the same kind

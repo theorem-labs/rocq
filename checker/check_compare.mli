@@ -61,16 +61,18 @@ val read_config : string -> config
     tolerate the same condition in the agent's own declaration. Without an
     object, [indices-not-mattering] applies wherever it appears: every
     inductive of an image built without [-indices-matter] may carry it, and
-    the replaced route always allows it. [uip] applies to every object only
-    when the task enables [allow_uip].
+    the replaced route always allows it. [uip] is allowed by that route when
+    the task enables [allow_uip]; this comparator accepts a kind-only [uip]
+    entry when its config requests one.
 
     [answer-universe-constraints] is a kind-only tolerance for the global
     universe comparison, and one that names an object is an error. It skips
     only the answer-to-challenge direction; the challenge-to-answer
     direction, declaration comparison, axiom checks and kernel checking
     still run. If that skipped direction would have failed, the record of
-    every theorem the answer holds carries the flag with object
-    [<universes>]. It is not recorded when the direction already passes.
+    every theorem the answer holds carries the flag with an object that
+    summarizes the first failing constraints and their remaining count. It is
+    not recorded when the direction already passes.
 
     Every other kind without an object is an error:
     [assumed-positive], [unsafe-fixpoint], [type-in-type] and

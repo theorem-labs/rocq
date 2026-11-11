@@ -43,6 +43,9 @@
 #   bad-<name>/tolerate-<flag>.tmpl
 #                     optional, a config that tolerates <flag>: that bad
 #                     answer must pass under it with the flag recorded
+#   bad-<name>/expected-reason
+#                     optional, a regular expression the failed reason must
+#                     match
 #
 # The runner takes a case name, or runs every case when given none.
 #
@@ -334,6 +337,14 @@ run_case() {
       [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b: the run exits $code"; }
       grep -q '"verdict":"fail"' "$work/out.json" \
         || { cat "$work/out.json"; fail "$name/$b: no theorem failed"; }
+      if [ -f "$bad/expected-reason" ]; then
+        local reason
+        while IFS= read -r reason; do
+          [ -z "$reason" ] && continue
+          grep -Eq -- "$reason" "$work/out.json" \
+            || { cat "$work/out.json"; fail "$name/$b: the failure does not match $reason"; }
+        done < "$bad/expected-reason"
+      fi
     fi
     echo "  ok $name/$b"
     # A named tolerance is a documented cost: it must turn this exact bad
@@ -350,7 +361,7 @@ run_case() {
       grep -q '"verdict":"pass"' "$work/out.json" \
         && ! grep -q '"verdict":"fail"' "$work/out.json" \
         || { cat "$work/out.json"; fail "$name/$b/$flag: the tolerated answer did not pass"; }
-      grep -q "\"kind\":\"$flag\",\"object\":\"<universes>\"" "$work/out.json" \
+      grep -q "\"kind\":\"$flag\"" "$work/out.json" \
         || { cat "$work/out.json"; fail "$name/$b/$flag: the passing verdict does not record $flag"; }
       echo "  ok $name/$b/$flag"
       code=$(run_compare "$work" "$work/answer" "$work/tolerated-config.json" "$pre")
