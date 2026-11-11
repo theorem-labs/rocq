@@ -77,8 +77,6 @@ let ( let* ) r f = match r with Ok x -> f x | Error _ as e -> e
 
 let wrap where = function Ok _ as o -> o | Error d -> Error (DIn (where, d))
 
-let check b d = if b then Ok () else Error d
-
 let rec fold2 f u l1 l2 err = match l1, l2 with
   | [], [] -> Ok u
   | x1 :: r1, x2 :: r2 -> let* u = f u x1 x2 in fold2 f u r1 r2 err
