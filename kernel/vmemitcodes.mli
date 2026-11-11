@@ -31,4 +31,11 @@ type body_code = to_patch pbody_code
 
 val subst_body_code : Mod_subst.substitution -> 'a pbody_code -> 'a pbody_code
 
+(** Rewrite the inductive and constant names a body's relocation table
+    mentions, driven by plain functions ([-merge-inductives] undoing a merge
+    before the body is written out). *)
+val map_body_code :
+  (Names.inductive -> Names.inductive) -> (Names.Constant.t -> Names.Constant.t) ->
+  'a pbody_code -> 'a pbody_code
+
 val to_memory : fv -> bytecodes -> to_patch * patches

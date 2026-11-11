@@ -109,6 +109,11 @@ let replace_module_body struc delta mb =
     mod_type_alg = None;
     mod_delta = delta }
 
+(* [-merge-inductives]: the loaded structure has been rewritten to the
+   merged names, so the resolver the environment keys its entries with has
+   to say the same thing. *)
+let set_delta delta mb = if delta == mb.mod_delta then mb else { mb with mod_delta = delta }
+
 let module_type_of_module mb =
   { mb with mod_expr = ModTypeNul; mod_type_alg = None;
     mod_retroknowledge = ModTypeNul; }
@@ -391,6 +396,101 @@ and subst_signature skind subst mp =
   functor_smart_map
     (fun mbid mtb -> subst_modtype skind subst (MPbound mbid) mtb)
     (fun sign -> subst_structure skind subst mp sign)
+
+(** {6 Rewriting the names a module body mentions}
+
+    The same traversal as [subst_structure] above, driven by plain functions
+    instead of a module substitution, for a rewrite a substitution cannot
+    express -- [-merge-inductives] undoing its own merges on the way out.
+    Every field [subst_module_body] visits is visited here, so a field added
+    to one has to be added to the other. *)
+
+type name_map = {
+  nmap_const : constant_body -> constant_body;
+  nmap_mind : mutual_inductive_body -> mutual_inductive_body;
+  nmap_rules : rewrite_rules_body -> rewrite_rules_body;
+  nmap_constr : Constr.t -> Constr.t;
+  nmap_delta : Mod_subst.delta_resolver -> Mod_subst.delta_resolver;
+  nmap_retro : Retroknowledge.action -> Retroknowledge.action;
+}
+
+let map_with_body f = function
+  | WithMod _ as orig -> orig
+  | WithDef (id, (c, ctx)) as orig ->
+    let c' = f.nmap_constr c in
+    if c == c' then orig else WithDef (id, (c', ctx))
+
+let map_retro : type a. name_map -> a module_retroknowledge -> a module_retroknowledge =
+  fun f retro -> match retro with
+    | ModTypeNul as r -> r
+    | ModBodyVal l as r ->
+      let l' = List.Smart.map f.nmap_retro l in
+      if l == l' then r else ModBodyVal l'
+
+let rec map_structure f sign =
+  let map_field ((l, body) as orig) = match body with
+    | SFBconst cb ->
+      let cb' = f.nmap_const cb in
+      if cb == cb' then orig else (l, SFBconst cb')
+    | SFBmind mib ->
+      let mib' = f.nmap_mind mib in
+      if mib == mib' then orig else (l, SFBmind mib')
+    | SFBrules rrb ->
+      let rrb' = f.nmap_rules rrb in
+      if rrb == rrb' then orig else (l, SFBrules rrb')
+    | SFBmodule mb ->
+      let mb' = map_module f mb in
+      if mb == mb' then orig else (l, SFBmodule mb')
+    | SFBmodtype mtb ->
+      let mtb' = map_module f mtb in
+      if mtb == mtb' then orig else (l, SFBmodtype mtb')
+  in
+  List.Smart.map map_field sign
+
+and map_module : type a. name_map -> a generic_module_body -> a generic_module_body =
+  fun f mb ->
+  let ty' = map_signature f mb.mod_type in
+  let me' = map_impl f mb.mod_expr in
+  let aty' = Option.Smart.map (map_expression f) mb.mod_type_alg in
+  let retro' = map_retro f mb.mod_retroknowledge in
+  let delta' = f.nmap_delta mb.mod_delta in
+  if me' == mb.mod_expr && ty' == mb.mod_type && aty' == mb.mod_type_alg
+     && retro' == mb.mod_retroknowledge && delta' == mb.mod_delta
+  then mb
+  else
+    { mod_expr = me';
+      mod_type = ty';
+      mod_type_alg = aty';
+      mod_retroknowledge = retro';
+      mod_delta = delta';
+    }
+
+and map_impl : type a. name_map -> (a, _) when_mod_body -> (a, _) when_mod_body =
+  fun f me ->
+  implem_smart_map
+    (fun (reso, sign) -> f.nmap_delta reso, map_structure f sign)
+    (map_expression f) me
+
+and map_expr f seb = match seb with
+  | MEident _ -> seb
+  | MEapply (meb1, mp2) ->
+    let meb1' = map_expr f meb1 in
+    if meb1 == meb1' then seb else MEapply (meb1', mp2)
+  | MEwith (meb, wdb) ->
+    let meb' = map_expr f meb in
+    let wdb' = map_with_body f wdb in
+    if meb == meb' && wdb == wdb' then seb else MEwith (meb', wdb')
+
+and map_expression f me = match me with
+  | MENoFunctor malg ->
+    let malg' = map_expr f malg in
+    if malg == malg' then me else MENoFunctor malg'
+  | MEMoreFunctor mf ->
+    let mf' = map_expression f mf in
+    if mf == mf' then me else MEMoreFunctor mf'
+
+and map_signature f =
+  functor_smart_map (fun _mbid mtb -> map_module f mtb) (fun sign -> map_structure f sign)
 
 (** Cleaning a module expression from bounded parts
 

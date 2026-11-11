@@ -230,6 +230,24 @@ let add_kn_delta_resolver kn kn' =
 
 let add_mp_delta_resolver mp1 mp2 = Deltamap.add_mp mp1 mp2
 
+(* Rewrite the canonical names a resolver points at and the terms it inlines,
+   leaving its domain and its module equivalences alone: used where a
+   substitution cannot express the rewrite ([-merge-inductives] undoing its
+   own merges).  [fc] is applied to an inlined functor-parameter term, as
+   [gen_subst_delta_resolver] applies the substitution to it. *)
+let map_kn_delta_resolver ?(fc = fun c -> c) f resolver =
+  let mp_id mkey mequ rslv = Deltamap.add_mp mkey mequ rslv in
+  let kn_map kkey hint rslv = match hint with
+    | Equiv kn ->
+      let kn' = f kn in
+      Deltamap.add_kn kkey (if kn' == kn then hint else Equiv kn') rslv
+    | Inline (lev, Some t) ->
+      Deltamap.add_kn kkey (Inline (lev, Some (UVars.map_univ_abstracted fc t))) rslv
+    | Inline (_, None) -> Deltamap.add_kn kkey hint rslv
+  in
+  Deltamap.fold mp_id kn_map resolver
+    (empty_delta_resolver (Deltamap.root resolver))
+
 let map_mbid_flat mbid mp resolve =
   let () = assert (ModPath.equal mp (Deltamap.root resolve)) in
   Umap.add_mbi mbid resolve Umap.empty

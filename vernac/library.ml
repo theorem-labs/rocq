@@ -848,6 +848,13 @@ let save_library_to todo_proofs ~output_native_objects dir f =
     Safe_typing.is_joined_environment (Global.safe_env ()))
   in
   let sd, md, vmlib, ast = save_library_struct ~output_native_objects dir in
+  (* The structure is unmerged inside [Safe_typing.export]; the opaque table
+     is written separately, so undo the merge here too. *)
+  let opaque_table =
+    if Indmerge.unmerging ()
+    then Opaques.map_disk Indmerge.unmerge_constr opaque_table
+    else opaque_table
+  in
   (* Writing vo payload *)
   save_library_base f sd md opaque_table vmlib;
   (* Writing native code files *)

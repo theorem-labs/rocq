@@ -117,7 +117,15 @@ module NonSubstReloc =
 struct
 
 (** Relocations that are left untouched by module substitution. To reduce the
-    memory footprint, this data is kept on the VM segment. *)
+    memory footprint, this data is kept on the VM segment.
+
+    A relocation that names a global must never be stored here: [Const_ind] and
+    [Reloc_getglobal] belong in [Reloc.t], which [subst] and [map] rewrite. One
+    kept here would survive a rewrite of the names around it, and the VM would
+    run code naming a type the kernel checks under another name -- which is what
+    [-merge-inductives] does to a library's names after its bytecode was
+    compiled (checker/safe_checking.ml). [names_global] below answers the
+    question for each constructor, and [to_memory] refuses an entry it accepts. *)
 type t =
 | SReloc_Const_sort of Sorts.t
 | SReloc_Const_evar of Evar.t
@@ -142,6 +150,14 @@ let to_reloc = function
 | SReloc_annot annot -> Reloc_annot annot
 | SReloc_caml_prim prm -> Reloc_caml_prim prm
 
+(* Whether [to_reloc] of this entry yields a relocation that names a global.
+   The match is exhaustive, so a constructor added to [t] must answer here. *)
+let names_global = function
+| SReloc_Const_sort _ | SReloc_Const_evar _ | SReloc_Const_b0 _
+| SReloc_Const_univ_instance _ | SReloc_Const_val _ | SReloc_Const_uint _
+| SReloc_Const_float _ | SReloc_Const_string _ | SReloc_annot _
+| SReloc_caml_prim _ -> false
+
 end
 
 module Reloc =
@@ -163,6 +179,17 @@ let subst s reloc = match reloc with
   if ind' == ind then reloc else SReloc_Const_ind ind'
 | SReloc_getglobal cst ->
   let cst' = Mod_subst.subst_constant s cst in
+  if cst' == cst then reloc else SReloc_getglobal cst'
+| SReloc_indirect _ -> reloc
+
+(* The same rewrite driven by plain functions instead of a module
+   substitution, so that -merge-inductives can undo a merge on export. *)
+let map fi fc reloc = match reloc with
+| SReloc_Const_ind ind ->
+  let ind' = fi ind in
+  if ind' == ind then reloc else SReloc_Const_ind ind'
+| SReloc_getglobal cst ->
+  let cst' = fc cst in
   if cst' == cst then reloc else SReloc_getglobal cst'
 | SReloc_indirect _ -> reloc
 
@@ -650,6 +677,15 @@ let subst_body_code s = function
 | BCalias cu -> BCalias (subst_constant s cu)
 | BCconstant -> BCconstant
 
+let map_patches fi fc p =
+  let infos = CArray.Smart.map (fun r -> Reloc.map fi fc r) p.reloc_infos in
+  { reloc_infos = infos }
+
+let map_body_code fi fc = function
+| BCdefined (m, x, tp) -> BCdefined (m, x, map_patches fi fc tp)
+| BCalias cu -> BCalias (fc cu)
+| BCconstant -> BCconstant
+
 let to_memory fv code =
   let env = {
     out_buffer = Bytes.create 1024;
@@ -667,7 +703,10 @@ let to_memory fv code =
   let reloc = List.sort (fun (id1, _) (id2, _) -> Int.compare id1 id2) reloc in
   let uid = ref 0 in
   let table = ref [] in
+  (* The relocations below [push] go to the non-substituted table, which no
+     substitution reaches: a relocation naming a global must not go there. *)
   let push r =
+    let () = assert (not (NonSubstReloc.names_global r)) in
     let id = !uid in
     let () = table := r :: !table in
     let () = incr uid in

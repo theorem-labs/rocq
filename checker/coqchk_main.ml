@@ -233,6 +233,10 @@ let print_usage_channel co command =
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
 \n                              contribute to the level of inductives\
 \n  -bytecode-compiler (yes|no) enable the vm_compute reduction machine (default is no)\
+\n  -merge-inductives           treat a loaded inductive type that matches one already\
+\n                              loaded as the same type (off by default); the match is\
+\n                              recomputed here, never read from a .vo\
+\n  -merge-inductives-verbose   -merge-inductives, and print each merge\
 \n\
 \n  -h, --help                  print this list of options\
 \n"
@@ -389,6 +393,12 @@ let profile = ref None
 let parse_args argv =
   let rec parse = function
     | [] -> ()
+    | "-merge-inductives" :: rem ->
+        Indmerge.set_enabled true; parse rem
+
+    | "-merge-inductives-verbose" :: rem ->
+        Indmerge.set_enabled true; Indmerge.set_verbose true; parse rem
+
     | "-impredicative-set" :: rem ->
       set_impredicative_set (); parse rem
 
