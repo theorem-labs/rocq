@@ -1,0 +1,29 @@
+Axioms:
+P1.q : nat
+P1.p : nat
+ax1 : nat
+Axioms:
+P2.q : nat
+P2.p : nat
+ax1 : nat
+Axioms:
+P1.q : nat
+P1.p : nat
+ax1 : nat
+Axioms:
+P1.q : nat
+P1.p : nat
+ax1 : nat
+Axioms:
+P1.p : nat
+ax1 : nat
+Axioms:
+P2.p : nat
+ax1 : nat
+Axioms:
+P1.p : nat
+ax1 : nat
+Axioms:
+P1.q : nat
+P1.p : nat
+ax1 : nat
