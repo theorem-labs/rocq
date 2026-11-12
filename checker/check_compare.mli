@@ -59,13 +59,14 @@ val read_config : string -> config
     A permitted axiom is named by the name it prints, and is the task's
     declaration of that name: an axiom a theorem's proof reaches passes only
     when its name is in the theorem's permitted list AND the constant of
-    that kernel name lives under a pre-checked library (exported or a field
-    of a sealed module it hides), or the challenge and the answer both
-    export it. A module path and a library path print alike (the constant
-    [g] of a module [Q] of the library [R.P] prints [R.P.Q.g]), so a
-    constant that only prints a permitted name fails with the reason that it
-    is not the task's declaration of that name, followed by where the
-    reached object lives and why it is not the task's.
+    that kernel name lives under a pre-checked library or a shared one (a
+    library outside every root the challenge stands in for: the image's own),
+    exported or a field of a sealed module it hides, or the challenge and
+    the answer both export it. A module path and a library path print
+    alike (the constant [g] of a module [Q] of the library [R.P] prints
+    [R.P.Q.g]), so a constant that only prints a permitted name fails with
+    the reason that it is not the task's declaration of that name, followed
+    by where the reached object lives and why it is not the task's.
 
     A theorem the config names is read by the kernel name of the challenge's
     constant of that printed name (two challenge constants printing it is an
