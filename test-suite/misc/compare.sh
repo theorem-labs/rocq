@@ -53,8 +53,9 @@
 #                     optional, a config that tolerates <flag>: that bad
 #                     answer must pass under it with the flag recorded
 #   bad-<name>/expected-reason
-#                     optional, a regular expression the failed reason must
-#                     match
+#                     optional, regular expressions, one per line, that the
+#                     failed verdict must match, or, for a bad answer with
+#                     `refuse`, the refused run's output
 #
 # The runner takes a case name, or runs every case when given none.
 #
@@ -373,6 +374,16 @@ run_case() {
     code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor" "$vroot")
     if [ -f "$bad/refuse" ]; then
       [ "$code" != "0" ] || fail "$name/$b: the run should not have completed"
+      # A refusal that must be a specific one names it, so that the run
+      # cannot pass this check by failing for another reason.
+      if [ -f "$bad/expected-reason" ]; then
+        local reason
+        while IFS= read -r reason; do
+          [ -z "$reason" ] && continue
+          grep -Eq -- "$reason" "$work/log" \
+            || { cat "$work/log"; fail "$name/$b: the refusal does not match $reason"; }
+        done < "$bad/expected-reason"
+      fi
     else
       [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b: the run exits $code"; }
       grep -q '"verdict":"fail"' "$work/out.json" \
