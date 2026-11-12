@@ -24,6 +24,10 @@
 #   bad-<name>/vendor-root
 #                     optional, the root that tree is bound to (default
 #                     Vendor)
+#   bad-<name>/cwd/*.v
+#                     optional, libraries the bad answer leaves in the
+#                     directory the comparator runs in, which the load path
+#                     binds implicitly under no root
 #   config.tmpl       the config, with @SHA256:<file>@ for a challenge
 #                     file's digest, @PRECHECKED@ for the pre-checked
 #                     array and @PRECHECKED_TOP:<dir>/<file>@ for a further
@@ -269,9 +273,10 @@ make_config() {
 }
 
 # Run the comparator on one answer tree. Prints the exit code; the verdict
-# file is $work/out.json.
+# file is $work/out.json. With a seventh argument, the comparator runs in
+# that directory, whose libraries the load path binds implicitly.
 run_compare() {
-  local work=$1 answer=$2 config=$3 pre=$4 vendor=${5:-} vroot=${6:-Vendor}
+  local work=$1 answer=$2 config=$3 pre=$4 vendor=${5:-} vroot=${6:-Vendor} cwd=${7:-.}
   local args=(-silent -Q "$answer" Top)
   [ -n "$pre" ] && args+=(-Q "$pre" Pre)
   [ -n "$vendor" ] && args+=(-Q "$vendor" "$vroot")
@@ -279,8 +284,8 @@ run_compare() {
   local f
   for f in "$answer"/*.vo; do libs+=("Top.$(basename "$f" .vo)"); done
   set +e
-  bounded "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
-    -compare-out "$work/out.json" "${libs[@]}" > "$work/log" 2>&1
+  (cd "$cwd" && bounded "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
+    -compare-out "$work/out.json" "${libs[@]}") > "$work/log" 2>&1
   local code=$?
   set -e
   completed "$code" "$work/log"
@@ -383,8 +388,27 @@ run_case() {
           || fail "$name/$b: the vendor library $vf does not compile"
       done
     fi
+    # A bad answer may also leave libraries in the directory the comparator
+    # runs in (bad-<name>/cwd/*.v). The load path binds the working
+    # directory implicitly, under no root, so each is found by its bare
+    # name; the answer's own build finds them the same way, through
+    # ROCQPATH, in front of the image stand-in.
+    local bcwd="." saved_env=("${rocq_env[@]}")
+    if [ -d "$bad/cwd" ]; then
+      bcwd="$work/$b-cwd"
+      mkdir -p "$bcwd"
+      cp "$bad/cwd"/*.v "$bcwd"/
+      local cf
+      for cf in $(cd "$bcwd" && ls *.v | sort); do
+        (cd "$bcwd" && "${rocq_env[@]}" coqc "$cf") \
+          || fail "$name/$b: the working-directory library $cf does not compile"
+      done
+      if [ -d "$work/rocqpath" ]; then rocq_env=(env "ROCQPATH=$bcwd:$work/rocqpath")
+      else rocq_env=(env "ROCQPATH=$bcwd"); fi
+    fi
     build_tree "$bad" "$bdir" "$pre" "$border" "$bvendor" "$vroot"
-    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor" "$vroot")
+    rocq_env=("${saved_env[@]}")
+    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor" "$vroot" "$bcwd")
     if [ -f "$bad/refuse" ]; then
       [ "$code" != "0" ] || fail "$name/$b: the run should not have completed"
       # A refusal that must be a specific one names it, so that the run

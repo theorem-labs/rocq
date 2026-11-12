@@ -718,6 +718,7 @@ let run_compare env =
     try
       let t =
         Check_compare.prepare cfg ~dir ~out ~under_challenge_root ~open_roots
+          ~bound_dirs:(List.map fst !user_includes)
           ~add_challenge_load_path:(fun () ->
               List.iter (fun (_, rocq_root) ->
                   if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)
