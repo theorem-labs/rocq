@@ -1,0 +1,143 @@
+diff --git a/checker/coqchk_main.ml b/checker/coqchk_main.ml
+index 0969d3a843..8ec2cf428a 100644
+--- a/checker/coqchk_main.ml
++++ b/checker/coqchk_main.ml
+@@ -320,7 +320,6 @@ let explain_exn = function
+       | UndeclaredUsedVariables _ -> str "UndeclaredUsedVariables"
+       | IllFormedConstant _ -> str "IllFormedConstant"
+       | IllFormedInductive _ -> str "IllFormedInductive"
+-      | ArrayTooLong _ -> str "ArrayTooLong"
+       ))
+ 
+   | InductiveError (env,e) ->
+diff --git a/doc/changelog/01-kernel/XXXXX-parray-literal-length-Fixed.rst b/doc/changelog/01-kernel/XXXXX-parray-literal-length-Fixed.rst
+deleted file mode 100644
+index 40a06c8054..0000000000
+--- a/doc/changelog/01-kernel/XXXXX-parray-literal-length-Fixed.rst
++++ /dev/null
+@@ -1,7 +0,0 @@
+-- **Fixed:**
+-  The kernel now refuses a primitive array literal longer than
+-  `PrimArray.max_length`. Lazy reduction truncated such a literal to
+-  `max_length` while the virtual machine and native compilation kept it
+-  whole, so its length could be proved to have two different values
+-  (`#XXXXX <https://github.com/rocq-prover/rocq/pull/XXXXX>`_,
+-  by Sami Jawhar).
+diff --git a/kernel/type_errors.ml b/kernel/type_errors.ml
+index 133ce79e4c..769882d553 100644
+--- a/kernel/type_errors.ml
++++ b/kernel/type_errors.ml
+@@ -83,7 +83,6 @@ type ('constr, 'types, 'r) ptype_error =
+   | UndeclaredUsedVariables of { declared_vars : Id.Set.t; inferred_vars : Id.Set.t }
+   | IllFormedConstant of Constant.t * KerName.t
+   | IllFormedInductive of MutInd.t * KerName.t
+-  | ArrayTooLong of int
+ 
+ type type_error = (constr, types, Sorts.relevance) ptype_error
+ 
+@@ -194,9 +193,6 @@ let error_ill_formed_constant env cst kn =
+ let error_ill_formed_inductive env ind kn =
+   raise (TypeError (env, IllFormedInductive (ind, kn)))
+ 
+-let error_array_too_long env len =
+-  raise (TypeError (env, ArrayTooLong len))
+-
+ let map_pfix_guard_error f = function
+ | NotEnoughAbstractionInFixBody _ | NotEnoughArgumentsForFixCall _ as e -> e
+ | RecursionNotOnInductiveType c -> RecursionNotOnInductiveType (f c)
+@@ -246,4 +242,3 @@ let map_ptype_error fr f = function
+   IllTypedRecBody (n, Array.map (Context.map_annot_relevance_het fr) na, Array.map (on_judgment f) jv, Array.map f t)
+ | BadBinderRelevance (rlv, decl) -> BadBinderRelevance (fr rlv, Context.Rel.Declaration.map_constr_het fr f decl)
+ | BadCaseRelevance (rlv, case) -> BadCaseRelevance (fr rlv, f case)
+-| ArrayTooLong _ as e -> e
+diff --git a/kernel/type_errors.mli b/kernel/type_errors.mli
+index 39ccfdf15b..c3698be298 100644
+--- a/kernel/type_errors.mli
++++ b/kernel/type_errors.mli
+@@ -85,7 +85,6 @@ type ('constr, 'types, 'r) ptype_error =
+   | UndeclaredUsedVariables of { declared_vars : Id.Set.t; inferred_vars : Id.Set.t }
+   | IllFormedConstant of Constant.t * KerName.t
+   | IllFormedInductive of MutInd.t * KerName.t
+-  | ArrayTooLong of int
+ 
+ type type_error = (constr, types, Sorts.relevance) ptype_error
+ 
+@@ -177,7 +176,5 @@ val error_ill_formed_constant : env -> Constant.t -> KerName.t -> 'a
+ 
+ val error_ill_formed_inductive : env -> MutInd.t -> KerName.t -> 'a
+ 
+-val error_array_too_long : env -> int -> 'a
+-
+ val map_pguard_error : ('c -> 'd) -> 'c pguard_error -> 'd pguard_error
+ val map_ptype_error : ('r1 -> 'r2) -> ('c -> 'd) -> ('c, 'c, 'r1) ptype_error -> ('d, 'd, 'r2) ptype_error
+diff --git a/kernel/typeops.ml b/kernel/typeops.ml
+index 446788b528..babc196a39 100644
+--- a/kernel/typeops.ml
++++ b/kernel/typeops.ml
+@@ -838,12 +838,6 @@ and execute_aux tbl env cstr =
+     | Float _ -> type_of_float env
+     | String _ -> type_of_string env
+     | Array(u,t,def,ty) ->
+-      (* A longer literal would have two lengths: Parray truncates it to
+-         max_length, while the VM and native compilers keep it whole. *)
+-      let len = Array.length t in
+-      let () = if Uint63.lt Parray.max_length (Uint63.of_int len) then
+-          error_array_too_long env len
+-      in
+       (* ty : Type@{u} and all of t,def : ty *)
+       let ulev = match UVars.Instance.to_array u with
+         | [||], [|u|] -> u
+diff --git a/test-suite/bugs/bug_parray_literal_length.v b/test-suite/bugs/bug_parray_literal_length.v
+deleted file mode 100644
+index 1384dcb84a..0000000000
+--- a/test-suite/bugs/bug_parray_literal_length.v
++++ /dev/null
+@@ -1,23 +0,0 @@
+-(* An array literal longer than PrimArray.max_length must be refused by the
+-   kernel: lazy reduction truncates it to max_length while the VM keeps it
+-   whole, which made its length provably both 4194303 and 4194304. *)
+-
+-From Corelib Require Import PrimInt63 PrimArray.
+-From Ltac2 Require Import Ltac2.
+-
+-Ltac2 literal (n : int) :=
+-  match Constr.Unsafe.kind '[| true | true : bool |] with
+-  | Constr.Unsafe.Array u _ def ty =>
+-    Constr.Unsafe.make (Constr.Unsafe.Array u (Array.make n 'true) def ty)
+-  | _ => Control.throw Not_found
+-  end.
+-
+-(* A literal of exactly max_length is accepted, and both machines agree on
+-   its length. *)
+-Definition ok : array bool := ltac2:(let c := literal 4194303 in exact $c).
+-Definition ok_lazy : PrimArray.length ok = 4194303%uint63 := eq_refl.
+-Definition ok_vm : PrimArray.length ok = 4194303%uint63 :=
+-  (eq_refl 4194303%uint63 <: PrimArray.length ok = 4194303%uint63).
+-
+-(* One element more is refused. *)
+-Fail Definition bad : array bool := ltac2:(let c := literal 4194304 in exact $c).
+diff --git a/vernac/himsg.ml b/vernac/himsg.ml
+index 68aa4860ca..6878e4afbc 100644
+--- a/vernac/himsg.ml
++++ b/vernac/himsg.ml
+@@ -996,11 +996,6 @@ let explain_ill_formed_inductive env sigma mind kn =
+   strbrk "expected canonical name" ++ spc () ++ KerName.print kn ++ spc () ++
+   strbrk "but found" ++ spc () ++ KerName.print (MutInd.canonical mind)
+ 
+-let explain_array_too_long len =
+-  strbrk "Array literal of length" ++ spc () ++ int len ++ spc () ++
+-  strbrk "exceeds the maximum array length" ++ spc () ++
+-  str (Uint63.to_string Parray.max_length) ++ str "."
+-
+ let explain_type_error env sigma err =
+   let env = make_all_name_different env sigma in
+   match err with
+@@ -1061,8 +1056,6 @@ let explain_type_error env sigma err =
+     explain_ill_formed_constant env sigma cst kn
+   | IllFormedInductive (mind, kn) ->
+     explain_ill_formed_inductive env sigma mind kn
+-  | ArrayTooLong len ->
+-    explain_array_too_long len
+ 
+ let pr_position (cl,pos) =
+   let clpos = match cl with
