@@ -1256,8 +1256,8 @@ let check_dep_digests t ~challenge ~answer =
       | None -> ()
       | Some (_, an_deps) ->
         Array.iter (fun (dep, ch_digest) ->
-            let prechecked = List.exists (DirPath.equal dep) t.prechecked in
-            if prechecked || not (t.under_challenge_root dep) then
+            if one_file t dep then
+              let prechecked = List.exists (DirPath.equal dep) t.prechecked in
               match digest_of an_deps dep with
               | Some an_digest when not (same ch_digest an_digest) ->
                 CErrors.user_err
@@ -1657,7 +1657,12 @@ let run t env access senv0 ~answer_deps =
   (* The theorem a verdict reads is the answer's constant of the challenge
      theorem's kernel name, not whichever answer constant prints its name:
      a module Q of the library R.P holding a constant thm prints R.P.Q.thm,
-     the name of the theorem thm of the library R.P.Q. *)
+     the name of the theorem thm of the library R.P.Q. When the answer holds
+     both, the theorem fails as declared twice under one name; when it lacks
+     the theorem's kernel name, it fails as missing (the declaration
+     comparison, which matches by kernel name too, says the same). Either
+     way the verdict's axioms and flags are the kernel-name constant's, never
+     the other's. *)
   let an_index = constant_index env in
   let an_kernel = kernel_index env in
   let rewrite_rules = has_rewrite_rules env libs && not t.cfg.cfg_rewrite_rules in
@@ -1726,8 +1731,12 @@ let run t env access senv0 ~answer_deps =
                theorem's own record names its own difference when it has one. *)
             let reason =
               if List.length printing > 1 then
+                let objs =
+                  List.sort String.compare
+                    (List.map (fun c -> describe_object (GlobRef.ConstRef c)) printing)
+                in
                 Some ("the answer declares " ^ string_of_int (List.length printing) ^
-                      " constants that print the theorem's name")
+                      " constants that print the theorem's name: " ^ String.concat " and " objs)
               else
               match CString.Map.find_opt th.th_name failed_decl with
               | Some d -> Some d
