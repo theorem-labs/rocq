@@ -250,7 +250,7 @@ make_config() {
   while [[ $text =~ @PRECHECKED_TOP:([A-Za-z0-9_/]+)@ ]]; do
     top_path=${BASH_REMATCH[1]}
     [ -f "$chdir/$top_path.vo" ] || fail "no challenge file $top_path.vo to pre-check"
-    top_sha=$(rocqchk -sha256 "$chdir/$top_path.vo")
+    top_sha=$(bounded rocqchk -sha256 "$chdir/$top_path.vo")
     if command -v sha256sum > /dev/null; then
       local top_ref
       top_ref=$(sha256sum "$chdir/$top_path.vo" | cut -d' ' -f1)
