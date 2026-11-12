@@ -886,3 +886,9 @@ let library_file dir = snd (try_locate_absolute_library dir)
 
 (* The dependency digests every library interned so far records. *)
 let interned_deps () = LibraryMap.bindings !depgraph
+
+(* The file each loaded library was read from, as the loader recorded it. *)
+let interned_files () =
+  List.map (fun (dir, m) -> dir, m.library_filename) (LibraryMap.bindings !libraries_table)
+
+let challenge_files needed = List.map (fun (dir, m) -> dir, m.library_filename) needed

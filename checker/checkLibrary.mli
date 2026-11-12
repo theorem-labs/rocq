@@ -66,6 +66,11 @@ val challenge_deps :
   (DirPath.t * challenge_library) list -> (DirPath.t * (DirPath.t * vodigest) array) list
 (** The dependency digests each interned library records. *)
 
+val challenge_files :
+  (DirPath.t * challenge_library) list -> (DirPath.t * physical_path) list
+(** The file each interned library was read from, as the loader recorded
+    it. *)
+
 val import_challenge :
   safe_environment -> (DirPath.t * challenge_library) list -> safe_environment
 (** Import the interned libraries without checking them. *)
@@ -75,3 +80,7 @@ val library_file : DirPath.t -> physical_path
 
 val interned_deps : unit -> (DirPath.t * (DirPath.t * vodigest) array) list
 (** The dependency digests every library interned so far records. *)
+
+val interned_files : unit -> (DirPath.t * physical_path) list
+(** The file each library loaded so far was read from, as the loader
+    recorded it. *)

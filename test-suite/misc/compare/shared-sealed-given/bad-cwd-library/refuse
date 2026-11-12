@@ -1,0 +1,2 @@
+The run must not complete: the answer loaded a library outside the
+challenge's roots from the working directory.
