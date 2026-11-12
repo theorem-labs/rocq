@@ -1,0 +1,1 @@
+Symbol s : nat.

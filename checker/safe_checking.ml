@@ -80,6 +80,11 @@ let import senv opac clib digest : _ * _ =
    merging against it adds no trust, and the grader's invocation leaves our
    own statement library unchecked. *)
 let unsafe_import senv clib digest =
+  (* The library's own flags first, as [import] sets them: compiling the
+     bytecode below adds the library's constants to the environment, and a
+     [Symbol] among them is refused unless the environment allows rewrite
+     rules, which a library built with them asks for. *)
+  let senv = Safe_typing.check_flags_for_library clib senv in
   (* Admitted libraries are trusted for their declarations, but their bytecode is
      recompiled all the same, so that the trusted surface is exactly the same. *)
   let env = env_of_library senv clib in

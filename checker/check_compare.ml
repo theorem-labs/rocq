@@ -1209,9 +1209,9 @@ let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root ~open_r
         p)
       cfg.cfg_challenge_files
   in
-  (* A run that does not complete must leave no verdict behind: a reader
-     that finds yesterday's file would read a verdict for today's answer. *)
-  (try Sys.remove out with Sys_error _ -> ());
+  (* The verdict file is already gone: rocqchk removes it before it parses
+     its command line (coqchk_main.ml), so no stop before the verdict, here
+     or earlier, leaves yesterday's verdict to be read as today's. *)
   { cfg; dir; out; files;
     prechecked = List.map (fun p -> dirpath_of_string p.pc_library) cfg.cfg_prechecked;
     add_challenge_load_path; under_challenge_root; open_roots;
@@ -1611,11 +1611,49 @@ let describe_object obj =
   | GlobRef.VarRef id -> "the section variable " ^ Id.to_string id
 
 
-(* Only a rewrite rule the answer itself declares is the answer's doing: a
-   pre-checked library may carry its own, and the task did not write it. *)
-let has_rewrite_rules env libs =
-  Cmap_env.exists (fun c _ -> in_libs libs (Constant.modpath c))
-    (Environ.Internal.View.view env).Environ.Internal.View.env_symb_pats
+(* The first rewrite rule a module declares, as the symbol it rewrites. The
+   walk reads the declarations themselves, not the environment's table of
+   rules, which is keyed by the symbol a rule rewrites: a rule may rewrite
+   a symbol of another library, and a module sealed by a signature that
+   hides its rule puts no rule in the environment at all, though its body
+   was checked with the rule in force. So it reads the signature, the
+   structure that implements it, submodules, functor parameters and module
+   types. A [Symbol] declaration is a constant, not a rule: it is an
+   assumption, which the axiom check counts. *)
+let rec rule_in_signature = function
+  | NoFunctor struc -> rule_in_structure struc
+  | MoreFunctor (_, mtb, sign) ->
+    (match rule_in_signature (Mod_declarations.mod_type mtb) with
+     | Some _ as r -> r
+     | None -> rule_in_signature sign)
+
+and rule_in_structure struc =
+  List.find_map (fun (_, field) -> match field with
+      | SFBrules { rewrules_rules = (c, _) :: _ } -> Some c
+      | SFBrules { rewrules_rules = [] } | SFBconst _ | SFBmind _ -> None
+      | SFBmodule mb -> rule_in_module mb
+      | SFBmodtype mtb -> rule_in_signature (Mod_declarations.mod_type mtb))
+    struc
+
+and rule_in_module mb =
+  match rule_in_signature (Mod_declarations.mod_type mb) with
+  | Some _ as r -> r
+  | None ->
+    match Mod_declarations.mod_expr mb with
+    | Mod_declarations.Struct (_, struc) -> rule_in_structure struc
+    | Mod_declarations.(Abstract | Algebraic _ | FullStruct) -> None
+
+(* The first rewrite rule one of [libs] declares, in the answer's
+   environment, which holds every library the answer loaded. *)
+let answer_rewrite_rule env libs =
+  List.find_map (fun dp ->
+      match Environ.lookup_module (ModPath.MPfile dp) env with
+      | mb -> rule_in_module mb
+      | exception Not_found ->
+        CErrors.user_err
+          Pp.(str ("The answer loaded the library " ^ DirPath.to_string dp ^
+                   ", which its environment does not hold.")))
+    libs
 
 (* A permitted axiom is a declaration the task hands the agent, so it is
    matched by its kernel name, not by the name it prints: a module path and
@@ -1688,18 +1726,18 @@ let run t env access senv0 ~answer_deps =
   (* A pre-checked library, and every library it rests on, is one file for
      both sides: its declarations are equal by construction, and walking
      them would read the whole standard library on every run. *)
-  let rec closure acc = function
+  let rec closure deps_of acc = function
     | [] -> acc
     | dp :: tl ->
-      if List.exists (DirPath.equal dp) acc then closure acc tl
+      if List.exists (DirPath.equal dp) acc then closure deps_of acc tl
       else
-        let deps = match List.find_opt (fun (l, _) -> DirPath.equal l dp) all_deps with
+        let deps = match List.find_opt (fun (l, _) -> DirPath.equal l dp) deps_of with
           | None -> []
           | Some (_, a) -> Array.to_list (Array.map fst a)
         in
-        closure (dp :: acc) (deps @ tl)
+        closure deps_of (dp :: acc) (deps @ tl)
   in
-  let skip = closure [] t.prechecked in
+  let skip = closure all_deps [] t.prechecked in
   let libs =
     CList.map_filter (fun (dp, _) ->
         if List.exists (DirPath.equal dp) skip then None else Some dp)
@@ -1742,7 +1780,21 @@ let run t env access senv0 ~answer_deps =
      the other's. *)
   let an_index = constant_index env in
   let an_kernel = kernel_index env in
-  let rewrite_rules = has_rewrite_rules env libs && not t.cfg.cfg_rewrite_rules in
+  (* Every library the answer loaded is the answer's to answer for, except
+     a pre-checked one, what a pre-checked one rests on (its bytes pin the
+     digests of those), and a shared one: those may carry rules the task did
+     not write. That includes a library only the answer has, which the
+     declaration comparison does not visit. *)
+  let rewrite_rule =
+    if t.cfg.cfg_rewrite_rules then None
+    else
+      let answer_skip = closure answer_deps [] t.prechecked in
+      answer_rewrite_rule env
+        (CList.map_filter (fun (dp, _) ->
+             if one_file t dp || List.exists (DirPath.equal dp) answer_skip then None
+             else Some dp)
+            answer_deps)
+  in
   let st = Check_closure.closure_state env access in
   let records =
     List.map (fun th ->
@@ -1825,8 +1877,11 @@ let run t env access senv0 ~answer_deps =
                   match universes with
                   | Some u -> Some u
                   | None ->
-                    if rewrite_rules then Some "the answer declares a rewrite rule"
-                    else match bad_axioms with
+                    match rewrite_rule with
+                    | Some c ->
+                      Some ("the answer declares a rewrite rule on " ^ Constant.to_string c)
+                    | None ->
+                    match bad_axioms with
                       | (a, _) :: _ -> Some ("the axiom " ^ a ^ " is not permitted")
                       | [] ->
                       match forged_axioms with
