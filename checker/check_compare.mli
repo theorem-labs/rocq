@@ -88,7 +88,13 @@ val read_config : string -> config
     entry when its config requests one.
 
     [rewrite_rules] (default [false]) is whether the answer may declare a
-    rewrite rule. A [Symbol] declaration with no rule is not one: it is an
+    rewrite rule. Without it, every theorem fails when a library the answer
+    loaded declares one, whatever symbol it rewrites: each library except a
+    pre-checked one, what a pre-checked one rests on, and a shared one. A
+    library only the answer has counts, and so does a rule inside a module
+    whose signature hides it. A rule the challenge declares counts too, since
+    the answer's copy of it declares it again: such a task needs the
+    option. A [Symbol] declaration with no rule is not a rule: it is an
     assumption, and the closure reports it among the theorem's axioms like
     an [Axiom], so a theorem whose proof reaches a symbol fails unless the
     config permits that symbol by name, under the rule for permitted axioms
