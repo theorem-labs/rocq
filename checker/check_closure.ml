@@ -131,9 +131,9 @@ and node = {
   (* no body: a constant without one, an opaque constant whose body cannot be
      read, or an object neither the environment nor an implementation
      resolves, which is reported rather than left out *)
-  flags : (string * string) list;
+  flags : (string * GlobRef.t) list;
   (* the relaxed typing conditions the selected object relies on,
-     (kind, object) *)
+     (kind, object); an inductive block's object is its first inductive *)
 }
 
 
@@ -324,8 +324,8 @@ let push_context view ctx todo =
       Context.Rel.Declaration.fold_constr (fun c todo -> (view, c) :: todo) d todo)
     todo ctx
 
-let typing_flags name (tf : typing_flags) acc =
-  let add ok kind acc = if ok then acc else (kind, name) :: acc in
+let typing_flags obj (tf : typing_flags) acc =
+  let add ok kind acc = if ok then acc else (kind, obj) :: acc in
   acc
   |> add tf.check_universes "type-in-type"
   |> add tf.check_guarded "unsafe-fixpoint"
@@ -382,7 +382,7 @@ let constant_node st view kn =
     in
     let refs = walk st (fresh_gen st) empty_refs ((declaration_view, cb.const_type) :: body) in
     { refs = refs_to_list refs; axiom;
-      flags = typing_flags (Constant.to_string kn) cb.const_typing_flags [] }
+      flags = typing_flags (GlobRef.ConstRef kn) cb.const_typing_flags [] }
 
 let mind_node st view mind =
   match lookup_mind st view mind with
@@ -402,7 +402,7 @@ let mind_node st view mind =
                      CheckNames.quote (Id.to_string mip.mind_typename) ^
                      ", which is not an identifier.")))
       mib.mind_packets;
-    let name = MutInd.to_string mind in
+    let name = GlobRef.IndRef (mind, 0) in
     let tf = mib.mind_typing_flags in
     let flags = typing_flags name tf [] in
     let add cond kind flags = if cond then (kind, name) :: flags else flags in
@@ -462,10 +462,10 @@ let check_printed_name obj =
                ", which is not made of identifiers."))
 
 module FlagSet = Stdlib.Set.Make (struct
-    type t = string * string
+    type t = string * GlobRef.t
     let compare (k1, o1) (k2, o2) =
       let c = String.compare k1 k2 in
-      if Int.equal c 0 then String.compare o1 o2 else c
+      if Int.equal c 0 then GlobRef.UserOrd.compare o1 o2 else c
   end)
 
 (** The axioms and flags of every object reachable from [root]. The axioms
@@ -496,8 +496,16 @@ let closure st root =
   in
   loop GlobRef.Set_env.empty GlobRef.Set_env.empty GlobRef.Set_env.empty FlagSet.empty [Public, root]
 
+(* The printed names of the axioms and flags, for the report's lines. They
+   are not identities: two objects can print the same name and then make
+   one line, so no grader may check these lines against a permitted list by
+   name ([Check_closure.print]'s documentation). *)
 let axiom_names axioms =
   GlobRef.Set_env.fold (fun obj acc -> CString.Set.add (name_of obj) acc) axioms CString.Set.empty
+
+let flag_names flags =
+  FlagSet.fold (fun (kind, obj) acc -> CString.Set.add (kind ^ " " ^ name_of obj) acc)
+    flags CString.Set.empty
 
 (** {6 The type match} *)
 
@@ -636,7 +644,7 @@ let print env access requests =
       | None -> line "statement %s %s %s model-missing 0 0" r.req_name r.req_model trusted
       | Some model ->
         let axioms, flags = closure st (GlobRef.ConstRef model) in
-        let axioms = axiom_names axioms in
+        let axioms = axiom_names axioms and flags = flag_names flags in
         let verdict = match r.req_trusted with
           | None -> "not-requested"
           | Some t ->
@@ -645,9 +653,9 @@ let print env access requests =
             | Some t -> type_verdict env model t
         in
         line "statement %s %s %s %s %d %d" r.req_name r.req_model trusted verdict
-          (CString.Set.cardinal axioms) (FlagSet.cardinal flags);
+          (CString.Set.cardinal axioms) (CString.Set.cardinal flags);
         CString.Set.iter (line "axiom %s %s" r.req_name) axioms;
-        FlagSet.iter (fun (kind, obj) -> line "flag %s %s %s" r.req_name kind obj) flags)
+        CString.Set.iter (line "flag %s %s" r.req_name) flags)
     requests;
   line "END STATEMENT REPORT"
 
@@ -668,4 +676,9 @@ let closure_state env access = {
 let axioms_and_flags st kn =
   let axioms, flags = closure st (GlobRef.ConstRef kn) in
   let axioms = List.map (fun obj -> name_of obj, obj) (GlobRef.Set_env.elements axioms) in
-  List.stable_sort (fun (a, _) (b, _) -> String.compare a b) axioms, FlagSet.elements flags
+  let flags =
+    List.map (fun (kind, obj) -> kind, name_of obj, obj) (FlagSet.elements flags)
+    |> List.stable_sort (fun (k1, n1, _) (k2, n2, _) ->
+        let c = String.compare k1 k2 in if Int.equal c 0 then String.compare n1 n2 else c)
+  in
+  List.stable_sort (fun (a, _) (b, _) -> String.compare a b) axioms, flags

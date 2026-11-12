@@ -1494,9 +1494,35 @@ let compare_declarations t ~challenge_env ~answer_env ~libs ~theorems =
 (************************************************************************)
 (** {6 The verdict} *)
 
+(* Every constant of [env] under the name it prints. Two constants can print
+   the same name (the constant [thm] of a module [Q] of the library [R.P]
+   and the constant [thm] of the library [R.P.Q]), so a name maps to all of
+   them. *)
 let constant_index env =
-  Environ.fold_constants (fun c _ acc -> CString.Map.add (Constant.to_string c) c acc)
+  Environ.fold_constants (fun c _ acc ->
+      CString.Map.update (Constant.to_string c)
+        (fun l -> Some (c :: Option.default [] l)) acc)
     env CString.Map.empty
+
+(* Every constant of [env] under its kernel name. *)
+let kernel_index env =
+  Environ.fold_constants (fun c _ acc -> KNmap.add (Constant.user c) c acc) env KNmap.empty
+
+(* Where an object lives, in words, for a refusal: "the constant g of
+   module Q of the library R.P". *)
+let describe_object obj =
+  let rec path = function
+    | ModPath.MPfile dp -> "the library " ^ DirPath.to_string dp
+    | ModPath.MPdot (mp, l) -> "module " ^ Label.to_string l ^ " of " ^ path mp
+    | ModPath.MPbound _ as mp -> "the functor parameter " ^ ModPath.to_string mp
+  in
+  match obj with
+  | GlobRef.ConstRef c ->
+    "the constant " ^ Label.to_string (Constant.label c) ^ " of " ^ path (Constant.modpath c)
+  | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+    "the inductive block " ^ Label.to_string (MutInd.label mind) ^ " of " ^ path (MutInd.modpath mind)
+  | GlobRef.VarRef id -> "the section variable " ^ Id.to_string id
+
 
 (* Only a rewrite rule the answer itself declares is the answer's doing: a
    pre-checked library may carry its own, and the task did not write it. *)
@@ -1508,19 +1534,60 @@ let has_rewrite_rules env libs =
    matched by its kernel name, not by the name it prints: a module path and
    a library path can print alike, and the constant [g] of a module [Q] of
    the library [R.P] prints [R.P.Q.g], the name of the constant [g] of the
-   library [R.P.Q]. An axiom the answer's proof reaches is the task's
-   declaration when the answer declares it and either the challenge declares
-   the same kernel name (the challenge's own files, which the declaration
-   comparison holds the answer to, and the libraries both sides read from
-   one file), or its module path is rooted at a pre-checked library, whose
-   bytes the config pins and which the comparison does not walk. An object
-   that is no constant is an axiom only when no library declares it, and
-   is no declaration of the task's. *)
+   library [R.P.Q]. An axiom constant the answer's proof reaches is the
+   task's declaration when either
+   - its module path, followed through every [MPdot] to its [MPfile], is
+     rooted at a pre-checked library. The config pins that library's bytes
+     by digest, so no answer file can add a constant under its [MPfile].
+     The constant may be a field of a sealed module that the library does
+     not export: the closure walk reaches it through the implementation,
+     where no environment lookup sees it, and it is still the library's
+     own; or
+   - both the challenge environment and the answer environment declare the
+     same kernel name (the challenge's own files, which the declaration
+     comparison holds the answer to, and the libraries both sides read from
+     one file). These lookups see only exported fields. Requiring the
+     answer's to export it keeps the constant under that comparison: an
+     answer that seals a challenge module, hides its axiom and gives it
+     another type is refused. An axiom hidden inside a sealed module of a
+     challenge file is refused even when the challenge hides it too:
+     fail-closed, since the comparison does not see such a field.
+   A forged constant declared in a changed file has a module path rooted
+   at that file, so its kernel name is neither under a pre-checked
+   [MPfile] nor one the challenge declares.
+   The same rule, on the inductive block's kernel name, decides whether a
+   tolerated flag's object is the task's own. An axiom that is no constant
+   is reached only when no library declares it, so the verdict counts it
+   as no declaration of the task's without asking this rule. *)
 let task_declares t ~challenge_env ~answer_env = function
   | GlobRef.ConstRef c ->
-    Environ.mem_constant c answer_env
-    && (Environ.mem_constant c challenge_env || in_libs t.prechecked (Constant.modpath c))
-  | GlobRef.IndRef _ | GlobRef.ConstructRef _ | GlobRef.VarRef _ -> false
+    in_libs t.prechecked (Constant.modpath c)
+    || (Environ.mem_constant c challenge_env && Environ.mem_constant c answer_env)
+  | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+    in_libs t.prechecked (MutInd.modpath mind)
+    || (Environ.mem_mind mind challenge_env && Environ.mem_mind mind answer_env)
+  | GlobRef.VarRef _ -> false
+
+(* Why [task_declares] refused [obj], for the refusal's text. *)
+let why_not_task ~challenge_env ~answer_env obj =
+  let ch, an = match obj with
+    | GlobRef.ConstRef c -> Environ.mem_constant c challenge_env, Environ.mem_constant c answer_env
+    | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
+      Environ.mem_mind mind challenge_env, Environ.mem_mind mind answer_env
+    | GlobRef.VarRef _ -> false, false
+  in
+  let why =
+    match obj with
+    | GlobRef.VarRef _ -> "a section variable is no declaration of the task's"
+    | _ ->
+      if ch && not an then
+        "the challenge declares it but the answer does not export it, and no pre-checked \
+         library holds it"
+      else
+        "the challenge does not declare it (or hides it in a sealed module), and no \
+         pre-checked library holds it"
+  in
+  "the proof reaches " ^ describe_object obj ^ ": " ^ why
 
 let run t env access senv0 ~answer_deps =
   check_open_roots t ~answer_deps;
@@ -1547,13 +1614,21 @@ let run t env access senv0 ~answer_deps =
       all_deps
   in
   let ch_index = constant_index challenge_env in
-  (* A theorem the challenge does not state is a config error, not a verdict. *)
-  List.iter (fun th ->
-      if not (CString.Map.mem th.th_name ch_index) then
-        CErrors.user_err
-          Pp.(str ("The config names the theorem " ^ th.th_name ^
-                   ", which the challenge does not hold.")))
-    t.cfg.cfg_theorems;
+  (* A theorem the challenge does not state, or states twice under one
+     printed name, is a config error, not a verdict. *)
+  let ch_theorem th =
+    match CString.Map.find_opt th.th_name ch_index with
+    | None | Some [] ->
+      CErrors.user_err
+        Pp.(str ("The config names the theorem " ^ th.th_name ^
+                 ", which the challenge does not hold."))
+    | Some [c] -> c
+    | Some (_ :: _ :: _) ->
+      CErrors.user_err
+        Pp.(str ("The config names the theorem " ^ th.th_name ^
+                 ", a name that two constants of the challenge print."))
+  in
+  List.iter (fun th -> ignore (ch_theorem th)) t.cfg.cfg_theorems;
   let theorems =
     List.fold_left (fun acc th -> CString.Set.add th.th_name acc) CString.Set.empty
       t.cfg.cfg_theorems
@@ -1564,7 +1639,12 @@ let run t env access senv0 ~answer_deps =
   let failed_decl =
     List.fold_left (fun acc f -> CString.Map.add f.f_name f.f_reason acc) CString.Map.empty failures
   in
+  (* The theorem a verdict reads is the answer's constant of the challenge
+     theorem's kernel name, not whichever answer constant prints its name:
+     a module Q of the library R.P holding a constant thm prints R.P.Q.thm,
+     the name of the theorem thm of the library R.P.Q. *)
   let an_index = constant_index env in
+  let an_kernel = kernel_index env in
   let rewrite_rules = has_rewrite_rules env libs && not t.cfg.cfg_rewrite_rules in
   let st = Check_closure.closure_state env access in
   let records =
@@ -1574,14 +1654,16 @@ let run t env access senv0 ~answer_deps =
           | None -> t.cfg.cfg_axioms
         in
         let verdict, reason, axioms, flags =
-          match CString.Map.find_opt th.th_name an_index with
+          let printing = Option.default [] (CString.Map.find_opt th.th_name an_index) in
+          match KNmap.find_opt (Constant.user (ch_theorem th)) an_kernel with
           | None -> "fail", "missing", [], []
           | Some kn ->
             let axioms, flags = Check_closure.axioms_and_flags st kn in
+            let flags = List.map (fun (k, o, obj) -> k, o, Some obj) flags in
             let flags =
               match skipped_answer_constraints with
               | Some constraints ->
-                (answer_universe_constraints, constraints) :: flags
+                (answer_universe_constraints, constraints, None) :: flags
               | None -> flags
             in
             let bad_axioms = List.filter (fun (a, _) -> not (List.mem a permitted)) axioms in
@@ -1590,24 +1672,48 @@ let run t env access senv0 ~answer_deps =
             let forged_axioms =
               List.filter (fun (a, obj) ->
                   List.mem a permitted
-                  && not (task_declares t ~challenge_env ~answer_env:env obj))
+                  && not (match obj with
+                      | GlobRef.ConstRef _ -> task_declares t ~challenge_env ~answer_env:env obj
+                      | GlobRef.IndRef _ | GlobRef.ConstructRef _ | GlobRef.VarRef _ -> false))
                 axioms
             in
             let axioms = CString.Set.elements (CString.Set.of_list (List.map fst axioms)) in
             (* A config entry tolerates a flag when it names the same kind
-               and either the same object or no object at all. *)
-            let tolerated (kind, obj) =
-              List.exists (fun (k, o) ->
-                  String.equal k kind
-                  && (match o with None -> true | Some o -> String.equal o obj))
+               and either no object at all, or the flag's object by the name
+               it prints AND that object is the task's own declaration of
+               that name, by the rule for permitted axioms
+               ([task_declares]). *)
+            let names_it (kind, printed, _) (k, o) =
+              String.equal k kind && (match o with None -> true | Some o -> String.equal o printed)
+            in
+            let tolerated ((_, _, obj) as f) =
+              List.exists (fun ((_, o) as entry) ->
+                  names_it f entry
+                  && (match o, obj with
+                      | None, _ -> true
+                      | Some _, Some obj -> task_declares t ~challenge_env ~answer_env:env obj
+                      | Some _, None -> false))
                 t.cfg.cfg_flags
             in
             let bad_flags = List.filter (fun f -> not (tolerated f)) flags in
+            (* The verdict prints each (kind, printed object) once, in the
+               order of [flags]: sorted, after any skipped constraints. *)
+            let flags =
+              List.fold_right (fun (k, o, _) acc ->
+                  match acc with
+                  | (k', o') :: _ when String.equal k k' && String.equal o o' -> acc
+                  | _ -> (k, o) :: acc)
+                flags []
+            in
             (* A challenge declaration the answer changed is a changed task,
                whichever theorem names it: the statements are written against
                those definitions, so no theorem of the run can pass. The
                theorem's own record names its own difference when it has one. *)
             let reason =
+              if List.length printing > 1 then
+                Some ("the answer declares " ^ string_of_int (List.length printing) ^
+                      " constants that print the theorem's name")
+              else
               match CString.Map.find_opt th.th_name failed_decl with
               | Some d -> Some d
               | None ->
@@ -1623,13 +1729,23 @@ let run t env access senv0 ~answer_deps =
                       | (a, _) :: _ -> Some ("the axiom " ^ a ^ " is not permitted")
                       | [] ->
                       match forged_axioms with
-                      | (a, _) :: _ ->
-                        Some ("the axiom " ^ a ^ " is not the task's declaration of that name")
+                      | (a, obj) :: _ ->
+                        Some ("the axiom " ^ a ^ " is not the task's declaration of that name: " ^
+                              why_not_task ~challenge_env ~answer_env:env obj)
                       | [] ->
                         match bad_flags with
-                        | (k, o) :: _ ->
-                          Some ("the relaxed typing flag " ^ k ^ " on " ^ o ^
-                                " is not tolerated")
+                        | ((k, o, obj) as f) :: _ ->
+                          let by_name =
+                            List.exists (fun ((_, e) as entry) -> Option.has_some e && names_it f entry)
+                              t.cfg.cfg_flags
+                          in
+                          Some ("the relaxed typing flag " ^ k ^ " on " ^ o ^ " is not tolerated" ^
+                                match by_name, obj with
+                                | true, Some obj ->
+                                  ": the config tolerates it on that name, but " ^ o ^
+                                  " is not the task's declaration of that name: " ^
+                                  why_not_task ~challenge_env ~answer_env:env obj
+                                | _ -> "")
                         | [] -> None
             in
             (match reason with
