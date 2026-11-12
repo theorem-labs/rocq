@@ -449,7 +449,7 @@ let eq_mib u _env mib1 mib2 =
 (* inductives in the session.                                          *)
 (* ------------------------------------------------------------------ *)
 
-let index : (string, MutInd.t list ref) Hashtbl.t = Hashtbl.create 509
+let index : (string, MutInd.t list ref) Hashtbl.t ref = ref (Hashtbl.create 509)
 
 let shape_key mib =
   let b = Buffer.create 256 in
@@ -485,12 +485,12 @@ let shape_key mib =
   Digest.to_hex (Digest.string (Buffer.contents b))
 
 let index_add key mind =
-  match Hashtbl.find_opt index key with
+  match Hashtbl.find_opt !index key with
   | Some l -> l := mind :: !l
-  | None -> Hashtbl.add index key (ref [mind])
+  | None -> Hashtbl.add !index key (ref [mind])
 
 let index_find key =
-  match Hashtbl.find_opt index key with Some l -> !l | None -> []
+  match Hashtbl.find_opt !index key with Some l -> !l | None -> []
 
 (* The universe context of each library this process has loaded, so that the
    constraints on a level a merge would equate can be compared. *)
@@ -781,6 +781,52 @@ let constraints_agree ~new_ctx ~old_ctx pairs =
    is always renamed into an already-loaded one, never the other way round --
    so nothing already in the environment ever needs rewriting. *)
 let global_subst = ref Mod_subst.empty_subst
+
+(* ------------------------------------------------------------------ *)
+(* The state, as one value.                                            *)
+(* ------------------------------------------------------------------ *)
+
+(* What the refs above hold describes ONE environment: the one the libraries
+   they record were loaded into. A candidate in [index] is looked up in the
+   environment [merge] is given, and [global_subst] renames into names that
+   environment holds. A process that builds a second environment from
+   nothing -- [rocqchk -compare] loads the challenge beside the answer
+   (dispatch://BET-894) -- must load it with state of its own: with the
+   first one's installed, a challenge block found its own answer-side copy
+   as a candidate, which the challenge environment does not hold, and
+   [Environ.lookup_mind] ended the run in an anomaly. The option itself
+   ([flag_enabled], [flag_verbose]) is the process's setting, not part of an
+   environment's state. *)
+type state = {
+  st_index : (string, MutInd.t list ref) Hashtbl.t;
+  st_library_univs : Univ.ContextSet.t DirPath.Map.t;
+  st_merged : KerName.t KerName.Map.t;
+  st_merge_targets : KerName.Set.t;
+  st_global_subst : Mod_subst.substitution;
+}
+
+let fresh_state () = {
+  st_index = Hashtbl.create 509;
+  st_library_univs = DirPath.Map.empty;
+  st_merged = KerName.Map.empty;
+  st_merge_targets = KerName.Set.empty;
+  st_global_subst = Mod_subst.empty_subst;
+}
+
+let swap_state s =
+  let old = {
+    st_index = !index;
+    st_library_univs = !library_univs;
+    st_merged = !merged;
+    st_merge_targets = !merge_targets;
+    st_global_subst = !global_subst;
+  } in
+  index := s.st_index;
+  library_univs := s.st_library_univs;
+  merged := s.st_merged;
+  merge_targets := s.st_merge_targets;
+  global_subst := s.st_global_subst;
+  old
 
 (* The merges this process has already made, applied to a library's body
    without looking for new ones. The checker type-checks a library in the
