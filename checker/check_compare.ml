@@ -1373,7 +1373,18 @@ let check_dep_digests t ~challenge ~answer =
    refuses the run rather than reporting a verdict. *)
 let load_challenge t senv0 ~answer_deps =
   let saved = CheckLibrary.swap_tables (CheckLibrary.fresh_tables ()) in
-  let restore () = ignore (CheckLibrary.swap_tables saved) in
+  (* -merge-inductives keeps state that describes the answer's environment,
+     and a candidate in it is looked up in the environment being loaded. The
+     challenge's is built from nothing, so it gets a fresh state and makes its
+     own merges, by the same comparison on its own files: the answer's
+     merges renamed the answer's copies, the comparison below compares
+     canonical names, and a merge the two sides do not share is a difference
+     it refuses (dispatch://BET-895). *)
+  let saved_merges = Indmerge.swap_state (Indmerge.fresh_state ()) in
+  let restore () =
+    ignore (Indmerge.swap_state saved_merges);
+    ignore (CheckLibrary.swap_tables saved)
+  in
   Fun.protect ~finally:restore (fun () ->
       t.add_challenge_load_path ();
       (* A pre-checked library is NOT a shared one, whatever root it sits
