@@ -1612,9 +1612,11 @@ let describe_object obj =
 
 
 (* Only a rewrite rule the answer itself declares is the answer's doing: a
-   pre-checked library may carry its own, and the task did not write it. *)
+   pre-checked library may carry its own, and the task did not write it. A
+   [Symbol] declaration alone puts its constant in this map with no rule;
+   that is an assumption, which the axiom check counts, not a rule. *)
 let has_rewrite_rules env libs =
-  Cmap_env.exists (fun c _ -> in_libs libs (Constant.modpath c))
+  Cmap_env.exists (fun c rules -> not (CList.is_empty rules) && in_libs libs (Constant.modpath c))
     (Environ.Internal.View.view env).Environ.Internal.View.env_symb_pats
 
 (* A permitted axiom is a declaration the task hands the agent, so it is

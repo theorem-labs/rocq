@@ -87,6 +87,13 @@ val read_config : string -> config
     the task enables [allow_uip]; this comparator accepts a kind-only [uip]
     entry when its config requests one.
 
+    [rewrite_rules] (default [false]) is whether the answer may declare a
+    rewrite rule. A [Symbol] declaration with no rule is not one: it is an
+    assumption, and the closure reports it among the theorem's axioms like
+    an [Axiom], so a theorem whose proof reaches a symbol fails unless the
+    config permits that symbol by name, under the rule for permitted axioms
+    (a symbol the answer itself declares is never the task's).
+
     [answer-universe-constraints] is a kind-only tolerance for the global
     universe comparison, and one that names an object is an error. It skips
     only the answer-to-challenge direction; the challenge-to-answer
