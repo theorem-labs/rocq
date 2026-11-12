@@ -1209,9 +1209,9 @@ let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root ~open_r
         p)
       cfg.cfg_challenge_files
   in
-  (* A run that does not complete must leave no verdict behind: a reader
-     that finds yesterday's file would read a verdict for today's answer. *)
-  (try Sys.remove out with Sys_error _ -> ());
+  (* The verdict file is already gone: rocqchk removes it before it parses
+     its command line (coqchk_main.ml), so no stop before the verdict, here
+     or earlier, leaves yesterday's verdict to be read as today's. *)
   { cfg; dir; out; files;
     prechecked = List.map (fun p -> dirpath_of_string p.pc_library) cfg.cfg_prechecked;
     add_challenge_load_path; under_challenge_root; open_roots;

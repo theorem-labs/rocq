@@ -115,6 +115,13 @@ json_valid() {
   fi
 }
 
+# A verdict file an earlier run left, which says pass: a run that stops
+# before its verdict must remove it, wherever it stops, or a reader takes
+# that old verdict for this run's (dispatch://BET-895, P2-1).
+seed_stale_verdict() {
+  printf '%s\n' '{"format":1,"theorems":[{"name":"Top.A.thm","verdict":"pass","reason":"","axioms":[],"flags":[]}],"declarations":[]}' > "$1"
+}
+
 # ---------------------------------------------------------------- sha256
 #
 # The comparator carries its own SHA-256, because the checker links no
@@ -408,9 +415,13 @@ run_case() {
     fi
     build_tree "$bad" "$bdir" "$pre" "$border" "$bvendor" "$vroot"
     rocq_env=("${saved_env[@]}")
+    # A run that does not complete must leave no verdict behind, whatever
+    # file was there before it: here, the honest answer's passing one.
+    seed_stale_verdict "$work/out.json"
     code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor" "$vroot" "$bcwd")
     if [ -f "$bad/refuse" ]; then
       [ "$code" != "0" ] || fail "$name/$b: the run should not have completed"
+      [ ! -f "$work/out.json" ] || fail "$name/$b: an earlier verdict file survived the refusal"
       # A refusal that must be a specific one names it, so that the run
       # cannot pass this check by failing for another reason.
       if [ -f "$bad/expected-reason" ]; then
@@ -468,7 +479,7 @@ run_case() {
     [ -d "$ref" ] || continue
     local r
     r=$(basename "$ref")
-    rm -f "$work/out.json"
+    seed_stale_verdict "$work/out.json"
     if [ -f "$ref/config.tmpl" ]; then
       make_config "$ref/config.tmpl" "$work/challenge" "$work/bad-config.json" "$pre"
     else
@@ -476,7 +487,7 @@ run_case() {
     fi
     code=$(run_compare "$work" "$work/answer" "$work/bad-config.json" "$pre")
     [ "$code" != "0" ] || fail "$name/$r: the run should not have completed"
-    [ ! -f "$work/out.json" ] || fail "$name/$r: a verdict file was written anyway"
+    [ ! -f "$work/out.json" ] || fail "$name/$r: an earlier verdict file survived the refusal"
     echo "  ok $name/$r"
   done
 
@@ -506,12 +517,12 @@ run_case() {
   # A config whose bytes are not UTF-8. It is written here rather than kept
   # as a file, because a repository's text files are UTF-8.
   if [ -f "$c/utf8-refusal" ]; then
-    rm -f "$work/out.json"
+    seed_stale_verdict "$work/out.json"
     printf '{"theorems": [{"name": "Top.A.\xff"}], "challenge_files": [{"path": "A.vo", "sha256": "%s"}]}\n' \
       "$(bounded rocqchk -sha256 "$work/challenge/A.vo")" > "$work/bad-config.json"
     code=$(run_compare "$work" "$work/answer" "$work/bad-config.json" "$pre")
     [ "$code" != "0" ] || fail "$name: a config that is not UTF-8 was accepted"
-    [ ! -f "$work/out.json" ] || fail "$name: a verdict file was written anyway"
+    [ ! -f "$work/out.json" ] || fail "$name: an earlier verdict file survived the refusal"
     echo "  ok $name/refuse-invalid-utf8"
   fi
 
@@ -546,9 +557,11 @@ case_vos() {
     " \"prechecked\": [{\"library\": \"Corelib.Init.Prelude\", \"sha256\": \"$prelude_sha\"}]," \
     " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
   local code
+  # The answer's own check stops this run, before any comparison.
+  seed_stale_verdict "$work/out.json"
   code=$(run_compare "$work" "$work/answer" "$work/config.json" "")
   [ "$code" != "0" ] || { cat "$work/log"; fail "vos: an answer without its proofs was graded"; }
-  [ ! -f "$work/out.json" ] || fail "vos: a verdict file was written anyway"
+  [ ! -f "$work/out.json" ] || fail "vos: an earlier verdict file survived the refusal"
   rm -rf "$work"
   echo "ok vos"
 }
@@ -584,10 +597,11 @@ case_digest() {
     "   {\"library\": \"Pre.Shared\", \"sha256\": \"$pre_sha\"}]," \
     " \"challenge_files\": [{\"path\": \"A.vo\", \"sha256\": \"$sha\"}]}" > "$work/config.json"
   local code
+  seed_stale_verdict "$work/out.json"
   code=$(run_compare "$work" "$work/answer" "$work/config.json" "$work/pre2")
   [ "$code" != "0" ] \
     || { cat "$work/log"; fail "digest: the two sides' shared libraries differ and the run passed"; }
-  [ ! -f "$work/out.json" ] || fail "digest: a verdict file was written anyway"
+  [ ! -f "$work/out.json" ] || fail "digest: an earlier verdict file survived the refusal"
   rm -rf "$work"
   echo "ok digest"
 }
@@ -688,7 +702,7 @@ case_norec() {
       norec) sel=(-norec Top.SubA.Defs -norec Top.SubB.Proof) ;;
       positional) sel=(Top.SubA.Defs Top.SubB.Proof) ;;
     esac
-    rm -f "$work/out.json"
+    seed_stale_verdict "$work/out.json"
     set +e
     bounded rocqchk -silent -Q "$tree" Top -compare "$work/config.json" \
       -challenge "$work/challenge" -compare-out "$work/out.json" "${sel[@]}" \

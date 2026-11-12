@@ -440,6 +440,24 @@ let rec explain_exn = function
 
 let profile = ref None
 
+(* The verdict file of a -compare run goes first, before the command line is
+   parsed or anything is checked, so that a run that stops early -- a usage
+   error, a malformed config, a challenge file's sha256, an answer that fails
+   its check -- leaves no earlier run's verdict where a reader would take it
+   for this run's (dispatch://BET-895, P2-1). The file is the argument after
+   any "-compare-out" token. One that cannot be removed is emptied, which no
+   reader takes for a verdict. *)
+let remove_stale_verdicts args =
+  let rec scan = function
+    | "-compare-out" :: f :: rem ->
+      (try Sys.remove f with Sys_error _ ->
+         try close_out (open_out_gen [Open_wronly; Open_trunc] 0 f) with Sys_error _ -> ());
+      scan rem
+    | _ :: rem -> scan rem
+    | [] -> ()
+  in
+  scan args
+
 let parse_args argv =
   let rec parse = function
     | [] -> ()
@@ -545,7 +563,9 @@ let parse_args argv =
         fatal_error (str "Unknown option " ++ str s) 1
     | s :: rem ->  add_compile s; parse rem
   in
-  parse (List.tl (Array.to_list argv));
+  let args = List.tl (Array.to_list argv) in
+  remove_stale_verdicts args;
+  parse args;
   (* [-sha256] is a probe of the comparator's own digest, nothing else. *)
   if not (CList.is_empty !sha256_files) then exit 0;
   match !compare_config, !compare_challenge, !compare_out with
