@@ -127,6 +127,29 @@ val apply_earlier_merges : Names.ModPath.t ->
     environment does; [merge] applies the same substitution again
     afterwards, which is idempotent. *)
 
+(** {6 One environment's merges}
+
+    What [merge] remembers between two loads -- the shape index of the
+    blocks loaded so far, each loaded library's universe context, the merges
+    made and the substitution that applies them -- describes the one
+    environment those libraries were loaded into: a candidate is looked up
+    in the environment [merge] is given. A process that builds a second
+    environment from nothing, as [rocqchk -compare] does for the challenge,
+    loads it with a state of its own and puts the first one back afterwards.
+    The option ([enabled], [verbose]) is the process's setting and is not
+    part of the state. *)
+
+type state
+
+val fresh_state : unit -> state
+(** No library loaded, no merge made. *)
+
+val swap_state : state -> state
+(** [swap_state s] installs [s] and returns the state it replaces, as
+    [CheckLibrary.swap_tables] does for the checker's library tables. The
+    installed state's index is updated in place, so a state value is handed
+    back by the next swap, not kept as a snapshot to install twice. *)
+
 (** {6 Two directions the merge refuses, both fail-closed} *)
 
 (** A universe-polymorphic block never merges in v1, whatever [eq_mib] says
