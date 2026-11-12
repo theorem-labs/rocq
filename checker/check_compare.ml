@@ -1223,6 +1223,22 @@ let in_libs libs mp = match mp_root mp with
   | None -> false
   | Some dp -> List.exists (DirPath.equal dp) libs
 
+(* A library that is one file for both sides: a pre-checked one, whose bytes
+   the config pins, or a shared one, outside every root the challenge stands
+   in for. A shared library is the image's own installed file: the answer
+   cannot write it, because its every library lives under a root the
+   challenge stands in for (coqchk_main's [under_challenge_root]), a root
+   bound to one of the image's own top-level names is refused before any
+   load, and a library under any other bound root is refused unless the
+   config pre-checks it ([check_open_roots]). The challenge load resolves it
+   to the same file ([load_challenge]). *)
+let one_file t dp =
+  List.exists (DirPath.equal dp) t.prechecked || not (t.under_challenge_root dp)
+
+let rooted_one_file t mp = match mp_root mp with
+  | None -> false
+  | Some dp -> one_file t dp
+
 (* The dependency digests a challenge library and its answer library record
    for a library both sides load must be equal: otherwise the two sides were
    built against different copies of it, and their kernel names would name
@@ -1328,9 +1344,7 @@ let seed_umap t ~challenge_env ~answer_env =
       | None -> m
       | Some ug ->
         let dp, _, _ = Univ.UGlobal.repr ug in
-        let one_file =
-          List.exists (DirPath.equal dp) t.prechecked || not (t.under_challenge_root dp)
-        in
+        let one_file = one_file t dp in
         if one_file && Univ.Level.Set.mem u an then add_level m u u else m)
     (UGraph.domain gch) empty_umap
 
@@ -1536,12 +1550,13 @@ let has_rewrite_rules env libs =
    library [R.P.Q]. An axiom constant the answer's proof reaches is the
    task's declaration when either
    - its module path, followed through every [MPdot] to its [MPfile], is
-     rooted at a pre-checked library. The config pins that library's bytes
-     by digest, so no answer file can add a constant under its [MPfile].
-     The constant may be a field of a sealed module that the library does
-     not export: the closure walk reaches it through the implementation,
-     where no environment lookup sees it, and it is still the library's
-     own; or
+     rooted at a library that is one file for both sides ([one_file]): a
+     pre-checked library, whose bytes the config pins by digest, or a shared
+     one, the image's installed file, which the answer cannot write. No
+     answer file can add a constant under such an [MPfile]. The constant may
+     be a field of a sealed module that the library does not export: the
+     closure walk reaches it through the implementation, where no
+     environment lookup sees it, and it is still the library's own; or
    - both the challenge environment and the answer environment declare the
      same kernel name (the challenge's own files, which the declaration
      comparison holds the answer to, and the libraries both sides read from
@@ -1552,18 +1567,19 @@ let has_rewrite_rules env libs =
      challenge file is refused even when the challenge hides it too:
      fail-closed, since the comparison does not see such a field.
    A forged constant declared in a changed file has a module path rooted
-   at that file, so its kernel name is neither under a pre-checked
-   [MPfile] nor one the challenge declares.
+   at that file, which lies under a root the challenge stands in for, so
+   its kernel name is neither under a one-file [MPfile] nor one the
+   challenge declares.
    The same rule, on the inductive block's kernel name, decides whether a
    tolerated flag's object is the task's own. An axiom that is no constant
    is reached only when no library declares it, so the verdict counts it
    as no declaration of the task's without asking this rule. *)
 let task_declares t ~challenge_env ~answer_env = function
   | GlobRef.ConstRef c ->
-    in_libs t.prechecked (Constant.modpath c)
+    rooted_one_file t (Constant.modpath c)
     || (Environ.mem_constant c challenge_env && Environ.mem_constant c answer_env)
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-    in_libs t.prechecked (MutInd.modpath mind)
+    rooted_one_file t (MutInd.modpath mind)
     || (Environ.mem_mind mind challenge_env && Environ.mem_mind mind answer_env)
   | GlobRef.VarRef _ -> false
 
@@ -1580,11 +1596,11 @@ let why_not_task ~challenge_env ~answer_env obj =
     | GlobRef.VarRef _ -> "a section variable is no declaration of the task's"
     | _ ->
       if ch && not an then
-        "the challenge declares it but the answer does not export it, and no pre-checked \
-         library holds it"
+        "the challenge declares it but the answer does not export it, and it lies under no \
+         pre-checked or shared library"
       else
-        "the challenge does not declare it (or hides it in a sealed module), and no \
-         pre-checked library holds it"
+        "the challenge does not declare it (or hides it in a sealed module), and it lies \
+         under no pre-checked or shared library"
   in
   "the proof reaches " ^ describe_object obj ^ ": " ^ why
 
