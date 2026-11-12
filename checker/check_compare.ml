@@ -1505,21 +1505,21 @@ let constant_index env =
 
 (* Every constant of [env] under its kernel name. *)
 let kernel_index env =
-  Environ.fold_constants (fun c _ acc -> KNmap.add (Constant.user c) c acc) env KNmap.empty
+  Environ.fold_constants (fun c _ acc -> KerName.Map.add (Constant.user c) c acc) env KerName.Map.empty
 
 (* Where an object lives, in words, for a refusal: "the constant g of
    module Q of the library R.P". *)
 let describe_object obj =
   let rec path = function
     | ModPath.MPfile dp -> "the library " ^ DirPath.to_string dp
-    | ModPath.MPdot (mp, l) -> "module " ^ Label.to_string l ^ " of " ^ path mp
+    | ModPath.MPdot (mp, l) -> "module " ^ Id.to_string l ^ " of " ^ path mp
     | ModPath.MPbound _ as mp -> "the functor parameter " ^ ModPath.to_string mp
   in
   match obj with
   | GlobRef.ConstRef c ->
-    "the constant " ^ Label.to_string (Constant.label c) ^ " of " ^ path (Constant.modpath c)
+    "the constant " ^ Id.to_string (Constant.label c) ^ " of " ^ path (Constant.modpath c)
   | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) ->
-    "the inductive block " ^ Label.to_string (MutInd.label mind) ^ " of " ^ path (MutInd.modpath mind)
+    "the inductive block " ^ Id.to_string (MutInd.label mind) ^ " of " ^ path (MutInd.modpath mind)
   | GlobRef.VarRef id -> "the section variable " ^ Id.to_string id
 
 
@@ -1654,7 +1654,7 @@ let run t env access senv0 ~answer_deps =
         in
         let verdict, reason, axioms, flags =
           let printing = Option.default [] (CString.Map.find_opt th.th_name an_index) in
-          match KNmap.find_opt (Constant.user (ch_theorem th)) an_kernel with
+          match KerName.Map.find_opt (Constant.user (ch_theorem th)) an_kernel with
           | None -> "fail", "missing", [], []
           | Some kn ->
             let axioms, flags = Check_closure.axioms_and_flags st kn in
