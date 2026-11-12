@@ -1,0 +1,2 @@
+The run must not complete: the answer binds Img, a name the image's own
+load path serves, to write the shared library itself.

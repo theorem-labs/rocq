@@ -69,7 +69,13 @@ END STATEMENT REPORT
     typing conditions of what they reach:
     [type-in-type], [unsafe-fixpoint], [unchecked-eliminations],
     [assumed-positive], [uip] and [indices-not-mattering]. Statements keep
-    request order; axioms and flags are sorted. *)
+    request order; axioms and flags are sorted.
+
+    The names on [axiom] and [flag] lines are printed names, not identities:
+    the constant [g] of a module [Q] of the library [R.P] and the constant
+    [g] of the library [R.P.Q] both print [R.P.Q.g]. No grader may check
+    these lines against a permitted list by name; [rocqchk -compare] judges
+    each axiom and flag by the object itself ([axioms_and_flags]). *)
 
 (** {6 The closure, for [rocqchk -compare]} *)
 
@@ -81,8 +87,15 @@ val closure_state :
     run. *)
 
 val axioms_and_flags :
-  closure_state -> Names.Constant.t -> string list * (string * string) list
-(** The axioms the constant's proof reaches, sorted, and the relaxed typing
-    flags [(kind, object)] it rests on, sorted. The closure is the one the
-    statement report walks: through a sealed module's implementation, with a
-    bodyless constant, a primitive and a symbol each counting as an axiom. *)
+  closure_state -> Names.Constant.t ->
+  (string * Names.GlobRef.t) list * (string * string * Names.GlobRef.t) list
+(** The axioms the constant's proof reaches, each with the name it prints,
+    sorted by that name, and the relaxed typing flags [(kind, printed
+    object, object)] it rests on, sorted by kind and printed name. An axiom
+    or a flag's object is the object itself: two objects that print the
+    same name are two entries ([R.P.Q.g] can be the constant [g] of the
+    library [R.P.Q] or the constant [g] of a module [Q] of the library
+    [R.P]). A flag of an inductive block names its first inductive. The
+    closure is the one the statement report walks: through a sealed
+    module's implementation, with a bodyless constant, a primitive and a
+    symbol each counting as an axiom. *)

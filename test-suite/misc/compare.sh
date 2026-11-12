@@ -24,9 +24,17 @@
 #   bad-<name>/vendor-root
 #                     optional, the root that tree is bound to (default
 #                     Vendor)
+#   bad-<name>/cwd/*.v
+#                     optional, libraries the bad answer leaves in the
+#                     directory the comparator runs in, which the load path
+#                     binds implicitly under no root
 #   config.tmpl       the config, with @SHA256:<file>@ for a challenge
-#                     file's digest and @PRECHECKED@ for the pre-checked
-#                     array
+#                     file's digest, @PRECHECKED@ for the pre-checked
+#                     array and @PRECHECKED_TOP:<dir>/<file>@ for a further
+#                     pre-checked entry, the library Top.<dir>.<file> at the
+#                     digest of the challenge's <dir>/<file>.vo (an
+#                     unchanged file of the task, which the answer's tree
+#                     holds at the same bytes)
 #   expected.json     the verdict the honest answer must give; only the
 #                     (name, verdict) pairs are compared, because a reason
 #                     is prose
@@ -36,7 +44,9 @@
 #                     optional, a regular expression the recorded flag object
 #                     of the honest answer must match
 #   order             optional, the order to compile the .v files in
-#                     (default: alphabetical)
+#                     (default: alphabetical); an entry <dir>/<file>.v is
+#                     copied from each tree's <dir>/ and compiled as the
+#                     library Top.<dir>.<file>
 #   refuse-<name>/    optional, a directory holding a raw config.json that
 #                     the run must refuse with a non-zero exit
 #   fail-config/expected-reason
@@ -47,8 +57,9 @@
 #                     optional, a config that tolerates <flag>: that bad
 #                     answer must pass under it with the flag recorded
 #   bad-<name>/expected-reason
-#                     optional, a regular expression the failed reason must
-#                     match
+#                     optional, regular expressions, one per line, that the
+#                     failed verdict must match, or, for a bad answer with
+#                     `refuse`, the refused run's output
 #
 # The runner takes a case name, or runs every case when given none.
 #
@@ -161,6 +172,13 @@ build_tree() {
     args+=($extra)
   fi
   local f
+  # A file the order names under a subdirectory is copied from the same
+  # subdirectory of the tree.
+  for f in $order; do
+    case $f in
+      */*) mkdir -p "$dst/$(dirname "$f")"; cp "$src/$f" "$dst/$f" ;;
+    esac
+  done
   for f in $order; do
     (cd "$dst" && "${rocq_env[@]}" coqc "${args[@]}" "$f") || fail "$src/$f does not compile"
   done
@@ -176,8 +194,10 @@ file_order() {
 }
 
 # The config: @SHA256:<file>@ becomes that challenge file's digest,
-# @PRECHECKED@ the pre-checked array and @PRECHECKED_PIN@ the entry for
-# pre/Pin.vo, which only a config that asks for it pins.
+# @PRECHECKED@ the pre-checked array, @PRECHECKED_PIN@ the entry for
+# pre/Pin.vo, which only a config that asks for it pins, and
+# @PRECHECKED_TOP:<dir>/<file>@ the entry for the library Top.<dir>.<file>
+# at the digest of the challenge's <dir>/<file>.vo.
 make_config() {
   local tmpl=$1 chdir=$2 out=$3 pre=$4
   local pre_json=""
@@ -219,6 +239,20 @@ make_config() {
   text=${text//"@PRECHECKED_BAD@"/"{\"library\":\"Corelib.Init.Prelude\",\"sha256\":\"$zero\"}"}
   text=${text//"@PRECHECKED@"/$all}
   text=${text//"@PRECHECKED_PIN@"/$pin_json}
+  local top_path top_sha
+  while [[ $text =~ @PRECHECKED_TOP:([A-Za-z0-9_/]+)@ ]]; do
+    top_path=${BASH_REMATCH[1]}
+    [ -f "$chdir/$top_path.vo" ] || fail "no challenge file $top_path.vo to pre-check"
+    top_sha=$(rocqchk -sha256 "$chdir/$top_path.vo")
+    if command -v sha256sum > /dev/null; then
+      local top_ref
+      top_ref=$(sha256sum "$chdir/$top_path.vo" | cut -d' ' -f1)
+      [ "$top_sha" = "$top_ref" ] || fail "rocqchk -sha256 $top_path.vo is $top_sha, sha256sum says $top_ref"
+    fi
+    local top_lib=${top_path//\//.}
+    local top_json=",{\"library\":\"Top.$top_lib\",\"sha256\":\"$top_sha\"}"
+    text=${text//"@PRECHECKED_TOP:$top_path@"/$top_json}
+  done
   # The standard library's eq is built without -indices-matter, so every
   # honest answer reaches that flag on that object. A tolerated flag names
   # its object, so tolerating it here tolerates nothing of the agent's own.
@@ -227,9 +261,10 @@ make_config() {
 }
 
 # Run the comparator on one answer tree. Prints the exit code; the verdict
-# file is $work/out.json.
+# file is $work/out.json. With a seventh argument, the comparator runs in
+# that directory, whose libraries the load path binds implicitly.
 run_compare() {
-  local work=$1 answer=$2 config=$3 pre=$4 vendor=${5:-} vroot=${6:-Vendor}
+  local work=$1 answer=$2 config=$3 pre=$4 vendor=${5:-} vroot=${6:-Vendor} cwd=${7:-.}
   local args=(-silent -Q "$answer" Top)
   [ -n "$pre" ] && args+=(-Q "$pre" Pre)
   [ -n "$vendor" ] && args+=(-Q "$vendor" "$vroot")
@@ -237,8 +272,8 @@ run_compare() {
   local f
   for f in "$answer"/*.vo; do libs+=("Top.$(basename "$f" .vo)"); done
   set +e
-  "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
-    -compare-out "$work/out.json" "${libs[@]}" > "$work/log" 2>&1
+  (cd "$cwd" && "${rocq_env[@]}" rocqchk "${args[@]}" -compare "$config" -challenge "$work/challenge" \
+    -compare-out "$work/out.json" "${libs[@]}") > "$work/log" 2>&1
   local code=$?
   set -e
   echo "$code"
@@ -340,10 +375,39 @@ run_case() {
           || fail "$name/$b: the vendor library $vf does not compile"
       done
     fi
+    # A bad answer may also leave libraries in the directory the comparator
+    # runs in (bad-<name>/cwd/*.v). The load path binds the working
+    # directory implicitly, under no root, so each is found by its bare
+    # name; the answer's own build finds them the same way, through
+    # ROCQPATH, in front of the image stand-in.
+    local bcwd="." saved_env=("${rocq_env[@]}")
+    if [ -d "$bad/cwd" ]; then
+      bcwd="$work/$b-cwd"
+      mkdir -p "$bcwd"
+      cp "$bad/cwd"/*.v "$bcwd"/
+      local cf
+      for cf in $(cd "$bcwd" && ls *.v | sort); do
+        (cd "$bcwd" && "${rocq_env[@]}" coqc "$cf") \
+          || fail "$name/$b: the working-directory library $cf does not compile"
+      done
+      if [ -d "$work/rocqpath" ]; then rocq_env=(env "ROCQPATH=$bcwd:$work/rocqpath")
+      else rocq_env=(env "ROCQPATH=$bcwd"); fi
+    fi
     build_tree "$bad" "$bdir" "$pre" "$border" "$bvendor" "$vroot"
-    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor" "$vroot")
+    rocq_env=("${saved_env[@]}")
+    code=$(run_compare "$work" "$bdir" "$work/config.json" "$pre" "$bvendor" "$vroot" "$bcwd")
     if [ -f "$bad/refuse" ]; then
       [ "$code" != "0" ] || fail "$name/$b: the run should not have completed"
+      # A refusal that must be a specific one names it, so that the run
+      # cannot pass this check by failing for another reason.
+      if [ -f "$bad/expected-reason" ]; then
+        local reason
+        while IFS= read -r reason; do
+          [ -z "$reason" ] && continue
+          grep -Eq -- "$reason" "$work/log" \
+            || { cat "$work/log"; fail "$name/$b: the refusal does not match $reason"; }
+        done < "$bad/expected-reason"
+      fi
     else
       [ "$code" = "0" ] || { cat "$work/log"; fail "$name/$b: the run exits $code"; }
       grep -q '"verdict":"fail"' "$work/out.json" \

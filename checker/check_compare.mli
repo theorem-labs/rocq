@@ -37,11 +37,15 @@
     [.vo] -- each of those is a load path the answer's side could otherwise
     fill. The option refuses what it can see: a bound root the challenge
     does not stand in for and whose libraries the config does not pin
-    (every library of such a root must be pre-checked), and any bound root
-    that is empty or is one of the image's own top-level names. What is
-    left -- the environment the grader hands the process -- is the
-    grader's to get right, and dispatch://BET-894's R5 and R1 are where it
-    is written down.
+    (every library of such a root must be pre-checked), any bound root
+    that is empty or is one of the image's own top-level names, and, on
+    either side, a library outside the challenge's roots and not
+    pre-checked whose recorded file lies directly in the working directory
+    or under a bound directory ([prepare]). A library that passes is shared
+    by where its file is, not by who wrote it. What is left -- the
+    environment the grader hands the process, and so who can write the
+    image's load path -- is the grader's to get right, and
+    dispatch://BET-894's R5 and R1 are where it is written down.
 
     The test suite stands in for the image with [ROCQPATH], because a test
     must not write into the installation it runs against. *)
@@ -56,8 +60,26 @@ val read_config : string -> config
     other key, a duplicate key, a byte after the top-level value, a byte
     sequence that is not UTF-8 or a name that is not a string is an error.
 
+    A permitted axiom is named by the name it prints, and is the task's
+    declaration of that name: an axiom a theorem's proof reaches passes only
+    when its name is in the theorem's permitted list AND the constant of
+    that kernel name lives under a pre-checked library or a shared one (a
+    library outside every root the challenge stands in for: the image's own),
+    exported or a field of a sealed module it hides, or the challenge and
+    the answer both export it. A module path and a library path print
+    alike (the constant [g] of a module [Q] of the library [R.P] prints
+    [R.P.Q.g]), so a constant that only prints a permitted name fails with
+    the reason that it is not the task's declaration of that name, followed
+    by where the reached object lives and why it is not the task's.
+
+    A theorem the config names is read by the kernel name of the challenge's
+    constant of that printed name (two challenge constants printing it is an
+    error), and a theorem whose name two answer constants print fails.
+
     A tolerated flag with an [object] tolerates that kind on that object
-    alone, so a relaxed condition the standard library rests on does not
+    alone, matched by the name it prints AND, by the rule for permitted
+    axioms, only when the flagged object is the task's declaration of that
+    name, so a relaxed condition the standard library rests on does not
     tolerate the same condition in the agent's own declaration. Without an
     object, [indices-not-mattering] applies wherever it appears: every
     inductive of an image built without [-indices-matter] may carry it, and
@@ -97,13 +119,21 @@ type t
 val prepare :
   config -> dir:string -> out:string -> add_challenge_load_path:(unit -> unit) ->
   under_challenge_root:(Names.DirPath.t -> bool) ->
-  open_roots:(Names.DirPath.t * string) list -> t
+  open_roots:(Names.DirPath.t * string) list -> bound_dirs:string list -> t
 (** Resolve the challenge files under [dir] and check the sha256 of each.
     [add_challenge_load_path] puts [dir] on the load path in place of the
     answer's directories; it is called once, inside the challenge load.
     [under_challenge_root] says whether a library name lives under one of
-    those roots: those are the answer's own libraries, and every other
-    library the answer loaded is a shared one, which the challenge loads too.
+    those roots: those are the answer's own libraries. Every other library
+    the answer loaded, unless pre-checked, is a shared one, which the
+    challenge loads too, and the run is refused unless the file the loader
+    recorded for it, on either side, lies outside every place an answer's
+    file is found in: directly in the working directory, which the load
+    path binds implicitly, or anywhere under one of [bound_dirs], the
+    directories the command line binds (real paths, links resolved). That
+    is a statement about where the file is, not about who wrote it: a file
+    elsewhere is the image's only as far as the launch keeps the answer from
+    writing the image's load path (above).
     [open_roots] are the bound roots the challenge does NOT stand in for,
     with the directory each is bound to; the run is refused when the answer
     loaded a library from under one of them that the config does not

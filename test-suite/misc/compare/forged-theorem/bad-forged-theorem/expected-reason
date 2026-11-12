@@ -1,0 +1,2 @@
+the answer declares 2 constants that print the theorem's name: the constant thm of module Q of the library Top\.P and the constant thm of the library Top\.P\.Q
+"axioms":\["Top\.P\.Q\.thm"\]
