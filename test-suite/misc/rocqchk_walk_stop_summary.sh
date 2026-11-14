@@ -8,6 +8,7 @@
 # copy of the honest Stops.v, one shape to a copy, and rocqchk -o must refuse
 # each copy with that stop's error:
 #   alias-cycle             Self := Self
+#   alias-two-cycle         Ping := Pong and Pong := Ping
 #   implementation-cycle    Up := Down and Down := Up.C: the module Up is
 #                           needed while Up is read
 #   functor-implementation  NotF, which is not a functor, gets a functor's
@@ -63,6 +64,7 @@ stop() {
 }
 
 stop alias-cycle "the alias $L.Self := $L.Self, whose target it is already reading: the aliases form a cycle"
+stop alias-two-cycle "the alias $L.Pong := $L.Ping, whose target it is already reading: the aliases form a cycle"
 stop implementation-cycle "the module $L.Up, whose implementation it needs while it reads it: the implementations form a cycle"
 stop functor-implementation "the module $L.NotF, which is not a functor but is implemented by a functor or by a 'with' constraint"
 stop with-functor "the application $L.RW, whose functor is a 'with' constraint"

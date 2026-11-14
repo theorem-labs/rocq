@@ -688,8 +688,8 @@ let fatal_exn e =
   if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
   fatal_error (explain_exn e) (exit_code e)
 
-(* A worker reports its error as [run] does, then exits with the same
-   code, which the main process passes on. *)
+(* A worker prints its error as [fatal_exn] does. It does not exit; it
+   returns the code the parent passes on. *)
 let () = CheckWorkers.set_error_printer (fun e ->
     if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
     print_fatal_error (explain_exn e))

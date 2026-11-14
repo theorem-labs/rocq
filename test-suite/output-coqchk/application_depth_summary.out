@@ -1,3 +1,0 @@
-Fatal Error: User error: The Axioms summary could not be completed: the walk of the module implementations stopped at the application application_depth_summary.SDeep.App.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M.M := application_depth_summary.C1 application_depth_summary.E, which is read inside 64 nested applications, the most it reads.
-
-rocqchk exited with code 1

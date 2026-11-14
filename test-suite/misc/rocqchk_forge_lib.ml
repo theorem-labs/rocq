@@ -2,7 +2,6 @@
    misc/rocqchk_nested_resolver.sh, misc/rocqchk_alias_label.sh,
    misc/rocqchk_inline_hint.sh, misc/rocqchk_primitive_type.sh,
    misc/rocqchk_alias_rewrite_rule.sh, misc/rocqchk_register_type.sh,
-   misc/rocqchk_alias_cycle_summary.sh,
    misc/rocqchk_functor_loop_summary.sh,
    misc/rocqchk_walk_stop_summary.sh and
    misc/rocqchk_repeated_label.sh share: reading and writing the

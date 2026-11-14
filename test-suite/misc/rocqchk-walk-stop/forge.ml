@@ -2,6 +2,7 @@
    the -o walk (checker/mod_impl.ml). Stops.v says which modules each shape
    changes:
      alias-cycle             Self := Self
+     alias-two-cycle         Ping := Pong, Pong := Ping
      implementation-cycle    Up := Down, Down := Up.C
      functor-implementation  NotF := (functor) Defines
      with-functor            RW := (F with Module ... := A) A
@@ -80,6 +81,7 @@ let forge shape disk =
   let root =
     match shape with
     | "alias-cycle" -> alias root "Self" (dot file "Self")
+    | "alias-two-cycle" -> alias (alias root "Ping" (dot file "Pong")) "Pong" (dot file "Ping")
     | "implementation-cycle" ->
       alias (alias root "Up" (dot file "Down")) "Down" (dot (dot file "Up") "C")
     | "functor-implementation" ->

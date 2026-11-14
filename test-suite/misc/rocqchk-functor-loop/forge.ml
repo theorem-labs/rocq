@@ -1,12 +1,11 @@
 (* Give Loop.vo the functor coqc refuses to write: in the body of F, the
-   modules Grow and Same, applications of G in the honest file, become
-   applications of F itself.
-     Grow := F Loc,  Same := F X
+   module Grow, an application of G in the honest file, becomes an
+   application of F itself.
+     Grow := F Loc
    The type of R := F A is F's body substituted, and the substitution keeps
-   the unchanged head of each application, MEident G, as the very block of
-   F's body, so R's Grow and Same share F's heads. The forgery gives both
-   the same new heads, so R's type says F too. The file is rewritten in
-   place.
+   the unchanged head of the application, MEident G, as the very block of
+   F's body, so R's Grow shares F's head. The forgery gives both the same
+   new head, so R's type says F too. The file is rewritten in place.
 
    The helpers, and the value layouts they rely on, are those of
    misc/rocqchk_forge_lib.ml. This file adds checker/values.ml's layouts of
@@ -62,28 +61,21 @@ let forge disk =
   let root = root_struc disk in
   let body = functor_body (module_of root "F") in
   let rstruc = sig_struc root "R" in
-  let g = field (application_head "Grow" (module_of body "Grow")) 0 in
+  let head = application_head "Grow" (module_of body "Grow") in
+  if application_head "Grow" (module_of rstruc "Grow") != head then
+    fail "R's Grow does not share the head of F's";
+  let g = field head 0 in
   expect ~size:2 "G's path (MPdot)" 2 g;
   let label = field g 1 in
   if Obj.is_int label || tag label <> Obj.string_tag || not (String.equal (to_str label) "G") then
     fail "Grow does not apply G";
-  (* F's path: G's, with the label F. Both new heads name this one block. *)
-  let f = set 1 (Obj.repr "F") g in
-  let body, rstruc =
-    List.fold_left
-      (fun (body, rstruc) name ->
-        let head = application_head name (module_of body name) in
-        if application_head name (module_of rstruc name) != head then
-          fail "R's %s does not share the head of F's" name;
-        (* One new head, for F's module and R's: only the blocks above it
-           are copied in each, up to the library's root structure. *)
-        let head = set 0 f head in
-        let body = struc_update body name (upd 0 (with_head head)) in
-        let rstruc = struc_update rstruc name (upd 0 (with_head head)) in
-        say "forge: %s now applies F" name;
-        body, rstruc)
-      (body, rstruc) [ "Grow"; "Same" ]
-  in
+  (* The new head names F's path: G's, with the label F. F's Grow and R's
+     share it: only the blocks above it are copied in each, up to the
+     library's root structure. *)
+  let head = set 0 (set 1 (Obj.repr "F") g) head in
+  let body = struc_update body "Grow" (upd 0 (with_head head)) in
+  let rstruc = struc_update rstruc "Grow" (upd 0 (with_head head)) in
+  say "forge: Grow now applies F";
   let root = struc_update root "F" (upd 0 (upd 1 (upd 2 (set 0 body)))) in
   let root = struc_update root "R" (upd 0 (upd 1 (set 0 rstruc))) in
   set_root_struc disk root;

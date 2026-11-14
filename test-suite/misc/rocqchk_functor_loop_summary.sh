@@ -4,12 +4,12 @@
 # (checker/mod_impl.ml), and the applications in that body in turn. rocqchk
 # does not check an admitted library, so its functor's body can apply that
 # functor again, which coqc never writes: forge.ml makes F's body in the
-# honest Loop.v hold Grow := F Loc and Same := F X. In F's body read as
-# R := F A, F's own path names R, so the walk reads Grow, which comes first,
-# as R's expression F A applied to R.Loc as well: one argument more than F
-# takes. It cannot read that application, so rocqchk -o must end, and refuse
-# to print a summary, with an error that names it. The honest library is the
-# control: it lists R.ax alone.
+# honest Loop.v hold Grow := F Loc. In F's body read as R := F A, F's own
+# path names R, so the walk reads Grow as R's expression F A applied to
+# R.Loc as well: one argument more than F takes. It cannot read that
+# application, so rocqchk -o must end, and refuse to print a summary, with
+# an error that names it. The honest library is the control: it lists R.ax
+# alone.
 set -eu
 
 . misc/rocqchk_summary_common.bash
