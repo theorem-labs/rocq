@@ -1,9 +1,9 @@
 # Shared helpers of the fork's misc tests that read the summary of
 # rocqchk -o: rocqchk_admitted_summary.sh, rocqchk_sealed_axiom_summary.sh,
 # rocqchk_ascribed_axiom_summary.sh, rocqchk_application_axiom_summary.sh,
-# rocqchk_application_bound_summary.sh, rocqchk_alias_cycle_summary.sh,
-# rocqchk_functor_loop_summary.sh, rocqchk_walk_stop_summary.sh,
-# rocqchk_cook.sh and rocqchk_primitive_type.sh. Each sources it with
+# rocqchk_application_bound_summary.sh, rocqchk_functor_loop_summary.sh,
+# rocqchk_walk_stop_summary.sh, rocqchk_cook.sh and
+# rocqchk_primitive_type.sh. Each sources it with
 #
 #   . misc/rocqchk_summary_common.bash
 #
