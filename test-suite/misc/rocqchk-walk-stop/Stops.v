@@ -19,9 +19,11 @@ Module F (X : S). Axiom ax : unit. End F.
 (* alias-cycle: Self := Self. *)
 Module Self : T := Defines.
 
-(* alias-two-cycle: Ping := Pong and Pong := Ping. *)
+(* alias-two-cycle: Ping := Pong and Pong := Ping. Pong's type declares
+   nothing, so that the summary reads the cycle only for Ping.p, and the
+   walk meets it at Pong's alias. *)
 Module Ping : T := Defines.
-Module Pong : T := Defines.
+Module Pong : Empty := Defines.
 
 (* implementation-cycle: Up := Down and Down := Up.C. Down's type declares
    nothing, so that the summary reads them only for Up.C.p. *)
