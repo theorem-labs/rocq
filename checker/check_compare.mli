@@ -29,9 +29,13 @@
     A challenge constant without a body (an axiom, a parameter or an
     admitted proof, which a [.vo] file does not tell apart) may be given one
     by the solution only when its type is a proposition or the config names
-    it as a theorem, and only an opaque one when another compared challenge
-    declaration names it in its type or its transparent body: a transparent
-    proof would unfold there and change what that declaration states.
+    it as a theorem. A proof of a proposition must be opaque when another
+    compared challenge declaration names it in its type or its transparent
+    body: a transparent proof would unfold there and change what that
+    declaration states. A constant of another type that the config names,
+    such as a function that a lemma of the challenge specifies, may be
+    transparent: the lemma is stated about the function the solution
+    chooses.
 
     {2 Where a shared library may come from}
 
@@ -136,8 +140,12 @@ val read_config : string -> config
     constants or that the renaming pairs with the challenge's must hold in
     the challenge, whichever library declares them, since a library may add
     a constraint on the sort of another, an installed or pre-checked one
-    included. A sort that only the solution declares, and a constraint on
-    it, count only where a path through it joins two such qualities.
+    included. The renaming pairs with itself each level and sort that both
+    sides hold of a pre-checked library, of an installed one and of a
+    library that a pre-checked one rests on, so a constraint on such a sort
+    counts even when no compared declaration names it. A sort that only the
+    solution declares, and a constraint on it, count only where a path
+    through it joins two such qualities.
 
     [answer-universe-constraints] is a kind-only tolerance for the global
     universe comparison, and one that names an object is an error. It skips

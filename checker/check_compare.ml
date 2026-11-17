@@ -460,8 +460,8 @@ let read_config file =
     declares ([Sort s.]), is named by its library and a number given in the
     order of declaration and nothing else, so a solution that declares one
     more before the challenge's numbers them differently. Each map is
-    seeded with the identity on every level and quality of a library that
-    is one file for both sides ([seed_umap]), and the rest of it is built
+    seeded with the identity on every level and quality of a library whose
+    bytes the two sides share ([seed_umap]), and the rest of it is built
     while the declarations are compared.
 
     A level or a quality of a polymorphic context is a variable bound by
@@ -971,18 +971,22 @@ let eq_universes u1 u2 = match u1, u2 with
    can. A constant whose type is a proposition is a lemma, and proving it
    is the point. A constant whose type is data -- an open definition --
    must stay without a body, or the solution could choose the function the
-   statements are about. A theorem the config names is a proof whatever its
-   sort.
+   statements are about, unless the config names it as a theorem: the
+   challenge then asks the solution to choose it, as for a function [f]
+   left open with a lemma [f_spec] about it.
 
-   A proof that another compared challenge declaration names in its type or
-   its transparent body ([named], from [declaration_names]) must be opaque.
+   A proof of a proposition that another compared challenge declaration
+   names in its type or its transparent body ([named], from
+   [declaration_names]) must be opaque, whether the config names it or not.
    The challenge states that declaration about a constant that does not
    unfold, and a transparent body would let conversion unfold it there,
    which changes what the declaration states: with [L : exists n, n = 0]
    left without a body, [L = ex_intro _ 0 eq_refl] is not provable, and
    once [L] is defined as that term it is proved by reflexivity. A proof
    that no other declaration names changes no statement but its own, so it
-   may be transparent.
+   may be transparent. Data that the config names is not held to this:
+   [f_spec] is stated about the function the solution chooses and is
+   provable only if [f] unfolds, so [f] may be transparent.
 
    The sort is the one the solution environment gives the solution's own
    type, which [eq_const_body] has already found equal to the challenge's.
@@ -1033,11 +1037,12 @@ let eq_const_body ~env ~is_theorem ~named m (cb1 : constant_body) (cb2 : constan
   map_relevance const_relevance cb2.const_relevance;
   let context_constraints = eq_universes const_universes cb2.const_universes in
   let m = eq_constr m const_type cb2.const_type in
+  let proposition = lazy (is_proposition env cb2) in
   let m = match const_body, cb2.const_body with
     | Undef _, Undef _ -> m
-    | Undef _, (Def _ | OpaqueDef _) when not (is_theorem || is_proposition env cb2) ->
+    | Undef _, (Def _ | OpaqueDef _) when not (is_theorem || Lazy.force proposition) ->
       diff "the challenge leaves this declaration open and the solution defines it"
-    | Undef _, Def _ when Lazy.force named ->
+    | Undef _, Def _ when Lazy.force proposition && Lazy.force named ->
       diff "the challenge leaves this proof without a body, another challenge \
             declaration names it, and the solution gives it a transparent body"
     | Undef _, (Def _ | OpaqueDef _) -> m
@@ -1175,17 +1180,20 @@ let eq_one_ind m (mip1 : one_inductive_body) (mip2 : one_inductive_body) =
   eq_record m mind_record mip2.mind_record
 
 (* The template data of two template-polymorphic blocks. The other fields
-   of a block are given at the default levels ([template_defaults]), and an
-   application of the block is typed by this data: which parameters bind a
-   level or a quality ([template_param_arguments]), the sort of the block
-   in terms of them ([template_concl]), and the context they are bound in
-   ([template_context]). Two blocks equal at the default levels may still
-   differ here: a parameter whose level is a global one binds nothing. So
-   the data is compared as a polymorphic declaration is: the sorts with
-   their bound levels by index, the defaults through the level map, and the
-   context by [eq_abstract_context]. Which parameters bind something is
-   compared at once; the rest is returned for the caller to run once the
-   rest of the block has been compared. *)
+   of a block are typed over the levels that the template context binds,
+   which they name by index, and the kernel instantiates them with the
+   default levels ([template_defaults]) where it reads them
+   ([Inductive.get_template_instance]); [eq_mib_body] compares them with
+   their bound levels by index. An application of the block is typed by
+   this data: which parameters bind a level or a quality
+   ([template_param_arguments]), the sort of the block in terms of them
+   ([template_concl]), and the context they are bound in
+   ([template_context]). No other field names the defaults. So the data is
+   compared as a polymorphic declaration is: the sorts with their bound
+   levels by index, the defaults through the level map, and the context by
+   [eq_abstract_context]. Which parameters bind something is compared at
+   once; the rest is returned for the caller to run once the rest of the
+   block has been compared. *)
 let[@warning "+9"] eq_template
     { template_param_arguments; template_concl; template_context; template_defaults } t2 =
   if not (CList.equal (fun a b -> Bool.equal (Option.has_some a) (Option.has_some b))
@@ -1195,7 +1203,8 @@ let[@warning "+9"] eq_template
   fun m ->
     let m = List.fold_left2 (fun m a1 a2 -> match a1, a2 with
         | Some s1, Some s2 -> map_sort m s1 s2
-        | (None | Some _), _ -> m (* both None: the shapes are equal *))
+        | None, None -> m
+        | (None | Some _), _ -> diff "the template-polymorphic parameters")
         m template_param_arguments t2.template_param_arguments
     in
     let m = map_sort m template_concl t2.template_concl in
@@ -1261,7 +1270,7 @@ let[@warning "+9"] rule_symbols { rewrules_rules } =
    counts. An opaque body is not read: it is not compared, and what it
    names unfolds into no statement. Nor is a rewrite rule, of which the
    comparison reads the symbols only. [eq_const_body] requires an opaque
-   proof of a constant that this set holds. *)
+   proof of a proposition that this set holds. *)
 let rec constr_names acc c = match Constr.kind c with
   | Constr.Const (k, _) ->
     KerName.Set.add (Constant.user k) (KerName.Set.add (Constant.canonical k) acc)
@@ -1341,6 +1350,8 @@ let rec eq_signature ~env ~names mp m s1 s2 =
        either binding would stand for both. *)
     if MBId.Set.mem p2 m.bound then diff "the solution binds one functor parameter twice";
     let mp2 = ModPath.MPbound p2 in
+    (* [add_mbid], not [join]: each challenge parameter is renamed once, so
+       one that has the name of a solution parameter is not renamed again. *)
     let params =
       Mod_subst.add_mbid p1 mp2 (Mod_subst.empty_delta_resolver mp2)
         (Option.default Mod_subst.empty_subst m.params)
@@ -1881,15 +1892,35 @@ let load_challenge t ~add_load_path senv0 =
 
 type failure = { f_name : string; f_reason : string }
 
-(* The identity seed: a level or a global quality of a library that is one
-   file for both sides ([one_file]), when both environments hold it. A level
-   no compared declaration names is in the map only through this: the body
-   of an opaque proof is never compared, so a challenge proof's constraint
-   on such a level would otherwise never be asked of the solution. So is a
-   quality of such a library that no compared declaration names: a
+(* The identity seed: a level or a global quality of a library whose bytes
+   the two sides share, when both environments hold it. Such a library is
+   one file for both sides ([one_file]), or one that a pre-checked library
+   rests on, which [check_prechecked_deps] has required to be one file for
+   both sides or pinned by its sha256 as a challenge file.
+
+   A level no compared declaration names is in the map only through this:
+   the body of an opaque proof is never compared, so a challenge proof's
+   constraint on such a level would otherwise never be asked of the
+   solution. So is a quality that no compared declaration names: a
    constraint that a solution library adds on it is still compared
-   ([check_elim_constraints]). *)
+   ([check_elim_constraints]).
+
+   With the libraries a pre-checked one rests on, the map holds every
+   quality that a compared statement stands on. A compared declaration
+   names declarations of the challenge files' closure only. Each of those
+   is compared, which maps the qualities it names, unless [run] skips its
+   library: a pre-checked library, or one it rests on that is one file for
+   both sides. A skipped library names its own qualities and those of the
+   libraries it rests on, all of which a pre-checked library rests on. So
+   a sort that a challenge library declares and only a pre-checked library
+   names, as the sort of one of its inductive types, is in the map, and a
+   constraint that the solution adds on it is compared.
+
+   The closure is read from the solution's libraries: each of them has the
+   bytes of the challenge's, so it records the same dependencies. *)
 let seed_umap t ~challenge_env ~solution_env =
+  let rests_on = deps_closure t.solution_deps (prechecked_libraries t.cfg) in
+  let same_bytes dp = one_file t dp || DirPath.Set.mem dp rests_on in
   let gch = Environ.universes challenge_env and gsol = Environ.universes solution_env in
   let sol = UGraph.domain gsol in
   let m =
@@ -1898,7 +1929,7 @@ let seed_umap t ~challenge_env ~solution_env =
         | None -> m
         | Some ug ->
           let dp, _, _ = Univ.UGlobal.repr ug in
-          if one_file t dp && Univ.Level.Set.mem u sol then add_level m u u else m)
+          if same_bytes dp && Univ.Level.Set.mem u sol then add_level m u u else m)
       (UGraph.domain gch) empty_umap
   in
   let qsol = QGraph.domain (Environ.qualities solution_env) in
@@ -1906,7 +1937,7 @@ let seed_umap t ~challenge_env ~solution_env =
       match q with
       | Sorts.Quality.QGlobal g ->
         let dp, _ = Sorts.QGlobal.repr g in
-        if one_file t dp && Sorts.Quality.Set.mem q qsol then add_quality m q q else m
+        if same_bytes dp && Sorts.Quality.Set.mem q qsol then add_quality m q q else m
       | Sorts.Quality.QConstant _ | Sorts.Quality.QVar _ -> m)
     (QGraph.domain (Environ.qualities challenge_env)) m
 
@@ -2030,8 +2061,9 @@ let check_constraints t ~challenge_env ~solution_env m =
    compare the PROJECTION of one graph onto the constants and the
    qualities the map holds, mapped: a quality the map does not hold -- one
    that only the solution declares, or one of the challenge's that no
-   compared declaration names -- is walked through, so a path through it
-   is compared like a direct edge.
+   compared declaration names and [seed_umap] does not hold, on which no
+   compared statement stands -- is walked through, so a path through it is
+   compared like a direct edge.
 
    Challenge to solution: every constraint of the challenge's graph, so
    projected, must hold in the solution's graph.
@@ -2044,9 +2076,10 @@ let check_constraints t ~challenge_env ~solution_env m =
    the solution loaded, so the solution's graph holds no constraint the
    challenge's lacks unless a file the challenge does not load, one of the
    solution's, states it. Such a file may state one on any library's sort:
-   one of the challenge's, or an installed or pre-checked library's
-   ([Constraint V.s -> Prop.]), which the map holds as itself
-   ([seed_umap]) and on which the challenge's statements stand as much.
+   one of the challenge's, or one of an installed or pre-checked library or
+   of a library a pre-checked one rests on ([Constraint V.s -> Prop.]),
+   which the map holds as itself ([seed_umap]) and on which the
+   challenge's statements stand as much.
    [universe_constraints_flag] does not skip this direction: it stays
    strict.
 

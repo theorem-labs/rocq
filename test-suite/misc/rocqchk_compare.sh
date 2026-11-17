@@ -370,6 +370,36 @@ verdict named/qed named.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the axiom Top.A.thm is not permitted"' \
   '"name":"Top.A.L","verdict":"pass"' '"declarations":[]'
 
+# A function f that the challenge leaves open and a lemma f_spec about it,
+# both named by the config: the challenge asks the solution to choose f, and
+# f_spec is provable only if f unfolds, so f may be transparent though
+# f_spec names it. Only the proof of a proposition must be opaque when
+# another declaration names it. eq has an index, which the config tolerates
+# as named.json does.
+compile spec/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive nat : Set := O : nat | S : forall _ : nat, nat.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Definition f : forall _ : nat, nat.
+Proof. Admitted.
+Theorem f_spec : forall n : nat, eq nat (f n) (S n).
+Proof. Admitted.
+EOF
+cat > "$d/spec.json" <<EOF
+{"theorems": [{"name": "Top.A.f"}, {"name": "Top.A.f_spec"}],
+ "tolerated_flags": [{"kind": "indices-not-mattering"}],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest spec/ch/A.vo)"}]}
+EOF
+compile spec/defined A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive nat : Set := O : nat | S : forall _ : nat, nat.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Definition f : forall _ : nat, nat := fun n => S n.
+Definition f_spec : forall n : nat, eq nat (f n) (S n) := fun n => eq_refl nat (S n).
+EOF
+verdict spec/defined spec.json '"name":"Top.A.f","verdict":"pass"' \
+  '"name":"Top.A.f_spec","verdict":"pass"' '"declarations":[]'
+
 # A functor module type. A functor parameter is named by a counter of the
 # process that compiled it, so a solution that declares one more functor
 # before FT numbers the parameters of FT otherwise: the comparison renames
@@ -402,6 +432,61 @@ sed 's/^  Parameter q : X\.P\./  Parameter q : Y.P./' "$d/functor/honest/A.v" |
 verdict functor/swapped functor.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.FT differs'
 
+# The name of a functor parameter is that counter, its identifier and its
+# library, so a parameter of one side may have the name of a parameter of
+# the other. Each challenge parameter is renamed once, and a name the
+# renaming gives is not renamed again. Here the solution declares G first,
+# so the outer parameter Y of its FT has the name of the inner parameter Y
+# of the challenge's FT; renamed twice, X would stand for W.
+compile functor/clash A.v <<'EOF'
+Module Type SIG.
+  Parameter P : Prop.
+End SIG.
+Module Type G (Z : SIG).
+End G.
+Module Type FT (Y : SIG) (W : SIG).
+  Parameter q : Y.P.
+End FT.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict functor/clash functor.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+sed 's/^  Parameter q : Y\.P\./  Parameter q : W.P./' "$d/functor/clash/A.v" |
+  compile functor/clash-swapped A.v
+verdict functor/clash-swapped functor.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.FT differs'
+# The other way round: the challenge declares G first, so the inner
+# parameter X of the solution's FT has the name of the outer parameter X of
+# the challenge's FT; renamed twice, Y would stand for V.
+compile functorg/ch A.v <<'EOF'
+Module Type SIG.
+  Parameter P : Prop.
+End SIG.
+Module Type G (Z : SIG).
+End G.
+Module Type FT (X : SIG) (Y : SIG).
+  Parameter q : Y.P.
+End FT.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config functorg > "$d/functorg.json"
+compile functorg/clash A.v <<'EOF'
+Module Type SIG.
+  Parameter P : Prop.
+End SIG.
+Module Type FT (V : SIG) (X : SIG).
+  Parameter q : X.P.
+End FT.
+Module Type G (Z : SIG).
+End G.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict functorg/clash functorg.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+sed 's/^  Parameter q : X\.P\./  Parameter q : V.P./' "$d/functorg/clash/A.v" |
+  compile functorg/clash-swapped A.v
+verdict functorg/clash-swapped functorg.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.FT differs'
+
 # A template-polymorphic inductive type. An application of Box is typed by
 # its template data, which says which parameters bind a universe.
 compile template/ch A.v <<'EOF'
@@ -421,9 +506,10 @@ Inductive Box@{i j} (A : Type@{i}) (B : Type@{j}) : Type@{max(i,j)} :=
 Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
 EOF
 verdict template/honest template.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
-# The level of B is the global level u: B binds nothing. At the default
-# levels, which the level map pairs, every other field of Box is the
-# challenge's.
+# The level of B is the global level u: B binds nothing. The parameters of
+# Box differ too, B : Type@{u} against the challenge's B over the second
+# level its template context binds, but which parameters bind a level is
+# compared first.
 compile template/global A.v <<'EOF'
 Unset Elimination Schemes.
 Universe u.
@@ -807,6 +893,60 @@ cat > "$d/predep-pin.json" <<EOF
 EOF
 ran 'Top.A with predep-pin.json' predep predep-pin.json
 holds 'Top.A with predep-pin.json' '"name":"Top.A.thm","verdict":"pass"'
+
+# A sort s of Top.D that only the pre-checked library Top.P.Q names: box
+# lives in it. Top.D is pinned by its sha256 as a challenge file. unbox
+# eliminates box into Prop, which the challenge's s does not allow, so an
+# honest solution leaves unbox admitted. A solution that adds s -> Prop
+# proves it. No compared declaration names s, and the constraint is
+# compared all the same: a sort of a library that a pre-checked one rests
+# on is renamed to itself.
+compile presort/ch D.v <<'EOF'
+Sort s.
+EOF
+compile presort/ch P/Q.v <<'EOF'
+Require Top.D.
+Unset Elimination Schemes.
+Inductive box (A : Prop) : Univ@{Top.D.s;_} := mk : forall _ : A, box A.
+EOF
+compile presort/ch A.v <<'EOF'
+Require Top.P.Q.
+Lemma unbox : forall A : Prop, forall _ : Top.P.Q.box A, A.
+Proof. Admitted.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+cat > "$d/presort.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}, {"name": "Top.A.unbox"}],
+ "prechecked": [$(prechecked Top.P.Q presort/ch/P/Q.vo)],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest presort/ch/A.vo)"},
+                     {"path": "D.vo", "sha256": "$(digest presort/ch/D.vo)"}]}
+EOF
+for t in honest bad; do
+  mkdir -p "$d/presort/$t/P"
+  cp "$d/presort/ch/D.vo" "$d/presort/$t/"
+  cp "$d/presort/ch/P/Q.vo" "$d/presort/$t/P/"
+done
+compile presort/honest A.v <<'EOF'
+Require Top.P.Q.
+Lemma unbox : forall A : Prop, forall _ : Top.P.Q.box A, A.
+Proof. Admitted.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict presort/honest presort.json '"name":"Top.A.thm","verdict":"pass"' \
+  '"name":"Top.A.unbox","verdict":"fail","reason":"the axiom Top.A.unbox is not permitted"' \
+  '"declarations":[]'
+compile presort/bad A.v <<'EOF'
+Require Top.D.
+Require Top.P.Q.
+Constraint Top.D.s -> Prop.
+Definition unbox : forall A : Prop, forall _ : Top.P.Q.box A, A :=
+  fun A b => match b with Top.P.Q.mk _ a => a end.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => unbox A (Top.P.Q.mk A a).
+EOF
+verdict presort/bad presort.json \
+  '"name":"Top.A.unbox","verdict":"fail","reason":"the solution has an elimination constraint the challenge does not: the constraint Top.D.0 -> Prop' \
+  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not: the constraint Top.D.0 -> Prop'
 
 #### The bytes of a library read without a check. With -compare, the sha256
 #### of each pre-checked library is compared before any library is read,
