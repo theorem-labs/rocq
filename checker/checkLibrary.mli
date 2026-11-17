@@ -37,14 +37,20 @@ val try_locate_qualified_library : object_file -> DirPath.t * physical_path
     path its directory is bound to.
     @raise CErrors.UserError when the library is not found. *)
 
-val recheck_library : ?output_context:bool -> ?intern_admit:bool ->
+val recheck_library : ?output_context:bool -> ?intern_admit:bool -> ?validate_all:bool ->
   safe_environment ->
   norec:object_file list ->
   admit:object_file list ->
   check:object_file list -> safe_environment * Mod_checking.axioms
 (** With [~intern_admit:true] (default [false]), the [admit] libraries and
-    their dependencies are read too, without validation, so that an admitted
-    library that no other library given here depends on is loaded as well. *)
+    their dependencies are read too, so that an admitted library that no
+    other library given here depends on is loaded as well.
+
+    With [~validate_all:true] (default [false]), every library read is
+    validated as a library given with [check] is, the [admit] libraries and
+    the dependencies of the [norec] ones included. Otherwise those are read
+    without validation: their bytes are unmarshalled as they are, which is
+    safe only on a file that is trusted. *)
 
 val unchecked : unit -> DirPath.t list
 (** The libraries the last [recheck_library] call imported without checking
@@ -80,10 +86,11 @@ val intern_challenge :
   (DirPath.t * library) list * (DirPath.t * library) list
 (** [intern_challenge files shared] reads the challenge [files] and their
     dependencies, then the [shared] libraries and theirs, in dependency
-    order, without validating them and without importing any of them into an
-    environment. The first result is the files' closure, the second every
-    library read, the files' closure first. A library both reach is read
-    once. *)
+    order, validating each as it is read and importing none of them into an
+    environment: the load path may find a file of the solution's side for a
+    library the challenge directory lacks. The first result is the files'
+    closure, the second every library read, the files' closure first. A
+    library both reach is read once. *)
 
 val import_challenge :
   safe_environment -> (DirPath.t * library) list -> safe_environment
@@ -104,6 +111,16 @@ val deps_of : (DirPath.t * library) list -> (DirPath.t * (DirPath.t * vodigest) 
 val files_of : (DirPath.t * library) list -> (DirPath.t * physical_path) list
 (** The file each library was read from, as the loader recorded it. *)
 
+val vo_path_below : root:DirPath.t -> DirPath.t -> string option
+(** [vo_path_below ~root lib]: when the library name [lib] lies strictly
+    below [root], by the names they print, the path of its [.vo] file
+    relative to the directory [root] is bound to, one directory per name
+    component ([Some "X/Y.vo"] for [root.X.Y]); [None] otherwise. *)
+
 val under_root : root:DirPath.t -> DirPath.t -> bool
 (** [under_root ~root lib]: whether the library name [lib] is [root] or lies
     below it, by the names they print. *)
+
+val bound_roots : unit -> Id.t list
+(** The first component of each logical path that the load path binds, each
+    once. *)

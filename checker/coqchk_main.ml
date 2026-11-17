@@ -124,30 +124,6 @@ let compare_out = ref None
 (* Used by option -sha256. *)
 let sha256_printed = ref false
 
-(* The top-level names that the installed load path serves without a -Q:
-   the corelib root, and the subdirectories of every directory bound
-   recursively under the empty root (user-contrib, the XDG directories and
-   ROCQPATH). The working directory is bound non-recursively, so its
-   subdirectories serve no library and are not names here. A -compare run
-   refuses a -Q bound to one of them ([Check_compare.check_roots]). Filled
-   by [init_load_path] in a -compare run; empty under -boot. *)
-let installed_roots = ref []
-
-let note_installed_roots ~unix_path ~rocq_root =
-  match List.rev (DirPath.repr rocq_root) with
-  | id :: _ -> installed_roots := Id.to_string id :: !installed_roots
-  | [] ->
-    if exists_dir unix_path then
-      (* a directory that cannot be listed, or one removed since the test
-         above, gives no root rather than raising, as [all_subdirs] does
-         through [System]'s own guarded readdir; a root that cannot be seen
-         shadows nothing *)
-      let entries = try Sys.readdir unix_path with Sys_error _ -> [||] in
-      Array.iter (fun e ->
-          if exists_dir (Filename.concat unix_path e) then
-            installed_roots := e :: !installed_roots)
-        entries
-
 (* Initializes the LoadPath *)
 let init_load_path rocqenv =
   (* the to_string casting won't be necessary once Boot handles
@@ -157,10 +133,6 @@ let init_load_path rocqenv =
   let user_contrib = Boot.Env.user_contrib rocqenv |> Boot.Path.to_string in
   let xdg_dirs = Envars.xdg_dirs in
   let rocqpath = Envars.coqpath in
-  let add_rec_path ~unix_path ~rocq_root =
-    if Option.has_some !compare_config then note_installed_roots ~unix_path ~rocq_root;
-    add_rec_path ~unix_path ~rocq_root
-  in
   (* NOTE: These directories are searched from last to first *)
   (* first standard library *)
   add_rec_path ~unix_path:theories ~rocq_root:(Names.DirPath.make[rocq_root]);
@@ -174,8 +146,7 @@ let init_load_path rocqenv =
     (xdg_dirs ~warn:(fun x -> Feedback.msg_warning (str x)));
   (* then directories in ROCQPATH *)
   List.iter (fun s -> add_rec_path ~unix_path:s ~rocq_root:CheckLibrary.default_root_prefix) (rocqpath());
-  (* then current directory: bound non-recursively, so it adds no installed
-     root (see [installed_roots]) *)
+  (* then current directory *)
   add_path ~unix_path:"." ~rocq_root:CheckLibrary.default_root_prefix
 
 let init_load_path env : unit =
@@ -240,19 +211,23 @@ let add_compile s =
     We no longer use [Arg.parse], in order to use share [Usage.print_usage]
     between coqtop and coqc. *)
 
-(* With -compare, the config's pre-checked libraries join the admit list
+(* With -compare, the sha256 of each of the config's pre-checked libraries is
+   checked first, before any library is read, and every library is
+   validated as it is read. The pre-checked libraries join the admit list
    here, so that [admit_list] holds only the libraries given with -admit
    ([run_compare]), and the admitted libraries are read too: a pre-checked
    one that no checked library depends on must be loaded as well. *)
 let compile_files senv =
+  let compare = Option.has_some !compare_config in
   let prechecked = match !compare_config with
     | None -> []
     | Some cfg ->
+      Check_compare.check_prechecked cfg;
       List.map (fun dp -> CheckLibrary.LogicalFile (CheckLibrary.path_of_dirpath dp))
         (Check_compare.prechecked_libraries cfg)
   in
   CheckLibrary.recheck_library ~output_context:(!output_context || !CheckFlags.axiom_free)
-    ~intern_admit:(Option.has_some !compare_config) senv
+    ~intern_admit:compare ~validate_all:compare senv
     ~norec:(List.rev !norec_list)
     ~admit:(List.rev_append !admit_list prechecked)
     ~check:(List.rev !compile_list)
@@ -586,6 +561,9 @@ let init_with_argv argv =
       | Boot -> ()
       | Env coqenv -> init_load_path coqenv
     in
+    (* the top-level names that the installed load path serves, before
+       -package and -R/-Q add theirs, for -compare *)
+    let installed_roots = CheckLibrary.bound_roots () in
     (* the -R/-Q roots alone, taken before -package adds its roots, which
        -compare refuses *)
     user_includes := List.rev !includes;
@@ -599,7 +577,7 @@ let init_with_argv argv =
     includes := [];
     if Option.has_some !compare_config then
       (* reported as the other errors of the command line are *)
-      (try Check_compare.check_roots ~installed_roots:!installed_roots !user_includes
+      (try Check_compare.check_roots ~installed_roots !user_includes
        with CErrors.UserError msg -> fatal_error msg 1);
     make_senv ()
   with e ->

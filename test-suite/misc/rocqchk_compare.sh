@@ -64,12 +64,11 @@ holds() { # <run> <text>...
   done
 }
 
-# A run that writes a verdict: it exits 0 and the verdict file holds each
-# <text>.
+# A run of compare that writes a verdict: it exits 0 and the verdict file
+# holds each <text>.
 verdict() { # <tree> <config> <text>...
   local run="$1 with $2"
-  rm -f "$out"
-  compare "$1" "$2" || fail "$run: exit $?"
+  ran "$run" compare "$1" "$2"
   shift 2
   holds "$run" "$@"
 }
@@ -87,6 +86,15 @@ refused() { # <text> <command>...
   if "$@"; then fail "$*: not refused"; fi
   [ ! -e "$out" ] || fail "$*: the stale verdict file is still there"
   grep -qF -- "$text" "$log" || fail "$*: the error does not hold $text"
+}
+
+# A run that writes a verdict: <command> exits 0, with no verdict file in
+# place before it; <run> names the run in a failure.
+ran() { # <run> <command>...
+  local run=$1
+  shift
+  rm -f "$out"
+  "$@" || fail "$run: exit $?"
 }
 
 in_dir() { (cd "$1" && shift && "$@"); }
@@ -361,7 +369,7 @@ refused 'is bound to the empty root' compare main/honest main.json -Q "$d/empty"
 refused 'is bound to Corelib, a name the installed load path serves' \
   compare main/honest main.json -Q "$d/empty" Corelib
 
-# A library outside the challenge's roots and not pre-checked: from another
+# A library outside the challenge's root and not pre-checked: from another
 # bound root, or from the working directory.
 mkdir "$d/lib" "$d/cwd"
 echo 'Definition v := Prop.' > "$d/lib/V.v"
@@ -375,6 +383,15 @@ echo 'Definition w := Prop.' > "$d/cwd/W.v"
 ROCQPATH=$d/cwd $coqc -noinit -native-compiler no "$d/cwd/W.v"
 { echo 'Require W.'; cat "$d/main/honest/A.v"; } | ROCQPATH=$d/cwd solution main/cwd
 refused 'in the working directory' in_dir "$d/cwd" compare main/cwd main.json
+
+# The libraries named for checking lie under two roots, Top and Vendor, and
+# the challenge directory stands in for one root only. Two -Q of one root
+# are one root.
+refused 'lie under more than one root that -Q or -R binds: Top, Vendor' \
+  chk -Q "$d/main/honest" Top -Q "$d/lib" Vendor -compare "$d/main.json" \
+  -challenge "$d/main/ch" -compare-out "$out" Top.A Vendor.V
+ran 'two -Q of Top' compare main/honest main.json -Q "$d/empty" Top
+holds 'two -Q of Top' '"name":"Top.A.thm","verdict":"pass"' '"name":"Top.A.other","verdict":"pass"'
 
 # The challenge directory lacks Defs.vo, which A.vo depends on, and the load
 # path finds the solution's behind it: a copy of the challenge's, which would
@@ -413,8 +430,7 @@ norec() { # <config> [rocqchk options]
     -compare-out "$out" -norec Top.A
 }
 refused 'The solution library Top.Helper was loaded without a check' norec norec.json
-rm -f "$out"
-norec norec.json -admit Top.Helper || fail "-admit Top.Helper -norec Top.A: exit $?"
+ran '-admit Top.Helper -norec Top.A' norec norec.json -admit Top.Helper
 holds '-admit Top.Helper -norec Top.A' '"name":"Top.A.thm","verdict":"pass"' \
   '"admitted":["Top.Helper"]}'
 
@@ -426,8 +442,7 @@ cat > "$d/norec-pin.json" <<EOF
  "challenge_files": [{"path": "A.vo", "sha256": "$(digest norec/ch/A.vo)"},
                      {"path": "Helper.vo", "sha256": "$(digest norec/ch/Helper.vo)"}]}
 EOF
-rm -f "$out"
-norec norec-pin.json || fail "-norec Top.A, Helper.vo pinned: exit $?"
+ran '-norec Top.A, Helper.vo pinned' norec norec-pin.json
 holds '-norec Top.A, Helper.vo pinned' '"name":"Top.A.thm","verdict":"pass"' '"admitted":[]}'
 
 # A library that one given with -admit depends on is loaded without a check
@@ -450,8 +465,7 @@ deep() { # [rocqchk options]
     -compare-out "$out" Top.A
 }
 refused 'The solution library Top.Base was loaded without a check' deep -admit Top.Mid
-rm -f "$out"
-deep -admit Top.Mid -admit Top.Base -admit Top.Mid || fail "-admit Top.Mid -admit Top.Base: exit $?"
+ran '-admit Top.Mid -admit Top.Base' deep -admit Top.Mid -admit Top.Base -admit Top.Mid
 holds '-admit Top.Mid -admit Top.Base' '"name":"Top.A.thm","verdict":"pass"' \
   '"admitted":["Top.Mid","Top.Base"]}'
 
@@ -569,8 +583,7 @@ predep() { # <config>
 refused 'The pre-checked library Top.P.Q depends on the library Top.D' predep predep.json
 config predep "\"prechecked\": [$(prechecked Top.P.Q predep/ch/P/Q.vo),
   $(prechecked Top.D predep/ch/D.vo)]," > "$d/predep-both.json"
-rm -f "$out"
-predep predep-both.json || fail "Top.A with predep-both.json: exit $?"
+ran 'Top.A with predep-both.json' predep predep-both.json
 holds 'Top.A with predep-both.json' '"name":"Top.A.thm","verdict":"pass"'
 # Top.D pinned by its sha256 as a challenge file, and not pre-checked.
 cat > "$d/predep-pin.json" <<EOF
@@ -578,9 +591,62 @@ cat > "$d/predep-pin.json" <<EOF
  "challenge_files": [{"path": "A.vo", "sha256": "$(digest predep/ch/A.vo)"},
                      {"path": "D.vo", "sha256": "$(digest predep/ch/D.vo)"}]}
 EOF
-rm -f "$out"
-predep predep-pin.json || fail "Top.A with predep-pin.json: exit $?"
+ran 'Top.A with predep-pin.json' predep predep-pin.json
 holds 'Top.A with predep-pin.json' '"name":"Top.A.thm","verdict":"pass"'
+
+#### The bytes of a library read without a check. With -compare, the sha256
+#### of each pre-checked library is compared before any library is read,
+#### and every library either side reads is validated as it is read.
+
+# A .vo file starts with a header of 16 bytes. Its first segment follows:
+# OCaml's marshal header of 20 bytes, whose second word is the length of the
+# data after it, then that data, then the data's MD5.
+seg_len() { # <file>: the length of the data of its first segment
+  od -An -tu1 -j20 -N4 "$1" | awk '{ print (($1 * 256 + $2) * 256 + $3) * 256 + $4 }'
+}
+overwrite() { # <file> <offset>: 16 bytes 0xff from <offset> on
+  printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377' |
+    dd of="$1" bs=1 seek="$2" conv=notrunc 2> /dev/null
+}
+
+# A pre-checked library, Top.P.Q, whose file holds other bytes and that no
+# checked library Requires: the challenge's file, with the start of the data
+# of its first segment overwritten. It is refused by its sha256, and nothing
+# reads those bytes.
+compile prebad/ch A.v <<'EOF'
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+compile prebad/sol A.v <<'EOF'
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+mkdir "$d/prebad/sol/P"
+cp "$d/pre/ch/P/Q.vo" "$d/prebad/sol/P/"
+overwrite "$d/prebad/sol/P/Q.vo" 36
+config prebad "\"prechecked\": [$(prechecked Top.P.Q pre/ch/P/Q.vo)]," > "$d/prebad.json"
+refused 'The pre-checked library Top.P.Q is' compare prebad/sol prebad.json
+
+# Top.Helper, given with -admit, is loaded without a check and validated all
+# the same: here the data of its first segment no longer has the MD5 that
+# follows it, which only a read that validates compares.
+mkdir "$d/norec/md5"
+cp "$d/norec/sol/A.vo" "$d/norec/sol/Helper.vo" "$d/norec/md5/"
+overwrite "$d/norec/md5/Helper.vo" $((36 + $(seg_len "$d/norec/md5/Helper.vo")))
+refused 'Corrupted file' chk -Q "$d/norec/md5" Top -compare "$d/norec.json" \
+  -challenge "$d/norec/ch" -compare-out "$out" -norec Top.A -admit Top.Helper
+
+# The challenge side too: the challenge directory of nodefs lacks Defs.vo,
+# which its A.vo depends on, and the load path finds the solution's, which
+# only the challenge reads (the solution's A.v does not Require it) and
+# whose MD5 does not match. It is refused as it is read, before the test of
+# where it lies.
+compile nodefs/md5 A.v <<'EOF'
+Definition thm := Prop.
+EOF
+cp "$d/main/ch/Defs.vo" "$d/nodefs/md5/"
+overwrite "$d/nodefs/md5/Defs.vo" $((36 + $(seg_len "$d/nodefs/md5/Defs.vo")))
+refused 'Corrupted file' chk -Q "$d/nodefs/md5" Top -compare "$d/nodefs.json" \
+  -challenge "$d/nodefs/ch" -compare-out "$out" Top.A
 
 #### A -vos build holds no proof.
 
@@ -643,6 +709,31 @@ verdict univ/lift univ-any.json '"name":"Top.A.thm","verdict":"pass"' \
 grep -v '^Constraint' "$d/univ/honest/A.v" | compile univ/drop A.v
 verdict univ/drop univ-any.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge has a universe constraint the solution does not:'
+
+# The polymorphic context of f constrains its level i below the global level
+# u, which the solution numbers differently: the constraint is compared
+# through the level map. One more constraint, on another level, differs.
+compile univp/ch A.v <<'EOF'
+Universe u.
+Polymorphic Definition f@{i | i < u} : Type@{u} := Type@{i}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config univp > "$d/univp.json"
+compile univp/honest A.v <<'EOF'
+Definition helper := Type.
+Universe u.
+Polymorphic Definition f@{i | i < u} : Type@{u} := Type@{i}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict univp/honest univp.json '"name":"Top.A.thm","verdict":"pass"'
+compile univp/extra A.v <<'EOF'
+Universe u v.
+Polymorphic Definition f@{i | i < u, i < v} : Type@{u} := Type@{i}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict univp/extra univp.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.f differs: the universe context has other constraints"'
 
 #### The type of a is the universe max(u+1, v+1), whose two levels no
 #### comparison has paired yet and have the same increment: which level of
@@ -730,7 +821,7 @@ compile elimc/drop A.v < "$d/elim/honest/A.v"
 verdict elimc/drop elimc.json '"name":"Top.A.thm","verdict":"fail"' \
   '{"name":"<qualities>","reason":"the challenge has an elimination constraint the solution does not:'
 
-# The sort s and box in a pre-checked library outside the challenge's roots,
+# The sort s and box in a pre-checked library outside the challenge's root,
 # Vendor.S: a constraint that the solution adds on that sort is compared as
 # well.
 mkdir "$d/elimlib"
@@ -752,8 +843,7 @@ Constraint Vendor.S.s -> Prop.
 Definition unbox (A : Prop) (b : Vendor.S.box A) : A := match b with Vendor.S.mk _ a => a end.
 Definition thm : forall A : Prop, forall _ : A, A := fun A a => unbox A (Vendor.S.mk A a).
 EOF
-rm -f "$out"
-compare elimv/bad elimv.json -Q "$d/elimlib" Vendor || fail "elimv/bad: exit $?"
+ran elimv/bad compare elimv/bad elimv.json -Q "$d/elimlib" Vendor
 holds elimv/bad '"name":"Top.A.thm","verdict":"fail"' \
   '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not:'
 

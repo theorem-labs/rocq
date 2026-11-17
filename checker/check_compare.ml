@@ -475,9 +475,10 @@ exception Diff of diff
 let diff fmt = Printf.ksprintf (fun s -> raise (Diff s)) fmt
 
 (* A universe whose levels no comparison so far has mapped, and that one
-   pass cannot map alone (two entries of one increment). The declaration is
-   compared again once the others have been, since a later declaration --
-   the one that introduced those levels -- may map them. *)
+   pass cannot map alone (two entries of one increment), or a constraint of
+   a polymorphic context on a global level the map does not hold yet. The
+   declaration is compared again once the others have been, since a later
+   declaration -- the one that introduced those levels -- may map them. *)
 exception Undecided of diff
 
 let level_name u = Univ.Level.to_string u
@@ -735,18 +736,52 @@ let eq_rel_context m c1 c2 =
       | (LocalAssum _ | LocalDef _), _ -> diff "a let-in of the context")
     m c1 c2
 
-let eq_universes m u1 u2 = match u1, u2 with
-  | Monomorphic, Monomorphic -> m
+(* The shape of two universe contexts: both monomorphic, or both
+   polymorphic, of one size and with the same elimination constraints, whose
+   qualities are compared by identity as [map_sort] compares them. The
+   universe constraints of a polymorphic context are compared by
+   [eq_context_constraints], once the rest of the declaration has been. *)
+let eq_universes u1 u2 = match u1, u2 with
+  | Monomorphic, Monomorphic -> ()
   | Polymorphic a1, Polymorphic a2 ->
     if UVars.AbstractContext.size a1 <> UVars.AbstractContext.size a2 then
       diff "the universe context has another size";
-    let (e1, c1) = UVars.UContext.constraints (UVars.AbstractContext.repr a1) in
-    let (e2, c2) = UVars.UContext.constraints (UVars.AbstractContext.repr a2) in
-    if not (Univ.UnivConstraints.equal c1 c2 && Sorts.ElimConstraints.equal e1 e2) then
-      diff "the universe context has other constraints";
-    m
+    let (e1, _) = UVars.UContext.constraints (UVars.AbstractContext.repr a1) in
+    let (e2, _) = UVars.UContext.constraints (UVars.AbstractContext.repr a2) in
+    if not (Sorts.ElimConstraints.equal e1 e2) then
+      diff "the universe context has other constraints"
   | Monomorphic, Polymorphic _ -> diff "a monomorphic declaration is polymorphic in the solution"
   | Polymorphic _, Monomorphic -> diff "a polymorphic declaration is monomorphic in the solution"
+
+(* The universe constraints of two polymorphic contexts. A constraint may
+   relate a bound level to a global one, which the two sides may number
+   differently, so a global level of the challenge's is compared as the
+   solution level the map pairs it with, as everywhere else. That is why
+   this runs last: the declaration's own terms may map the level. A level
+   the map does not hold yet leaves the declaration undecided. *)
+let eq_context_constraints m u1 u2 = match u1, u2 with
+  | Polymorphic a1, Polymorphic a2 ->
+    let (_, c1) = UVars.UContext.constraints (UVars.AbstractContext.repr a1) in
+    let (_, c2) = UVars.UContext.constraints (UVars.AbstractContext.repr a2) in
+    let level u = match Univ.Level.var_index u, Univ.Level.name u with
+      (* a level of the context, or Set: it stands for itself *)
+      | Some _, _ | None, None -> u
+      | None, Some _ ->
+        match Univ.Level.Map.find_opt u m.fwd with
+        | Some v -> v
+        | None ->
+          raise (Undecided (Printf.sprintf
+            "the universe context constrains the universe %s, which no comparison has mapped"
+            (level_name u)))
+    in
+    let c1 =
+      Univ.UnivConstraints.fold (fun (u, k, v) acc ->
+          Univ.UnivConstraints.add (level u, k, level v) acc)
+        c1 Univ.UnivConstraints.empty
+    in
+    if not (Univ.UnivConstraints.equal c1 c2) then
+      diff "the universe context has other constraints"
+  | (Monomorphic | Polymorphic _), _ -> ()
 
 (* What the challenge leaves without a body, the solution may fill only when
    it is a proof. [Admitted], [Axiom] and [Parameter] give the same .vo
@@ -794,54 +829,57 @@ let eq_const_body ~env ~is_theorem m (cb1 : constant_body) (cb2 : constant_body)
     (* whether the compilers inline the constant: how it runs, not what it
        states *)
     const_typing_flags = _;
-    (* the checker types each solution constant under its own
-       [indices_matter], [impredicative_set] and [sprop_allowed]
-       ([CheckFlags.set_local_flags]); the relaxed conditions the constant
-       may carry reach the verdict as the closure's flags; the rest steer
-       how conversion computes *)
+    (* the checker types each solution constant under the checker's
+       [indices_matter], [impredicative_set] and [sprop_allowed], not the
+       constant's ([CheckFlags.set_local_flags] keeps the environment's);
+       the relaxed conditions the constant may carry reach the verdict as
+       the closure's flags; the rest steer how conversion computes *)
     const_def_height = _;
     (* derived from the body, for the unfolding heuristic of conversion *)
   } = cb1
   in
   map_relevance const_relevance cb2.const_relevance;
-  let m = eq_universes m const_universes cb2.const_universes in
+  eq_universes const_universes cb2.const_universes;
   let m = eq_constr m const_type cb2.const_type in
-  match const_body, cb2.const_body with
-  | Undef _, Undef _ -> m
-  | Undef _, (Def _ | OpaqueDef _) ->
-    if is_theorem || is_proposition env cb2 then m
-    else diff "the challenge leaves this declaration open and the solution defines it"
-  | Undef _, _ -> diff "an assumption is a primitive or a symbol in the solution"
-  (* An opaque body is never compared, but a proof stays a proof: a Qed in
-     the challenge may not become a transparent definition, which would let
-     the solution's body reach conversion where the challenge's could not. *)
-  | OpaqueDef _, OpaqueDef _ -> m
-  | Def b1, Def b2 -> eq_constr m b1 b2
-  | Def _, OpaqueDef _ -> diff "a transparent definition is opaque in the solution"
-  | Def _, _ -> diff "a transparent definition is not a definition in the solution"
-  | OpaqueDef _, _ -> diff "an opaque proof is not an opaque proof in the solution"
-  | Primitive p1, Primitive p2 ->
-    if not (CPrimitives.equal p1 p2) then diff "another primitive"; m
-  | Primitive _, _ -> diff "a primitive is not a primitive in the solution"
-  (* A symbol's [unfold_fix] flag steers only the matching of its rules,
-     which reach the verdict through the config's [rewrite_rules]. *)
-  | Symbol _, Symbol _ -> m
-  | Symbol _, _ -> diff "a symbol is not a symbol in the solution"
+  let m = match const_body, cb2.const_body with
+    | Undef _, Undef _ -> m
+    | Undef _, (Def _ | OpaqueDef _) ->
+      if is_theorem || is_proposition env cb2 then m
+      else diff "the challenge leaves this declaration open and the solution defines it"
+    | Undef _, _ -> diff "an assumption is a primitive or a symbol in the solution"
+    (* An opaque body is never compared, but a proof stays a proof: a Qed in
+       the challenge may not become a transparent definition, which would let
+       the solution's body reach conversion where the challenge's could not. *)
+    | OpaqueDef _, OpaqueDef _ -> m
+    | Def b1, Def b2 -> eq_constr m b1 b2
+    | Def _, OpaqueDef _ -> diff "a transparent definition is opaque in the solution"
+    | Def _, _ -> diff "a transparent definition is not a definition in the solution"
+    | OpaqueDef _, _ -> diff "an opaque proof is not an opaque proof in the solution"
+    | Primitive p1, Primitive p2 ->
+      if not (CPrimitives.equal p1 p2) then diff "another primitive"; m
+    | Primitive _, _ -> diff "a primitive is not a primitive in the solution"
+    (* A symbol's [unfold_fix] flag steers only the matching of its rules,
+       which reach the verdict through the config's [rewrite_rules]. *)
+    | Symbol _, Symbol _ -> m
+    | Symbol _, _ -> diff "a symbol is not a symbol in the solution"
+  in
+  eq_context_constraints m const_universes cb2.const_universes;
+  m
 
 let eq_has_eta e1 e2 = match e1, e2 with
   | AlwaysEta, AlwaysEta | MaybeEta, MaybeEta | NoEta, NoEta -> true
   | (AlwaysEta | MaybeEta | NoEta), _ -> false
 
-let eq_record m r1 r2 = match r1, r2 with
+let[@warning "+9"] eq_record m r1 r2 = match r1, r2 with
   | NotRecord, NotRecord | FakeRecord, FakeRecord -> m
-  | PrimRecord p1, PrimRecord p2 ->
-    if not (Id.equal p1.id p2.id) then diff "the record binder name";
-    if not (Array.equal Id.equal p1.projections p2.projections) then diff "the projections";
-    if not (Array.equal Sorts.relevance_equal p1.relevances p2.relevances) then
+  | PrimRecord { id; projections; relevances; tys; has_eta }, PrimRecord p2 ->
+    if not (Id.equal id p2.id) then diff "the record binder name";
+    if not (Array.equal Id.equal projections p2.projections) then diff "the projections";
+    if not (Array.equal Sorts.relevance_equal relevances p2.relevances) then
       diff "a projection's relevance";
-    if not (eq_has_eta p1.has_eta p2.has_eta) then diff "the record's eta";
-    if not (Int.equal (Array.length p1.tys) (Array.length p2.tys)) then diff "the projections";
-    Array.fold_left2 eq_constr m p1.tys p2.tys
+    if not (eq_has_eta has_eta p2.has_eta) then diff "the record's eta";
+    if not (Int.equal (Array.length tys) (Array.length p2.tys)) then diff "the projections";
+    Array.fold_left2 eq_constr m tys p2.tys
   | (NotRecord | FakeRecord | PrimRecord _), _ -> diff "the record kind"
 
 let eq_variance v1 v2 =
@@ -956,11 +994,13 @@ let eq_mib_body m (mib1 : mutual_inductive_body) (mib2 : mutual_inductive_body) 
   eq_typing_flags mind_typing_flags mib2.mind_typing_flags;
   eq_variance mind_variance mib2.mind_variance;
   eq_variance mind_sec_variance mib2.mind_sec_variance;
-  let m = eq_universes m mind_universes mib2.mind_universes in
+  eq_universes mind_universes mib2.mind_universes;
   let m = eq_rel_context m mind_params_ctxt mib2.mind_params_ctxt in
   if not (Int.equal (Array.length mind_packets) (Array.length mib2.mind_packets)) then
     diff "the number of types in the block";
-  Array.fold_left2 eq_one_ind m mind_packets mib2.mind_packets
+  let m = Array.fold_left2 eq_one_ind m mind_packets mib2.mind_packets in
+  eq_context_constraints m mind_universes mib2.mind_universes;
+  m
 
 (* The symbols a block of rewrite rules rewrites, in order. That is all of a
    rule the comparison reads: a rule reaches the verdict through the
@@ -1043,12 +1083,12 @@ type t = {
           that the config pins for it and that [prepare] found it has. *)
   challenge_dir : string option;
       (** The real path of the challenge directory. A challenge library under
-          a root the challenge stands in for is read from below it, unless
+          the root the challenge stands in for is read from below it, unless
           pre-checked ([check_challenge_place]). *)
-  prechecked : DirPath.t list;
-  challenge_roots : DirPath.t list;
-      (** The logical roots the challenge stands in for ([run]). A library
-          under one of them is the solution's own. Every other library the
+  prechecked : DirPath.Set.t;
+  challenge_root : DirPath.t option;
+      (** The logical root the challenge stands in for, if any ([run]). A
+          library under it is the solution's own. Every other library the
           solution loaded is a shared one, provided its recorded file lies
           outside every place the solution can write ([solution_place]); a
           run that loaded one from inside such a place is refused
@@ -1066,28 +1106,37 @@ type t = {
   bound_dirs : string list;
       (** The real paths of the directories the command line binds, each
           with its subdirectories. *)
-  solution_deps : (DirPath.t * (DirPath.t * Safe_typing.vodigest) array) list;
-      (** Every library the solution loaded, with the dependency digests it
-          records. *)
-  solution_files : (DirPath.t * string) list;
-      (** Every library the solution loaded, with the file the loader
-          recorded for it. *)
-  outside : DirPath.t list;
-      (** The libraries the solution loaded whose recorded file lies in no
-          place a solution's file is found in ([solution_place]). *)
+  solution_libs : DirPath.t list;
+      (** Every library the solution loaded, in the loader's order. *)
+  solution_deps : (DirPath.t * Safe_typing.vodigest) array DirPath.Map.t;
+      (** The dependency digests each library the solution loaded records. *)
+  solution_files : string DirPath.Map.t;
+      (** The file the loader recorded for each library the solution
+          loaded. *)
 }
 
-let is_prechecked t dp = List.exists (DirPath.equal dp) t.prechecked
+let is_prechecked t dp = DirPath.Set.mem dp t.prechecked
 
-let under_challenge_root t lib =
-  List.exists (fun root -> CheckLibrary.under_root ~root lib) t.challenge_roots
+let under_challenge_root t lib = match t.challenge_root with
+  | None -> false
+  | Some root -> CheckLibrary.under_root ~root lib
+
+(* What a library is to the run: a pre-checked one, whose bytes the config
+   pins, wherever it lies; otherwise the solution's own when it lies under
+   the root the challenge stands in for, and a shared one when it does
+   not. *)
+type origin = Prechecked | Own | Shared
+
+let origin t dp =
+  if is_prechecked t dp then Prechecked
+  else if under_challenge_root t dp then Own
+  else Shared
 
 let realpath p =
   try Some (Unix.realpath p) with Unix.Unix_error _ | Invalid_argument _ | Sys_error _ -> None
 
 let path_under ~dir file =
-  String.equal file dir
-  || CString.is_prefix (if String.equal dir "/" then dir else dir ^ "/") file
+  String.equal file dir || CString.is_prefix (Filename.concat dir "") file
 
 (* The place a solution's file could have been found in that holds [file],
    the path the loader recorded: the working directory, for a file directly
@@ -1115,8 +1164,10 @@ let solution_place t file =
         t.bound_dirs
 
 (* The pre-checked libraries are resolved on the solution's load path, which
-   is the one in place when this runs. *)
-let check_prechecked t =
+   is the one in place when this runs: before any library is read, and so
+   before the file of a pre-checked library, which loads without a check, is
+   unmarshalled. The loader then resolves each name to the same file. *)
+let check_prechecked cfg =
   List.iter (fun p ->
       let file = CheckLibrary.library_file p.pc_library in
       let got = sha256_of_file file in
@@ -1125,7 +1176,7 @@ let check_prechecked t =
           (Pp.str ("The pre-checked library " ^ DirPath.to_string p.pc_library ^ " is " ^
                    file ^ ", whose sha256 is " ^ got ^ ", and the config pins " ^
                    p.pc_sha256 ^ ".")))
-    t.cfg.cfg_prechecked
+    cfg.cfg_prechecked
 
 (* A root the command line binds that the challenge does not stand in for is
    an open root: the solution's build put files there, and the challenge
@@ -1142,7 +1193,7 @@ let check_prechecked t =
    that binds a stand-in for installed libraries pre-checks them, as the
    config's pre-checked list is for. *)
 let check_open_roots t =
-  List.iter (fun (lib, _) ->
+  List.iter (fun lib ->
       List.iter (fun (root, path) ->
           if CheckLibrary.under_root ~root lib && not (is_prechecked t lib) then
             CErrors.user_err
@@ -1152,7 +1203,7 @@ let check_open_roots t =
                         does not declare pre-checked. Every library of such a root \
                         must be pre-checked, so that its bytes are pinned.")))
         t.open_roots)
-    t.solution_deps
+    t.solution_libs
 
 let rec mp_root mp = match mp with
   | ModPath.MPfile dp -> Some dp
@@ -1161,40 +1212,42 @@ let rec mp_root mp = match mp with
 
 let in_libs libs mp = match mp_root mp with
   | None -> false
-  | Some dp -> List.exists (DirPath.equal dp) libs
+  | Some dp -> DirPath.Set.mem dp libs
 
 (* A library that is one file for both sides: a pre-checked one, whose bytes
-   the config pins, or a shared one: outside every root the challenge stands
-   in for, AND loaded by the solution from a recorded file that lies in no
+   the config pins, or a shared one that the solution loaded: outside the
+   root the challenge stands in for, from a recorded file that lies in no
    place a solution's file is found in ([solution_place]: the working
    directory, a bound directory), so the installed load path or another
-   directory the command line does not name. What this establishes is where
-   the loaded file is, from the path the loader recorded; that no solution
-   wrote such a file rests on the launch keeping the installed load path out
-   of the solution's reach (check_compare.mli). [check_provenance] refuses a
-   run that loaded a library outside the challenge's roots from inside such
-   a place, so the two tests agree on every library a run goes on with. The
-   challenge load resolves a shared library to the same file
-   ([load_challenge]). *)
-let one_file t dp =
-  is_prechecked t dp
-  || (not (under_challenge_root t dp) && List.exists (DirPath.equal dp) t.outside)
+   directory the command line does not name. [prepare] refuses a run that
+   loaded a shared library from inside such a place ([check_provenance])
+   before anything asks this. What this establishes is where the loaded
+   file is, from the path the loader recorded; that no solution wrote such a
+   file rests on the launch keeping the installed load path out of the
+   solution's reach (check_compare.mli). The challenge load resolves a
+   shared library to the same file ([load_challenge]). *)
+let one_file t dp = match origin t dp with
+  | Prechecked -> true
+  | Own -> false
+  | Shared -> DirPath.Map.mem dp t.solution_files
 
 let rooted_one_file t mp = match mp_root mp with
   | None -> false
   | Some dp -> one_file t dp
 
-(* A library a side loaded that is neither under a root the challenge stands
-   in for nor pre-checked must come from outside every place a solution's
-   file is found in: otherwise a file the solution put in the working
-   directory, which the load path binds implicitly, could stand in for an
-   installed library of the same name. [libs] are a side's loaded libraries
-   with the files the loader recorded. Returns those that pass. *)
+(* A library a side loaded that is neither under the root the challenge
+   stands in for nor pre-checked must come from outside every place a
+   solution's file is found in: otherwise a file the solution put in the
+   working directory, which the load path binds implicitly, could stand in
+   for an installed library of the same name. [libs] are a side's loaded
+   libraries with the files the loader recorded. *)
 let check_provenance t ~side libs =
-  CList.map_filter (fun (dp, file) ->
-      if under_challenge_root t dp || is_prechecked t dp then None
-      else match solution_place t file with
-        | None -> Some dp
+  List.iter (fun (dp, file) ->
+      match origin t dp with
+      | Prechecked | Own -> ()
+      | Shared ->
+        match solution_place t file with
+        | None -> ()
         | Some place ->
           CErrors.user_err
             Pp.(str ("The " ^ side ^ " loaded the library " ^ DirPath.to_string dp ^
@@ -1210,57 +1263,34 @@ let deps_closure deps roots =
   let rec walk acc = function
     | [] -> acc
     | dp :: tl ->
-      if List.exists (DirPath.equal dp) acc then walk acc tl
+      if DirPath.Set.mem dp acc then walk acc tl
       else
-        let next = match List.find_opt (fun (l, _) -> DirPath.equal l dp) deps with
+        let next = match DirPath.Map.find_opt dp deps with
           | None -> []
-          | Some (_, a) -> Array.to_list (Array.map fst a)
+          | Some a -> Array.to_list (Array.map fst a)
         in
-        walk (dp :: acc) (next @ tl)
+        walk (DirPath.Set.add dp acc) (next @ tl)
   in
-  walk [] roots
+  walk DirPath.Set.empty roots
 
-(* Whether the config pins the bytes of the library [dp] the solution loaded
-   by a challenge file: the file the loader recorded for [dp] has the sha256
-   that the config gives for [dp]'s file in the challenge directory, the one
-   at the path that [dp]'s file has below the directory of a root the
-   challenge stands in for. The load path maps a name below a root to that
-   path one directory per name component, so the path is read from [dp]'s
-   name. A prechecked entry pins its library too, which is then pre-checked:
-   [check_prechecked] has compared that sha256. *)
+(* Whether the library [dp] the solution loaded is pinned by its sha256 as a
+   challenge file (the rule of [run], check_compare.mli). *)
 let pinned t dp =
-  match List.find_opt (fun (l, _) -> DirPath.equal l dp) t.solution_files with
-  | None -> false
-  | Some (_, file) ->
-    let sha256 = lazy (sha256_of_file file) in
-    let l = DirPath.to_string dp in
-    List.exists (fun root ->
-        let r = DirPath.to_string root ^ "." in
-        if not (CString.is_prefix r l) then false
-        else
-          let below = String.sub l (String.length r) (String.length l - String.length r) in
-          let path = String.concat "/" (String.split_on_char '.' below) ^ ".vo" in
-          let same = CUnix.same_file (CUnix.correct_path path t.dir) in
-          List.exists (fun (f, h) -> same f && String.equal h (Lazy.force sha256)) t.files)
-      t.challenge_roots
+  match t.challenge_root, DirPath.Map.find_opt dp t.solution_files with
+  | None, _ | _, None -> false
+  | Some root, Some file ->
+    match CheckLibrary.vo_path_below ~root dp with
+    | None -> false
+    | Some path ->
+      let same = CUnix.same_file (CUnix.correct_path path t.dir) in
+      let sha256 = lazy (sha256_of_file file) in
+      List.exists (fun (f, h) -> same f && String.equal h (Lazy.force sha256)) t.files
 
-(* The config's sha256 pins the bytes of a pre-checked library. The library
-   records a digest for each library it depends on, but such a digest is the
-   one the dependency's own file states for itself: the checker does not
-   compute it from the file's bytes, so any file can state any digest. A
-   library a pre-checked one rests on, directly or not, must therefore stand
-   on a rule of its own: pre-checked as well or shared ([one_file]), or
-   pinned by its sha256 as a challenge file ([pinned]), which is not one
-   file for both sides and so is compared and searched for rewrite rules as
-   the solution's own libraries are ([run]). A kernel check of such a
-   library is not enough: the pre-checked library is loaded without a
-   check, so its terms were typed only against the dependency it was built
-   with, and one of other content that states the same digest could make
-   them prove [False]. The closure is the one the solution loaded. Reads
-   [outside]. *)
+(* The rule of [run] for the libraries a pre-checked one rests on
+   (check_compare.mli), on the closure the solution loaded. *)
 let check_prechecked_deps t =
   List.iter (fun p ->
-      List.iter (fun dep ->
+      DirPath.Set.iter (fun dep ->
           if not (one_file t dep || pinned t dep) then
             CErrors.user_err
               Pp.(str ("The pre-checked library " ^ DirPath.to_string p ^
@@ -1272,43 +1302,39 @@ let check_prechecked_deps t =
                         of it is not enough either, since the pre-checked library was not \
                         checked against it. A -compare run refuses it.")))
         (deps_closure t.solution_deps [p]))
-    t.prechecked
+    (prechecked_libraries t.cfg)
 
-(* [-norec] checks the libraries it names and loads their dependencies
-   without a check, and the admit list does the same with each library it
-   holds and every dependency of one ([CheckLibrary.unchecked]). Such a
-   library is not compared either when the challenge files do not Require
-   it, so a library only the solution has would stand behind a theorem
-   unchecked. A library under a root the challenge stands in for that the
-   solution loaded without a check must therefore be pre-checked, pinned by
-   its sha256 as a challenge file ([pinned]), or given with -admit by name
-   ([admitted]), which says that whoever starts the run trusts it. A library
-   that one given with -admit depends on is not exempt unless given too. *)
+(* The rule of [run] for the libraries the solution loaded without a check
+   (check_compare.mli). *)
 let check_unchecked t ~admitted =
+  let admitted = DirPath.Set.of_list admitted in
   List.iter (fun dp ->
-      if under_challenge_root t dp && not (is_prechecked t dp)
-         && not (List.exists (DirPath.equal dp) admitted) && not (pinned t dp)
-      then
-        CErrors.user_err
-          Pp.(str ("The solution library " ^ DirPath.to_string dp ^ " was loaded without a \
-                    check, as a dependency of a library given with -norec or -admit, and \
-                    it is neither pre-checked by the config, nor pinned by its sha256 as \
-                    a challenge file, nor given with -admit itself. A -compare run \
-                    refuses it.")))
+      match origin t dp with
+      | Prechecked | Shared -> ()
+      | Own ->
+        if not (DirPath.Set.mem dp admitted || pinned t dp) then
+          CErrors.user_err
+            Pp.(str ("The solution library " ^ DirPath.to_string dp ^ " was loaded without \
+                      a check, as a dependency of a library given with -norec or -admit, \
+                      and it is neither pre-checked by the config, nor pinned by its \
+                      sha256 as a challenge file, nor given with -admit itself. A \
+                      -compare run refuses it.")))
     (CheckLibrary.unchecked ())
 
 (* The challenge load puts the challenge directory in front of the
-   solution's directories under the roots it stands in for, and leaves
+   solution's directories under the root it stands in for, and leaves
    those behind it: a challenge library that the directory does not hold
    would be read from the solution's file and then compared with itself.
-   So a library the challenge loaded under such a root must have been read
+   So a library the challenge loaded under that root must have been read
    from a file below the challenge directory (real paths, links resolved),
    unless it is pre-checked: a pre-checked library may resolve to the
    solution's file, which the config pins. [libs] are the challenge's
    loaded libraries with the files the loader recorded. *)
 let check_challenge_place t libs =
   List.iter (fun (dp, file) ->
-      if under_challenge_root t dp && not (is_prechecked t dp) then
+      match origin t dp with
+      | Prechecked | Shared -> ()
+      | Own ->
         let inside = match t.challenge_dir, realpath file with
           | Some dir, Some f -> path_under ~dir f
           | None, _ | _, None -> false
@@ -1324,9 +1350,10 @@ let check_challenge_place t libs =
 
 (* Before the challenge is loaded: the files the config pins must be there
    and have the sha256 it gives, and the libraries the solution loaded must
-   pass [check_open_roots], [check_prechecked], [check_provenance],
-   [check_prechecked_deps] and [check_unchecked], in that order. *)
-let prepare cfg ~dir ~challenge_roots ~open_roots ~bound_dirs ~admitted =
+   pass [check_open_roots], [check_provenance], [check_prechecked_deps] and
+   [check_unchecked], in that order. [check_prechecked] ran before any
+   library was read. *)
+let prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs ~admitted =
   let files =
     List.map (fun f ->
         let p = CUnix.correct_path f.cf_path dir in
@@ -1344,18 +1371,16 @@ let prepare cfg ~dir ~challenge_roots ~open_roots ~bound_dirs ~admitted =
   let solution_files = CheckLibrary.files_of loaded in
   let t =
     { cfg; dir; files; challenge_dir = realpath dir;
-      prechecked = List.map (fun p -> p.pc_library) cfg.cfg_prechecked;
-      challenge_roots; open_roots;
+      prechecked = DirPath.Set.of_list (prechecked_libraries cfg);
+      challenge_root; open_roots;
       cwd = realpath (Sys.getcwd ());
       bound_dirs = List.filter_map realpath bound_dirs;
-      solution_deps = CheckLibrary.deps_of loaded;
-      solution_files;
-      outside = [] }
+      solution_libs = List.map fst loaded;
+      solution_deps = DirPath.Map.of_list (CheckLibrary.deps_of loaded);
+      solution_files = DirPath.Map.of_list solution_files }
   in
   check_open_roots t;
-  check_prechecked t;
-  (* [check_provenance] computes [outside] and does not read it. *)
-  let t = { t with outside = check_provenance t ~side:"solution" solution_files } in
+  check_provenance t ~side:"solution" solution_files;
   check_prechecked_deps t;
   check_unchecked t ~admitted;
   t
@@ -1370,9 +1395,9 @@ let check_dep_digests t ~challenge ~solution =
     Array.fold_left (fun acc (d, dg) -> if DirPath.equal d dp then Some dg else acc) None deps
   in
   List.iter (fun (lib, ch_deps) ->
-      match List.find_opt (fun (l, _) -> DirPath.equal l lib) solution with
+      match DirPath.Map.find_opt lib solution with
       | None -> ()
-      | Some (_, sol_deps) ->
+      | Some sol_deps ->
         Array.iter (fun (dep, ch_digest) ->
             if one_file t dep then
               let prechecked = is_prechecked t dep in
@@ -1400,25 +1425,28 @@ let check_dep_digests t ~challenge ~solution =
    added: what is left for the constraint checks is what the solution's own
    libraries add. A shared library that only the solution Requires is one
    file for both sides because the challenge load changes the load path
-   only in front of the challenge's roots, because every library naming it
+   only in front of the challenge's root, because every library naming it
    records the same digest on both sides ([check_dep_digests]), and because
-   no bound root is left open ([check_open_roots]). *)
-let load_challenge t ~dir ~add_load_path senv0 =
+   no bound root is left open ([check_open_roots]). Returns the challenge
+   environment and the dependency digests that each library of the files'
+   closure records. *)
+let load_challenge t ~add_load_path senv0 =
   let saved = CheckLibrary.swap_tables (CheckLibrary.fresh_tables ()) in
   let restore () = ignore (CheckLibrary.swap_tables saved) in
   Fun.protect ~finally:restore (fun () ->
-      List.iter (fun rocq_root -> add_load_path ~unix_path:dir ~rocq_root) t.challenge_roots;
+      Option.iter (fun rocq_root -> add_load_path ~unix_path:t.dir ~rocq_root) t.challenge_root;
       (* A pre-checked library is not a shared one ([prechecked_libraries]). *)
       let shared =
-        CList.map_filter (fun (dp, _) ->
-            if under_challenge_root t dp || is_prechecked t dp then None else Some dp)
-          t.solution_deps
+        List.filter (fun dp -> match origin t dp with
+            | Shared -> true
+            | Prechecked | Own -> false)
+          t.solution_libs
       in
       let needed, all = CheckLibrary.intern_challenge (List.map fst t.files) shared in
       let files = CheckLibrary.files_of all in
       check_challenge_place t files;
-      ignore (check_provenance t ~side:"challenge" files);
-      let challenge_deps = CheckLibrary.deps_of needed in
+      check_provenance t ~side:"challenge" files;
+      let challenge_deps = DirPath.Map.of_list (CheckLibrary.deps_of needed) in
       check_dep_digests t ~challenge:(CheckLibrary.deps_of all) ~solution:t.solution_deps;
       let senv = CheckLibrary.import_challenge senv0 all in
       Safe_typing.env_of_safe_env senv, challenge_deps)
@@ -1476,7 +1504,7 @@ type universe_check =
 
    The other direction asks what the solution ADDS, and passes over one
    shape alone: a constraint between two levels of libraries outside the
-   challenge's roots. A proof adds those as a matter of course -- it
+   challenge's root. A proof adds those as a matter of course -- it
    instantiates installed definitions, and the kernel records what that
    costs -- and they say nothing about the challenge, since its statements
    do not stand on those levels relative to each other. A proof that
@@ -1683,7 +1711,7 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
         step name (fun m -> eq_mib_body m mib mib'))
     (by_name MutInd.UserOrd.compare inductives);
   let modtypes =
-    List.fold_left (fun acc dp ->
+    DirPath.Set.fold (fun dp acc ->
         let mp = ModPath.MPfile dp in
         match Environ.lookup_module mp challenge_env with
         | mb -> signature_modtypes mp acc (Mod_declarations.mod_type mb)
@@ -1691,7 +1719,7 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
           CErrors.anomaly
             Pp.(str ("The challenge environment does not hold the library " ^
                      DirPath.to_string dp ^ ", which the challenge loaded.")))
-      [] libs
+      libs []
   in
   List.iter (fun (name, mp, mt) ->
       match Environ.lookup_modtype mp solution_env with
@@ -1860,7 +1888,6 @@ let why_not_challenge ~challenge_env ~solution_env obj =
    closure. *)
 type global_checks = {
   failures : failure list;  (** in the order [compare_declarations] finds them *)
-  failed_decl : string CString.Map.t;  (** the reason of each failure, by name *)
   universes : universe_check;
   qualities : string option;  (** why [check_elim_constraints] fails *)
   rewrite_rule : Constant.t option;  (** a rule the config does not allow *)
@@ -1942,7 +1969,10 @@ let theorem_record t ~challenge_env ~solution_env ~sol_index st g (th, ch_consta
                    " constants that print the theorem's name: " ^
                    String.concat " and " objs)
            else None);
-        (fun () -> CString.Map.find_opt th.th_name g.failed_decl);
+        (* the reason of the last failure found under the theorem's name *)
+        (fun () ->
+           List.fold_left (fun r f -> if String.equal f.f_name th.th_name then Some f.f_reason else r)
+             None g.failures);
         (fun () -> match g.failures with
            | f :: _ ->
              Some ("the challenge declaration " ^ f.f_name ^ " differs: " ^ f.f_reason)
@@ -2047,7 +2077,7 @@ let check_roots ~installed_roots roots =
                     every library name the installed load path serves. A -compare run \
                     refuses it."))
       | id :: _ ->
-        if List.exists (String.equal (Id.to_string id)) installed_roots then
+        if List.mem_f Id.equal id installed_roots then
           CErrors.user_err
             Pp.(str ("The directory " ^ unix_path ^ " is bound to " ^
                      DirPath.to_string rocq_root ^ ", a name the installed load path \
@@ -2055,35 +2085,43 @@ let check_roots ~installed_roots roots =
                      different files under one library name.")))
     roots
 
-(* The challenge stands in for each bound root that a library named for
-   checking lives under; a root that only a pre-checked library or another
-   shared tree uses is left alone, since the challenge directory does not
-   hold it. Every other bound root is an open root ([check_open_roots]). *)
+(* The challenge stands in for the bound root that the libraries named for
+   checking live under, and the challenge directory holds one root's tree:
+   [add_load_path] binds a directory to one logical root at a time, so a
+   second root would take the binding of the first. A root that only a
+   pre-checked library or another shared tree uses is left alone, since the
+   challenge directory does not hold it. Every other bound root is an open
+   root ([check_open_roots]). *)
 let run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv0 =
   let substitutes root = List.exists (CheckLibrary.under_root ~root) checked in
-  let challenge_roots = List.filter substitutes (List.map snd roots) in
+  let challenge_root =
+    match List.sort_uniquize DirPath.compare (List.filter substitutes (List.map snd roots)) with
+    | [] -> None
+    | [root] -> Some root
+    | _ :: _ :: _ as l ->
+      CErrors.user_err
+        Pp.(str ("The libraries named for checking lie under more than one root that -Q \
+                  or -R binds: " ^ String.concat ", " (List.map DirPath.to_string l) ^
+                 ". The challenge directory stands in for one root, the solution's \
+                  project root. A -compare run refuses them."))
+  in
   let open_roots =
     List.filter_map (fun (unix_path, rocq_root) ->
         if substitutes rocq_root then None else Some (rocq_root, unix_path))
       roots
   in
   let t =
-    prepare cfg ~dir ~challenge_roots ~open_roots ~bound_dirs:(List.map fst roots) ~admitted
+    prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs:(List.map fst roots) ~admitted
   in
-  let challenge_env, challenge_deps = load_challenge t ~dir ~add_load_path senv0 in
-  (* A pre-checked library and the libraries it rests on are not compared
-     when they are one file for both sides: their declarations are equal by
+  let challenge_env, challenge_deps = load_challenge t ~add_load_path senv0 in
+  (* A pre-checked library, and each library it rests on that is one file
+     for both sides, is not compared: their declarations are equal by
      construction, and walking them would read the whole standard library on
-     every run. A library a pre-checked one rests on that is not one file for
-     both sides, one the config pins as a challenge file
-     ([check_prechecked_deps]) or one that only the challenge's copy of a
-     pre-checked library rests on, is compared all the same. *)
-  let skip = List.filter (one_file t) (deps_closure challenge_deps t.prechecked) in
-  let libs =
-    CList.map_filter (fun (dp, _) ->
-        if List.exists (DirPath.equal dp) skip then None else Some dp)
-      challenge_deps
+     every run. Every other library of the challenge files' closure is. *)
+  let skip =
+    DirPath.Set.filter (one_file t) (deps_closure challenge_deps (prechecked_libraries t.cfg))
   in
+  let libs = DirPath.Set.diff (DirPath.Map.domain challenge_deps) skip in
   let ch_index = constant_index challenge_env in
   (* A theorem the challenge does not state, or states twice under one
      printed name, is a config error, not a verdict. *)
@@ -2107,9 +2145,6 @@ let run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv0 =
   let failures, m = compare_declarations t ~challenge_env ~solution_env:env ~libs ~theorems in
   let universes = check_constraints t ~challenge_env ~solution_env:env m in
   let qualities = check_elim_constraints ~challenge_env ~solution_env:env in
-  let failed_decl =
-    List.fold_left (fun acc f -> CString.Map.add f.f_name f.f_reason acc) CString.Map.empty failures
-  in
   let sol_index = constant_index env in
   (* Every library the solution loaded is the solution's own concern, a
      library only the solution has included, which the declaration
@@ -2118,12 +2153,9 @@ let run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv0 =
      challenge did not write. *)
   let rewrite_rule =
     if t.cfg.cfg_rewrite_rules then None
-    else
-      solution_rewrite_rule env
-        (CList.map_filter (fun (dp, _) -> if one_file t dp then None else Some dp)
-           t.solution_deps)
+    else solution_rewrite_rule env (List.filter (fun dp -> not (one_file t dp)) t.solution_libs)
   in
-  let g = { failures; failed_decl; universes; qualities; rewrite_rule } in
+  let g = { failures; universes; qualities; rewrite_rule } in
   let st = Check_closure.closure_state env CheckLibrary.indirect_accessor in
   let records =
     List.map (theorem_record t ~challenge_env ~solution_env:env ~sol_index st g) named
