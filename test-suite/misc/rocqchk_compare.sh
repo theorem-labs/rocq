@@ -665,9 +665,11 @@ holds 'Top.A with predep-pin.json' '"name":"Top.A.thm","verdict":"pass"'
 
 # A .vo file starts with a header of 16 bytes. Its first segment follows:
 # OCaml's marshal header of 20 bytes, whose second word is the length of the
-# data after it, then that data, then the data's MD5.
+# data after it, then that data, then the data's MD5. od may end its output
+# with an empty line (BSD od does), so awk folds every byte it reads into one
+# number.
 seg_len() { # <file>: the length of the data of its first segment
-  od -An -tu1 -j20 -N4 "$1" | awk '{ print (($1 * 256 + $2) * 256 + $3) * 256 + $4 }'
+  od -An -tu1 -j20 -N4 "$1" | awk '{ for (i = 1; i <= NF; i++) n = n * 256 + $i } END { print n }'
 }
 overwrite() { # <file> <offset>: 16 bytes 0xff from <offset> on
   printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377' |
