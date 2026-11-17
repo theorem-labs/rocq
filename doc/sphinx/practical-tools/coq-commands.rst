@@ -1078,9 +1078,8 @@ that the library's file has below the directory of its ``-Q`` or ``-R`` root
 A library given with ``-admit`` is loaded without a check too, and no digest
 pins it; the verdict lists it. Under the challenge's root it is still the
 solution's own, not a pre-checked one: an axiom of it is the challenge's
-declaration only by the rule for every axiom (the challenge declares the same
-kernel name and the solution exports it), never as an axiom of a pre-checked
-library is, and it is compared with the challenge's library of the same name
-when the challenge has one. The libraries that a library given with ``-norec``
-or ``-admit`` depends on are loaded without a check as well, hence the refusal
-above that concerns them.
+declaration only as an axiom that both sides declare is (above), never as an
+axiom of a pre-checked library is, and it is compared with the challenge's
+library of the same name when the challenge has one. The libraries that a
+library given with ``-norec`` or ``-admit`` depends on are loaded without a
+check as well, hence the refusal above that concerns them.

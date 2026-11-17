@@ -161,8 +161,8 @@ val check_prechecked : config -> Names.DirPath.t list
 
     A pre-checked library is never a shared one: the admit list puts it in
     the SOLUTION's environment whether the solution's tree Requires it or
-    not, and the challenge environment takes it only as a dependency of a
-    library it loads, never as a shared library. A config pins bytes; it
+    not, and the challenge environment takes it only through the challenge
+    files' closure, never as a shared library. A config pins bytes; it
     cannot add a library to the challenge's universe graph and so decide
     what the challenge stands on.
     @raise CErrors.UserError on the first library whose sha256 differs, or
