@@ -425,6 +425,11 @@ and fold_deps_list seen ff modl needed =
 let fold_deps_list ff modl acc =
   snd (fold_deps_list LibrarySet.empty ff modl (LibrarySet.empty,acc))
 
+(* The libraries the last [recheck_library] imported without a check. *)
+let unchecked_libraries = ref []
+
+let unchecked () = !unchecked_libraries
+
 let recheck_library ?(output_context=false) ?(intern_admit=false) senv ~norec ~admit ~check =
   let ml = List.map try_locate_qualified_library check in
   let nrl = List.map try_locate_qualified_library norec in
@@ -459,7 +464,8 @@ let recheck_library ?(output_context=false) ?(intern_admit=false) senv ~norec ~a
   (* explicitly required modules cannot be skipped... *)
   let nochk =
     List.fold_right LibrarySet.remove (List.map fst (nrl@ml)) nochk in
-  (* *)
+  unchecked_libraries :=
+    List.filter_map (fun (dir, _) -> if LibrarySet.mem dir nochk then Some dir else None) needed;
   Flags.if_verbose Feedback.msg_notice (fnl()++hv 2 (str "Ordered list:" ++ fnl() ++
     prlist
     (fun (dir,_) -> pr_dirpath dir ++ fnl()) needed));

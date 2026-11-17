@@ -571,6 +571,37 @@ let init_profile ~file =
       NewProfile.finish ();
       close_out ch)
 
+(* A -compare run refuses a -Q that binds one of the installed load path's
+   own top-level names, or the empty root: it puts the solution's directory
+   where a library that the challenge reads from the installation is looked
+   up, so the two sides would read different files under one name, and the
+   one the solution wrote would decide. The empty root binds every name.
+   This is refused outright, because no config can make it safe, and a run
+   needs only one bound root, the solution's own. It needs only the load
+   path, so it runs as soon as that is set up, before any library is
+   checked. *)
+let check_compare_roots () =
+  List.iter (fun (unix_path, rocq_root) ->
+      let head = match List.rev (DirPath.repr rocq_root) with
+        | [] -> None
+        | id :: _ -> Some (Id.to_string id)
+      in
+      match head with
+      | None ->
+        fatal_error
+          (str ("The directory " ^ unix_path ^ " is bound to the empty root, which binds \
+                 every library name the installed load path serves. A -compare run \
+                 refuses it."))
+          1
+      | Some h when List.exists (String.equal h) !installed_roots ->
+        fatal_error
+          (str ("The directory " ^ unix_path ^ " is bound to " ^ DirPath.to_string rocq_root ^
+                ", a name the installed load path serves. A -compare run refuses it: the \
+                 two sides would read different files under one library name."))
+          1
+      | Some _ -> ())
+    !user_includes
+
 (* XXX: At some point we need to either port the checker to use the
    feedback system or to remove its use completely. *)
 let init_with_argv argv =
@@ -598,6 +629,7 @@ let init_with_argv argv =
           (List.rev !includes))
       ();
     includes := [];
+    if Option.has_some !compare_config then check_compare_roots ();
     make_senv ()
   with e ->
     fatal_error (str "Error during initialization :" ++ (explain_exn e)) (CErrors.exit_code e)
@@ -648,10 +680,12 @@ let run_compare env empty_senv =
        challenge environment loads the same ones, so that a constraint one
        of them carries is not read as a constraint the solution invented.
 
-       This rests on every solution library being checked in this run (none
-       is given with -admit): a library of the solution's own then lives
-       under a root that some checked name lives under, which is a root the
-       challenge stands in for; what is left is the installation's. *)
+       This rests on every library of the solution's own living under a root
+       that some checked name lives under, which is a root the challenge
+       stands in for; what is left is the installation's. A library under
+       such a root that the solution loaded without a check, as a dependency
+       of a -norec or -admit library, is refused unless the config pre-checks
+       it or -admit names it ([Check_compare.prepare]). *)
     let under_challenge_root lib =
       List.exists (fun (_, rocq_root) ->
           substitutes rocq_root && CheckLibrary.under_root ~root:rocq_root lib)
@@ -665,37 +699,15 @@ let run_compare env empty_senv =
           if substitutes rocq_root then None else Some (rocq_root, unix_path))
         !user_includes
     in
-    (* A -Q that binds one of the installed load path's own top-level names,
-       or the empty root, puts the solution's directory where a library that
-       the challenge reads from the installation is looked up: the two sides
-       would then read different files under one name, and the one the
-       solution wrote would decide. The empty root binds every name. This is
-       refused outright, because no config can make it safe, and a run needs
-       only one bound root, the solution's own. *)
-    List.iter (fun (unix_path, rocq_root) ->
-        let head = match List.rev (DirPath.repr rocq_root) with
-          | [] -> None
-          | id :: _ -> Some (Id.to_string id)
-        in
-        match head with
-        | None ->
-          fatal_error
-            (str ("The directory " ^ unix_path ^ " is bound to the empty root, which binds \
-                   every library name the installed load path serves. A -compare run \
-                   refuses it."))
-            1
-        | Some h when List.exists (String.equal h) !installed_roots ->
-          fatal_error
-            (str ("The directory " ^ unix_path ^ " is bound to " ^ DirPath.to_string rocq_root ^
-                  ", a name the installed load path serves. A -compare run refuses it: the \
-                   two sides would read different files under one library name."))
-            1
-        | Some _ -> ())
-      !user_includes;
+    (* The libraries -admit names, the config's pre-checked ones among
+       them, by the library name the loader gave each. *)
+    let admitted =
+      List.map (fun f -> fst (CheckLibrary.try_locate_qualified_library f)) !admit_list
+    in
     try
       let t =
         Check_compare.prepare cfg ~dir ~out ~under_challenge_root ~open_roots
-          ~bound_dirs:(List.map fst !user_includes)
+          ~bound_dirs:(List.map fst !user_includes) ~admitted
           ~add_challenge_load_path:(fun () ->
               List.iter (fun (_, rocq_root) ->
                   if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)

@@ -53,17 +53,25 @@ compare() { # <tree> <config> [rocqchk options]
   chk -Q "$tree" Top "$@" -compare "$config" -challenge "$ch" -compare-out "$out" "${libs[@]}"
 }
 
-# A run that writes a verdict: it exits 0 and the verdict file holds each
-# <text>.
-verdict() { # <tree> <config> <text>...
-  local run="$1 with $2" text
-  rm -f "$out"
-  compare "$1" "$2" || fail "$run: exit $?"
+# The verdict file is there and holds each <text>; <run> names the run in a
+# failure.
+holds() { # <run> <text>...
+  local run=$1 text
+  shift
   [ -f "$out" ] || fail "$run: no verdict file"
-  shift 2
   for text in "$@"; do
     grep -qF -- "$text" "$out" || fail "$run: the verdict does not hold $text"
   done
+}
+
+# A run that writes a verdict: it exits 0 and the verdict file holds each
+# <text>.
+verdict() { # <tree> <config> <text>...
+  local run="$1 with $2"
+  rm -f "$out"
+  compare "$1" "$2" || fail "$run: exit $?"
+  shift 2
+  holds "$run" "$@"
 }
 
 lacks() { # <text>
@@ -212,6 +220,14 @@ compile main/name A.v < "$d/main/honest/A.v"
 verdict main/name main.json '"name":"Top.A.thm","verdict":"fail"' '"name":"Top.A.other","verdict":"fail"' \
   '{"name":"Top.Defs.th\u00e9or\u00e8me_\u00ff","reason":'
 
+# The field P of the module type SIG is given a body. A module type is no
+# constant of the environment, and is compared all the same.
+sed 's/^  Parameter P : Prop\./  Definition P := prop_id./' "$d/main/ch/Defs.v" |
+  compile main/modtype Defs.v
+compile main/modtype A.v < "$d/main/honest/A.v"
+verdict main/modtype main.json '"name":"Top.A.thm","verdict":"fail"' \
+  '{"name":"Top.Defs.SIG","reason":"the challenge leaves this declaration open and the solution defines it"}'
+
 # An axiom that the proof reaches through a module whose signature hides it.
 solution main/sealed <<'EOF'
 Require Import Top.Defs.
@@ -252,6 +268,42 @@ EOF
 verdict main/rmod main.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the solution declares a rewrite rule on Top.A.N.s"' \
   '"name":"Top.A.other","verdict":"fail"'
+
+#### Declarations of the challenge that no theorem names: a solution may
+#### give a body to one that the challenge leaves open only when it is a
+#### proof, and may not change an inductive type.
+
+compile open/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Parameter P : Prop.
+Lemma lem : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+Inductive t : Set := c : t.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config open > "$d/open.json"
+# The type of lem is a proposition: the solution may prove it.
+compile open/lem A.v <<'EOF'
+Unset Elimination Schemes.
+Parameter P : Prop.
+Definition lem : forall A : Prop, forall _ : A, A := fun A a => a.
+Inductive t : Set := c : t.
+Definition thm : forall A : Prop, forall _ : A, A := lem.
+EOF
+verdict open/lem open.json '"name":"Top.A.thm","verdict":"pass"'
+# The type of P, Prop, is a type and not a proposition: P is data, which the
+# solution may not choose.
+sed 's/^Parameter P : Prop\./Definition P : Prop := forall A : Prop, A./' "$d/open/lem/A.v" |
+  compile open/data A.v
+verdict open/data open.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.P differs: the challenge leaves this declaration open and the solution defines it"'
+# t has one more constructor.
+sed 's/^Inductive t : Set := c : t\./Inductive t : Set := c : t | d : t./' "$d/open/lem/A.v" |
+  compile open/ctor A.v
+verdict open/ctor open.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.t differs' \
+  '{"name":"Top.A.t","reason":'
 
 #### Runs that rocqchk refuses.
 
@@ -322,6 +374,45 @@ echo 'Definition w := Prop.' > "$d/cwd/W.v"
 ROCQPATH=$d/cwd $coqc -noinit -native-compiler no "$d/cwd/W.v"
 { echo 'Require W.'; cat "$d/main/honest/A.v"; } | ROCQPATH=$d/cwd solution main/cwd
 refused 'in the working directory' in_dir "$d/cwd" compare main/cwd main.json
+
+# The challenge directory lacks Defs.vo, which A.vo depends on, and the load
+# path finds the solution's behind it: a copy of the challenge's, which would
+# then be compared with itself. A challenge library comes from the challenge
+# directory.
+mkdir -p "$d/nodefs/ch" "$d/nodefs/sol"
+cp "$d/main/ch/A.vo" "$d/nodefs/ch/"
+cp "$d/main/ch/Defs.vo" "$d/nodefs/sol/"
+compile nodefs/sol A.v < "$d/main/honest/A.v"
+config nodefs > "$d/nodefs.json"
+refused 'which is not under the challenge directory' compare nodefs/sol nodefs.json
+
+#### -norec checks the libraries it names, and loads the libraries they
+#### depend on without a check.
+
+compile norec/ch A.v <<'EOF'
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config norec > "$d/norec.json"
+compile norec/sol Helper.v <<'EOF'
+Definition h : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+compile norec/sol A.v <<'EOF'
+Require Top.Helper.
+Definition thm : forall A : Prop, forall _ : A, A := Top.Helper.h.
+EOF
+# Top.A and Top.Helper are both checked.
+verdict norec/sol norec.json '"name":"Top.A.thm","verdict":"pass"'
+# Only Top.A is checked, and the challenge has no counterpart for
+# Top.Helper: nothing would look at it. Refused, unless -admit names it.
+norec() {
+  chk -Q "$d/norec/sol" Top "$@" -compare "$d/norec.json" -challenge "$d/norec/ch" \
+    -compare-out "$out" -norec Top.A
+}
+refused 'The solution library Top.Helper was loaded without a check' norec
+rm -f "$out"
+norec -admit Top.Helper || fail "-admit Top.Helper -norec Top.A: exit $?"
+holds '-admit Top.Helper -norec Top.A' '"name":"Top.A.thm","verdict":"pass"'
 
 #### A pre-checked library, Top.P.Q: the solution may not change it, the
 #### config pins its digest, and it is not compared. Its axiom g is permitted.
@@ -395,6 +486,38 @@ pre_config "$(digest pre/other/P/Q.vo)" > "$d/pre-other.json"
 refused 'The library Top.A depends on the pre-checked library Top.P.Q with a different digest' \
   compare pre/other pre-other.json
 
+# A pre-checked library, Top.P.Q, that depends on another library of the
+# tree, Top.D. The config pins the bytes of Top.P.Q, which state a digest for
+# Top.D; a digest is what a library's own file states, so it pins nothing,
+# and Top.D must be pre-checked too.
+compile predep/ch D.v <<'EOF'
+Definition d := Prop.
+EOF
+compile predep/ch P/Q.v <<'EOF'
+Require Top.D.
+Definition q := Top.D.d.
+EOF
+compile predep/ch A.v <<'EOF'
+Require Top.P.Q.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+mkdir -p "$d/predep/sol/P"
+cp "$d/predep/ch/D.vo" "$d/predep/sol/"
+cp "$d/predep/ch/P/Q.vo" "$d/predep/sol/P/"
+compile predep/sol A.v <<'EOF'
+Require Top.P.Q.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+prechecked() { # <library> <file whose sha256 the config pins>
+  printf '{"library": "%s", "sha256": "%s"}' "$1" "$(digest "$2")"
+}
+config predep "\"prechecked\": [$(prechecked Top.P.Q predep/ch/P/Q.vo)]," > "$d/predep.json"
+refused 'The pre-checked library Top.P.Q depends on the library Top.D' compare predep/sol predep.json
+config predep "\"prechecked\": [$(prechecked Top.P.Q predep/ch/P/Q.vo),
+  $(prechecked Top.D predep/ch/D.vo)]," > "$d/predep-both.json"
+verdict predep/sol predep-both.json '"name":"Top.A.thm","verdict":"pass"'
+
 #### A -vos build holds no proof.
 
 compile vos/ch A.v <<'EOF'
@@ -457,8 +580,46 @@ grep -v '^Constraint' "$d/univ/honest/A.v" | compile univ/drop A.v
 verdict univ/drop univ-any.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge has a universe constraint the solution does not:'
 
-#### Elimination constraints: box lives in a sort s of the challenge's own,
-#### which may not be eliminated into Prop.
+#### The type of a is the universe max(u+1, v+1), whose two levels no
+#### comparison has paired yet and have the same increment: which level of
+#### the solution each stands for is not decided. The declaration is compared
+#### again once the others have been (the constants are compared in the
+#### order their names sort), and fails if none of them pairs those levels.
+
+compile undecided/ch A.v <<'EOF'
+Universe u v.
+Definition a : Type@{max(u+1,v+1)} := forall _ : Type@{u}, Type@{v}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config undecided > "$d/undecided.json"
+compile undecided/sol A.v <<'EOF'
+Universe u v.
+Definition a : Type@{max(u+1,v+1)} := forall _ : Type@{u}, Type@{v}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict undecided/sol undecided.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.a differs: universe ' \
+  'each level of the challenge stands for is not decided'
+# b, compared after a, pairs u with u, and then a pairs v with v.
+compile decided/ch A.v <<'EOF'
+Universe u v.
+Definition a : Type@{max(u+1,v+1)} := forall _ : Type@{u}, Type@{v}.
+Definition b := Type@{u}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config decided > "$d/decided.json"
+compile decided/sol A.v <<'EOF'
+Universe u v.
+Definition a : Type@{max(u+1,v+1)} := forall _ : Type@{u}, Type@{v}.
+Definition b := Type@{u}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict decided/sol decided.json '"name":"Top.A.thm","verdict":"pass"'
+
+#### Elimination constraints: box lives in a sort s, which may not be
+#### eliminated into Prop unless the challenge says so.
 
 compile elim/ch A.v <<'EOF'
 Unset Elimination Schemes.
@@ -484,6 +645,52 @@ Definition unbox (A : Prop) (b : box A) : A := match b with mk _ a => a end.
 Definition thm : forall A : Prop, forall _ : A, A := fun A a => unbox A (mk A a).
 EOF
 verdict elim/bad elim.json '"name":"Top.A.thm","verdict":"fail"' \
+  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not:'
+# answer-universe-constraints does not tolerate it.
+config elim '"tolerated_flags": [{"kind": "answer-universe-constraints"}],' > "$d/elim-any.json"
+verdict elim/bad elim-any.json '"name":"Top.A.thm","verdict":"fail"' \
+  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not:'
+
+# A challenge whose box may be eliminated into Prop, and a solution that
+# drops the constraint.
+compile elimc/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Sort s.
+Inductive box (A : Prop) : Univ@{s;_} := mk : forall _ : A, box A.
+Constraint s -> Prop.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config elimc > "$d/elimc.json"
+compile elimc/drop A.v < "$d/elim/honest/A.v"
+verdict elimc/drop elimc.json '"name":"Top.A.thm","verdict":"fail"' \
+  '{"name":"<qualities>","reason":"the challenge has an elimination constraint the solution does not:'
+
+# The sort s and box in a pre-checked library outside the challenge's roots,
+# Vendor.S: a constraint that the solution adds on that sort is compared as
+# well.
+mkdir "$d/elimlib"
+cat > "$d/elimlib/S.v" <<'EOF'
+Unset Elimination Schemes.
+Sort s.
+Inductive box (A : Prop) : Univ@{s;_} := mk : forall _ : A, box A.
+EOF
+$coqc -noinit -native-compiler no -Q "$d/elimlib" Vendor "$d/elimlib/S.v"
+compile elimv/ch A.v -Q "$d/elimlib" Vendor <<'EOF'
+Require Vendor.S.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config elimv "\"prechecked\": [$(prechecked Vendor.S elimlib/S.vo)]," > "$d/elimv.json"
+compile elimv/bad A.v -Q "$d/elimlib" Vendor <<'EOF'
+Require Vendor.S.
+Constraint Vendor.S.s -> Prop.
+Definition unbox (A : Prop) (b : Vendor.S.box A) : A := match b with Vendor.S.mk _ a => a end.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => unbox A (Vendor.S.mk A a).
+EOF
+rm -f "$out"
+compare elimv/bad elimv.json -Q "$d/elimlib" Vendor || fail "elimv/bad: exit $?"
+holds elimv/bad '"name":"Top.A.thm","verdict":"fail"' \
   '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not:'
 
 #### Relaxed typing conditions: the challenge declares seq under

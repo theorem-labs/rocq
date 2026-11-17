@@ -15,8 +15,8 @@
     checks the solution with the kernel as it does without the option; this
     module loads the challenge into a second environment without a check,
     compares every challenge declaration with the solution declaration of
-    the same canonical kernel name, computes each named theorem's axiom
-    closure and writes a JSON verdict.
+    the same user kernel name, computes each named theorem's axiom closure
+    and writes a JSON verdict.
 
     The comparison is structural after a one-to-one renaming of universe
     levels: no conversion, no reduction, and no constant is unfolded.
@@ -93,8 +93,9 @@ val read_config : string -> config
     [rewrite_rules] (default [false]) is whether the solution may declare a
     rewrite rule. Without it, every theorem fails when a library the
     solution loaded declares one, whatever symbol it rewrites: each library
-    except a pre-checked one, what a pre-checked one rests on, and a shared
-    one. A library only the solution has counts, and so does a rule inside a
+    except a pre-checked one and a shared one (every library a pre-checked
+    one rests on is one of those, or the run is refused: [prepare]). A
+    library only the solution has counts, and so does a rule inside a
     module whose signature hides it, and a rule a module type or a module's
     signature declares. A rule the challenge declares counts too, since the
     solution's copy of it declares it again: such a challenge needs the
@@ -108,9 +109,14 @@ val read_config : string -> config
     every constraint of the challenge must hold in the solution, and every
     constraint the solution adds that reaches a level of the challenge's
     own must hold in the challenge; a failing direction fails every
-    theorem. The same is done for the elimination constraints between sort
-    qualities (a global sort a library declares, and constraints such as
-    [s -> Prop] on it), comparing the qualities by identity.
+    theorem. The elimination constraints between sort qualities (a global
+    sort a library declares, and constraints such as [s -> Prop] on it) are
+    compared in both directions too, the qualities by identity, and with no
+    exception in the solution-to-challenge direction: every constraint the
+    solution's graph holds between two qualities the challenge's graph holds
+    must hold in the challenge, whichever library declares them, since a
+    library may add a constraint on the sort of another, an installed or
+    pre-checked one included.
 
     [answer-universe-constraints] is a kind-only tolerance for the global
     universe comparison, and one that names an object is an error. It skips
@@ -149,10 +155,11 @@ type t
 val prepare :
   config -> dir:string -> out:string -> add_challenge_load_path:(unit -> unit) ->
   under_challenge_root:(Names.DirPath.t -> bool) ->
-  open_roots:(Names.DirPath.t * string) list -> bound_dirs:string list -> t
+  open_roots:(Names.DirPath.t * string) list -> bound_dirs:string list ->
+  admitted:Names.DirPath.t list -> t
 (** Resolve the challenge files under [dir] and check the sha256 of each,
     then check what the solution loaded, from the library tables in place.
-    [add_challenge_load_path] puts [dir] on the load path in place of the
+    [add_challenge_load_path] puts [dir] on the load path in front of the
     solution's directories under the roots the challenge stands in for; it
     is called once, inside the challenge load.
     [under_challenge_root] says whether a library name lives under one of
@@ -170,12 +177,25 @@ val prepare :
     with the directory each is bound to; the run is refused when the
     solution loaded a library from under one of them that the config does
     not pre-check.
+    A pre-checked library records a digest for each library it depends on,
+    but that digest is the one the dependency's own file states, which
+    pins nothing; so every library a pre-checked one rests on, directly or
+    not, must be pre-checked too or shared.
+    [admitted] are the libraries the command line gives with [-admit]. A
+    library the solution loaded without a check ([CheckLibrary.unchecked]:
+    a dependency of a [-norec] or [-admit] library) is neither checked nor,
+    unless the challenge files Require it, compared; under a root the
+    challenge stands in for, it must be pre-checked or in [admitted].
     @raise CErrors.UserError when a challenge file is missing or its sha256
     differs, when the solution loaded a library from under one of
     [open_roots] that the config does not pre-check, when a pre-checked
-    library's sha256 differs, or when the solution loaded a library that is
+    library's sha256 differs, when the solution loaded a library that is
     neither under a root the challenge stands in for nor pre-checked from a
-    file in the working directory or under [bound_dirs]. *)
+    file in the working directory or under [bound_dirs], when a pre-checked
+    library rests on a library that is neither pre-checked nor shared, or
+    when the solution loaded a library under a root the challenge stands in
+    for without a check and that library is neither pre-checked nor in
+    [admitted]. *)
 
 val run : t -> Environ.env -> Safe_typing.safe_environment -> unit
 (** Load the challenge into an environment of its own on top of the given
@@ -185,17 +205,23 @@ val run : t -> Environ.env -> Safe_typing.safe_environment -> unit
     ([CheckLibrary.indirect_accessor]).
     @raise CErrors.UserError when the challenge loaded a library that is
     neither under its roots nor pre-checked from a file in the working
-    directory or under a bound directory; when a challenge library and its
-    solution library record different dependency digests for a pre-checked
-    or shared library; when the config names a theorem the challenge does
-    not hold, or one whose name two constants of the challenge print; or
-    when a theorem's axiom closure reaches an axiom or a flag's object whose
+    directory or under a bound directory; when the challenge loaded a
+    library that is under its roots and not pre-checked from a file that is
+    not under the challenge directory ([dir] of [prepare]; real paths, links
+    resolved), as when that directory lacks a library and the load path
+    finds the solution's; when a challenge library and its solution library
+    record different dependency digests for a pre-checked or shared
+    library; when the config names a theorem the challenge does not hold,
+    or one whose name two constants of the challenge print; or when a
+    theorem's axiom closure reaches an axiom or a flag's object whose
     printed name is not made of identifiers, or an inductive type whose name
     is not an identifier.
-    A verdict is never an error: the file is written and the run exits 0. *)
+    A verdict is never an error: the file is written and the run exits 0.
+    The verdict is written to a temporary file next to it and renamed, so a
+    write that fails leaves no verdict file and exits non-zero. *)
 
 val sha256_of_file : string -> string
 (** The SHA-256 of a file's bytes as 64 lowercase hexadecimal digits
-    ({!Sha256.file}), the digest a config gives. [rocqchk -sha256 FILE]
+    ({!CSha256.file}), the digest a config gives. [rocqchk -sha256 FILE]
     prints it.
     @raise CErrors.UserError when the file cannot be read. *)

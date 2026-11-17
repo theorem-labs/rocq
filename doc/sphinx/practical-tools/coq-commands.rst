@@ -915,14 +915,16 @@ Comparing a solution with a challenge
 libraries it checks, the *solution*, with a *challenge*: ``.vo`` files compiled
 under the same library names. The solution is checked as without these options.
 The challenge files are then loaded into a second environment without a check,
-*dir* taking the place of the solution's directory under each ``-Q`` or ``-R``
-root that holds a library named on the command line for checking, by its
-logical name: the challenge's roots. Each declaration of the challenge files and
-of the libraries they depend on (except the pre-checked libraries and their
-dependencies) is compared with the solution's declaration of the same kernel
-name, structurally after a one-to-one renaming of universe levels, with no
-reduction. Then the axioms of each theorem the config names are computed, and
-the verdict is written to *file*.
+*dir* being searched before the solution's directory under each ``-Q`` or
+``-R`` root that holds a library named on the command line for checking, by its
+logical name: the challenge's roots. Every library that the challenge loads
+under those roots, except a pre-checked one, must be read from *dir*. Each
+declaration of the challenge files and of the libraries they depend on (except
+the pre-checked libraries and their dependencies, which are pre-checked too or
+from the installed load path) is compared with the solution's declaration of
+the same kernel name, structurally after a one-to-one renaming of universe
+levels, with no reduction. Then the axioms of each theorem the config names are
+computed, and the verdict is written to *file*.
 
 *config* is one JSON object with the keys ``theorems`` (each
 ``{name, permitted_axioms?}``), ``permitted_axioms``, ``tolerated_flags`` (each
@@ -968,11 +970,13 @@ theorem fails when:
   name;
 - a challenge declaration is missing from the solution or differs from it;
 - a universe or elimination constraint of the challenge does not hold in the
-  solution, or one that the solution adds on a level or sort of a library under
-  the challenge's roots does not hold in the challenge;
+  solution, a universe constraint that the solution adds on a level of a library
+  under the challenge's roots does not hold in the challenge, or an elimination
+  constraint that the solution adds between two sorts the challenge knows,
+  whichever library declares them, does not hold in the challenge;
 - ``rewrite_rules`` is ``false`` and a library the solution loaded declares a
-  rewrite rule, unless that library is pre-checked, a dependency of a
-  pre-checked library, or from the installed load path;
+  rewrite rule, unless that library is pre-checked or from the installed load
+  path;
 - its proof reaches an axiom whose name its permitted list does not hold;
 - its proof reaches, under a permitted name, an axiom that is not the
   challenge's declaration of that name. The challenge's declaration of a name is
@@ -1005,12 +1009,26 @@ refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
 - a library outside the challenge's roots and not pre-checked that the solution
   loads from another ``-Q`` or ``-R`` root, or that either side loads from a
   file in the working directory or under a directory that ``-Q`` or ``-R``
-  binds.
+  binds;
+- a pre-checked library that depends, directly or not, on a library that is
+  neither pre-checked nor from the installed load path;
+- a library under the challenge's roots that the solution loads without a check,
+  as a dependency of a library given with ``-norec`` or ``-admit``, and that is
+  neither pre-checked nor given with ``-admit``;
+- a library under the challenge's roots and not pre-checked that the challenge
+  loads from a file that is not under *dir*, as when *dir* lacks a library that
+  a challenge file depends on and the solution's directory holds it.
 
 The comparison trusts the challenge files and the pre-checked libraries, which
 the config pins by their SHA-256 (``rocqchk -sha256 file`` prints the digest a
 config takes), and the installed load path, whose libraries both sides read
 from the same files. A pre-checked library is loaded without a check, as with
-``-admit``. A library given with ``-admit`` is loaded without a check too, so
-the comparison trusts it as it trusts a pre-checked library, but no digest pins
-it.
+``-admit``. The digest that a library records for each library it depends on is
+the one stated in the file of that dependency, and is not computed from its
+bytes, so it pins nothing: this is why every library that a pre-checked library
+depends on must be pre-checked too, or come from the installed load path. A
+library given with ``-admit`` is loaded without a check too, so the comparison
+trusts it as it trusts a pre-checked library, but no digest pins it. The
+libraries that a library given with ``-norec`` or ``-admit`` depends on are
+loaded without a check as well; under the challenge's roots, each of them must
+be pre-checked or given with ``-admit``.

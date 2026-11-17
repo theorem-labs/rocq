@@ -42,6 +42,13 @@ val recheck_library : ?output_context:bool -> ?intern_admit:bool ->
     their dependencies are read too, without validation, so that an admitted
     library that no other library given here depends on is loaded as well. *)
 
+val unchecked : unit -> DirPath.t list
+(** The libraries the last [recheck_library] call imported without checking
+    them. Those are the [admit] libraries with their dependencies, and the
+    dependencies of the [norec] libraries that no [check] library depends
+    on; the libraries given with [norec] or [check] themselves are always
+    checked. *)
+
 val indirect_accessor : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm
 (** The body of an opaque constant of a loaded library, from the table of
     opaque proofs that the tables in place hold for that library. *)

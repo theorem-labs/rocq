@@ -10,7 +10,7 @@ let log_out_ch = open_log_out_ch __FILE__
    shared by this module's string and file paths cannot make a test pass. *)
 
 let digest name description expected input =
-  mk_eq_test name description expected (Sha256.string input)
+  mk_eq_test name description expected (CSha256.string input)
 
 let empty = digest "clib-sha256-empty"
     "the digest of the empty string"
@@ -63,7 +63,7 @@ let file_digest =
             does not end on a block boundary. *)
          Fun.protect ~finally:(fun () -> close_out ch)
            (fun () -> output_string ch (String.make 100000 'x'));
-         Sha256.file name)
+         CSha256.file name)
   in
   mk_eq_test "clib-sha256-file"
     "the digest of a file of 100000 times 'x'"
