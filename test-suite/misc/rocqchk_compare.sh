@@ -850,6 +850,38 @@ sed -e 's/^Universe u v\./Universe u v w./' \
 verdict univs/more univs.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.small differs: the universe context has other constraints"'
 
+# The context of small constrains i below u and w, two levels that no term
+# names, so each of its constraints fits two of the solution's: nothing
+# decides between them but the solution's level of the same library and
+# number, which is taken once no other comparison maps the level. A copy
+# whose context names v instead of w, a level that V maps and u < v
+# constrains, fails; so does a copy that relates u and w, whichever way the
+# map pairs them.
+compile univs2/ch A.v <<'EOF'
+Universe u v w.
+Constraint u < v.
+Definition V := Type@{v}.
+Polymorphic Definition small@{i | i < u, i < w} : Type@{i+1} := Type@{i}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config univs2 > "$d/univs2.json"
+compile univs2/honest A.v <<'EOF'
+Universe u v w.
+Constraint u < v.
+Definition V := Type@{v}.
+Polymorphic Definition small@{i | i < u, i < w} : Type@{i+1} := Type@{i}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict univs2/honest univs2.json '"name":"Top.A.thm","verdict":"pass"'
+sed 's/^Polymorphic Definition small@{i | i < u, i < w}/Polymorphic Definition small@{i | i < u, i < v}/' \
+  "$d/univs2/honest/A.v" | compile univs2/other A.v
+verdict univs2/other univs2.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.small differs'
+{ cat "$d/univs2/honest/A.v"; echo 'Constraint w < u.'; } | compile univs2/related A.v
+verdict univs2/related univs2.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the solution has a universe constraint the challenge does not:'
+
 #### The type of a is the universe max(u+1, v+1), whose two levels no
 #### comparison has paired yet and have the same increment: which level of
 #### the solution each stands for is not decided. The declaration is compared
@@ -915,11 +947,63 @@ Definition unbox (A : Prop) (b : box A) : A := match b with mk _ a => a end.
 Definition thm : forall A : Prop, forall _ : A, A := fun A a => unbox A (mk A a).
 EOF
 verdict elim/bad elim.json '"name":"Top.A.thm","verdict":"fail"' \
-  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not:'
+  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not: the constraint Top.A.0 -> Prop'
 # answer-universe-constraints does not tolerate it.
 config elim '"tolerated_flags": [{"kind": "answer-universe-constraints"}],' > "$d/elim-any.json"
 verdict elim/bad elim-any.json '"name":"Top.A.thm","verdict":"fail"' \
-  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not:'
+  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not: the constraint Top.A.0 -> Prop'
+
+# A library numbers its sorts in the order it declares them. A solution that
+# declares a sort t of its own before s, with a constraint of its own, gives
+# its s the number 1 where the challenge's s has 0: the sorts are compared
+# through a map that pairs them. t, which nothing of the challenge's
+# stands for, may be eliminated into Prop.
+compile elim/own A.v <<'EOF'
+Unset Elimination Schemes.
+Sort t.
+Constraint t -> Prop.
+Sort s.
+Inductive box (A : Prop) : Univ@{s;_} := mk : forall _ : A, box A.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict elim/own elim.json '"name":"Top.A.thm","verdict":"pass"'
+# The same constraint on its s, numbered 1, is one on the challenge's s.
+compile elim/shifted A.v <<'EOF'
+Unset Elimination Schemes.
+Sort t.
+Sort s.
+Inductive box (A : Prop) : Univ@{s;_} := mk : forall _ : A, box A.
+Constraint s -> Prop.
+Definition unbox (A : Prop) (b : box A) : A := match b with mk _ a => a end.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => unbox A (mk A a).
+EOF
+verdict elim/shifted elim.json '"name":"Top.A.thm","verdict":"fail"' \
+  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not: the constraint Top.A.1 -> Prop'
+
+# Two sorts, which the solution declares in the other order: each stands for
+# the challenge's sort of its name, the constraint s -> Prop included.
+compile elims/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Sort s.
+Sort t.
+Inductive box (A : Prop) : Univ@{s;_} := mk : forall _ : A, box A.
+Inductive tbox (A : Prop) : Univ@{t;_} := tmk : forall _ : A, tbox A.
+Constraint s -> Prop.
+Theorem thm : forall A : Prop, forall _ : box A, A.
+Proof. Admitted.
+EOF
+config elims > "$d/elims.json"
+compile elims/swapped A.v <<'EOF'
+Unset Elimination Schemes.
+Sort t.
+Sort s.
+Inductive box (A : Prop) : Univ@{s;_} := mk : forall _ : A, box A.
+Inductive tbox (A : Prop) : Univ@{t;_} := tmk : forall _ : A, tbox A.
+Constraint s -> Prop.
+Definition unbox (A : Prop) (b : box A) : A := match b with mk _ a => a end.
+Definition thm : forall A : Prop, forall _ : box A, A := unbox.
+EOF
+verdict elims/swapped elims.json '"name":"Top.A.thm","verdict":"pass"'
 
 # A challenge whose box may be eliminated into Prop, and a solution that
 # drops the constraint.

@@ -19,8 +19,9 @@
     named theorem's axiom closure, and writes a JSON verdict.
 
     The comparison is structural: two declarations are equal when their terms
-    are the same after a one-to-one renaming of universe levels. There is no
-    conversion and no reduction, and no constant is unfolded. *)
+    are the same after a one-to-one renaming of universe levels and of global
+    sort qualities. There is no conversion and no reduction, and no constant
+    is unfolded. *)
 
 open Util
 open Names
@@ -451,22 +452,39 @@ let read_config file =
     cfg_challenge_files = challenge_files }
 
 (************************************************************************)
-(** {6 The universe level map}
+(** {6 The universe level and sort quality maps}
 
     One map for the whole run, a bijection between the challenge's
-    monomorphic levels and the solution's. It is seeded with the identity on
-    every level of a library that is one file for both sides ([seed_umap]),
-    and the rest of it is built while the declarations are compared.
+    monomorphic levels and the solution's, and another between their global
+    sort qualities. A global level, and a global quality that a library
+    declares ([Sort s.]), is named by its library and a number given in the
+    order of declaration and nothing else, so a solution that declares one
+    more before the challenge's numbers them differently. Each map is
+    seeded with the identity on every level and quality of a library that
+    is one file for both sides ([seed_umap]), and the rest of it is built
+    while the declarations are compared.
 
-    A level of a polymorphic context is a [Level.var], bound by position, so
-    it is compared by its index and never enters the map. *)
+    A level or a quality of a polymorphic context is a variable bound by
+    position, so it is compared by its index and never enters the map. *)
 
 type umap = {
   fwd : Univ.Level.t Univ.Level.Map.t;  (** challenge to solution *)
   bwd : Univ.Level.t Univ.Level.Map.t;  (** solution to challenge *)
+  qfwd : Sorts.Quality.t Sorts.Quality.Map.t;
+      (** challenge to solution, on global qualities ([QGlobal]) only *)
+  qbwd : Sorts.Quality.t Sorts.Quality.Map.t;  (** solution to challenge *)
+  ties : bool;
+      (** whether the constraints of a polymorphic context may decide
+          between several solution levels or qualities that fit by taking
+          the challenge's own ([map_through_constraints]); only the last
+          resort of [compare_declarations] sets it *)
 }
 
-let empty_umap = { fwd = Univ.Level.Map.empty; bwd = Univ.Level.Map.empty }
+let empty_umap = {
+  fwd = Univ.Level.Map.empty; bwd = Univ.Level.Map.empty;
+  qfwd = Sorts.Quality.Map.empty; qbwd = Sorts.Quality.Map.empty;
+  ties = false;
+}
 
 type diff = string
 
@@ -476,15 +494,16 @@ let diff fmt = Printf.ksprintf (fun s -> raise (Diff s)) fmt
 
 (* A universe whose levels no comparison so far has mapped, and that one
    pass cannot map alone (two entries of one increment), or a constraint of
-   a polymorphic context on a global level the map does not hold yet. The
-   declaration is compared again once the others have been, since a later
-   declaration -- the one that introduced those levels -- may map them. *)
+   a polymorphic context on a global level or quality the map does not hold
+   yet. The declaration is compared again once the others have been, since
+   a later declaration -- the one that introduced those levels -- may map
+   them. *)
 exception Undecided of diff
 
 let level_name u = Univ.Level.to_string u
 
 let add_level m u v =
-  { fwd = Univ.Level.Map.add u v m.fwd; bwd = Univ.Level.Map.add v u m.bwd }
+  { m with fwd = Univ.Level.Map.add u v m.fwd; bwd = Univ.Level.Map.add v u m.bwd }
 
 let map_level m u v =
   match Univ.Level.var_index u, Univ.Level.var_index v with
@@ -591,21 +610,56 @@ let map_universe m u v =
   passes ();
   !m
 
-let map_quality q1 q2 =
-  if not (Sorts.Quality.equal q1 q2) then diff "sort quality"
+let quality_name = function
+  | Sorts.Quality.QConstant c -> Pp.string_of_ppcmds (Sorts.Quality.Constants.pr c)
+  | Sorts.Quality.QGlobal q -> Sorts.QGlobal.to_string q
+  | Sorts.Quality.QVar q -> Sorts.QVar.to_string q
+
+let add_quality m q1 q2 =
+  { m with qfwd = Sorts.Quality.Map.add q1 q2 m.qfwd;
+           qbwd = Sorts.Quality.Map.add q2 q1 m.qbwd }
+
+(* A global quality maps to a global quality, one-to-one, as [map_level]
+   maps a global level. A constant ([SProp], [Prop], [Type]) stands for
+   itself, and so does a quality variable of a polymorphic context, bound by
+   position. *)
+let map_quality m q1 q2 =
+  let open Sorts.Quality in
+  match q1, q2 with
+  | QGlobal _, QGlobal _ ->
+    (match Map.find_opt q1 m.qfwd with
+     | Some q' ->
+       if not (equal q2 q') then
+         diff "sort quality %s is already mapped to %s, not to %s"
+           (quality_name q1) (quality_name q') (quality_name q2);
+       m
+     | None ->
+       match Map.find_opt q2 m.qbwd with
+       | Some q' ->
+         diff "sort quality %s is already mapped from %s, so %s cannot map to it"
+           (quality_name q2) (quality_name q') (quality_name q1)
+       | None -> add_quality m q1 q2)
+  | (QConstant _ | QVar _), _ | QGlobal _, (QConstant _ | QVar _) ->
+    if not (equal q1 q2) then
+      diff "sort quality %s against %s" (quality_name q1) (quality_name q2);
+    m
+
+(* The solution quality that the challenge quality [q] stands for, when
+   that is decided, as [mapped_level] gives it for a level. *)
+let mapped_quality m q = match q with
+  | Sorts.Quality.QGlobal _ -> Sorts.Quality.Map.find_opt q m.qfwd
+  | Sorts.Quality.QConstant _ | Sorts.Quality.QVar _ -> Some q
 
 (* A sort is compared by its quality and its universe. The quality of a
-   [GSort] is a global quality, a name that a library declares: the two
-   sides must name the same one. Its universe goes through the level map,
-   as the universe of [Type] does. *)
+   [GSort] is a global quality, which goes through the quality map, as its
+   universe and the universe of [Type] go through the level map. *)
 let map_sort m s1 s2 =
   let open Sorts in
   match s1, s2 with
   | SProp, SProp | Prop, Prop | Set, Set -> m
   | Type u, Type v -> map_universe m u v
   | GSort (q1, u), GSort (q2, v) ->
-    if not (QGlobal.equal q1 q2) then diff "sort quality";
-    map_universe m u v
+    map_universe (map_quality m (Quality.QGlobal q1) (Quality.QGlobal q2)) u v
   | VSort (q1, u), VSort (q2, v) ->
     if not (QVar.equal q1 q2) then diff "sort variable";
     map_universe m u v
@@ -615,7 +669,7 @@ let map_instance m i1 i2 =
   let q1, u1 = UVars.Instance.to_array i1 and q2, u2 = UVars.Instance.to_array i2 in
   if Array.length q1 <> Array.length q2 || Array.length u1 <> Array.length u2 then
     diff "universe instance";
-  Array.iter2 map_quality q1 q2;
+  let m = Array.fold_left2 map_quality m q1 q2 in
   Array.fold_left2 map_level m u1 u2
 
 let map_relevance r1 r2 =
@@ -740,56 +794,55 @@ let eq_rel_context m c1 c2 =
       | (LocalAssum _ | LocalDef _), _ -> diff "a let-in of the context")
     m c1 c2
 
-(* The universe constraints [c1] and [c2] of two polymorphic contexts. A
-   constraint may relate a bound level to a global one, which the two sides
-   may number differently, so a global level of the challenge's is compared
-   as the solution level the map pairs it with, as everywhere else. That is
-   why this runs once the rest of the declaration has been compared: its
-   terms may map the level. The map is one-to-one, so it maps [c1] to a set
-   of the same size: two sets of different sizes differ whatever it maps,
-   which is reported before any level is mapped.
+(* A global level or quality that only the constraints of a polymorphic
+   context name is mapped by them. For a challenge constraint [(x, k, u)]
+   whose [x] stands for [x'] and whose [u] the map does not hold, the
+   solution must hold [(x', k, v)] for the [v] that [u] stands for, and [v]
+   can only be a global one that nothing maps to yet ([free]). When exactly
+   one solution constraint has that shape, [u] maps to its [v] ([add] keeps
+   the map one-to-one), and the same holds the other way round for
+   [(u, k, x)]. Each such mapping can decide another constraint, so the
+   passes run until one maps nothing; what is still unmapped then is the
+   caller's to report.
 
-   A global level that only the constraints name is mapped by them. For a
-   challenge constraint [(x, k, u)] whose [x] stands for [x'] and whose [u]
-   the map does not hold, the solution must hold [(x', k, v)] for the level
-   [v] that [u] stands for, and [v] can only be a global level that no
-   level maps to yet; when exactly one solution constraint has that shape,
-   [u] maps to its [v] ([map_level] keeps the map one-to-one), and the same
-   holds the other way round for [(u, k, x)]. Each such mapping can decide
-   another constraint, so the passes run until one maps nothing. A level
-   still unmapped then, which no such constraint or several fit, leaves the
-   declaration undecided, as an ambiguous universe does in
-   [map_universe]. *)
-let eq_context_constraints m c1 c2 =
-  let size = Univ.UnivConstraints.cardinal in
-  if not (Int.equal (size c1) (size c2)) then
-    diff "the universe context has other constraints";
-  let solution = Univ.UnivConstraints.elements c2 in
-  (* The level an unmapped end may map to: [ends] reads a solution
-     constraint as its end opposite the unmapped one, then its end at the
-     unmapped one's place. *)
-  let target m k x' ends =
+   When several solution constraints have that shape, none of them is
+   taken, unless [m.ties] is set and one of them is [u] itself: the same
+   library and number, which the two sides share when the solution declares
+   [u] where the challenge does. Any pairing is sound, since everything
+   compared after it -- the rest of the context, the other declarations and
+   both graphs -- is compared through the map it leaves, so a wrong one can
+   only fail a solution. [compare_declarations] sets [m.ties] only once
+   nothing else decides, so a comparison that maps [u] by a term comes
+   first.
+
+   The universe constraints and the elimination constraints of a context
+   have the same shape: [mapped] reads a challenge end through the map,
+   [free] tells whether a solution end may still be mapped to, [same] and
+   [same_kind] compare ends and kinds, and [add] maps an end. *)
+let map_through_constraints ~mapped ~free ~same ~same_kind ~add m challenge solution =
+  (* The end that the unmapped end [u] may map to: [ends] reads a solution
+     constraint as its end opposite [u]'s place, then its end at [u]'s
+     place. *)
+  let target m k x' u ends =
     let fits ((_, k2, _) as c) =
       let x2, v = ends c in
-      if Int.equal (Univ.UnivConstraint.compare_kind k k2) 0 && Univ.Level.equal x2 x'
-         && Option.has_some (Univ.Level.name v) && not (Univ.Level.Map.mem v m.bwd)
-      then Some v
-      else None
+      if same_kind k k2 && same x2 x' && free m v then Some v else None
     in
     match List.filter_map fits solution with
     | [ v ] -> Some v
-    | [] | _ :: _ :: _ -> None
+    | [] -> None
+    | _ :: _ :: _ as l -> if m.ties && List.exists (same u) l then Some u else None
   in
   let step (m, rest) ((u, k, v) as c) =
-    match mapped_level m u, mapped_level m v with
+    match mapped m u, mapped m v with
     | Some _, Some _ -> m, rest
     | Some u', None ->
-      (match target m k u' (fun (a, _, b) -> a, b) with
-       | Some v' -> map_level m v v', rest
+      (match target m k u' v (fun (a, _, b) -> a, b) with
+       | Some v' -> add m v v', rest
        | None -> m, c :: rest)
     | None, Some v' ->
-      (match target m k v' (fun (a, _, b) -> b, a) with
-       | Some u' -> map_level m u u', rest
+      (match target m k v' u (fun (a, _, b) -> b, a) with
+       | Some u' -> add m u u', rest
        | None -> m, c :: rest)
     | None, None -> m, c :: rest
   in
@@ -797,7 +850,31 @@ let eq_context_constraints m c1 c2 =
     let m, rest = List.fold_left step (m, []) pending in
     if List.length rest < List.length pending then passes m (List.rev rest) else m
   in
-  let m = passes m (Univ.UnivConstraints.elements c1) in
+  passes m challenge
+
+(* The universe constraints [c1] and [c2] of two polymorphic contexts. A
+   constraint may relate a bound level to a global one, which the two sides
+   may number differently, so a global level of the challenge's is compared
+   as the solution level the map pairs it with, as everywhere else. That is
+   why this runs once the rest of the declaration has been compared: its
+   terms may map the level. The map is one-to-one, so it maps [c1] to a set
+   of the same size: two sets of different sizes differ whatever it maps,
+   which is reported before any level is mapped. A global level that only
+   the constraints name is mapped by them ([map_through_constraints]); one
+   still unmapped then, which no such constraint or several fit, leaves the
+   declaration undecided, as an ambiguous universe does in
+   [map_universe]. *)
+let eq_context_constraints m c1 c2 =
+  let size = Univ.UnivConstraints.cardinal in
+  if not (Int.equal (size c1) (size c2)) then
+    diff "the universe context has other constraints";
+  let m =
+    map_through_constraints ~mapped:mapped_level
+      ~free:(fun m v -> Option.has_some (Univ.Level.name v) && not (Univ.Level.Map.mem v m.bwd))
+      ~same:Univ.Level.equal
+      ~same_kind:(fun k k2 -> Int.equal (Univ.UnivConstraint.compare_kind k k2) 0)
+      ~add:map_level m (Univ.UnivConstraints.elements c1) (Univ.UnivConstraints.elements c2)
+  in
   let level u = match mapped_level m u with
     | Some v -> v
     | None ->
@@ -814,12 +891,39 @@ let eq_context_constraints m c1 c2 =
     diff "the universe context has other constraints";
   m
 
+(* The elimination constraints [e1] and [e2] of two polymorphic contexts,
+   compared as [eq_context_constraints] compares their universe constraints:
+   a constraint may relate a bound quality to a global one, which goes
+   through the quality map, and a global quality that only the constraints
+   name is mapped by them. *)
+let eq_elim_context_constraints m e1 e2 =
+  let module EC = Sorts.ElimConstraints in
+  if not (Int.equal (EC.cardinal e1) (EC.cardinal e2)) then
+    diff "the universe context has other constraints";
+  let same_kind k k2 = match k, k2 with
+    | Sorts.ElimConstraint.ElimTo, Sorts.ElimConstraint.ElimTo -> true
+  in
+  let m =
+    map_through_constraints ~mapped:mapped_quality
+      ~free:(fun m q -> Sorts.Quality.is_qglobal q && not (Sorts.Quality.Map.mem q m.qbwd))
+      ~same:Sorts.Quality.equal ~same_kind ~add:map_quality m (EC.elements e1) (EC.elements e2)
+  in
+  let quality q = match mapped_quality m q with
+    | Some q' -> q'
+    | None ->
+      raise (Undecided (Printf.sprintf
+        "the universe context constrains the sort quality %s, which no comparison has mapped"
+        (quality_name q)))
+  in
+  let e1 = EC.fold (fun (q1, k, q2) acc -> EC.add (quality q1, k, quality q2) acc) e1 EC.empty in
+  if not (EC.equal e1 e2) then diff "the universe context has other constraints";
+  m
+
 (* The shape of two universe contexts: both monomorphic, or both
-   polymorphic, of one size and with the same elimination constraints, whose
-   qualities are compared by identity as [map_sort] compares them. Returns
-   the comparison of their universe constraints ([eq_context_constraints]),
-   for the caller to run once the rest of the declaration has been
-   compared. *)
+   polymorphic and of one size. Returns the comparison of their elimination
+   and universe constraints ([eq_elim_context_constraints],
+   [eq_context_constraints]), for the caller to run once the rest of the
+   declaration has been compared. *)
 let eq_universes u1 u2 = match u1, u2 with
   | Monomorphic, Monomorphic -> fun m -> m
   | Polymorphic a1, Polymorphic a2 ->
@@ -827,9 +931,7 @@ let eq_universes u1 u2 = match u1, u2 with
       diff "the universe context has another size";
     let (e1, c1) = UVars.UContext.constraints (UVars.AbstractContext.repr a1) in
     let (e2, c2) = UVars.UContext.constraints (UVars.AbstractContext.repr a2) in
-    if not (Sorts.ElimConstraints.equal e1 e2) then
-      diff "the universe context has other constraints";
-    fun m -> eq_context_constraints m c1 c2
+    fun m -> eq_context_constraints (eq_elim_context_constraints m e1 e2) c1 c2
   | Monomorphic, Polymorphic _ -> diff "a monomorphic declaration is polymorphic in the solution"
   | Polymorphic _, Monomorphic -> diff "a polymorphic declaration is monomorphic in the solution"
 
@@ -969,11 +1071,22 @@ let eq_typing_flags (f1 : typing_flags) (f2 : typing_flags) =
   || impredicative_set <> f2.impredicative_set
   then diff "the kernel conditions the declaration was typed under"
 
-let eq_squashed s1 s2 = match s1, s2 with
-  | None, None -> true
-  | Some AlwaysSquashed, Some AlwaysSquashed -> true
-  | Some (SometimesSquashed q1), Some (SometimesSquashed q2) -> Sorts.Quality.Set.equal q1 q2
-  | (None | Some (AlwaysSquashed | SometimesSquashed _)), _ -> false
+(* The qualities at which a block is squashed: the challenge's are compared
+   through the quality map. *)
+let eq_squashed m s1 s2 = match s1, s2 with
+  | None, None | Some AlwaysSquashed, Some AlwaysSquashed -> ()
+  | Some (SometimesSquashed q1), Some (SometimesSquashed q2) ->
+    let mapped q = match mapped_quality m q with
+      | Some q' -> q'
+      | None ->
+        raise (Undecided (Printf.sprintf
+          "the elimination restriction names the sort quality %s, which no comparison has \
+           mapped"
+          (quality_name q)))
+    in
+    if not (Sorts.Quality.Set.equal (Sorts.Quality.Set.map mapped q1) q2) then
+      diff "the elimination restriction"
+  | (None | Some (AlwaysSquashed | SometimesSquashed _)), _ -> diff "the elimination restriction"
 
 let eq_one_ind m (mip1 : one_inductive_body) (mip2 : one_inductive_body) =
   let[@warning "+9"] {
@@ -1009,13 +1122,13 @@ let eq_one_ind m (mip1 : one_inductive_body) (mip2 : one_inductive_body) =
   let m = eq_constr m mind_user_arity mip2.mind_user_arity in
   let m = map_sort m mind_sort mip2.mind_sort in
   if not (Int.equal mind_nrealargs mip2.mind_nrealargs) then diff "the number of indices";
-  if not (eq_squashed mind_squashed mip2.mind_squashed) then
-    diff "the elimination restriction";
   if not (Array.equal Id.equal mind_consnames mip2.mind_consnames) then
     diff "the constructor names";
   if not (Int.equal (Array.length mind_user_lc) (Array.length mip2.mind_user_lc)) then
     diff "the number of constructors";
   let m = Array.fold_left2 eq_constr m mind_user_lc mip2.mind_user_lc in
+  (* after the constructors, whose types may map the qualities it names *)
+  eq_squashed m mind_squashed mip2.mind_squashed;
   eq_record m mind_record mip2.mind_record
 
 let eq_mib_body m (mib1 : mutual_inductive_body) (mib2 : mutual_inductive_body) =
@@ -1621,22 +1734,34 @@ let load_challenge t ~add_load_path senv0 =
 
 type failure = { f_name : string; f_reason : string }
 
-(* The identity seed: a level of a library that is one file for both sides
-   ([one_file]). A level no compared declaration names is in the map only
-   through this: the body of an opaque proof is never compared, so a
-   challenge proof's constraint on such a level would otherwise never be
-   asked of the solution. *)
+(* The identity seed: a level or a global quality of a library that is one
+   file for both sides ([one_file]), when both environments hold it. A level
+   no compared declaration names is in the map only through this: the body
+   of an opaque proof is never compared, so a challenge proof's constraint
+   on such a level would otherwise never be asked of the solution. So is a
+   quality of such a library that no compared declaration names: a
+   constraint that a solution library adds on it is still compared
+   ([check_elim_constraints]). *)
 let seed_umap t ~challenge_env ~solution_env =
   let gch = Environ.universes challenge_env and gsol = Environ.universes solution_env in
   let sol = UGraph.domain gsol in
-  Univ.Level.Set.fold (fun u m ->
-      match Univ.Level.name u with
-      | None -> m
-      | Some ug ->
-        let dp, _, _ = Univ.UGlobal.repr ug in
-        let one_file = one_file t dp in
-        if one_file && Univ.Level.Set.mem u sol then add_level m u u else m)
-    (UGraph.domain gch) empty_umap
+  let m =
+    Univ.Level.Set.fold (fun u m ->
+        match Univ.Level.name u with
+        | None -> m
+        | Some ug ->
+          let dp, _, _ = Univ.UGlobal.repr ug in
+          if one_file t dp && Univ.Level.Set.mem u sol then add_level m u u else m)
+      (UGraph.domain gch) empty_umap
+  in
+  let qsol = QGraph.domain (Environ.qualities solution_env) in
+  Sorts.Quality.Set.fold (fun q m ->
+      match q with
+      | Sorts.Quality.QGlobal g ->
+        let dp, _ = Sorts.QGlobal.repr g in
+        if one_file t dp && Sorts.Quality.Set.mem q qsol then add_quality m q q else m
+      | Sorts.Quality.QConstant _ | Sorts.Quality.QVar _ -> m)
+    (QGraph.domain (Environ.qualities challenge_env)) m
 
 (* The reason a failing set of constraints gives: the first [shown] of them
    in sorted order, and how many more there are. *)
@@ -1746,29 +1871,35 @@ let check_constraints t ~challenge_env ~solution_env m =
    quality ([Sort s.]) and constraints on it ([Constraint s -> Prop.]), and
    the environment's quality graph ([Environ.qualities]) holds those of
    every loaded library. A solution library that adds [s -> Prop] for a sort
-   [s] the challenge knows lets a proof eliminate a type of sort [s] into
-   [Prop], which the challenge's statements over [s] did not allow; every
-   declaration still compares equal, and only the graphs show it.
+   [s] that stands for one of the challenge's lets a proof eliminate a type
+   of sort [s] into [Prop], which the challenge's statements over its sort
+   did not allow; every declaration still compares equal, and only the
+   graphs show it.
 
-   A global quality is named by its library and a number, which the two
-   sides share, so qualities are compared by identity ([QGlobal.equal], as
-   [map_sort] does) and need no map.
+   A global quality is named by its library and its rank among the
+   library's [Sort] commands, which the two sides need not share, so the
+   graphs are compared through the quality map, as [check_constraints]
+   compares the universe graphs through the level map. Both directions
+   compare the PROJECTION of one graph onto the constants and the
+   qualities the map holds, mapped: a quality the map does not hold -- one
+   that only the solution declares, or one of the challenge's that no
+   compared declaration names -- is walked through, so a path through it
+   is compared like a direct edge.
 
-   Challenge to solution: every constraint of the challenge's graph between
-   the qualities it holds must hold in the solution's graph, which must hold
-   both qualities.
+   Challenge to solution: every constraint of the challenge's graph, so
+   projected, must hold in the solution's graph.
 
-   Solution to challenge: every constraint of the solution's graph,
-   projected onto the qualities both graphs hold, must hold in the
-   challenge's graph, whichever library declares the qualities. Unlike the
-   universe check, no shape is passed over. A proof never adds an
-   elimination constraint: only a [Constraint] command does, and the
-   challenge environment loads the shared libraries the solution loaded, so
-   the solution's graph holds no constraint the challenge's lacks unless a
-   file the challenge does not load, one of the solution's, states it. Such
-   a file may state one on any library's sort: one of the challenge's, or
-   an installed or pre-checked library's ([Constraint V.s -> Prop.]), on
-   which the challenge's statements stand as much.
+   Solution to challenge: every constraint of the solution's graph, so
+   projected, must hold in the challenge's graph, whichever library
+   declares the qualities. Unlike the universe check, no shape is passed
+   over. A proof never adds an elimination constraint: only a [Constraint]
+   command does, and the challenge environment loads the shared libraries
+   the solution loaded, so the solution's graph holds no constraint the
+   challenge's lacks unless a file the challenge does not load, one of the
+   solution's, states it. Such a file may state one on any library's sort:
+   one of the challenge's, or an installed or pre-checked library's
+   ([Constraint V.s -> Prop.]), which the map holds as itself
+   ([seed_umap]) and on which the challenge's statements stand as much.
    [universe_constraints_flag] does not skip this direction: it stays
    strict.
 
@@ -1776,36 +1907,47 @@ let check_constraints t ~challenge_env ~solution_env m =
    [UGraph.constraints_for] makes, by the same
    [AcyclicGraph.constraints_for]: a path through qualities it does not
    keep comes out as a direct constraint, and an equivalence between two
-   kept qualities as a constraint each way, so a constraint routed through a
-   quality only the solution declares is still seen. A kept quality must be
-   in the graph, hence the intersection.
+   kept qualities as a constraint each way. A kept quality must be in the
+   graph, hence the filter on its domain.
 
    Both graphs are read with their constraints in force: in an environment
    that does not check eliminations, [QGraph.check_constraint] accepts every
    constraint, which would leave nothing compared. *)
-let check_elim_constraints ~challenge_env ~solution_env =
+let check_elim_constraints ~challenge_env ~solution_env m =
   let enforced env = QGraph.set_ignore_constraints false (Environ.qualities env) in
   let gch = enforced challenge_env and gsol = enforced solution_env in
-  let name = function
-    | Sorts.Quality.QConstant c -> Pp.string_of_ppcmds (Sorts.Quality.Constants.pr c)
-    | Sorts.Quality.QGlobal q -> Sorts.QGlobal.to_string q
-    | Sorts.Quality.QVar q -> Sorts.QVar.to_string q
+  (* The kept set is the constants and the map's domain, so a quality the
+     map does not hold cannot reach here, as in [check_constraints]. *)
+  let mapped map q = match q with
+    | Sorts.Quality.QConstant _ -> q
+    | Sorts.Quality.QGlobal _ | Sorts.Quality.QVar _ ->
+      match Sorts.Quality.Map.find_opt q map with
+      | Some q' -> q'
+      | None ->
+        CErrors.anomaly
+          Pp.(str ("The comparator projected an elimination constraint onto " ^
+                   quality_name q ^ ", which its quality map does not hold."))
   in
-  let fails graph cs =
-    constraints_reason (Sorts.ElimConstraints.fold (fun ((q1, k, q2) as c) acc ->
-        if QGraph.mem q1 graph && QGraph.mem q2 graph && QGraph.check_constraint graph c
+  let fails map graph cs =
+    constraints_reason (Sorts.ElimConstraints.fold (fun (q1, k, q2) acc ->
+        let q1' = mapped map q1 and q2' = mapped map q2 in
+        if QGraph.mem q1' graph && QGraph.mem q2' graph
+           && QGraph.check_constraint graph (q1', k, q2')
         then acc
         else
           Printf.sprintf "%s %s %s"
-            (name q1) (Pp.string_of_ppcmds (Sorts.ElimConstraint.pr_kind k)) (name q2) :: acc)
+            (quality_name q1) (Pp.string_of_ppcmds (Sorts.ElimConstraint.pr_kind k))
+            (quality_name q2) :: acc)
         cs [])
   in
-  let kept_ch = QGraph.domain gch in
-  let kept_both = Sorts.Quality.Set.inter kept_ch (QGraph.domain gsol) in
-  match fails gsol (QGraph.constraints_for ~kept:kept_ch gch) with
+  let kept map graph =
+    Sorts.Quality.Set.filter (fun q -> Sorts.Quality.is_qconst q || Sorts.Quality.Map.mem q map)
+      (QGraph.domain graph)
+  in
+  match fails m.qfwd gsol (QGraph.constraints_for ~kept:(kept m.qfwd gch) gch) with
   | Some e -> Some ("the challenge has an elimination constraint the solution does not: " ^ e)
   | None ->
-    match fails gch (QGraph.constraints_for ~kept:kept_both gsol) with
+    match fails m.qbwd gch (QGraph.constraints_for ~kept:(kept m.qbwd gsol) gsol) with
     | Some e -> Some ("the solution has an elimination constraint the challenge does not: " ^ e)
     | None -> None
 
@@ -1829,9 +1971,10 @@ let rec signature_modtypes mp acc = function
    blocks, then the module types, each kind in the order their printed names
    sort, the kernel name deciding between two that print alike. The order
    decides which difference a theorem's reason names first, and in which
-   order the level map is built. A declaration the solution does not hold is
-   a failure; a declaration only the solution holds is not visited. Returns
-   the failures, in the order they are found, and the level map. *)
+   order the level and quality maps are built. A declaration the solution
+   does not hold is a failure; a declaration only the solution holds is not
+   visited. Returns the failures, in the order they are found, and the
+   maps. *)
 let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
   let m = ref (seed_umap t ~challenge_env ~solution_env) in
   let failures = ref [] in
@@ -1892,21 +2035,28 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
       | exception Not_found -> fail name "missing")
     (by_name ModPath.compare modtypes);
   (* The declarations set aside as undecided, again, until a pass decides
-     none of them. Each pending entry keeps the reason of its last
-     comparison, so what is still undecided fails with that reason; no
-     declaration is left both uncompared and unfailed. *)
+     none of them. Then the first of them that a tie decides
+     ([map_through_constraints]) is compared with ties allowed, and the
+     passes resume without them: a tie is the last resort, taken only where
+     no comparison maps the level or quality otherwise. Each pending entry
+     keeps the reason of its last comparison, so what is still undecided
+     fails with that reason; no declaration is left both uncompared and
+     unfailed. *)
+  let attempt ~ties (name, f, _) =
+    match f { !m with ties } with
+    | m' -> m := { m' with ties = false }; None
+    | exception Diff d -> fail name d; None
+    | exception Undecided d -> Some (name, f, d)
+  in
   let rec again pending =
-    let progress = ref false in
-    let still = CList.map_filter (fun (name, f, _) ->
-        match f !m with
-        | m' -> m := m'; progress := true; None
-        | exception Diff d -> fail name d; progress := true; None
-        | exception Undecided d -> Some (name, f, d))
-        pending
-    in
-    if not (CList.is_empty still) then
-      if !progress then again still
-      else List.iter (fun (name, _, d) -> fail name d) still
+    let still = CList.map_filter (attempt ~ties:false) pending in
+    if List.length still < List.length pending then again still else tie [] still
+  and tie seen = function
+    | [] -> List.iter (fun (name, _, d) -> fail name d) (List.rev seen)
+    | e :: rest ->
+      match attempt ~ties:true e with
+      | None -> again (List.rev_append seen rest)
+      | Some e -> tie (e :: seen) rest
   in
   again (List.rev !deferred);
   List.rev !failures, !m
@@ -2316,7 +2466,7 @@ let run cfg ~dir ~out ~roots ~trusted ~checked ~admitted ~add_load_path env senv
   in
   let failures, m = compare_declarations t ~challenge_env ~solution_env:env ~libs ~theorems in
   let universes = check_constraints t ~challenge_env ~solution_env:env m in
-  let qualities = check_elim_constraints ~challenge_env ~solution_env:env in
+  let qualities = check_elim_constraints ~challenge_env ~solution_env:env m in
   let sol_index = constant_index env in
   (* Every library the solution loaded is the solution's own concern, a
      library only the solution has included, which the declaration

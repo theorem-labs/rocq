@@ -19,7 +19,12 @@
     and writes a JSON verdict.
 
     The comparison is structural after a one-to-one renaming of universe
-    levels: no conversion, no reduction, and no constant is unfolded.
+    levels and of global sort qualities, which each side numbers in the
+    order it declares them: no conversion, no reduction, and no constant is
+    unfolded. A global level or quality that only the constraints of a
+    polymorphic context name is renamed by the one solution constraint that
+    fits it; when several fit and nothing else decides, by the one of the
+    same library and number.
 
     {2 Where a shared library may come from}
 
@@ -118,12 +123,14 @@ val read_config : string -> config
     own must hold in the challenge; a failing direction fails every
     theorem. The elimination constraints between sort qualities (a global
     sort a library declares, and constraints such as [s -> Prop] on it) are
-    compared in both directions too, the qualities by identity, and with no
-    exception in the solution-to-challenge direction: every constraint the
-    solution's graph holds between two qualities the challenge's graph holds
-    must hold in the challenge, whichever library declares them, since a
-    library may add a constraint on the sort of another, an installed or
-    pre-checked one included.
+    compared in both directions too, through the renaming of qualities, and
+    with no exception in the solution-to-challenge direction: every
+    constraint the solution's graph holds between two qualities that are
+    constants or that the renaming pairs with the challenge's must hold in
+    the challenge, whichever library declares them, since a library may add
+    a constraint on the sort of another, an installed or pre-checked one
+    included. A sort that only the solution declares, and a constraint on
+    it, count only where a path through it joins two such qualities.
 
     [answer-universe-constraints] is a kind-only tolerance for the global
     universe comparison, and one that names an object is an error. It skips

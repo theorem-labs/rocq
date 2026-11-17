@@ -926,7 +926,8 @@ declaration of the challenge files and of the libraries they depend on (except
 the pre-checked libraries, and those of their dependencies that are pre-checked
 too or from the installed load path) is compared with the solution's
 declaration of the same kernel name, structurally after a one-to-one renaming
-of universe levels, with no reduction. Then the axioms of each theorem the
+of universe levels and of global sorts (each side numbers them in the order it
+declares them), with no reduction. Then the axioms of each theorem the
 config names are computed, and the verdict is written to *file*.
 
 *config* is one JSON object with the keys ``theorems`` (each
@@ -979,8 +980,9 @@ them. A theorem fails when:
 - a universe or elimination constraint of the challenge does not hold in the
   solution, a universe constraint that the solution adds on a level of a library
   under the challenge's root does not hold in the challenge, or an elimination
-  constraint that the solution adds between two sorts the challenge knows,
-  whichever library declares them, does not hold in the challenge;
+  constraint that the solution adds between two sorts that the renaming pairs
+  with the challenge's (or ``Prop``, ``SProp`` and ``Type``), whichever library
+  declares them, does not hold in the challenge;
 - ``rewrite_rules`` is ``false`` and a library the solution loaded declares a
   rewrite rule, unless that library is pre-checked or from the installed load
   path;
