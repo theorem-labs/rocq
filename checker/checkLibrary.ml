@@ -425,7 +425,7 @@ and fold_deps_list seen ff modl needed =
 let fold_deps_list ff modl acc =
   snd (fold_deps_list LibrarySet.empty ff modl (LibrarySet.empty,acc))
 
-let recheck_library ?(output_context=false) senv ~norec ~admit ~check =
+let recheck_library ?(output_context=false) ?(intern_admit=false) senv ~norec ~admit ~check =
   let ml = List.map try_locate_qualified_library check in
   let nrl = List.map try_locate_qualified_library norec in
   let al =  List.map try_locate_qualified_library admit in
@@ -440,6 +440,16 @@ let recheck_library ?(output_context=false) senv ~norec ~admit ~check =
   in
   let needed = List.fold_right (intern_library ~intern_mode:Rec ~validated LibrarySet.empty) ml [] in
   let needed = List.fold_right (intern_library ~intern_mode:Root ~validated LibrarySet.empty) nrl needed in
+  (* With [intern_admit], read the admitted libraries too, in [Dep] mode so
+     that they are not validated ([validated] excludes [al]). Otherwise an
+     admitted library that no other library given here depends on is never
+     read, so it is missing from [depgraph] and the closure of [al] below
+     raises an anomaly. *)
+  let needed =
+    if intern_admit then
+      List.fold_right (intern_library ~intern_mode:Dep ~validated LibrarySet.empty) al needed
+    else needed
+  in
   let needed = List.rev needed in
   (* first compute the closure of norec, remove closure of check,
      add closure of admit, and finally remove norec and check *)
@@ -456,3 +466,98 @@ let recheck_library ?(output_context=false) senv ~norec ~admit ~check =
   let senv = List.fold_left (check_one_lib ~output_context nochk) (senv, Mod_checking.empty_axioms) needed in
   Flags.if_verbose Feedback.msg_notice (str"Modules were successfully checked");
   senv
+
+(************************************************************************)
+(*s The challenge side of [rocqchk -compare].
+
+    The challenge libraries carry the same names as the solution's, so they
+    cannot share this module's per-library tables: [libraries_table] would
+    make [intern_library] skip a library of one side because the other
+    side's library of that name is already there, and [opaque_tables], keyed
+    by library name as well, would let a challenge proof body stand in for a
+    solution one. So the challenge is loaded between [swap_tables] calls: the
+    solution's tables are set aside, the challenge is loaded with tables of
+    its own, and the solution's are put back. The challenge environment is a
+    value and survives the swap. Its opaque proofs stay in the challenge's
+    tables, not in those [indirect_accessor] reads once the solution's are
+    back, which is sound because the comparison never looks into an opaque
+    body of the challenge. *)
+
+type tables = {
+  tb_libraries : library_t LibraryMap.t;
+  tb_opaques : seg_proofs LibraryMap.t;
+  tb_depgraph : (compilation_unit_name * Safe_typing.vodigest) array LibraryMap.t;
+  tb_load_paths : CUnix.physical_path list * logical_path list;
+}
+
+(* Empty library tables, with the load path as it is: the challenge load adds
+   its own directories in front of the solution's, so that a library name the
+   two sides share resolves to the challenge's copy, while a pre-checked
+   library, which is one file for both sides, still resolves. *)
+let fresh_tables () = {
+  tb_libraries = LibraryMap.empty;
+  tb_opaques = LibraryMap.empty;
+  tb_depgraph = LibraryMap.empty;
+  tb_load_paths = !load_paths;
+}
+
+let swap_tables t =
+  let old = {
+    tb_libraries = !libraries_table;
+    tb_opaques = !opaque_tables;
+    tb_depgraph = !depgraph;
+    tb_load_paths = !load_paths;
+  } in
+  libraries_table := t.tb_libraries;
+  opaque_tables := t.tb_opaques;
+  depgraph := t.tb_depgraph;
+  load_paths := t.tb_load_paths;
+  old
+
+type challenge_library = library_t
+
+(* The libraries the challenge files name, then the given shared libraries,
+   each with its dependencies, in dependency order, with the dependency
+   digests each of them records. They are read in [Dep] mode, so neither
+   validated nor imported: the caller checks those digests against the
+   solution's before any of it reaches an environment.
+
+   A shared library is one the solution loaded from outside the roots the
+   challenge stands in for: a library of the installed load path. The
+   challenge files' own closure reaches only the ones their Require lines
+   name, and the solution may load more; a universe constraint one of those
+   carries between two levels the challenge does know would otherwise look
+   like a constraint the solution added. They are read into the same
+   tables, so a library both lists reach is read once.
+
+   The two results are the files' closure, which is what the comparison
+   walks, and every library to import, the files' closure first. *)
+let intern_challenge files shared =
+  let intern = intern_library ~intern_mode:Dep ~validated:LibrarySet.empty LibrarySet.empty in
+  let locs = List.map (fun f -> try_locate_qualified_library (PhysicalFile f)) files in
+  let needed = List.fold_right intern locs [] in
+  let all = List.fold_right intern (List.map try_locate_absolute_library shared) needed in
+  List.rev needed, List.rev all
+
+let challenge_deps needed =
+  List.map (fun (dir, m) -> dir, m.library_deps) needed
+
+(* Import the interned libraries without a check: the challenge files are
+   checked when the challenge is built, and a library they depend on is
+   another challenge file, a pre-checked library or a shared one. *)
+let import_challenge senv needed =
+  List.fold_left
+    (fun senv (_, m) ->
+       Safe_checking.unsafe_import senv m.library_compiled m.library_digest)
+    senv needed
+
+let library_file dir = snd (try_locate_absolute_library dir)
+
+(* The dependency digests every library interned so far records. *)
+let interned_deps () = LibraryMap.bindings !depgraph
+
+(* The file each loaded library was read from, as the loader recorded it. *)
+let interned_files () =
+  List.map (fun (dir, m) -> dir, m.library_filename) (LibraryMap.bindings !libraries_table)
+
+let challenge_files needed = List.map (fun (dir, m) -> dir, m.library_filename) needed

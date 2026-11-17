@@ -27,7 +27,68 @@ val default_root_prefix : DirPath.t
 
 val add_load_path : physical_path * logical_path -> unit
 
-val recheck_library : ?output_context:bool -> safe_environment ->
+val recheck_library : ?output_context:bool -> ?intern_admit:bool ->
+  safe_environment ->
   norec:object_file list ->
   admit:object_file list ->
   check:object_file list -> safe_environment * Mod_checking.axioms
+(** With [~intern_admit:true] (default [false]), the [admit] libraries and
+    their dependencies are read too, without validation, so that an admitted
+    library that no other library given here depends on is loaded as well. *)
+
+val indirect_accessor : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm
+(** The body of an opaque constant of a loaded library, from the table of
+    opaque proofs that the tables in place hold for that library. *)
+
+(** {6 The challenge side of [rocqchk -compare]} *)
+
+type tables
+(** This module's per-library tables: the loaded libraries, their tables of
+    opaque proofs, the dependency graph and the load path. They are keyed by
+    library name, and the challenge libraries have the solution's names, so
+    the two sides each need a set of their own: the challenge is loaded
+    between two [swap_tables] calls, which set the solution's tables aside
+    and put them back. *)
+
+val fresh_tables : unit -> tables
+(** Empty library tables, with the load path as it is. *)
+
+val swap_tables : tables -> tables
+(** [swap_tables t] installs [t] and returns what was there. *)
+
+type challenge_library
+
+val intern_challenge :
+  physical_path list -> DirPath.t list ->
+  (DirPath.t * challenge_library) list * (DirPath.t * challenge_library) list
+(** [intern_challenge files shared] reads the challenge [files] and their
+    dependencies, then the [shared] libraries and theirs, in dependency
+    order, without validating them and without importing any of them into an
+    environment. The first result is the files' closure, the second every
+    library read, the files' closure first. A library both reach is read
+    once. *)
+
+val challenge_deps :
+  (DirPath.t * challenge_library) list -> (DirPath.t * (DirPath.t * vodigest) array) list
+(** The dependency digests each interned library records. *)
+
+val challenge_files :
+  (DirPath.t * challenge_library) list -> (DirPath.t * physical_path) list
+(** The file each interned library was read from, as the loader recorded
+    it. *)
+
+val import_challenge :
+  safe_environment -> (DirPath.t * challenge_library) list -> safe_environment
+(** Import the interned libraries without checking them: the challenge files
+    are checked when the challenge is built, and the other libraries are
+    pre-checked or shared with the solution. *)
+
+val library_file : DirPath.t -> physical_path
+(** The file the load path resolves a library name to. *)
+
+val interned_deps : unit -> (DirPath.t * (DirPath.t * vodigest) array) list
+(** The dependency digests every library interned so far records. *)
+
+val interned_files : unit -> (DirPath.t * physical_path) list
+(** The file each library loaded so far was read from, as the loader
+    recorded it. *)
