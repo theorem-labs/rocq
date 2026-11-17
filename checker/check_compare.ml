@@ -1037,7 +1037,10 @@ and eq_modtype ~env m t1 t2 =
 
 type t = {
   cfg : config;
-  files : string list;           (** the challenge files, absolute or as given *)
+  dir : string;                  (** the challenge directory, as given *)
+  files : (string * string) list;
+      (** The challenge files, absolute or as given, each with the sha256
+          that the config pins for it and that [prepare] found it has. *)
   challenge_dir : string option;
       (** The real path of the challenge directory. A challenge library under
           a root the challenge stands in for is read from below it, unless
@@ -1066,6 +1069,9 @@ type t = {
   solution_deps : (DirPath.t * (DirPath.t * Safe_typing.vodigest) array) list;
       (** Every library the solution loaded, with the dependency digests it
           records. *)
+  solution_files : (DirPath.t * string) list;
+      (** Every library the solution loaded, with the file the loader
+          recorded for it. *)
   outside : DirPath.t list;
       (** The libraries the solution loaded whose recorded file lies in no
           place a solution's file is found in ([solution_place]). *)
@@ -1214,27 +1220,57 @@ let deps_closure deps roots =
   in
   walk [] roots
 
-(* The config's sha256 pins the bytes of a pre-checked library and of
-   nothing else. The library records a digest for each library it depends
-   on, but such a digest is the one the dependency's own file states for
-   itself: the checker does not compute it from the file's bytes, so any
-   file can state any digest. A library a pre-checked one rests on is loaded
-   without a check (it is in the closure of the admit list), and is neither
-   compared nor searched for rewrite rules ([run]); it is safe only when it
-   is one file for both sides by a rule of its own ([one_file]): pre-checked
-   as well, or shared. The closure is the one the solution loaded. Reads
+(* Whether the config pins the bytes of the library [dp] the solution loaded
+   by a challenge file: the file the loader recorded for [dp] has the sha256
+   that the config gives for [dp]'s file in the challenge directory, the one
+   at the path that [dp]'s file has below the directory of a root the
+   challenge stands in for. The load path maps a name below a root to that
+   path one directory per name component, so the path is read from [dp]'s
+   name. A prechecked entry pins its library too, which is then pre-checked:
+   [check_prechecked] has compared that sha256. *)
+let pinned t dp =
+  match List.find_opt (fun (l, _) -> DirPath.equal l dp) t.solution_files with
+  | None -> false
+  | Some (_, file) ->
+    let sha256 = lazy (sha256_of_file file) in
+    let l = DirPath.to_string dp in
+    List.exists (fun root ->
+        let r = DirPath.to_string root ^ "." in
+        if not (CString.is_prefix r l) then false
+        else
+          let below = String.sub l (String.length r) (String.length l - String.length r) in
+          let path = String.concat "/" (String.split_on_char '.' below) ^ ".vo" in
+          let same = CUnix.same_file (CUnix.correct_path path t.dir) in
+          List.exists (fun (f, h) -> same f && String.equal h (Lazy.force sha256)) t.files)
+      t.challenge_roots
+
+(* The config's sha256 pins the bytes of a pre-checked library. The library
+   records a digest for each library it depends on, but such a digest is the
+   one the dependency's own file states for itself: the checker does not
+   compute it from the file's bytes, so any file can state any digest. A
+   library a pre-checked one rests on, directly or not, must therefore stand
+   on a rule of its own: pre-checked as well or shared ([one_file]), or
+   pinned by its sha256 as a challenge file ([pinned]), which is not one
+   file for both sides and so is compared and searched for rewrite rules as
+   the solution's own libraries are ([run]). A kernel check of such a
+   library is not enough: the pre-checked library is loaded without a
+   check, so its terms were typed only against the dependency it was built
+   with, and one of other content that states the same digest could make
+   them prove [False]. The closure is the one the solution loaded. Reads
    [outside]. *)
 let check_prechecked_deps t =
   List.iter (fun p ->
       List.iter (fun dep ->
-          if not (one_file t dep) then
+          if not (one_file t dep || pinned t dep) then
             CErrors.user_err
               Pp.(str ("The pre-checked library " ^ DirPath.to_string p ^
                        " depends on the library " ^ DirPath.to_string dep ^
-                       ", which the config does not declare pre-checked and which is not \
-                        from the installed load path. Nothing pins the bytes of such a \
-                        dependency: a library's digest is the one its own file states. \
-                        A -compare run refuses it.")))
+                       ", which is neither pre-checked by the config, nor pinned by its \
+                        sha256 as a challenge file, nor from the installed load path. The \
+                        digest the pre-checked library records for it pins nothing: a \
+                        library's digest is the one its own file states. A kernel check \
+                        of it is not enough either, since the pre-checked library was not \
+                        checked against it. A -compare run refuses it.")))
         (deps_closure t.solution_deps [p]))
     t.prechecked
 
@@ -1244,19 +1280,21 @@ let check_prechecked_deps t =
    library is not compared either when the challenge files do not Require
    it, so a library only the solution has would stand behind a theorem
    unchecked. A library under a root the challenge stands in for that the
-   solution loaded without a check must therefore be pre-checked, or be
-   given with -admit by name ([admitted]), which says that whoever starts
-   the run trusts it. *)
+   solution loaded without a check must therefore be pre-checked, pinned by
+   its sha256 as a challenge file ([pinned]), or given with -admit by name
+   ([admitted]), which says that whoever starts the run trusts it. A library
+   that one given with -admit depends on is not exempt unless given too. *)
 let check_unchecked t ~admitted =
   List.iter (fun dp ->
       if under_challenge_root t dp && not (is_prechecked t dp)
-         && not (List.exists (DirPath.equal dp) admitted)
+         && not (List.exists (DirPath.equal dp) admitted) && not (pinned t dp)
       then
         CErrors.user_err
           Pp.(str ("The solution library " ^ DirPath.to_string dp ^ " was loaded without a \
                     check, as a dependency of a library given with -norec or -admit, and \
-                    it is neither pre-checked by the config nor given with -admit. A \
-                    -compare run refuses it.")))
+                    it is neither pre-checked by the config, nor pinned by its sha256 as \
+                    a challenge file, nor given with -admit itself. A -compare run \
+                    refuses it.")))
     (CheckLibrary.unchecked ())
 
 (* The challenge load puts the challenge directory in front of the
@@ -1299,25 +1337,25 @@ let prepare cfg ~dir ~challenge_roots ~open_roots ~bound_dirs ~admitted =
           CErrors.user_err
             (Pp.str ("The challenge file " ^ p ^ " has sha256 " ^ got ^
                      ", and the config pins " ^ f.cf_sha256 ^ "."));
-        p)
+        p, f.cf_sha256)
       cfg.cfg_challenge_files
   in
   let loaded = CheckLibrary.loaded () in
+  let solution_files = CheckLibrary.files_of loaded in
   let t =
-    { cfg; files; challenge_dir = realpath dir;
+    { cfg; dir; files; challenge_dir = realpath dir;
       prechecked = List.map (fun p -> p.pc_library) cfg.cfg_prechecked;
       challenge_roots; open_roots;
       cwd = realpath (Sys.getcwd ());
       bound_dirs = List.filter_map realpath bound_dirs;
       solution_deps = CheckLibrary.deps_of loaded;
+      solution_files;
       outside = [] }
   in
   check_open_roots t;
   check_prechecked t;
   (* [check_provenance] computes [outside] and does not read it. *)
-  let t =
-    { t with outside = check_provenance t ~side:"solution" (CheckLibrary.files_of loaded) }
-  in
+  let t = { t with outside = check_provenance t ~side:"solution" solution_files } in
   check_prechecked_deps t;
   check_unchecked t ~admitted;
   t
@@ -1376,7 +1414,7 @@ let load_challenge t ~dir ~add_load_path senv0 =
             if under_challenge_root t dp || is_prechecked t dp then None else Some dp)
           t.solution_deps
       in
-      let needed, all = CheckLibrary.intern_challenge t.files shared in
+      let needed, all = CheckLibrary.intern_challenge (List.map fst t.files) shared in
       let files = CheckLibrary.files_of all in
       check_challenge_place t files;
       ignore (check_provenance t ~side:"challenge" files);
@@ -2036,11 +2074,10 @@ let run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv0 =
   (* A pre-checked library and the libraries it rests on are not compared
      when they are one file for both sides: their declarations are equal by
      construction, and walking them would read the whole standard library on
-     every run. [prepare] has refused a run in which a pre-checked library
-     the solution loaded rests on a library that is not one file for both
-     sides. A library that the challenge's copy of a pre-checked library
-     rests on, and that is not one file for both sides, is compared all the
-     same. *)
+     every run. A library a pre-checked one rests on that is not one file for
+     both sides, one the config pins as a challenge file
+     ([check_prechecked_deps]) or one that only the challenge's copy of a
+     pre-checked library rests on, is compared all the same. *)
   let skip = List.filter (one_file t) (deps_closure challenge_deps t.prechecked) in
   let libs =
     CList.map_filter (fun (dp, _) ->
@@ -2078,8 +2115,7 @@ let run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv0 =
      library only the solution has included, which the declaration
      comparison does not visit. The exceptions are the libraries that are
      one file for both sides ([one_file]), which may carry rules the
-     challenge did not write; every library a pre-checked one rests on is
-     one of those, or [prepare] has refused the run. *)
+     challenge did not write. *)
   let rewrite_rule =
     if t.cfg.cfg_rewrite_rules then None
     else
@@ -2102,8 +2138,12 @@ let run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv0 =
        | None -> []
        | Some q -> [Json.Obj ["name", Json.Str "<qualities>"; "reason", Json.Str q]])
   in
+  (* The libraries given with -admit, in the order given and each once: the
+     run trusts them unchecked, and no digest pins them. *)
+  let admitted = List.uniquize (List.map DirPath.to_string admitted) in
   write_verdict out (Json.to_string (Json.Obj [
       "format", Json.Int 1;
       "theorems", Json.List (List.map record_json records);
       "declarations", Json.List decls;
+      "admitted", Json.List (List.map (fun a -> Json.Str a) admitted);
     ]))

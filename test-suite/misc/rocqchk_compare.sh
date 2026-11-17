@@ -21,7 +21,7 @@ log=$d/log
 : > "$log"
 # A verdict file that says pass, as an earlier run would leave it. Every
 # refused run starts with it in place and must remove it.
-stale='{"format":1,"theorems":[{"name":"Top.A.thm","verdict":"pass","reason":"","axioms":[],"flags":[]}],"declarations":[]}'
+stale='{"format":1,"theorems":[{"name":"Top.A.thm","verdict":"pass","reason":"","axioms":[],"flags":[]}],"declarations":[],"admitted":[]}'
 
 fail() {
   echo "FAILURE: $*"
@@ -149,9 +149,10 @@ Require Import Top.Defs.
 Definition thm : théorème_ÿ := fun A a => a.
 Definition other : prop_id := thm.
 EOF
+# The whole verdict file. No library is given with -admit.
 verdict main/honest main.json \
   '{"format":1,"theorems":[{"name":"Top.A.thm","verdict":"pass","reason":"","axioms":[],"flags":[]},' \
-  '{"name":"Top.A.other","verdict":"pass","reason":"","axioms":[],"flags":[]}],"declarations":[]}'
+  '{"name":"Top.A.other","verdict":"pass","reason":"","axioms":[],"flags":[]}],"declarations":[],"admitted":[]}'
 
 # Another statement of thm. A challenge declaration that differs fails every
 # theorem.
@@ -405,14 +406,54 @@ EOF
 verdict norec/sol norec.json '"name":"Top.A.thm","verdict":"pass"'
 # Only Top.A is checked, and the challenge has no counterpart for
 # Top.Helper: nothing would look at it. Refused, unless -admit names it.
-norec() {
-  chk -Q "$d/norec/sol" Top "$@" -compare "$d/norec.json" -challenge "$d/norec/ch" \
+norec() { # <config> [rocqchk options]
+  local config=$d/$1
+  shift
+  chk -Q "$d/norec/sol" Top "$@" -compare "$config" -challenge "$d/norec/ch" \
     -compare-out "$out" -norec Top.A
 }
-refused 'The solution library Top.Helper was loaded without a check' norec
+refused 'The solution library Top.Helper was loaded without a check' norec norec.json
 rm -f "$out"
-norec -admit Top.Helper || fail "-admit Top.Helper -norec Top.A: exit $?"
-holds '-admit Top.Helper -norec Top.A' '"name":"Top.A.thm","verdict":"pass"'
+norec norec.json -admit Top.Helper || fail "-admit Top.Helper -norec Top.A: exit $?"
+holds '-admit Top.Helper -norec Top.A' '"name":"Top.A.thm","verdict":"pass"' \
+  '"admitted":["Top.Helper"]}'
+
+# Or unless the config pins its sha256 as a challenge file: the challenge
+# directory holds the same Helper.vo.
+cp "$d/norec/sol/Helper.vo" "$d/norec/ch/"
+cat > "$d/norec-pin.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest norec/ch/A.vo)"},
+                     {"path": "Helper.vo", "sha256": "$(digest norec/ch/Helper.vo)"}]}
+EOF
+rm -f "$out"
+norec norec-pin.json || fail "-norec Top.A, Helper.vo pinned: exit $?"
+holds '-norec Top.A, Helper.vo pinned' '"name":"Top.A.thm","verdict":"pass"' '"admitted":[]}'
+
+# A library that one given with -admit depends on is loaded without a check
+# too, and is not exempt: Top.Base, which Top.Mid depends on, is refused
+# unless -admit names it as well. The verdict lists each library given with
+# -admit once, in the order given.
+compile norec/deep Base.v <<'EOF'
+Definition b : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+compile norec/deep Mid.v <<'EOF'
+Require Top.Base.
+Definition h : forall A : Prop, forall _ : A, A := Top.Base.b.
+EOF
+compile norec/deep A.v <<'EOF'
+Require Top.Mid.
+Definition thm : forall A : Prop, forall _ : A, A := Top.Mid.h.
+EOF
+deep() { # [rocqchk options]
+  chk -Q "$d/norec/deep" Top "$@" -compare "$d/norec.json" -challenge "$d/norec/ch" \
+    -compare-out "$out" Top.A
+}
+refused 'The solution library Top.Base was loaded without a check' deep -admit Top.Mid
+rm -f "$out"
+deep -admit Top.Mid -admit Top.Base -admit Top.Mid || fail "-admit Top.Mid -admit Top.Base: exit $?"
+holds '-admit Top.Mid -admit Top.Base' '"name":"Top.A.thm","verdict":"pass"' \
+  '"admitted":["Top.Mid","Top.Base"]}'
 
 #### A pre-checked library, Top.P.Q: the solution may not change it, the
 #### config pins its digest, and it is not compared. Its axiom g is permitted.
@@ -456,9 +497,12 @@ Require Top.P.
 Require Top.P.Q.
 Definition thm : forall A : Prop, A := Top.P.Q.g.
 EOF
+# The pre-checked library, which the option admits itself, is not one given
+# with -admit.
 verdict pre/honest pre.json \
   '"name":"Top.A.thm","verdict":"pass","reason":"","axioms":["Top.P.Q.g"]' \
-  '"name":"Top.P.Q.g","verdict":"fail","reason":"the axiom Top.P.Q.g is not permitted"'
+  '"name":"Top.P.Q.g","verdict":"fail","reason":"the axiom Top.P.Q.g is not permitted"' \
+  '"admitted":[]}'
 
 # A module Q of Top.P, whose axiom g prints Top.P.Q.g too.
 compile pre/forged P.v <<'EOF'
@@ -489,7 +533,9 @@ refused 'The library Top.A depends on the pre-checked library Top.P.Q with a dif
 # A pre-checked library, Top.P.Q, that depends on another library of the
 # tree, Top.D. The config pins the bytes of Top.P.Q, which state a digest for
 # Top.D; a digest is what a library's own file states, so it pins nothing,
-# and Top.D must be pre-checked too.
+# and Top.D must be pre-checked too or pinned by its sha256 as a challenge
+# file. A kernel check of Top.D is not enough: Top.P.Q was not checked
+# against it.
 compile predep/ch D.v <<'EOF'
 Definition d := Prop.
 EOF
@@ -513,10 +559,28 @@ prechecked() { # <library> <file whose sha256 the config pins>
   printf '{"library": "%s", "sha256": "%s"}' "$1" "$(digest "$2")"
 }
 config predep "\"prechecked\": [$(prechecked Top.P.Q predep/ch/P/Q.vo)]," > "$d/predep.json"
+# Top.A and Top.D are both checked: refused all the same.
 refused 'The pre-checked library Top.P.Q depends on the library Top.D' compare predep/sol predep.json
+# Only Top.A is checked, and Top.D is loaded without a check, as a
+# dependency of Top.P.Q.
+predep() { # <config>
+  chk -Q "$d/predep/sol" Top -compare "$d/$1" -challenge "$d/predep/ch" -compare-out "$out" Top.A
+}
+refused 'The pre-checked library Top.P.Q depends on the library Top.D' predep predep.json
 config predep "\"prechecked\": [$(prechecked Top.P.Q predep/ch/P/Q.vo),
   $(prechecked Top.D predep/ch/D.vo)]," > "$d/predep-both.json"
-verdict predep/sol predep-both.json '"name":"Top.A.thm","verdict":"pass"'
+rm -f "$out"
+predep predep-both.json || fail "Top.A with predep-both.json: exit $?"
+holds 'Top.A with predep-both.json' '"name":"Top.A.thm","verdict":"pass"'
+# Top.D pinned by its sha256 as a challenge file, and not pre-checked.
+cat > "$d/predep-pin.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}], "prechecked": [$(prechecked Top.P.Q predep/ch/P/Q.vo)],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest predep/ch/A.vo)"},
+                     {"path": "D.vo", "sha256": "$(digest predep/ch/D.vo)"}]}
+EOF
+rm -f "$out"
+predep predep-pin.json || fail "Top.A with predep-pin.json: exit $?"
+holds 'Top.A with predep-pin.json' '"name":"Top.A.thm","verdict":"pass"'
 
 #### A -vos build holds no proof.
 

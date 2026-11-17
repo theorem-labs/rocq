@@ -920,11 +920,11 @@ The challenge files are then loaded into a second environment without a check,
 logical name: the challenge's roots. Every library that the challenge loads
 under those roots, except a pre-checked one, must be read from *dir*. Each
 declaration of the challenge files and of the libraries they depend on (except
-the pre-checked libraries and their dependencies, which are pre-checked too or
-from the installed load path) is compared with the solution's declaration of
-the same kernel name, structurally after a one-to-one renaming of universe
-levels, with no reduction. Then the axioms of each theorem the config names are
-computed, and the verdict is written to *file*.
+the pre-checked libraries, and those of their dependencies that are pre-checked
+too or from the installed load path) is compared with the solution's
+declaration of the same kernel name, structurally after a one-to-one renaming
+of universe levels, with no reduction. Then the axioms of each theorem the
+config names are computed, and the verdict is written to *file*.
 
 *config* is one JSON object with the keys ``theorems`` (each
 ``{name, permitted_axioms?}``), ``permitted_axioms``, ``tolerated_flags`` (each
@@ -955,16 +955,19 @@ the check of the universe constraints the solution adds; when that check would
 have failed, the ``flags`` of each theorem the solution holds list it, with a
 summary of those constraints as its object.
 
-*file* receives one JSON object with the keys ``format`` (``1``), ``theorems``
-and ``declarations``. Each entry of ``theorems`` has the keys ``name``,
-``verdict`` (``"pass"`` or ``"fail"``), ``reason`` (empty for a pass), ``axioms``
-(the printed names of the axioms the theorem's type and proof reach, such as
-constants without a body, admitted proofs among them, primitives and symbols)
-and ``flags`` (each ``{kind, object}``: the relaxed typing conditions they rest
-on, of the kinds named above). ``declarations`` lists, as ``{name, reason}``,
-each challenge declaration that is missing from the solution or differs from
-it, and ``<universes>`` or ``<qualities>`` for a failed constraint check. A
-theorem fails when:
+*file* receives one JSON object with the keys ``format`` (``1``),
+``theorems``, ``declarations`` and ``admitted``. Each entry of ``theorems`` has
+the keys ``name``, ``verdict`` (``"pass"`` or ``"fail"``), ``reason`` (empty
+for a pass), ``axioms`` (the printed names of the axioms the theorem's type
+and proof reach, such as constants without a body, admitted proofs among them,
+primitives and symbols) and ``flags`` (each ``{kind, object}``: the relaxed
+typing conditions they rest on, of the kinds named above). ``declarations``
+lists, as ``{name, reason}``, each challenge declaration that is missing from
+the solution or differs from it, and ``<universes>`` or ``<qualities>`` for a
+failed constraint check. ``admitted``, the last key, lists the libraries given
+with ``-admit``, by logical name, in the order of the command line and each
+once; the pre-checked libraries, which the option admits itself, are not among
+them. A theorem fails when:
 
 - the solution does not declare it, or declares two constants that print its
   name;
@@ -1011,10 +1014,12 @@ refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
   file in the working directory or under a directory that ``-Q`` or ``-R``
   binds;
 - a pre-checked library that depends, directly or not, on a library that is
-  neither pre-checked nor from the installed load path;
+  neither pre-checked, nor pinned by its SHA-256 (below), nor from the
+  installed load path;
 - a library under the challenge's roots that the solution loads without a check,
   as a dependency of a library given with ``-norec`` or ``-admit``, and that is
-  neither pre-checked nor given with ``-admit``;
+  neither pre-checked, nor pinned by its SHA-256, nor itself given with
+  ``-admit``;
 - a library under the challenge's roots and not pre-checked that the challenge
   loads from a file that is not under *dir*, as when *dir* lacks a library that
   a challenge file depends on and the solution's directory holds it.
@@ -1026,9 +1031,15 @@ from the same files. A pre-checked library is loaded without a check, as with
 ``-admit``. The digest that a library records for each library it depends on is
 the one stated in the file of that dependency, and is not computed from its
 bytes, so it pins nothing: this is why every library that a pre-checked library
-depends on must be pre-checked too, or come from the installed load path. A
-library given with ``-admit`` is loaded without a check too, so the comparison
-trusts it as it trusts a pre-checked library, but no digest pins it. The
-libraries that a library given with ``-norec`` or ``-admit`` depends on are
-loaded without a check as well; under the challenge's roots, each of them must
-be pre-checked or given with ``-admit``.
+depends on must be pre-checked too, pinned by its SHA-256, or come from the
+installed load path. A kernel check of such a dependency is not enough, since
+the pre-checked library was not checked against it. A library is pinned by its
+SHA-256 when its file has the SHA-256 that the config gives for that library:
+in ``prechecked``, or in ``challenge_files`` for the file of *dir* at the path
+that the library's file has below the directory of its ``-Q`` or ``-R`` root.
+A library given with ``-admit`` is loaded without a check too, so the
+comparison trusts it as it trusts a pre-checked library, but no digest pins it;
+the verdict lists it. The libraries that a library given with ``-norec`` or
+``-admit`` depends on are loaded without a check as well; under the challenge's
+roots, each of them must be pre-checked, pinned by its SHA-256, or given with
+``-admit`` itself.

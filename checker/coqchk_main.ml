@@ -240,14 +240,21 @@ let add_compile s =
     We no longer use [Arg.parse], in order to use share [Usage.print_usage]
     between coqtop and coqc. *)
 
-(* -compare also reads the admitted libraries: the config's pre-checked
-   libraries are on the admit list, and one that no checked library depends
-   on must be loaded too. *)
+(* With -compare, the config's pre-checked libraries join the admit list
+   here, so that [admit_list] holds only the libraries given with -admit
+   ([run_compare]), and the admitted libraries are read too: a pre-checked
+   one that no checked library depends on must be loaded as well. *)
 let compile_files senv =
+  let prechecked = match !compare_config with
+    | None -> []
+    | Some cfg ->
+      List.map (fun dp -> CheckLibrary.LogicalFile (CheckLibrary.path_of_dirpath dp))
+        (Check_compare.prechecked_libraries cfg)
+  in
   CheckLibrary.recheck_library ~output_context:(!output_context || !CheckFlags.axiom_free)
     ~intern_admit:(Option.has_some !compare_config) senv
     ~norec:(List.rev !norec_list)
-    ~admit:(List.rev !admit_list)
+    ~admit:(List.rev_append !admit_list prechecked)
     ~check:(List.rev !compile_list)
 
 let version () =
@@ -515,13 +522,8 @@ let parse_args argv =
     | "-compare" :: f :: rem ->
         (* Read now, so that a malformed config stops the run before any
            library is loaded. A pre-checked library loads without a check,
-           through the admit list. *)
-        let cfg = Check_compare.read_config f in
-        List.iter (fun dp ->
-            let path = CheckLibrary.path_of_dirpath dp in
-            admit_list := CheckLibrary.LogicalFile path :: !admit_list)
-          (Check_compare.prechecked_libraries cfg);
-        compare_config := Some cfg; parse rem
+           through the admit list ([compile_files]). *)
+        compare_config := Some (Check_compare.read_config f); parse rem
     | "-compare" :: [] -> usage 1
 
     | "-challenge" :: d :: rem ->
@@ -625,11 +627,11 @@ let run_compare env empty_senv =
   | Some cfg ->
     let dir = Option.get !compare_challenge and out = Option.get !compare_out in
     let name f = fst (CheckLibrary.try_locate_qualified_library f) in
-    (* -admit names a library to load without a check, never one to check:
-       the admit list also holds the config's pre-checked libraries, which
-       the challenge does not stand in for. *)
+    (* -admit names a library to load without a check, never one to check.
+       [admit_list] holds the libraries given with -admit, and not the
+       pre-checked ones ([compile_files]). *)
     let checked = List.map name (!compile_list @ !norec_list) in
-    let admitted = List.map name !admit_list in
+    let admitted = List.map name (List.rev !admit_list) in
     try
       Check_compare.run cfg ~dir ~out ~roots:!user_includes ~checked ~admitted
         ~add_load_path:add_rec_path env empty_senv

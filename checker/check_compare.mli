@@ -93,17 +93,16 @@ val read_config : string -> config
     [rewrite_rules] (default [false]) is whether the solution may declare a
     rewrite rule. Without it, every theorem fails when a library the
     solution loaded declares one, whatever symbol it rewrites: each library
-    except a pre-checked one and a shared one (every library a pre-checked
-    one rests on is one of those, or the run is refused: [run]). A
-    library only the solution has counts, and so does a rule inside a
-    module whose signature hides it, and a rule a module type or a module's
-    signature declares. A rule the challenge declares counts too, since the
-    solution's copy of it declares it again: such a challenge needs the
-    option. A [Symbol] declaration with no rule is not a rule: it is an
-    assumption, and the closure reports it among the theorem's axioms like
-    an [Axiom], so a theorem whose proof reaches a symbol fails unless the
-    config permits that symbol by name, under the rule for permitted axioms
-    (a symbol the solution itself declares is never the challenge's).
+    except a pre-checked one and a shared one. A library only the solution
+    has counts, and so does a rule inside a module whose signature hides it,
+    and a rule a module type or a module's signature declares. A rule the
+    challenge declares counts too, since the solution's copy of it declares
+    it again: such a challenge needs the option. A [Symbol] declaration with
+    no rule is not a rule: it is an assumption, and the closure reports it
+    among the theorem's axioms like an [Axiom], so a theorem whose proof
+    reaches a symbol fails unless the config permits that symbol by name,
+    under the rule for permitted axioms (a symbol the solution itself
+    declares is never the challenge's).
 
     The universe graphs of the two sides are compared in both directions:
     every constraint of the challenge must hold in the solution, and every
@@ -173,8 +172,9 @@ val run :
 
     [roots] are the [-Q] and [-R] roots, each [(directory, logical root)];
     [checked] are the libraries the command line names for checking, with or
-    without [-norec], and [admitted] those it gives with [-admit], each by
-    the library name the loader gave it. The challenge stands in for each
+    without [-norec], and [admitted] those it gives with [-admit] (not the
+    pre-checked libraries the option adds to the admit list), each by the
+    library name the loader gave it. The challenge stands in for each
     root of [roots] that a library of [checked] lives under:
     [add_load_path ~unix_path ~rocq_root] binds [unix_path] and its
     subdirectories to [rocq_root], as [-Q] does, and is called with [dir]
@@ -183,13 +183,24 @@ val run :
     solution's own. Every other library the solution loaded, unless
     pre-checked, is a shared one, which the challenge loads too (above).
 
-    A library that a pre-checked one depends on, directly or not, must be
-    pre-checked too or shared: the digest a pre-checked library records for
-    it is the one the dependency's own file states, which pins nothing. A
-    library the solution loaded without a check ([CheckLibrary.unchecked]:
-    a dependency of a [-norec] or [-admit] library) is neither checked nor,
+    A library is pinned by its sha256 when the file the solution loaded for
+    it has the sha256 the config gives for it: in [prechecked], or in
+    [challenge_files] for its file in [dir], the file at the path that its
+    own file has below the directory of its root, a root the challenge
+    stands in for. A library that a pre-checked one depends on, directly or
+    not, must be pre-checked too, pinned by its sha256, or shared: the
+    digest a pre-checked library records for it is the one the dependency's
+    own file states, which pins nothing, and a kernel check of it is not
+    enough, since the pre-checked library was not checked against it. A
+    library the solution loaded without a check ([CheckLibrary.unchecked]: a
+    dependency of a [-norec] or [-admit] library) is neither checked nor,
     unless the challenge files Require it, compared, so under a root the
-    challenge stands in for it must be pre-checked or in [admitted].
+    challenge stands in for it must be pre-checked, pinned by its sha256, or
+    in [admitted] itself: a library one of [admitted] depends on is not
+    exempt.
+
+    The verdict's last key, [admitted], lists the libraries of [admitted] by
+    logical name, in their order and each once.
 
     A verdict is never an error: the file is written and the run exits 0.
     The verdict is written to a temporary file next to it and renamed, so a
@@ -202,21 +213,21 @@ val run :
     stands in for nor pre-checked from a file directly in the working
     directory, which the load path binds implicitly, or anywhere under a
     directory of [roots] (real paths, links resolved); when a pre-checked
-    library rests on a library that is neither pre-checked nor shared; when
-    the solution loaded a library under a root the challenge stands in for
-    without a check and that library is neither pre-checked nor in
-    [admitted]; when the challenge loaded a library that is under its roots
-    and not pre-checked from a file that is not under [dir] (real paths,
-    links resolved), as when [dir] lacks a library and the load path finds
-    the solution's; when the challenge loaded a library that is neither
-    under its roots nor pre-checked from a file in the working directory or
-    under a directory of [roots]; when a challenge library and its solution
-    library record different dependency digests for a pre-checked or shared
-    library; when the config names a theorem the challenge does not hold, or
-    one whose name two constants of the challenge print; or when a theorem's
-    axiom closure reaches an axiom or a flag's object whose printed name is
-    not made of identifiers, or an inductive type whose name is not an
-    identifier. *)
+    library rests on a library that is neither pre-checked, pinned by its
+    sha256, nor shared; when the solution loaded a library under a root the
+    challenge stands in for without a check and that library is neither
+    pre-checked, pinned by its sha256, nor in [admitted]; when the challenge
+    loaded a library that is under its roots and not pre-checked from a file
+    that is not under [dir] (real paths, links resolved), as when [dir] lacks
+    a library and the load path finds the solution's; when the challenge
+    loaded a library that is neither under its roots nor pre-checked from a
+    file in the working directory or under a directory of [roots]; when a
+    challenge library and its solution library record different dependency
+    digests for a pre-checked or shared library; when the config names a
+    theorem the challenge does not hold, or one whose name two constants of
+    the challenge print; or when a theorem's axiom closure reaches an axiom
+    or a flag's object whose printed name is not made of identifiers, or an
+    inductive type whose name is not an identifier. *)
 
 val sha256_of_file : string -> string
 (** The SHA-256 of a file's bytes as 64 lowercase hexadecimal digits
