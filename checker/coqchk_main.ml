@@ -563,9 +563,10 @@ let init_with_argv argv =
       | Boot -> ()
       | Env coqenv -> init_load_path coqenv
     in
-    (* the top-level names that the installed load path serves, before
-       -package and -R/-Q add theirs, for -compare *)
-    let installed_roots = CheckLibrary.bound_roots () in
+    (* the top-level names that the default load path (the corelib
+       directory, user-contrib, the XDG directories and ROCQPATH) serves,
+       before -package and -R/-Q add theirs, for -compare *)
+    let default_roots = CheckLibrary.bound_roots () in
     (* the -R/-Q roots alone, taken before -package adds its roots, which
        -compare refuses *)
     user_includes := List.rev !includes;
@@ -579,17 +580,20 @@ let init_with_argv argv =
     includes := [];
     if Option.has_some !compare_config then begin
       (* reported as the other errors of the command line are *)
-      (try Check_compare.check_roots ~installed_roots !user_includes
+      (try Check_compare.check_roots ~default_roots !user_includes
        with CErrors.UserError msg -> fatal_error msg 1);
       (* The corelib directory and user-contrib, as -coqlib or ROCQLIB
          select them, and the directories of ROCQPATH and COQPATH, which
-         [init_load_path] binds; not the XDG directories nor the working
-         directory, which it binds too. With -boot it binds none of them. *)
+         [init_load_path] binds; not the plugins directory, which it binds
+         under Corelib, nor the XDG directories nor the working directory,
+         which it binds too. With -boot it binds none of them.
+         [init_load_path] has warned about COQPATH already. *)
       compare_trusted := (match coqenv with
         | Boot -> []
         | Env coqenv ->
           (Boot.Env.corelib coqenv |> Boot.Path.to_string) ::
-          (Boot.Env.user_contrib coqenv |> Boot.Path.to_string) :: Envars.coqpath ())
+          (Boot.Env.user_contrib coqenv |> Boot.Path.to_string) ::
+          CWarnings.with_warn "-deprecated-coq-env-var" Envars.coqpath ())
     end;
     make_senv ()
   with e ->

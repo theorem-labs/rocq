@@ -363,10 +363,10 @@ if chk -Q "$d/main/honest" Top -compare "$d/main.json" -challenge "$d/main/ch" T
 fi
 grep -qF 'go together' "$log" || fail "a run without -compare-out: another error"
 
-# A -Q of the empty root, or of a top-level name of the installed load path.
+# A -Q of the empty root, or of a top-level name of the default load path.
 mkdir "$d/empty"
 refused 'is bound to the empty root' compare main/honest main.json -Q "$d/empty" ""
-refused 'is bound to Corelib, a name the installed load path serves' \
+refused 'is bound to Corelib, a name the default load path serves' \
   compare main/honest main.json -Q "$d/empty" Corelib
 
 # A library outside the challenge's root and not pre-checked: from another
@@ -443,6 +443,20 @@ ROCQPATH=$d/rp:$d/rp2 verdict shared/sol shared.json '"name":"Top.A.thm","verdic
 ln -s "$d/rp/Lib" "$d/shared/ch/Lib"
 ROCQPATH=$d/rp:$d/rp2 refused 'The challenge loaded the shared library Lib.X from' \
   compare shared/sol shared.json
+# Lib.X pre-checked: the config pins its sha256, and the challenge load,
+# which the link makes find the name in rp2 or rp3, must read pinned bytes.
+# rp2's copy has them. rp3's X.vo has one byte more at its end, which the
+# loader never reads: the digest that each library naming Lib.X records
+# still matches it, as a forged file's would, and only its sha256 refuses
+# it.
+mkdir -p "$d/rp3/Lib"
+cp "$d/rp/Lib/X.vo" "$d/rp3/Lib/"
+printf 'x' >> "$d/rp3/Lib/X.vo"
+config shared "\"prechecked\": [{\"library\": \"Lib.X\", \"sha256\": \"$(digest rp/Lib/X.vo)\"}]," \
+  > "$d/shared-pre.json"
+ROCQPATH=$d/rp:$d/rp2 verdict shared/sol shared-pre.json '"name":"Top.A.thm","verdict":"pass"'
+ROCQPATH=$d/rp:$d/rp3 refused 'The challenge loaded the pre-checked library Lib.X from' \
+  compare shared/sol shared-pre.json
 
 #### -norec checks the libraries it names, and loads the libraries they
 #### depend on without a check.
@@ -676,6 +690,19 @@ cp "$d/pre/ch/P/Q.vo" "$d/prebad/sol/P/"
 overwrite "$d/prebad/sol/P/Q.vo" 36
 config prebad "\"prechecked\": [$(prechecked Top.P.Q pre/ch/P/Q.vo)]," > "$d/prebad.json"
 refused 'The pre-checked library Top.P.Q is' compare prebad/sol prebad.json
+# prebad/two and prebad/pin are both bound to Top, and the load path
+# searches prebad/pin first: Top.P.Q resolves to its copy of the pinned
+# file, whose sha256 is compared before any library is read. The command
+# line names prebad/two's P/Q.vo, another library of that name, which the
+# loader then reads instead: that file is refused by its sha256 as well.
+mkdir -p "$d/prebad/pin/P"
+cp "$d/pre/ch/P/Q.vo" "$d/prebad/pin/P/"
+compile prebad/two A.v < "$d/prebad/sol/A.v"
+compile prebad/two P/Q.v <<'EOF'
+Definition q := Prop.
+EOF
+refused "The pre-checked library Top.P.Q is $d/prebad/two/P/Q.vo," \
+  compare prebad/two prebad.json -Q "$d/prebad/pin" Top "$d/prebad/two/P/Q.vo"
 
 # Top.Helper, given with -admit, is loaded without a check and validated all
 # the same: here the data of its first segment no longer has the MD5 that
@@ -812,6 +839,14 @@ sed 's/^Polymorphic Definition small@{i | i < u}/Polymorphic Definition small@{i
   "$d/univs/honest/A.v" | compile univs/other A.v
 verdict univs/other univs.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.small differs'
+# A copy whose context adds i < w, on a level w that nothing maps: two
+# constraints where the challenge has one, which differ whatever the map
+# pairs u with.
+sed -e 's/^Universe u v\./Universe u v w./' \
+  -e 's/^Polymorphic Definition small@{i | i < u}/Polymorphic Definition small@{i | i < u, i < w}/' \
+  "$d/univs/honest/A.v" | compile univs/more A.v
+verdict univs/more univs.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.small differs: the universe context has other constraints"'
 
 #### The type of a is the universe max(u+1, v+1), whose two levels no
 #### comparison has paired yet and have the same increment: which level of

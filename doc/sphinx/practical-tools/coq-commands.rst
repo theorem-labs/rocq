@@ -1014,12 +1014,16 @@ refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
   or proof reaches and whose printed name is not made of identifiers, or an
   inductive type they reach whose name is not an identifier;
 - a ``-Q`` or ``-R`` that binds the empty root or a top-level name that the
-  installed load path serves;
+  default load path (the corelib directory, ``user-contrib``, the XDG
+  directories and ``$ROCQPATH``) serves;
 - a library outside the challenge's root and not pre-checked that the solution
   loads from another ``-Q`` or ``-R`` root, or that either side loads from a
   file in the working directory, under a directory that ``-Q`` or ``-R``
   binds, or under none of the trusted directories (below), or that the
   challenge loads from another file than the one the solution loaded for it;
+- a pre-checked library that the challenge loads from another file than the
+  one the solution loaded for it (compared by real path), unless that file has
+  the SHA-256 that the config gives for the library;
 - a pre-checked library that depends, directly or not, on a library that is
   neither pre-checked, nor pinned by its SHA-256 (below), nor from the
   installed load path;
@@ -1038,18 +1042,29 @@ config takes), and every other library that the challenge files load from
 config pins by their SHA-256 as well, and the installed load path: a library
 outside the challenge's root that is not pre-checked is accepted only when the
 directory that its file is found in lies, by real path, under one of the
-trusted directories, and both sides then read it from that one file. The
-trusted directories are the corelib directory and ``user-contrib`` of the
+trusted directories, and both sides then read it from that one file.
+
+The trusted directories are the corelib directory and ``user-contrib`` of the
 installation that ``-coqlib`` or ``$ROCQLIB`` selects, and the directories
-that ``$ROCQPATH`` (or ``$COQPATH``) lists. Whoever starts ``rocqchk``
-chooses them, and must keep the solution's side from writing there. Such a
-library is refused from anywhere else: from ``$XDG_DATA_HOME/coq`` (by default
-``$HOME/.local/share/coq``) and the ``coq`` directory of each directory of
-``$XDG_DATA_DIRS``, which the load path searches before the corelib directory
-and ``user-contrib``, unless a trusted directory holds them, and from the
-working directory or a directory that ``-Q`` or ``-R`` binds in every case. A
-pre-checked library is loaded without a check, as with ``-admit``; its SHA-256
-is compared before any library is read. The digest that a library records for
+that ``$ROCQPATH`` (or ``$COQPATH``) lists. With ``-boot`` there are none.
+Whoever starts ``rocqchk`` chooses them, and must keep the solution's side
+from writing there. A library outside the challenge's root that is not
+pre-checked is refused from anywhere else: from ``$XDG_DATA_HOME/coq`` (by
+default ``$HOME/.local/share/coq``) and the ``coq`` directory of each directory
+of ``$XDG_DATA_DIRS``, which the load path searches before the corelib
+directory and ``user-contrib``, unless a trusted directory holds them, and from
+the working directory or a directory that ``-Q`` or ``-R`` binds in every case.
+The load path records each directory with its links resolved, so a link to a
+file in a trusted directory is taken as that directory's, and a link to a
+directory is not: a library found below such a link is refused unless the
+link's target lies under a trusted directory too.
+
+A pre-checked library is loaded without a check, as with ``-admit``; its SHA-256
+is compared before any library is read, and again on the file the solution
+loaded it from, another file when the command line names a file of that
+library in a second directory bound to its logical path. The challenge side
+must read it from that same file (compared by real path) or from a file with
+that SHA-256, such as a copy in *dir*. The digest that a library records for
 each library it depends on is the one stated in the file of that dependency,
 and is not computed from its bytes, so it pins nothing, and a kernel check of a
 library that a pre-checked library depends on is not enough either, since the
@@ -1059,6 +1074,7 @@ SHA-256 when its file has the SHA-256 that the config gives for that library:
 in ``prechecked``, or in ``challenge_files`` for the file of *dir* at the path
 that the library's file has below the directory of its ``-Q`` or ``-R`` root
 (compared by real path).
+
 A library given with ``-admit`` is loaded without a check too, and no digest
 pins it; the verdict lists it. Under the challenge's root it is still the
 solution's own, not a pre-checked one: its axioms are never the challenge's

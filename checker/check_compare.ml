@@ -745,7 +745,9 @@ let eq_rel_context m c1 c2 =
    may number differently, so a global level of the challenge's is compared
    as the solution level the map pairs it with, as everywhere else. That is
    why this runs once the rest of the declaration has been compared: its
-   terms may map the level.
+   terms may map the level. The map is one-to-one, so it maps [c1] to a set
+   of the same size: two sets of different sizes differ whatever it maps,
+   which is reported before any level is mapped.
 
    A global level that only the constraints name is mapped by them. For a
    challenge constraint [(x, k, u)] whose [x] stands for [x'] and whose [u]
@@ -759,6 +761,9 @@ let eq_rel_context m c1 c2 =
    declaration undecided, as an ambiguous universe does in
    [map_universe]. *)
 let eq_context_constraints m c1 c2 =
+  let size = Univ.UnivConstraints.cardinal in
+  if not (Int.equal (size c1) (size c2)) then
+    diff "the universe context has other constraints";
   let solution = Univ.UnivConstraints.elements c2 in
   (* The level an unmapped end may map to: [ends] reads a solution
      constraint as its end opposite the unmapped one, then its end at the
@@ -1178,20 +1183,28 @@ let origin t dp =
 let realpath p =
   try Some (Unix.realpath p) with Unix.Unix_error _ | Invalid_argument _ | Sys_error _ -> None
 
+(* [same_real_file a b]: whether [a] and [b] resolve to one real path. [a] is
+   resolved once, for a predicate applied to many [b]. A path that cannot be
+   resolved is the same file as none. *)
+let same_real_file a =
+  match realpath a with
+  | None -> fun _ -> false
+  | Some ra -> fun b -> Option.equal String.equal (realpath b) (Some ra)
+
 let path_under ~dir file =
   String.equal file dir || CString.is_prefix (Filename.concat dir "") file
 
 (* The place a solution's file could have been found in that holds [file],
    the path the loader recorded: the working directory, for a file directly
    in it, or a directory the command line binds, for a file anywhere below
-   it. Both the directory the loader found the file in and the file's own
-   real path are tested, so a link in such a place to a file elsewhere, or a
-   link elsewhere to a file in one, is found. A path that cannot be resolved
-   is in an unknown place, which counts as the solution's. [None]: in no
-   such place. This says where the recorded file is, not who wrote it. *)
-let solution_place t file =
-  let found_in = realpath (Filename.dirname file) and real = realpath file in
-  match found_in, real with
+   it. Both the directory the loader found the file in, [found_in] (its real
+   path), and the file's own real path are tested, so a link in such a place
+   to a file elsewhere, or a link elsewhere to a file in one, is found. A
+   path that cannot be resolved is in an unknown place, which counts as the
+   solution's. [None]: in no such place. This says where the recorded file
+   is, not who wrote it. *)
+let solution_place t ~found_in file =
+  match found_in, realpath file with
   | None, _ | _, None -> Some file
   | Some d, Some f ->
     let in_cwd p = match t.cwd with
@@ -1206,34 +1219,43 @@ let solution_place t file =
           else None)
         t.bound_dirs
 
-(* Whether [file], the path the loader recorded, was found in a trusted
-   directory: the real path of the directory the loader found it in lies
-   under the real path of one of [t.trusted_dirs]. That directory is the
-   one tested, not the file's own real path, since an installation may hold
-   its files as links to where they were built: a link inside a trusted
-   directory is placed by whoever writes that directory, whom the run
-   trusts. A link in a place the solution's side can write is
-   [solution_place]'s, which reads the file's own real path too. *)
-let trusted_place t file =
-  match realpath (Filename.dirname file) with
+(* Whether a file was found in a trusted directory: [found_in], the real path
+   of the directory the loader found it in, lies under the real path of one
+   of [t.trusted_dirs]. That directory is the one tested, not the file's own
+   real path, since an installation may hold its files as links to where
+   they were built: a file link inside a trusted directory is placed by
+   whoever writes that directory, whom the run trusts. A directory link is
+   not taken as the trusted directory's: the load path stores each directory
+   with links resolved ([CheckLibrary.add_load_path]), so a file found below
+   a directory link was found in the link's target, which must itself lie
+   under a trusted directory. A link in a place the solution's side can
+   write is [solution_place]'s, which reads the file's own real path too. *)
+let trusted_place t ~found_in =
+  match found_in with
   | None -> false
   | Some d -> List.exists (fun dir -> path_under ~dir d) t.trusted_dirs
+
+(* Refuses [file] as the file of the pre-checked library [p] unless it has
+   the sha256 that the config pins for [p]. *)
+let check_pin p file =
+  let got = sha256_of_file file in
+  if not (String.equal got p.pc_sha256) then
+    CErrors.user_err
+      (Pp.str ("The pre-checked library " ^ DirPath.to_string p.pc_library ^ " is " ^
+               file ^ ", whose sha256 is " ^ got ^ ", and the config pins " ^
+               p.pc_sha256 ^ "."))
 
 (* The pre-checked libraries are resolved on the solution's load path, which
    is the one in place when this runs: before any library is read, and so
    before the file of a pre-checked library, which loads without a check, is
-   unmarshalled. The loader then resolves each name to the same file. Every
-   pin is checked before the names are returned, so the caller cannot have
-   the libraries that load without a check apart from their pins. *)
+   unmarshalled. Every pin is checked before the names are returned, so the
+   caller cannot have the libraries that load without a check apart from
+   their pins. The loader resolves each name to the same file, unless the
+   command line names a file of that library in a second directory bound to
+   its logical path, which it then reads instead: [prepare] checks the pin
+   on the file each was read from as well. *)
 let check_prechecked cfg =
-  List.iter (fun p ->
-      let file = CheckLibrary.library_file p.pc_library in
-      let got = sha256_of_file file in
-      if not (String.equal got p.pc_sha256) then
-        CErrors.user_err
-          (Pp.str ("The pre-checked library " ^ DirPath.to_string p.pc_library ^ " is " ^
-                   file ^ ", whose sha256 is " ^ got ^ ", and the config pins " ^
-                   p.pc_sha256 ^ ".")))
+  List.iter (fun p -> check_pin p (CheckLibrary.library_file p.pc_library))
     cfg.cfg_prechecked;
   prechecked_libraries cfg
 
@@ -1282,8 +1304,9 @@ let in_libs libs mp = match mp_root mp with
    where the loaded file is, from the path the loader recorded; that no
    solution wrote such a file rests on whoever starts the run keeping the
    trusted directories out of the solution's reach (check_compare.mli). The
-   challenge load reads a shared library from the same file
-   ([check_same_files]). *)
+   challenge load reads a pre-checked library from the solution's file or
+   from one of the pinned sha256 ([check_prechecked_files]), and a shared
+   library from the same file ([check_same_files]). *)
 let one_file t dp = match origin t dp with
   | Prechecked -> true
   | Own -> false
@@ -1306,7 +1329,8 @@ let check_provenance t ~side libs =
       match origin t dp with
       | Prechecked | Own -> ()
       | Shared ->
-        match solution_place t file with
+        let found_in = realpath (Filename.dirname file) in
+        match solution_place t ~found_in file with
         | Some place ->
           CErrors.user_err
             Pp.(str ("The " ^ side ^ " loaded the library " ^ DirPath.to_string dp ^
@@ -1315,7 +1339,7 @@ let check_provenance t ~side libs =
                       does not pre-check it, so it would count as an installed one. A \
                       -compare run refuses it."))
         | None ->
-          if not (trusted_place t file) then
+          if not (trusted_place t ~found_in) then
             let trusted = match t.trusted_dirs with
               | [] -> "none in this run"
               | l -> String.concat ", " l
@@ -1354,15 +1378,9 @@ let pinned t dp =
         CheckLibrary.vo_path_below ~root:t.challenge_root dp with
   | None, _ | _, None -> false
   | Some file, Some path ->
-    match realpath (CUnix.correct_path path t.dir) with
-    | None -> false
-    | Some target ->
-      let same f = match realpath f with
-        | Some f -> String.equal f target
-        | None -> false
-      in
-      let sha256 = lazy (sha256_of_file file) in
-      List.exists (fun (f, h) -> same f && String.equal h (Lazy.force sha256)) t.files
+    let same = same_real_file (CUnix.correct_path path t.dir) in
+    let sha256 = lazy (sha256_of_file file) in
+    List.exists (fun (f, h) -> same f && String.equal h (Lazy.force sha256)) t.files
 
 (* The rule of [run] for the libraries a pre-checked one rests on
    (check_compare.mli), on the closure the solution loaded. *)
@@ -1406,8 +1424,9 @@ let check_unchecked t ~admitted =
    So a library the challenge loaded under that root must have been read
    from a file below the challenge directory (real paths, links resolved),
    unless it is pre-checked: a pre-checked library may resolve to the
-   solution's file, which the config pins. [libs] are the challenge's
-   loaded libraries with the files the loader recorded. *)
+   solution's file, and [check_prechecked_files] tests that it is read from
+   pinned bytes. [libs] are the challenge's loaded libraries with the files
+   the loader recorded. *)
 let check_challenge_place t libs =
   List.iter (fun (dp, file) ->
       match origin t dp with
@@ -1439,11 +1458,7 @@ let check_same_files t libs =
   List.iter (fun (dp, file) ->
       match origin t dp, DirPath.Map.find_opt dp t.solution_files with
       | Shared, Some sol_file ->
-        let same = match realpath file, realpath sol_file with
-          | Some f, Some g -> String.equal f g
-          | None, _ | _, None -> false
-        in
-        if not same then
+        if not (same_real_file file sol_file) then
           CErrors.user_err
             Pp.(str ("The challenge loaded the shared library " ^ DirPath.to_string dp ^
                      " from " ^ file ^ ", and the solution loaded it from " ^ sol_file ^
@@ -1452,11 +1467,40 @@ let check_same_files t libs =
       | (Prechecked | Own | Shared), _ -> ())
     libs
 
+(* A pre-checked library loads without a check on both sides, so the
+   challenge load must read it from pinned bytes: from the file the solution
+   read (compared by real path), whose sha256 [prepare] compared with the
+   pin, or from a file of the pinned sha256, such as a copy in the challenge
+   directory. The challenge's binding can make its name resolve to another
+   file, as for a shared library ([check_same_files]). [libs] are the
+   challenge's loaded libraries with the files the loader recorded. *)
+let check_prechecked_files t libs =
+  List.iter (fun (dp, file) ->
+      match origin t dp with
+      | Own | Shared -> ()
+      | Prechecked ->
+        let same = match DirPath.Map.find_opt dp t.solution_files with
+          | Some sol_file -> same_real_file sol_file file
+          | None -> false
+        in
+        if not same then
+          let got = sha256_of_file file in
+          let pins p = DirPath.equal p.pc_library dp && String.equal p.pc_sha256 got in
+          if not (List.exists pins t.cfg.cfg_prechecked) then
+            CErrors.user_err
+              Pp.(str ("The challenge loaded the pre-checked library " ^ DirPath.to_string dp ^
+                       " from " ^ file ^ ", which is not the file the solution loaded it \
+                        from, and whose sha256 is " ^ got ^ ", not the one the config \
+                        pins. A -compare run refuses it.")))
+    libs
+
 (* Before the challenge is loaded: the files the config pins must be there
-   and have the sha256 it gives, and the libraries the solution loaded must
-   pass [check_open_roots], [check_provenance], [check_prechecked_deps] and
-   [check_unchecked], in that order. [check_prechecked] ran before any
-   library was read. *)
+   and have the sha256 it gives, the file the solution read each pre-checked
+   library from must have its pinned sha256, and the libraries the solution
+   loaded must pass [check_open_roots], [check_provenance],
+   [check_prechecked_deps] and [check_unchecked], in that order.
+   [check_prechecked] ran before any library was read, on the file each
+   pre-checked name resolved to then, which the loader may not have read. *)
 let prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs ~trusted ~admitted =
   let files =
     List.map (fun f ->
@@ -1484,6 +1528,9 @@ let prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs ~trusted ~admitted 
       solution_deps = DirPath.Map.of_list (CheckLibrary.deps_of loaded);
       solution_files = DirPath.Map.of_list solution_files }
   in
+  List.iter (fun p ->
+      Option.iter (check_pin p) (DirPath.Map.find_opt p.pc_library t.solution_files))
+    cfg.cfg_prechecked;
   check_open_roots t;
   check_provenance t ~side:"solution" solution_files;
   check_prechecked_deps t;
@@ -1532,9 +1579,13 @@ let check_dep_digests t ~challenge ~solution =
    file for both sides because the challenge load reads it from the
    solution's file ([check_same_files]), because every library naming it
    records the same digest on both sides ([check_dep_digests]), and because
-   no bound root is left open ([check_open_roots]). Returns the challenge
-   environment and the dependency digests that each library of the files'
-   closure records. *)
+   no bound root is left open ([check_open_roots]). A pre-checked library
+   the challenge files Require is read from pinned bytes
+   ([check_prechecked_files]), tested once the digests are compared, so that
+   two sides built against two libraries of one name are reported as such.
+   Every refusal comes before the import. Returns the challenge environment
+   and the dependency digests that each library of the files' closure
+   records. *)
 let load_challenge t ~add_load_path senv0 =
   let saved = CheckLibrary.swap_tables (CheckLibrary.fresh_tables ()) in
   let restore () = ignore (CheckLibrary.swap_tables saved) in
@@ -1554,6 +1605,7 @@ let load_challenge t ~add_load_path senv0 =
       check_same_files t files;
       let challenge_deps = DirPath.Map.of_list (CheckLibrary.deps_of needed) in
       check_dep_digests t ~challenge:(CheckLibrary.deps_of all) ~solution:t.solution_deps;
+      check_prechecked_files t files;
       let senv = CheckLibrary.import_challenge senv0 all in
       Safe_typing.env_of_safe_env senv, challenge_deps)
 
@@ -2168,25 +2220,26 @@ let write_verdict out text =
     (try Sys.remove tmp with Sys_error _ -> ());
     Exninfo.iraise e
 
-(* A root bound to one of the installed load path's own top-level names, or
-   to the empty root, which binds every name, puts the solution's directory
-   where a library that the challenge reads from the installation is looked
-   up: the two sides would read different files under one name, and the one
-   the solution wrote would decide. No config can make that safe, and a run
-   needs one bound root only, the solution's own. *)
-let check_roots ~installed_roots roots =
+(* A root bound to one of the top-level names of the default load path (the
+   corelib directory, user-contrib, the XDG directories and ROCQPATH), or to
+   the empty root, which binds every name, puts the solution's directory
+   where a library of the default load path is looked up: the two sides
+   would read different files under one name, and the one the solution
+   wrote would decide. No config can make that safe, and a run needs one
+   bound root only, the solution's own. *)
+let check_roots ~default_roots roots =
   List.iter (fun (unix_path, rocq_root) ->
       match List.rev (DirPath.repr rocq_root) with
       | [] ->
         CErrors.user_err
           Pp.(str ("The directory " ^ unix_path ^ " is bound to the empty root, which binds \
-                    every library name the installed load path serves. A -compare run \
+                    every library name the default load path serves. A -compare run \
                     refuses it."))
       | id :: _ ->
-        if List.mem_f Id.equal id installed_roots then
+        if List.mem_f Id.equal id default_roots then
           CErrors.user_err
             Pp.(str ("The directory " ^ unix_path ^ " is bound to " ^
-                     DirPath.to_string rocq_root ^ ", a name the installed load path \
+                     DirPath.to_string rocq_root ^ ", a name the default load path \
                      serves. A -compare run refuses it: the two sides would read \
                      different files under one library name.")))
     roots

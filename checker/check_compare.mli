@@ -34,7 +34,11 @@
     real path of the corelib directory, of user-contrib (both as [-coqlib]
     or [ROCQLIB] select them) or of a directory that [ROCQPATH] or
     [COQPATH] lists. Whoever starts the run chooses those directories, and
-    keeping them out of the solution's reach is theirs to get right.
+    keeping them out of the solution's reach is theirs to get right. The
+    load path stores each directory with links resolved, so a file link in
+    a trusted directory is taken as the directory's, and a directory link
+    is not: a library found below one is refused unless the link's target
+    lies under a trusted directory too.
 
     Every other directory the load path binds is refused for a shared
     library unless a trusted directory holds it: the XDG directories (the
@@ -44,7 +48,7 @@
     working directory, which the load path binds implicitly, and every
     directory that [-Q] or [-R] binds are refused for a shared library even
     then ([run]). A run binds exactly one root with [-Q], the solution's
-    project root, and no root that the installed load path serves
+    project root, and no root that the default load path serves
     ([check_roots]). A library that passes is shared by where its file is,
     not by who wrote it. *)
 
@@ -148,7 +152,10 @@ val check_prechecked : config -> Names.DirPath.t list
     before it reads any library: bytes the config does not pin are never
     read. They load through the existing [-admit] path, so the option adds
     each of the returned libraries to the admit list; the config is the only
-    place that names them.
+    place that names them. When the command line names a file of such a
+    library in a second directory bound to its logical path, the loader
+    reads that file instead, so [run] checks the pin on the file the
+    solution loaded as well.
 
     A pre-checked library is never a shared one: the admit list puts it in
     the SOLUTION's environment whether the solution's tree Requires it or
@@ -159,12 +166,13 @@ val check_prechecked : config -> Names.DirPath.t list
     @raise CErrors.UserError on the first library whose sha256 differs, or
     on one that the load path does not find. *)
 
-val check_roots : installed_roots:Names.Id.t list -> (string * Names.DirPath.t) list -> unit
-(** [check_roots ~installed_roots roots] refuses a [-Q] or [-R] root
+val check_roots : default_roots:Names.Id.t list -> (string * Names.DirPath.t) list -> unit
+(** [check_roots ~default_roots roots] refuses a [-Q] or [-R] root
     [(directory, logical root)] of [roots] that binds the empty root or one
-    of [installed_roots], the top-level names that the installed load path
-    serves without a [-Q] (above). It reads nothing but its arguments, so
-    [rocqchk] calls it as soon as the load path is set up.
+    of [default_roots], the top-level names that the default load path (the
+    corelib directory, user-contrib, the XDG directories and ROCQPATH)
+    serves without a [-Q]. It reads nothing but its arguments, so [rocqchk]
+    calls it as soon as the load path is set up.
     @raise CErrors.UserError on the first such root. *)
 
 val run :
@@ -219,6 +227,9 @@ val run :
     - the libraries of [checked] lie under no root of [roots], or under
       more than one;
     - a challenge file is missing or its sha256 differs;
+    - the file the solution loaded a pre-checked library from does not have
+      the sha256 the config pins for it, which can be another file than the
+      one [check_prechecked] hashed (above);
     - the solution loaded a library from under a root of [roots] that the
       challenge does not stand in for and the config does not pre-check;
     - the solution loaded a library that is neither under the root the
@@ -248,6 +259,11 @@ val run :
       paths);
     - a challenge library and its solution library record different
       dependency digests for a pre-checked or shared library;
+    - the challenge loaded a pre-checked library from a file that is neither
+      the one the solution loaded it from (real paths) nor of the sha256 the
+      config pins for it, as when a directory link in [dir] takes the
+      binding of a directory the load path binds and the name resolves to
+      another file;
     - the config names a theorem the challenge does not hold, or one whose
       name two constants of the challenge print;
     - a theorem's axiom closure reaches an axiom or a flag's object whose
