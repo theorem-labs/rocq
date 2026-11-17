@@ -26,20 +26,27 @@
     The solution's tree may Require more of the installation than the
     challenge files do, so the challenge environment loads the same SHARED
     libraries the solution loaded -- those outside the root the challenge
-    stands in for -- and a constraint one of them carries is then not read
-    as one the solution invented. That rests on a shared library being
-    something the solution cannot write, so the one trusted source of them
-    is the installed load path: the corelib directory and user-contrib.
+    stands in for that the config does not pre-check -- and a constraint one
+    of them carries is then not read as one the solution invented. That
+    rests on a shared library being something the solution cannot write, so
+    a run accepts one only from a TRUSTED directory ([run]'s [trusted]): the
+    real path of the directory its file was found in must lie under the
+    real path of the corelib directory, of user-contrib (both as [-coqlib]
+    or [ROCQLIB] select them) or of a directory that [ROCQPATH] or
+    [COQPATH] lists. Whoever starts the run chooses those directories, and
+    keeping them out of the solution's reach is theirs to get right.
 
-    A run therefore binds exactly one root with [-Q], the solution's
-    project root, and leaves [ROCQPATH], [COQPATH], [-coqlib] and the XDG
-    directories unset, and starts in a working directory that holds no
-    [.vo] -- each of those is a load path the solution's side could
-    otherwise fill. The option refuses each of those places that it can see
-    ([check_roots], [run]). A library that passes is shared by where its
-    file is, not by who wrote it. What is left -- the environment the
-    process is started in, and so who can write the installed load path --
-    is for whoever starts the run to get right. *)
+    Every other directory the load path binds is refused for a shared
+    library unless a trusted directory holds it: the XDG directories (the
+    [coq] directory of [XDG_DATA_HOME], by default
+    [$HOME/.local/share/coq], and of each directory of [XDG_DATA_DIRS]),
+    which the load path searches before corelib and user-contrib. The
+    working directory, which the load path binds implicitly, and every
+    directory that [-Q] or [-R] binds are refused for a shared library even
+    then ([run]). A run binds exactly one root with [-Q], the solution's
+    project root, and no root that the installed load path serves
+    ([check_roots]). A library that passes is shared by where its file is,
+    not by who wrote it. *)
 
 type config
 
@@ -132,27 +139,25 @@ val read_config : string -> config
     well.
     @raise CErrors.UserError on any of these errors. *)
 
-val prechecked_libraries : config -> Names.DirPath.t list
-(** The libraries the config declares pre-checked. They load through the
-    existing [-admit] path, so the option adds each of them to the admit
-    list; the config is the only place that names them.
+val check_prechecked : config -> Names.DirPath.t list
+(** [check_prechecked cfg] refuses a pre-checked library whose file, the one
+    the load path in place resolves its name to
+    ([CheckLibrary.library_file]), does not have the sha256 that the config
+    gives, then returns the libraries the config declares pre-checked. A
+    pre-checked library loads without a check, so [rocqchk] calls this
+    before it reads any library: bytes the config does not pin are never
+    read. They load through the existing [-admit] path, so the option adds
+    each of the returned libraries to the admit list; the config is the only
+    place that names them.
 
     A pre-checked library is never a shared one: the admit list puts it in
     the SOLUTION's environment whether the solution's tree Requires it or
     not, and the challenge environment takes it only through its own files'
     Require closure. A config pins bytes; it cannot add a library to the
     challenge's universe graph and so decide what the challenge stands
-    on. *)
-
-val check_prechecked : config -> unit
-(** [check_prechecked cfg] refuses a pre-checked library whose file, the one
-    the load path in place resolves its name to
-    ([CheckLibrary.library_file]), does not have the sha256 that the config
-    gives. A pre-checked library loads without a check, so [rocqchk] calls
-    this before it reads any library: bytes the config does not pin are
-    never read.
-    @raise CErrors.UserError on the first such library, or on one that the
-    load path does not find. *)
+    on.
+    @raise CErrors.UserError on the first library whose sha256 differs, or
+    on one that the load path does not find. *)
 
 val check_roots : installed_roots:Names.Id.t list -> (string * Names.DirPath.t) list -> unit
 (** [check_roots ~installed_roots roots] refuses a [-Q] or [-R] root
@@ -164,20 +169,23 @@ val check_roots : installed_roots:Names.Id.t list -> (string * Names.DirPath.t) 
 
 val run :
   config -> dir:string -> out:string -> roots:(string * Names.DirPath.t) list ->
-  checked:Names.DirPath.t list -> admitted:Names.DirPath.t list ->
+  trusted:string list -> checked:Names.DirPath.t list -> admitted:Names.DirPath.t list ->
   add_load_path:(unix_path:string -> rocq_root:Names.DirPath.t -> unit) ->
   Environ.env -> Safe_typing.safe_environment -> unit
-(** [run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv]
-    compares the solution with the challenge of the directory [dir] and
-    writes the verdict to the file [out]. [env] is the solution's
+(** [run cfg ~dir ~out ~roots ~trusted ~checked ~admitted ~add_load_path env
+    senv] compares the solution with the challenge of the directory [dir]
+    and writes the verdict to the file [out]. [env] is the solution's
     environment, as [rocqchk] checked it, whose opaque proofs are read from
     the library tables in place ([CheckLibrary.indirect_accessor]); the
     challenge is loaded into an environment of its own on top of [senv], an
     empty safe environment.
 
     [roots] are the [-Q] and [-R] roots, each [(directory, logical root)];
-    [checked] are the libraries the command line names for checking, with or
-    without [-norec], and [admitted] those it gives with [-admit] (not the
+    [trusted] are the trusted directories (above), each with its
+    subdirectories: the corelib directory, user-contrib and the directories
+    of [ROCQPATH] and [COQPATH], none with [-boot]; [checked] are the
+    libraries the command line names for checking, with or without
+    [-norec], and [admitted] those it gives with [-admit] (not the
     pre-checked libraries the option adds to the admit list), each by the
     library name the loader gave it. The challenge stands in for the root of
     [roots] that the libraries of [checked] live under:
@@ -186,16 +194,17 @@ val run :
     [dir] and that root, so that the challenge load finds [dir] in front of
     the solution's directories. A library under that root is the solution's
     own. Every other library the solution loaded, unless pre-checked, is a
-    shared one, which the challenge loads too (above). The challenge load
-    validates every library it reads, as [rocqchk -compare] validates the
-    solution's: the load path may find a file the solution's side wrote,
-    which a refusal below rejects only once it is read.
+    shared one, which the challenge loads too, from the same file (above).
+    The challenge load validates every library it reads, as
+    [rocqchk -compare] validates the solution's: the load path may find a
+    file the solution's side wrote, which a refusal below rejects only once
+    it is read.
 
     A library is pinned by its sha256 when the file the solution loaded for
     it has the sha256 the config gives for it: in [prechecked], or in
     [challenge_files] for its file in [dir], the file at the path that its
     own file has below the directory of the root the challenge stands in
-    for.
+    for (real paths, so a config path may use [/] on every platform).
 
     The verdict's last key, [admitted], lists the libraries of [admitted] by
     logical name, in their order and each once.
@@ -207,14 +216,16 @@ val run :
     non-zero.
 
     The run is refused, and writes no verdict, when:
-    - the libraries of [checked] lie under more than one root of [roots];
+    - the libraries of [checked] lie under no root of [roots], or under
+      more than one;
     - a challenge file is missing or its sha256 differs;
     - the solution loaded a library from under a root of [roots] that the
       challenge does not stand in for and the config does not pre-check;
     - the solution loaded a library that is neither under the root the
       challenge stands in for nor pre-checked from a file directly in the
       working directory, which the load path binds implicitly, or anywhere
-      under a directory of [roots] (real paths, links resolved);
+      under a directory of [roots] (real paths, links resolved), or from a
+      directory under none of [trusted] (real paths);
     - a pre-checked library rests, directly or not, on a library that is
       neither pre-checked, pinned by its sha256, nor shared: the digest a
       pre-checked library records for it is the one the dependency's own
@@ -231,8 +242,10 @@ val run :
       paths, links resolved), as when [dir] lacks a library and the load
       path finds the solution's;
     - the challenge loaded a library that is neither under that root nor
-      pre-checked from a file in the working directory or under a directory
-      of [roots];
+      pre-checked from a file in the working directory, under a directory
+      of [roots] or in a directory under none of [trusted], or, when the
+      solution loaded it too, from another file than the solution's (real
+      paths);
     - a challenge library and its solution library record different
       dependency digests for a pre-checked or shared library;
     - the config names a theorem the challenge does not hold, or one whose

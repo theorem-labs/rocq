@@ -120,6 +120,9 @@ let resolve_packages () =
 let compare_config = ref None
 let compare_challenge = ref None
 let compare_out = ref None
+(* The directories whose libraries -compare takes for the installation's
+   ([Check_compare.run]), set by [init_with_argv]. *)
+let compare_trusted = ref []
 
 (* Used by option -sha256. *)
 let sha256_printed = ref false
@@ -218,13 +221,12 @@ let add_compile s =
    ([run_compare]), and the admitted libraries are read too: a pre-checked
    one that no checked library depends on must be loaded as well. *)
 let compile_files senv =
-  let compare = Option.has_some !compare_config in
-  let prechecked = match !compare_config with
-    | None -> []
+  let compare, prechecked = match !compare_config with
+    | None -> false, []
     | Some cfg ->
-      Check_compare.check_prechecked cfg;
+      true,
       List.map (fun dp -> CheckLibrary.LogicalFile (CheckLibrary.path_of_dirpath dp))
-        (Check_compare.prechecked_libraries cfg)
+        (Check_compare.check_prechecked cfg)
   in
   CheckLibrary.recheck_library ~output_context:(!output_context || !CheckFlags.axiom_free)
     ~intern_admit:compare ~validate_all:compare senv
@@ -575,10 +577,20 @@ let init_with_argv argv =
           (List.rev !includes))
       ();
     includes := [];
-    if Option.has_some !compare_config then
+    if Option.has_some !compare_config then begin
       (* reported as the other errors of the command line are *)
       (try Check_compare.check_roots ~installed_roots !user_includes
        with CErrors.UserError msg -> fatal_error msg 1);
+      (* The corelib directory and user-contrib, as -coqlib or ROCQLIB
+         select them, and the directories of ROCQPATH and COQPATH, which
+         [init_load_path] binds; not the XDG directories nor the working
+         directory, which it binds too. With -boot it binds none of them. *)
+      compare_trusted := (match coqenv with
+        | Boot -> []
+        | Env coqenv ->
+          (Boot.Env.corelib coqenv |> Boot.Path.to_string) ::
+          (Boot.Env.user_contrib coqenv |> Boot.Path.to_string) :: Envars.coqpath ())
+    end;
     make_senv ()
   with e ->
     fatal_error (str "Error during initialization :" ++ (explain_exn e)) (CErrors.exit_code e)
@@ -611,8 +623,8 @@ let run_compare env empty_senv =
     let checked = List.map name (!compile_list @ !norec_list) in
     let admitted = List.map name (List.rev !admit_list) in
     try
-      Check_compare.run cfg ~dir ~out ~roots:!user_includes ~checked ~admitted
-        ~add_load_path:add_rec_path env empty_senv
+      Check_compare.run cfg ~dir ~out ~roots:!user_includes ~trusted:!compare_trusted
+        ~checked ~admitted ~add_load_path:add_rec_path env empty_senv
     with e -> fatal_exn e
 
 let main () =

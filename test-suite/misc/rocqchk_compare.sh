@@ -383,6 +383,16 @@ echo 'Definition w := Prop.' > "$d/cwd/W.v"
 ROCQPATH=$d/cwd $coqc -noinit -native-compiler no "$d/cwd/W.v"
 { echo 'Require W.'; cat "$d/main/honest/A.v"; } | ROCQPATH=$d/cwd solution main/cwd
 refused 'in the working directory' in_dir "$d/cwd" compare main/cwd main.json
+# The load path finds X in an XDG directory, which it searches before the
+# installation's directories, and the solution's build finds it there too.
+# No trusted directory holds it: the corelib directory, user-contrib and
+# those of ROCQPATH.
+mkdir -p "$d/xdg/coq"
+echo 'Definition x := Prop.' > "$d/xdg/coq/X.v"
+XDG_DATA_HOME=$d/xdg $coqc -noinit -native-compiler no "$d/xdg/coq/X.v"
+{ echo 'Require X.'; cat "$d/main/honest/A.v"; } | XDG_DATA_HOME=$d/xdg solution main/xdg
+XDG_DATA_HOME=$d/xdg refused 'which is under none of the directories a -compare run trusts' \
+  compare main/xdg main.json
 
 # The libraries named for checking lie under two roots, Top and Vendor, and
 # the challenge directory stands in for one root only. Two -Q of one root
@@ -392,6 +402,10 @@ refused 'lie under more than one root that -Q or -R binds: Top, Vendor' \
   -challenge "$d/main/ch" -compare-out "$out" Top.A Vendor.V
 ran 'two -Q of Top' compare main/honest main.json -Q "$d/empty" Top
 holds 'two -Q of Top' '"name":"Top.A.thm","verdict":"pass"' '"name":"Top.A.other","verdict":"pass"'
+# The library named for checking lies under no root: the load path finds W
+# in the working directory, and no -Q binds a root.
+refused 'lie under no root that -Q or -R binds' \
+  in_dir "$d/cwd" chk -compare "$d/main.json" -challenge "$d/main/ch" -compare-out "$out" W
 
 # The challenge directory lacks Defs.vo, which A.vo depends on, and the load
 # path finds the solution's behind it: a copy of the challenge's, which would
@@ -403,6 +417,32 @@ cp "$d/main/ch/Defs.vo" "$d/nodefs/sol/"
 compile nodefs/sol A.v < "$d/main/honest/A.v"
 config nodefs > "$d/nodefs.json"
 refused 'which is not under the challenge directory' compare nodefs/sol nodefs.json
+
+#### A shared library, Lib.X: a stand-in for an installed library, which
+#### ROCQPATH reaches and no -Q binds. Both sides read it from one file.
+
+mkdir -p "$d/rp/Lib" "$d/rp2/Lib"
+echo 'Definition l := Prop.' > "$d/rp/Lib/X.v"
+ROCQPATH=$d/rp $coqc -noinit -native-compiler no "$d/rp/Lib/X.v"
+cp "$d/rp/Lib/X.vo" "$d/rp2/Lib/"
+ROCQPATH=$d/rp compile shared/ch A.v <<'EOF'
+Require Lib.X.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config shared > "$d/shared.json"
+ROCQPATH=$d/rp compile shared/sol A.v <<'EOF'
+Require Lib.X.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+# ROCQPATH lists rp2 too, behind rp, with a copy of X.vo.
+ROCQPATH=$d/rp:$d/rp2 verdict shared/sol shared.json '"name":"Top.A.thm","verdict":"pass"'
+# A link in the challenge directory to rp's Lib: the challenge load binds it
+# to Top.Lib, so that on the challenge side the name Lib.X resolves to rp2's
+# copy, the same bytes in another file.
+ln -s "$d/rp/Lib" "$d/shared/ch/Lib"
+ROCQPATH=$d/rp:$d/rp2 refused 'The challenge loaded the shared library Lib.X from' \
+  compare shared/sol shared.json
 
 #### -norec checks the libraries it names, and loads the libraries they
 #### depend on without a check.
@@ -444,6 +484,17 @@ cat > "$d/norec-pin.json" <<EOF
 EOF
 ran '-norec Top.A, Helper.vo pinned' norec norec-pin.json
 holds '-norec Top.A, Helper.vo pinned' '"name":"Top.A.thm","verdict":"pass"' '"admitted":[]}'
+# A challenge file pins the file at its own path below the challenge
+# directory, the two compared by real path: an entry for another path pins
+# nothing, not even one for a hard link to that file.
+mkdir "$d/link"
+ln "$d/norec/ch/Helper.vo" "$d/link/Helper.vo"
+cat > "$d/norec-link.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest norec/ch/A.vo)"},
+                     {"path": "$d/link/Helper.vo", "sha256": "$(digest link/Helper.vo)"}]}
+EOF
+refused 'The solution library Top.Helper was loaded without a check' norec norec-link.json
 
 # A library that one given with -admit depends on is loaded without a check
 # too, and is not exempt: Top.Base, which Top.Mid depends on, is refused
@@ -734,6 +785,33 @@ Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
 EOF
 verdict univp/extra univp.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.f differs: the universe context has other constraints"'
+
+# The context of small constrains its level i below the global level u,
+# which no term of the declaration names and which the solution numbers
+# differently: the constraint itself maps u. A copy whose constraint names
+# v, which V has mapped, fails.
+compile univs/ch A.v <<'EOF'
+Universe u v.
+Constraint u < v.
+Definition V := Type@{v}.
+Polymorphic Definition small@{i | i < u} : Type@{i+1} := Type@{i}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config univs > "$d/univs.json"
+compile univs/honest A.v <<'EOF'
+Definition helper := Type.
+Universe u v.
+Constraint u < v.
+Definition V := Type@{v}.
+Polymorphic Definition small@{i | i < u} : Type@{i+1} := Type@{i}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict univs/honest univs.json '"name":"Top.A.thm","verdict":"pass"'
+sed 's/^Polymorphic Definition small@{i | i < u}/Polymorphic Definition small@{i | i < v}/' \
+  "$d/univs/honest/A.v" | compile univs/other A.v
+verdict univs/other univs.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.small differs'
 
 #### The type of a is the universe max(u+1, v+1), whose two levels no
 #### comparison has paired yet and have the same increment: which level of

@@ -933,9 +933,10 @@ config names are computed, and the verdict is written to *file*.
 ``{name, permitted_axioms?}``), ``permitted_axioms``, ``tolerated_flags`` (each
 ``{kind, object?}``), ``rewrite_rules``, ``prechecked`` (each
 ``{library, sha256}``) and ``challenge_files`` (each ``{path, sha256}``, with
-``path`` relative to *dir* unless it is absolute). Theorems, axioms and flag
-objects are named by the names they print, libraries by their logical names
-(identifiers separated by dots; a name ending in ``.vo`` is an error).
+``path`` relative to *dir* unless it is absolute; it may use ``/`` as the
+directory separator on every platform). Theorems, axioms and flag objects are
+named by the names they print, libraries by their logical names (identifiers
+separated by dots; a name ending in ``.vo`` is an error).
 ``theorems`` and ``challenge_files`` are required and not empty; a theorem's
 ``permitted_axioms`` replaces the top-level list, which is empty by default;
 ``rewrite_rules`` is ``false`` by default. Any other key, a key given twice and
@@ -1002,8 +1003,8 @@ refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
   ``-compare-out``, and ``-package`` with ``-compare``;
 - a challenge file that is missing, or a challenge file or pre-checked library
   whose SHA-256 is not the one the config gives;
-- libraries named for checking that lie under more than one ``-Q`` or ``-R``
-  root;
+- libraries named for checking that lie under no ``-Q`` or ``-R`` root, or
+  under more than one;
 - a challenge library and its solution library that record different digests
   for a library they depend on that is pre-checked or from the installed load
   path;
@@ -1016,8 +1017,9 @@ refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
   installed load path serves;
 - a library outside the challenge's root and not pre-checked that the solution
   loads from another ``-Q`` or ``-R`` root, or that either side loads from a
-  file in the working directory or under a directory that ``-Q`` or ``-R``
-  binds;
+  file in the working directory, under a directory that ``-Q`` or ``-R``
+  binds, or under none of the trusted directories (below), or that the
+  challenge loads from another file than the one the solution loaded for it;
 - a pre-checked library that depends, directly or not, on a library that is
   neither pre-checked, nor pinned by its SHA-256 (below), nor from the
   installed load path;
@@ -1033,19 +1035,34 @@ The comparison trusts the challenge directory: the challenge files, which the
 config pins by their SHA-256 (``rocqchk -sha256 file`` prints the digest a
 config takes), and every other library that the challenge files load from
 *dir*, which is read as it is. It trusts the pre-checked libraries, which the
-config pins by their SHA-256 as well, and the installed load path, whose
-libraries both sides read from the same files. A pre-checked library is loaded
-without a check, as with ``-admit``; its SHA-256 is compared before any library
-is read. The digest that a library records for each library it depends on is
-the one stated in the file of that dependency, and is not computed from its
-bytes, so it pins nothing, and a kernel check of a library that a pre-checked
-library depends on is not enough either, since the pre-checked library was not
-checked against it: hence the refusal above that concerns the dependencies of
-a pre-checked library. A library is pinned by its SHA-256 when its file has the
-SHA-256 that the config gives for that library: in ``prechecked``, or in
-``challenge_files`` for the file of *dir* at the path that the library's file
-has below the directory of its ``-Q`` or ``-R`` root. A library given with
-``-admit`` is loaded without a check too, so the comparison trusts it as it
-trusts a pre-checked library, but no digest pins it; the verdict lists it. The
-libraries that a library given with ``-norec`` or ``-admit`` depends on are
-loaded without a check as well, hence the refusal above that concerns them.
+config pins by their SHA-256 as well, and the installed load path: a library
+outside the challenge's root that is not pre-checked is accepted only when the
+directory that its file is found in lies, by real path, under one of the
+trusted directories, and both sides then read it from that one file. The
+trusted directories are the corelib directory and ``user-contrib`` of the
+installation that ``-coqlib`` or ``$ROCQLIB`` selects, and the directories
+that ``$ROCQPATH`` (or ``$COQPATH``) lists. Whoever starts ``rocqchk``
+chooses them, and must keep the solution's side from writing there. Such a
+library is refused from anywhere else: from ``$XDG_DATA_HOME/coq`` (by default
+``$HOME/.local/share/coq``) and the ``coq`` directory of each directory of
+``$XDG_DATA_DIRS``, which the load path searches before the corelib directory
+and ``user-contrib``, unless a trusted directory holds them, and from the
+working directory or a directory that ``-Q`` or ``-R`` binds in every case. A
+pre-checked library is loaded without a check, as with ``-admit``; its SHA-256
+is compared before any library is read. The digest that a library records for
+each library it depends on is the one stated in the file of that dependency,
+and is not computed from its bytes, so it pins nothing, and a kernel check of a
+library that a pre-checked library depends on is not enough either, since the
+pre-checked library was not checked against it: hence the refusal above that
+concerns the dependencies of a pre-checked library. A library is pinned by its
+SHA-256 when its file has the SHA-256 that the config gives for that library:
+in ``prechecked``, or in ``challenge_files`` for the file of *dir* at the path
+that the library's file has below the directory of its ``-Q`` or ``-R`` root
+(compared by real path).
+A library given with ``-admit`` is loaded without a check too, and no digest
+pins it; the verdict lists it. Under the challenge's root it is still the
+solution's own, not a pre-checked one: its axioms are never the challenge's
+declarations, and it is compared with the challenge's library of the same name
+when the challenge has one. The libraries that a library given with ``-norec``
+or ``-admit`` depends on are loaded without a check as well, hence the refusal
+above that concerns them.
