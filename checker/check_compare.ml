@@ -303,12 +303,7 @@ type config = {
    universe comparison ([check_constraints]). *)
 let universe_constraints_flag = "answer-universe-constraints"
 
-(* A pre-checked library loads through the existing -admit path: the option
-   adds its name to the admit list, so the config is the only place that
-   names it. The admit list reads the name as the same library
-   ([logical_name]). *)
-let prechecked_libraries cfg =
-  List.map (fun p -> DirPath.to_string p.pc_library) cfg.cfg_prechecked
+let prechecked_libraries cfg = List.map (fun p -> p.pc_library) cfg.cfg_prechecked
 
 let cfg_error msg = CErrors.user_err Pp.(str ("The comparator config is wrong: " ^ msg ^ "."))
 
@@ -338,10 +333,9 @@ let as_obj where = function
 
 let string_list where v = List.map (as_string (where ^ "'s entries")) (as_list where v)
 
-(* A pre-checked library is named by its logical name, and the admit list
-   parses the same string (coqchk_main.ml): there, a name ending in [.vo] is
-   a file and an empty last component is dropped. So only identifiers
-   separated by dots are accepted, and both read the same library. *)
+(* A pre-checked library is named by its logical name: identifiers separated
+   by dots. A name that ends in [.vo], which on the command line names a
+   file, is refused rather than read as a library [vo]. *)
 let logical_name s =
   let ids = String.split_on_char '.' s in
   if Filename.check_suffix s ".vo" || not (List.for_all Id.is_valid ids) then
@@ -384,35 +378,10 @@ let read_config file =
   let axioms = match get top "permitted_axioms" with
     | None -> [] | Some v -> string_list "permitted_axioms" v
   in
-  (* A tolerated flag names the kind, and may name the object it is
-     tolerated on. With an object, a relaxed condition the standard library
-     rests on does not tolerate the same condition in the solution's own
-     declaration.
-
-     [assumed-positive], [unsafe-fixpoint] and [type-in-type] are refused
-     with an object or without ([never_tolerated]): each is a way to prove
-     False whatever the object, by a negative inductive type, a fixpoint
-     that does not terminate, or Girard's paradox. The check comes before
-     the object is read, so both forms reach it.
-
-     [unchecked-eliminations] is a way to prove False too, by an elimination
-     the check would refuse, so it is tolerated on a named object alone, one
-     declaration at a time, and a kind-only entry for it is refused.
-
-     [indices-not-mattering] and [uip] take both forms. Without an object,
-     [indices-not-mattering] tolerates the kind wherever it appears: indices
-     not mattering is Rocq's default, so every inductive of an installation
-     built without [-indices-matter] may carry it. The config has no
-     [allow_uip] input, so a kind-only [uip] entry is that switch: writing
-     it says that definitional UIP is allowed wherever a proof reaches it.
-     An entry with an object allows it on that object alone, when the object
-     is the challenge's declaration, and leaving both out says that it is
-     not allowed.
-
-     [universe_constraints_flag] is kind-only, and has a narrower meaning:
-     it skips only the solution-to-challenge universe comparison. It names no
-     declaration, so an object would not make the requested relaxation more
-     precise, and an entry with one is refused. *)
+  (* The rules of [read_config] (check_compare.mli). A kind of
+     [never_tolerated] is refused before the object is read, so with an
+     object or without; a kind outside [kind_only_allowed] needs an object;
+     [universe_constraints_flag] names no declaration and takes none. *)
   let never_tolerated =
     [Check_closure.assumed_positive; Check_closure.unsafe_fixpoint; Check_closure.type_in_type]
   in
@@ -486,15 +455,8 @@ let read_config file =
 
     One map for the whole run, a bijection between the challenge's
     monomorphic levels and the solution's. It is seeded with the identity on
-    every level of a SHARED library -- one outside the roots the challenge
-    stands in for, which is one file for both sides -- and on every
-    pre-checked library's, so that a constraint between a level of the
-    challenge's own and one of those is a constraint between two mapped
-    levels, which the constraint check below sees. Without the seed a level
-    no compared term names is not in the map at all, and a constraint
-    reaching it is passed over: an opaque body is never compared, so a
-    challenge proof's own constraint on such a level would be lost. The
-    rest of the map is built while the declarations are compared.
+    every level of a library that is one file for both sides ([seed_umap]),
+    and the rest of it is built while the declarations are compared.
 
     A level of a polymorphic context is a [Level.var], bound by position, so
     it is compared by its index and never enters the map. *)
@@ -1075,21 +1037,19 @@ and eq_modtype ~env m t1 t2 =
 
 type t = {
   cfg : config;
-  out : string;
   files : string list;           (** the challenge files, absolute or as given *)
   challenge_dir : string option;
       (** The real path of the challenge directory. A challenge library under
           a root the challenge stands in for is read from below it, unless
           pre-checked ([check_challenge_place]). *)
   prechecked : DirPath.t list;
-  add_challenge_load_path : unit -> unit;
-  under_challenge_root : DirPath.t -> bool;
-      (** Is this library name under a root the challenge directory stands in
-          for? Those are the solution's own libraries. Every other library
-          the solution loaded is a shared one, provided its recorded file
-          lies outside every place the solution can write
-          ([solution_place]); a run that loaded one from inside such a
-          place is refused ([check_provenance]). *)
+  challenge_roots : DirPath.t list;
+      (** The logical roots the challenge stands in for ([run]). A library
+          under one of them is the solution's own. Every other library the
+          solution loaded is a shared one, provided its recorded file lies
+          outside every place the solution can write ([solution_place]); a
+          run that loaded one from inside such a place is refused
+          ([check_provenance]). *)
   open_roots : (DirPath.t * string) list;
       (** The roots the command line binds that the challenge does NOT stand
           in for, with the directory each is bound to. A library under one of
@@ -1112,6 +1072,9 @@ type t = {
 }
 
 let is_prechecked t dp = List.exists (DirPath.equal dp) t.prechecked
+
+let under_challenge_root t lib =
+  List.exists (fun root -> CheckLibrary.under_root ~root lib) t.challenge_roots
 
 let realpath p =
   try Some (Unix.realpath p) with Unix.Unix_error _ | Invalid_argument _ | Sys_error _ -> None
@@ -1209,7 +1172,7 @@ let in_libs libs mp = match mp_root mp with
    ([load_challenge]). *)
 let one_file t dp =
   is_prechecked t dp
-  || (not (t.under_challenge_root dp) && List.exists (DirPath.equal dp) t.outside)
+  || (not (under_challenge_root t dp) && List.exists (DirPath.equal dp) t.outside)
 
 let rooted_one_file t mp = match mp_root mp with
   | None -> false
@@ -1223,7 +1186,7 @@ let rooted_one_file t mp = match mp_root mp with
    with the files the loader recorded. Returns those that pass. *)
 let check_provenance t ~side libs =
   CList.map_filter (fun (dp, file) ->
-      if t.under_challenge_root dp || is_prechecked t dp then None
+      if under_challenge_root t dp || is_prechecked t dp then None
       else match solution_place t file with
         | None -> Some dp
         | Some place ->
@@ -1286,7 +1249,7 @@ let check_prechecked_deps t =
    the run trusts it. *)
 let check_unchecked t ~admitted =
   List.iter (fun dp ->
-      if t.under_challenge_root dp && not (is_prechecked t dp)
+      if under_challenge_root t dp && not (is_prechecked t dp)
          && not (List.exists (DirPath.equal dp) admitted)
       then
         CErrors.user_err
@@ -1307,7 +1270,7 @@ let check_unchecked t ~admitted =
    loaded libraries with the files the loader recorded. *)
 let check_challenge_place t libs =
   List.iter (fun (dp, file) ->
-      if t.under_challenge_root dp && not (is_prechecked t dp) then
+      if under_challenge_root t dp && not (is_prechecked t dp) then
         let inside = match t.challenge_dir, realpath file with
           | Some dir, Some f -> path_under ~dir f
           | None, _ | _, None -> false
@@ -1325,12 +1288,10 @@ let check_challenge_place t libs =
    and have the sha256 it gives, and the libraries the solution loaded must
    pass [check_open_roots], [check_prechecked], [check_provenance],
    [check_prechecked_deps] and [check_unchecked], in that order. *)
-let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root ~open_roots
-    ~bound_dirs ~admitted =
+let prepare cfg ~dir ~challenge_roots ~open_roots ~bound_dirs ~admitted =
   let files =
     List.map (fun f ->
-        let p = if Filename.is_relative f.cf_path then Filename.concat dir f.cf_path
-          else f.cf_path in
+        let p = CUnix.correct_path f.cf_path dir in
         if not (Sys.file_exists p) then
           CErrors.user_err Pp.(str ("The challenge file " ^ p ^ " is not there."));
         let got = sha256_of_file p in
@@ -1341,14 +1302,11 @@ let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root ~open_r
         p)
       cfg.cfg_challenge_files
   in
-  (* The verdict file is already gone: rocqchk removes it before it parses
-     its command line (coqchk_main.ml), so no stop before the verdict, here
-     or earlier, leaves yesterday's verdict to be read as today's. *)
   let loaded = CheckLibrary.loaded () in
   let t =
-    { cfg; out; files; challenge_dir = realpath dir;
+    { cfg; files; challenge_dir = realpath dir;
       prechecked = List.map (fun p -> p.pc_library) cfg.cfg_prechecked;
-      add_challenge_load_path; under_challenge_root; open_roots;
+      challenge_roots; open_roots;
       cwd = realpath (Sys.getcwd ());
       bound_dirs = List.filter_map realpath bound_dirs;
       solution_deps = CheckLibrary.deps_of loaded;
@@ -1365,12 +1323,10 @@ let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root ~open_r
   t
 
 (* The dependency digests a challenge library and its solution library
-   record for a library both sides load must be equal: otherwise the two
-   sides were built against different copies of it, and their kernel names
-   would name different objects. That is every pre-checked library, and
-   every shared library -- one outside the roots the challenge stands in
-   for, which both sides read from the installed load path by the same
-   name. Checked before the challenge is imported. *)
+   record for a library both sides load from one file ([one_file]) must be
+   equal: otherwise the two sides were built against different copies of
+   it, and their kernel names would name different objects. Checked before
+   the challenge is imported. *)
 let check_dep_digests t ~challenge ~solution =
   let digest_of deps dp =
     Array.fold_left (fun acc (d, dg) -> if DirPath.equal d dp then Some dg else acc) None deps
@@ -1396,56 +1352,28 @@ let check_dep_digests t ~challenge ~solution =
           ch_deps)
     challenge
 
-(* The challenge load, between two swaps of this process's per-library tables.
-   The challenge libraries have the solution's names, so they need tables of
-   their own; nothing of the challenge is left in them afterwards.
+(* The challenge load, between two swaps of the per-library tables: the
+   challenge libraries have the solution's names, so they need tables of
+   their own ([CheckLibrary.tables]).
 
-   The challenge files' own Require lines decide which shared libraries their
-   closure reaches, and the solution's tree may Require more of the
-   installation than they do. A shared library carries universe
-   constraints, and some of them relate levels of OTHER shared libraries,
-   which both sides do know; loading one more installed library is not
-   something the solution asserted, so the challenge environment loads the
-   same shared libraries the solution did. What is left for the constraint
-   check to catch is a constraint the solution's OWN libraries add, which
-   is the solution's doing.
-
-   Only the challenge files' closure is compared declaration by declaration.
-   Every library the challenge loads under a root it stands in for comes
-   from the challenge directory unless it is pre-checked
-   ([check_challenge_place]).
-
-   What pins a shared library the solution alone Requires, and so what this
-   load rests on: the config's sha256 when it is pre-checked, and otherwise
-   only (1) that it is resolved on the same load path, which the challenge
-   load changes solely by putting the challenge directory in front of the
-   roots it stands in for, so a library outside those roots resolves to the
-   same file for both sides; (2) that every library naming it as a
-   dependency records the same digest on both sides, which the check above
-   has just established; and (3) [check_open_roots], which has already
-   refused the run if a root the solution could write to were left open. A
-   library that none of the three reaches does not exist: a library comes
-   from a bound root or from the installed load path. Each of the three
-   refuses the run rather than reporting a verdict. *)
-let load_challenge t senv0 =
+   Besides the challenge files' closure, which alone is compared, the
+   challenge environment loads the shared libraries the solution loaded, so
+   that a constraint one of them carries is not read as one the solution
+   added: what is left for the constraint checks is what the solution's own
+   libraries add. A shared library that only the solution Requires is one
+   file for both sides because the challenge load changes the load path
+   only in front of the challenge's roots, because every library naming it
+   records the same digest on both sides ([check_dep_digests]), and because
+   no bound root is left open ([check_open_roots]). *)
+let load_challenge t ~dir ~add_load_path senv0 =
   let saved = CheckLibrary.swap_tables (CheckLibrary.fresh_tables ()) in
   let restore () = ignore (CheckLibrary.swap_tables saved) in
   Fun.protect ~finally:restore (fun () ->
-      t.add_challenge_load_path ();
-      (* A pre-checked library is NOT a shared one, whatever root it sits
-         under. The config names it, and the option puts it on the admit
-         list, so the solution's environment holds it whether its tree
-         Requires it or not; were it shared too, a config could add a
-         library to the CHALLENGE's graph and so decide what the challenge
-         stands on. The config pins bytes; it does not say what the
-         challenge is. In a run as check_compare.mli describes this changes
-         nothing -- a pre-checked library is a library of the solution,
-         under the root the challenge stands in for -- and the challenge
-         still loads one whose own files Require it, through its
-         closure. *)
+      List.iter (fun rocq_root -> add_load_path ~unix_path:dir ~rocq_root) t.challenge_roots;
+      (* A pre-checked library is not a shared one ([prechecked_libraries]). *)
       let shared =
         CList.map_filter (fun (dp, _) ->
-            if t.under_challenge_root dp || is_prechecked t dp then None else Some dp)
+            if under_challenge_root t dp || is_prechecked t dp then None else Some dp)
           t.solution_deps
       in
       let needed, all = CheckLibrary.intern_challenge t.files shared in
@@ -1462,12 +1390,11 @@ let load_challenge t senv0 =
 
 type failure = { f_name : string; f_reason : string }
 
-(* The identity seed: a level of a library that is one file for both sides.
-   That is every shared library -- outside the roots the challenge stands in
-   for -- and every pre-checked one. A level no compared declaration names
-   is in the map only through this: the body of an opaque proof is never
-   compared, so a challenge proof's constraint on such a level would
-   otherwise never be asked of the solution. *)
+(* The identity seed: a level of a library that is one file for both sides
+   ([one_file]). A level no compared declaration names is in the map only
+   through this: the body of an opaque proof is never compared, so a
+   challenge proof's constraint on such a level would otherwise never be
+   asked of the solution. *)
 let seed_umap t ~challenge_env ~solution_env =
   let gch = Environ.universes challenge_env and gsol = Environ.universes solution_env in
   let sol = UGraph.domain gsol in
@@ -1492,6 +1419,14 @@ let constraints_reason bad =
     Some (Printf.sprintf "the constraint %s does not hold on the other side%s"
             (String.concat ", " head)
             (if n > shown then Printf.sprintf " (and %d more)" (n - shown) else ""))
+
+(* The outcome of [check_constraints]. *)
+type universe_check =
+  | Holds
+  | Fails of string
+  | Tolerated of string
+      (** the solution-to-challenge direction fails, and the config tolerates
+          [universe_constraints_flag]: the summary of what it skipped *)
 
 (* The two directions are not the same question.
 
@@ -1540,7 +1475,7 @@ let check_constraints t ~challenge_env ~solution_env m =
   let gch = Environ.universes challenge_env and gsol = Environ.universes solution_env in
   let own u = match Univ.Level.name u with
     | None -> false
-    | Some ug -> let dp, _, _ = Univ.UGlobal.repr ug in t.under_challenge_root dp
+    | Some ug -> let dp, _, _ = Univ.UGlobal.repr ug in under_challenge_root t dp
   in
   let kept_ch = Univ.Level.Map.domain m.fwd and kept_sol = Univ.Level.Map.domain m.bwd in
   (* [constraints_for ~kept] emits only constraints between kept levels, and
@@ -1567,13 +1502,13 @@ let check_constraints t ~challenge_env ~solution_env m =
   in
   let never _ _ = false in
   match fails ~skip:never m.fwd gsol (UGraph.constraints_for ~kept:kept_ch gch) with
-  | Some e -> Some ("the challenge has a universe constraint the solution does not: " ^ e), None
+  | Some e -> Fails ("the challenge has a universe constraint the solution does not: " ^ e)
   | None ->
     let neither_own u' v' = not (own u') && not (own v') in
     match fails ~skip:neither_own m.bwd gch (UGraph.constraints_for ~kept:kept_sol gsol) with
-    | Some e when List.mem_assoc universe_constraints_flag t.cfg.cfg_flags -> None, Some e
-    | Some e -> Some ("the solution has a universe constraint the challenge does not: " ^ e), None
-    | None -> None, None
+    | Some e when List.mem_assoc universe_constraints_flag t.cfg.cfg_flags -> Tolerated e
+    | Some e -> Fails ("the solution has a universe constraint the challenge does not: " ^ e)
+    | None -> Holds
 
 (* The elimination constraints between sort qualities, in the two
    directions of [check_constraints]. A library may declare a global sort
@@ -1664,7 +1599,8 @@ let rec signature_modtypes mp acc = function
    sort, the kernel name deciding between two that print alike. The order
    decides which difference a theorem's reason names first, and in which
    order the level map is built. A declaration the solution does not hold is
-   a failure; a declaration only the solution holds is not visited. *)
+   a failure; a declaration only the solution holds is not visited. Returns
+   the failures, in the order they are found, and the level map. *)
 let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
   let m = ref (seed_umap t ~challenge_env ~solution_env) in
   let failures = ref [] in
@@ -1742,11 +1678,7 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
       else List.iter (fun (name, _, d) -> fail name d) still
   in
   again (List.rev !deferred);
-  let universes, skipped_solution_constraints =
-    check_constraints t ~challenge_env ~solution_env !m
-  in
-  let qualities = check_elim_constraints ~challenge_env ~solution_env in
-  List.rev !failures, universes, qualities, skipped_solution_constraints
+  List.rev !failures, !m
 
 (************************************************************************)
 (** {6 The verdict} *)
@@ -1760,10 +1692,6 @@ let constant_index env =
       CString.Map.update (Constant.to_string c)
         (fun l -> Some (c :: Option.default [] l)) acc)
     env CString.Map.empty
-
-(* Every constant of [env] under its kernel name. *)
-let kernel_index env =
-  Environ.fold_constants (fun c _ acc -> KerName.Map.add (Constant.user c) c acc) env KerName.Map.empty
 
 (* Where an object lives, in words, for a refusal: "the constant g of
    module Q of the library R.P". *)
@@ -1837,15 +1765,11 @@ let solution_rewrite_rule env libs =
    constant [g] of the library [R.P.Q]. An axiom constant the solution's
    proof reaches is the challenge's declaration when either
    - its module path, followed through every [MPdot] to its [MPfile], is
-     rooted at a library that is one file for both sides ([one_file]): a
-     pre-checked library, whose bytes the config pins by digest, or a shared
-     one, outside the challenge's roots and read from a file in no place a
-     solution's file is found in (a run that read one from such a place is
-     refused). No solution file the run reads can add a constant under such
-     an [MPfile]. The constant may be a field of a sealed module that the
-     library does not export: the closure walk reaches it through the
-     implementation, where no environment lookup sees it, and it is still
-     the library's own; or
+     rooted at a library that is one file for both sides ([one_file]), under
+     whose [MPfile] no solution file the run reads can add a constant. The
+     constant may be a field of a sealed module that the library does not
+     export: the closure walk reaches it through the implementation, where
+     no environment lookup sees it, and it is still the library's own; or
    - both the challenge environment and the solution environment declare
      the same kernel name (the challenge's own files, which the declaration
      comparison holds the solution to, and the libraries both sides read
@@ -1894,8 +1818,221 @@ let why_not_challenge ~challenge_env ~solution_env obj =
   in
   "the proof reaches " ^ describe_object obj ^ ": " ^ why
 
-let run t env senv0 =
-  let challenge_env, challenge_deps = load_challenge t senv0 in
+(* What the verdict of every theorem reads besides the theorem's own
+   closure. *)
+type global_checks = {
+  failures : failure list;  (** in the order [compare_declarations] finds them *)
+  failed_decl : string CString.Map.t;  (** the reason of each failure, by name *)
+  universes : universe_check;
+  qualities : string option;  (** why [check_elim_constraints] fails *)
+  rewrite_rule : Constant.t option;  (** a rule the config does not allow *)
+}
+
+type verdict = Pass | Fail of string
+
+(* A theorem's entry in the verdict file. *)
+type record = {
+  r_name : string;
+  r_verdict : verdict;
+  r_axioms : string list;  (** printed names, sorted, each once *)
+  r_flags : (string * string) list;  (** (kind, printed object) *)
+}
+
+(* The record of the theorem [th] of the config, [ch_constant] being the
+   challenge's constant of that name. The theorem a verdict reads is the
+   solution's constant of the challenge theorem's kernel name, not
+   whichever solution constant prints its name: a module Q of the library
+   R.P holding a constant thm prints R.P.Q.thm, the name of the theorem thm
+   of the library R.P.Q. When the solution holds both, the theorem fails as
+   declared twice under one name; when it lacks the theorem's kernel name,
+   it fails as missing (the declaration comparison, which matches by kernel
+   name too, says the same). Either way the verdict's axioms and flags are
+   the kernel-name constant's, never the other's: the solution's
+   environment and the closure read a constant by its user name.
+   [sol_index] is the solution's [constant_index]. *)
+let theorem_record t ~challenge_env ~solution_env ~sol_index st g (th, ch_constant) =
+  let permitted = match th.th_axioms with
+    | Some l -> l
+    | None -> t.cfg.cfg_axioms
+  in
+  let printing = Option.default [] (CString.Map.find_opt th.th_name sol_index) in
+  if not (Environ.mem_constant ch_constant solution_env) then
+    { r_name = th.th_name; r_verdict = Fail "missing"; r_axioms = []; r_flags = [] }
+  else
+    let axioms, flags = Check_closure.axioms_and_flags st ch_constant in
+    let permitted_axioms, bad_axioms =
+      List.partition (fun (a, _) -> List.mem a permitted) axioms
+    in
+    (* A permitted name the proof reaches through an object the challenge
+       did not declare: a forgery of that name. *)
+    let forged_axioms =
+      List.filter (fun (_, obj) ->
+          not (match obj with
+              | GlobRef.ConstRef _ -> challenge_declares t ~challenge_env ~solution_env obj
+              | GlobRef.IndRef _ | GlobRef.ConstructRef _ | GlobRef.VarRef _ -> false))
+        permitted_axioms
+    in
+    (* A config entry tolerates a flag when it names the same kind and
+       either no object at all, or the flag's object by the name it prints
+       AND that object is the challenge's own declaration of that name, by
+       the rule for permitted axioms ([challenge_declares]). *)
+    let names_it (kind, printed, _) (k, o) =
+      String.equal k kind && (match o with None -> true | Some o -> String.equal o printed)
+    in
+    let tolerated ((_, _, obj) as f) =
+      List.exists (fun ((_, o) as entry) ->
+          names_it f entry
+          && (match o with
+              | None -> true
+              | Some _ -> challenge_declares t ~challenge_env ~solution_env obj))
+        t.cfg.cfg_flags
+    in
+    let bad_flags = List.filter (fun f -> not (tolerated f)) flags in
+    (* A challenge declaration the solution changed is a changed challenge,
+       whichever theorem names it: the statements are written against those
+       definitions, so no theorem of the run can pass. The theorem's own
+       record names its own difference when it has one. *)
+    let reason =
+      List.find_map (fun reason -> reason ()) [
+        (fun () ->
+           if List.length printing > 1 then
+             let objs =
+               List.sort String.compare
+                 (List.map (fun c -> describe_object (GlobRef.ConstRef c)) printing)
+             in
+             Some ("the solution declares " ^ string_of_int (List.length printing) ^
+                   " constants that print the theorem's name: " ^
+                   String.concat " and " objs)
+           else None);
+        (fun () -> CString.Map.find_opt th.th_name g.failed_decl);
+        (fun () -> match g.failures with
+           | f :: _ ->
+             Some ("the challenge declaration " ^ f.f_name ^ " differs: " ^ f.f_reason)
+           | [] -> None);
+        (* A failing graph comparison fails every theorem, the universe one
+           first. *)
+        (fun () -> match g.universes with
+           | Fails r -> Some r
+           | Holds | Tolerated _ -> g.qualities);
+        (fun () ->
+           Option.map (fun c ->
+               "the solution declares a rewrite rule on " ^ Constant.to_string c)
+             g.rewrite_rule);
+        (fun () -> match bad_axioms with
+           | (a, _) :: _ -> Some ("the axiom " ^ a ^ " is not permitted")
+           | [] -> None);
+        (fun () -> match forged_axioms with
+           | (a, obj) :: _ ->
+             Some ("the axiom " ^ a ^ " is not the challenge's declaration of that \
+                    name: " ^ why_not_challenge ~challenge_env ~solution_env obj)
+           | [] -> None);
+        (fun () -> match bad_flags with
+           | ((k, o, obj) as f) :: _ ->
+             let by_name =
+               List.exists (fun ((_, e) as entry) -> Option.has_some e && names_it f entry)
+                 t.cfg.cfg_flags
+             in
+             Some ("the relaxed typing flag " ^ k ^ " on " ^ o ^ " is not tolerated" ^
+                   if by_name then
+                     ": the config tolerates it on that name, but " ^ o ^
+                     " is not the challenge's declaration of that name: " ^
+                     why_not_challenge ~challenge_env ~solution_env obj
+                   else "")
+           | [] -> None);
+      ]
+    in
+    (* Each (kind, printed object) once, in the order of [flags] (sorted),
+       after the universe constraints a tolerance skipped, which no closure
+       flag names. *)
+    let printed =
+      List.fold_right (fun (k, o, _) acc ->
+          match acc with
+          | (k', o') :: _ when String.equal k k' && String.equal o o' -> acc
+          | _ -> (k, o) :: acc)
+        flags []
+    in
+    let printed = match g.universes with
+      | Tolerated constraints -> (universe_constraints_flag, constraints) :: printed
+      | Holds | Fails _ -> printed
+    in
+    { r_name = th.th_name;
+      r_verdict = (match reason with Some r -> Fail r | None -> Pass);
+      r_axioms = CString.Set.elements (CString.Set.of_list (List.map fst axioms));
+      r_flags = printed }
+
+let record_json r =
+  let verdict, reason = match r.r_verdict with
+    | Pass -> "pass", ""
+    | Fail reason -> "fail", reason
+  in
+  Json.Obj [
+    "name", Json.Str r.r_name;
+    "verdict", Json.Str verdict;
+    "reason", Json.Str reason;
+    "axioms", Json.List (List.map (fun a -> Json.Str a) r.r_axioms);
+    "flags", Json.List (List.map (fun (k, o) -> Json.Obj ["kind", Json.Str k;
+                                                          "object", Json.Str o]) r.r_flags);
+  ]
+
+(* The verdict goes to a temporary file in the directory of [out], which is
+   then renamed over it, so a write that fails (a full disk, say) leaves no
+   part of a verdict where a reader would take it for a whole one: the
+   temporary file is removed and the run exits non-zero. *)
+let write_verdict out text =
+  let tmp, ch =
+    Filename.open_temp_file ~perms:0o666 ~temp_dir:(Filename.dirname out)
+      (Filename.basename out) ".tmp"
+  in
+  try
+    output_string ch text;
+    output_char ch '\n';
+    close_out ch;
+    Sys.rename tmp out
+  with e ->
+    let e = Exninfo.capture e in
+    close_out_noerr ch;
+    (try Sys.remove tmp with Sys_error _ -> ());
+    Exninfo.iraise e
+
+(* A root bound to one of the installed load path's own top-level names, or
+   to the empty root, which binds every name, puts the solution's directory
+   where a library that the challenge reads from the installation is looked
+   up: the two sides would read different files under one name, and the one
+   the solution wrote would decide. No config can make that safe, and a run
+   needs one bound root only, the solution's own. *)
+let check_roots ~installed_roots roots =
+  List.iter (fun (unix_path, rocq_root) ->
+      match List.rev (DirPath.repr rocq_root) with
+      | [] ->
+        CErrors.user_err
+          Pp.(str ("The directory " ^ unix_path ^ " is bound to the empty root, which binds \
+                    every library name the installed load path serves. A -compare run \
+                    refuses it."))
+      | id :: _ ->
+        if List.exists (String.equal (Id.to_string id)) installed_roots then
+          CErrors.user_err
+            Pp.(str ("The directory " ^ unix_path ^ " is bound to " ^
+                     DirPath.to_string rocq_root ^ ", a name the installed load path \
+                     serves. A -compare run refuses it: the two sides would read \
+                     different files under one library name.")))
+    roots
+
+(* The challenge stands in for each bound root that a library named for
+   checking lives under; a root that only a pre-checked library or another
+   shared tree uses is left alone, since the challenge directory does not
+   hold it. Every other bound root is an open root ([check_open_roots]). *)
+let run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv0 =
+  let substitutes root = List.exists (CheckLibrary.under_root ~root) checked in
+  let challenge_roots = List.filter substitutes (List.map snd roots) in
+  let open_roots =
+    List.filter_map (fun (unix_path, rocq_root) ->
+        if substitutes rocq_root then None else Some (rocq_root, unix_path))
+      roots
+  in
+  let t =
+    prepare cfg ~dir ~challenge_roots ~open_roots ~bound_dirs:(List.map fst roots) ~admitted
+  in
+  let challenge_env, challenge_deps = load_challenge t ~dir ~add_load_path senv0 in
   (* A pre-checked library and the libraries it rests on are not compared
      when they are one file for both sides: their declarations are equal by
      construction, and walking them would read the whole standard library on
@@ -1930,29 +2067,19 @@ let run t env senv0 =
     List.fold_left (fun acc th -> CString.Set.add th.th_name acc) CString.Set.empty
       t.cfg.cfg_theorems
   in
-  let failures, universes, qualities, skipped_solution_constraints =
-    compare_declarations t ~challenge_env ~solution_env:env ~libs ~theorems
-  in
+  let failures, m = compare_declarations t ~challenge_env ~solution_env:env ~libs ~theorems in
+  let universes = check_constraints t ~challenge_env ~solution_env:env m in
+  let qualities = check_elim_constraints ~challenge_env ~solution_env:env in
   let failed_decl =
     List.fold_left (fun acc f -> CString.Map.add f.f_name f.f_reason acc) CString.Map.empty failures
   in
-  (* The theorem a verdict reads is the solution's constant of the challenge
-     theorem's kernel name, not whichever solution constant prints its name:
-     a module Q of the library R.P holding a constant thm prints R.P.Q.thm,
-     the name of the theorem thm of the library R.P.Q. When the solution
-     holds both, the theorem fails as declared twice under one name; when it
-     lacks the theorem's kernel name, it fails as missing (the declaration
-     comparison, which matches by kernel name too, says the same). Either
-     way the verdict's axioms and flags are the kernel-name constant's,
-     never the other's. *)
   let sol_index = constant_index env in
-  let sol_kernel = kernel_index env in
   (* Every library the solution loaded is the solution's own concern, a
      library only the solution has included, which the declaration
      comparison does not visit. The exceptions are the libraries that are
-     one file for both sides ([one_file]), pre-checked or shared, which may
-     carry rules the challenge did not write; every library a pre-checked
-     one rests on is one of those, or [prepare] has refused the run. *)
+     one file for both sides ([one_file]), which may carry rules the
+     challenge did not write; every library a pre-checked one rests on is
+     one of those, or [prepare] has refused the run. *)
   let rewrite_rule =
     if t.cfg.cfg_rewrite_rules then None
     else
@@ -1960,164 +2087,23 @@ let run t env senv0 =
         (CList.map_filter (fun (dp, _) -> if one_file t dp then None else Some dp)
            t.solution_deps)
   in
+  let g = { failures; failed_decl; universes; qualities; rewrite_rule } in
   let st = Check_closure.closure_state env CheckLibrary.indirect_accessor in
   let records =
-    List.map (fun (th, ch_constant) ->
-        let permitted = match th.th_axioms with
-          | Some l -> l
-          | None -> t.cfg.cfg_axioms
-        in
-        let verdict, reason, axioms, flags =
-          let printing = Option.default [] (CString.Map.find_opt th.th_name sol_index) in
-          match KerName.Map.find_opt (Constant.user ch_constant) sol_kernel with
-          | None -> "fail", "missing", [], []
-          | Some kn ->
-            let axioms, flags = Check_closure.axioms_and_flags st kn in
-            let flags = List.map (fun (k, o, obj) -> k, o, Some obj) flags in
-            let flags =
-              match skipped_solution_constraints with
-              | Some constraints ->
-                (universe_constraints_flag, constraints, None) :: flags
-              | None -> flags
-            in
-            let permitted_axioms, bad_axioms =
-              List.partition (fun (a, _) -> List.mem a permitted) axioms
-            in
-            (* A permitted name the proof reaches through an object the
-               challenge did not declare: a forgery of that name. *)
-            let forged_axioms =
-              List.filter (fun (_, obj) ->
-                  not (match obj with
-                      | GlobRef.ConstRef _ -> challenge_declares t ~challenge_env ~solution_env:env obj
-                      | GlobRef.IndRef _ | GlobRef.ConstructRef _ | GlobRef.VarRef _ -> false))
-                permitted_axioms
-            in
-            let axioms = CString.Set.elements (CString.Set.of_list (List.map fst axioms)) in
-            (* A config entry tolerates a flag when it names the same kind
-               and either no object at all, or the flag's object by the name
-               it prints AND that object is the challenge's own declaration
-               of that name, by the rule for permitted axioms
-               ([challenge_declares]). *)
-            let names_it (kind, printed, _) (k, o) =
-              String.equal k kind && (match o with None -> true | Some o -> String.equal o printed)
-            in
-            let tolerated ((_, _, obj) as f) =
-              List.exists (fun ((_, o) as entry) ->
-                  names_it f entry
-                  && (match o, obj with
-                      | None, _ -> true
-                      | Some _, Some obj -> challenge_declares t ~challenge_env ~solution_env:env obj
-                      | Some _, None -> false))
-                t.cfg.cfg_flags
-            in
-            let bad_flags = List.filter (fun f -> not (tolerated f)) flags in
-            (* The verdict prints each (kind, printed object) once, in the
-               order of [flags]: sorted, after any skipped constraints. *)
-            let flags =
-              List.fold_right (fun (k, o, _) acc ->
-                  match acc with
-                  | (k', o') :: _ when String.equal k k' && String.equal o o' -> acc
-                  | _ -> (k, o) :: acc)
-                flags []
-            in
-            (* A challenge declaration the solution changed is a changed
-               challenge, whichever theorem names it: the statements are
-               written against those definitions, so no theorem of the run
-               can pass. The theorem's own record names its own difference
-               when it has one. *)
-            let reason =
-              List.find_map (fun reason -> reason ()) [
-                (fun () ->
-                   if List.length printing > 1 then
-                     let objs =
-                       List.sort String.compare
-                         (List.map (fun c -> describe_object (GlobRef.ConstRef c)) printing)
-                     in
-                     Some ("the solution declares " ^ string_of_int (List.length printing) ^
-                           " constants that print the theorem's name: " ^
-                           String.concat " and " objs)
-                   else None);
-                (fun () -> CString.Map.find_opt th.th_name failed_decl);
-                (fun () -> match failures with
-                   | f :: _ ->
-                     Some ("the challenge declaration " ^ f.f_name ^ " differs: " ^ f.f_reason)
-                   | [] -> None);
-                (* A failing graph comparison fails every theorem, the
-                   universe one first. *)
-                (fun () -> Option.append universes qualities);
-                (fun () ->
-                   Option.map (fun c ->
-                       "the solution declares a rewrite rule on " ^ Constant.to_string c)
-                     rewrite_rule);
-                (fun () -> match bad_axioms with
-                   | (a, _) :: _ -> Some ("the axiom " ^ a ^ " is not permitted")
-                   | [] -> None);
-                (fun () -> match forged_axioms with
-                   | (a, obj) :: _ ->
-                     Some ("the axiom " ^ a ^ " is not the challenge's declaration of that \
-                            name: " ^ why_not_challenge ~challenge_env ~solution_env:env obj)
-                   | [] -> None);
-                (fun () -> match bad_flags with
-                   | ((k, o, obj) as f) :: _ ->
-                     let by_name =
-                       List.exists (fun ((_, e) as entry) -> Option.has_some e && names_it f entry)
-                         t.cfg.cfg_flags
-                     in
-                     Some ("the relaxed typing flag " ^ k ^ " on " ^ o ^ " is not tolerated" ^
-                           match by_name, obj with
-                           | true, Some obj ->
-                             ": the config tolerates it on that name, but " ^ o ^
-                             " is not the challenge's declaration of that name: " ^
-                             why_not_challenge ~challenge_env ~solution_env:env obj
-                           | _ -> "")
-                   | [] -> None);
-              ]
-            in
-            (match reason with
-             | Some r -> "fail", r, axioms, flags
-             | None -> "pass", "", axioms, flags)
-        in
-        Json.Obj [
-          "name", Json.Str th.th_name;
-          "verdict", Json.Str verdict;
-          "reason", Json.Str reason;
-          "axioms", Json.List (List.map (fun a -> Json.Str a) axioms);
-          "flags", Json.List (List.map (fun (k, o) -> Json.Obj ["kind", Json.Str k;
-                                                                "object", Json.Str o]) flags);
-        ])
-      named
+    List.map (theorem_record t ~challenge_env ~solution_env:env ~sol_index st g) named
   in
   let decls =
     List.map (fun f -> Json.Obj ["name", Json.Str f.f_name; "reason", Json.Str f.f_reason])
       failures
     @ (match universes with
-       | None -> []
-       | Some u -> [Json.Obj ["name", Json.Str "<universes>"; "reason", Json.Str u]])
+       | Fails u -> [Json.Obj ["name", Json.Str "<universes>"; "reason", Json.Str u]]
+       | Holds | Tolerated _ -> [])
     @ (match qualities with
        | None -> []
        | Some q -> [Json.Obj ["name", Json.Str "<qualities>"; "reason", Json.Str q]])
   in
-  let doc = Json.Obj [
+  write_verdict out (Json.to_string (Json.Obj [
       "format", Json.Int 1;
-      "theorems", Json.List records;
+      "theorems", Json.List (List.map record_json records);
       "declarations", Json.List decls;
-    ] in
-  (* The verdict goes to a temporary file in the directory of [t.out], which
-     is then renamed over it, so a write that fails (a full disk, say) leaves
-     no part of a verdict where a reader would take it for a whole one: the
-     temporary file is removed and the run exits non-zero. *)
-  let text = Json.to_string doc in
-  let tmp, ch =
-    Filename.open_temp_file ~perms:0o666 ~temp_dir:(Filename.dirname t.out)
-      (Filename.basename t.out) ".tmp"
-  in
-  try
-    output_string ch text;
-    output_char ch '\n';
-    close_out ch;
-    Sys.rename tmp t.out
-  with e ->
-    let e = Exninfo.capture e in
-    close_out_noerr ch;
-    (try Sys.remove tmp with Sys_error _ -> ());
-    Exninfo.iraise e
+    ]))

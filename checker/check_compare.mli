@@ -41,10 +41,10 @@
     that is empty or is one of the installed load path's own top-level
     names, and, on either side, a library outside the challenge's roots and
     not pre-checked whose recorded file lies directly in the working
-    directory or under a bound directory ([prepare], [run]). A library that
-    passes is shared by where its file is, not by who wrote it. What is left
-    -- the environment the process is started in, and so who can write the
-    installed load path -- is for whoever starts the run to get right. *)
+    directory or under a bound directory ([check_roots], [run]). A library
+    that passes is shared by where its file is, not by who wrote it. What is
+    left -- the environment the process is started in, and so who can write
+    the installed load path -- is for whoever starts the run to get right. *)
 
 type config
 
@@ -94,7 +94,7 @@ val read_config : string -> config
     rewrite rule. Without it, every theorem fails when a library the
     solution loaded declares one, whatever symbol it rewrites: each library
     except a pre-checked one and a shared one (every library a pre-checked
-    one rests on is one of those, or the run is refused: [prepare]). A
+    one rests on is one of those, or the run is refused: [run]). A
     library only the solution has counts, and so does a rule inside a
     module whose signature hides it, and a rule a module type or a module's
     signature declares. A rule the challenge declares counts too, since the
@@ -138,7 +138,7 @@ val read_config : string -> config
     well.
     @raise CErrors.UserError on any of these errors. *)
 
-val prechecked_libraries : config -> string list
+val prechecked_libraries : config -> Names.DirPath.t list
 (** The libraries the config declares pre-checked. They load through the
     existing [-admit] path, so the option adds each of them to the admit
     list; the config is the only place that names them.
@@ -150,75 +150,73 @@ val prechecked_libraries : config -> string list
     challenge's universe graph and so decide what the challenge stands
     on. *)
 
-type t
+val check_roots : installed_roots:string list -> (string * Names.DirPath.t) list -> unit
+(** [check_roots ~installed_roots roots] refuses a [-Q] or [-R] root
+    [(directory, logical root)] of [roots] that binds the empty root or one
+    of [installed_roots], the top-level names that the installed load path
+    serves without a [-Q] (above). It reads nothing but its arguments, so
+    [rocqchk] calls it as soon as the load path is set up.
+    @raise CErrors.UserError on the first such root. *)
 
-val prepare :
-  config -> dir:string -> out:string -> add_challenge_load_path:(unit -> unit) ->
-  under_challenge_root:(Names.DirPath.t -> bool) ->
-  open_roots:(Names.DirPath.t * string) list -> bound_dirs:string list ->
-  admitted:Names.DirPath.t list -> t
-(** Resolve the challenge files under [dir] and check the sha256 of each,
-    then check what the solution loaded, from the library tables in place.
-    [add_challenge_load_path] puts [dir] on the load path in front of the
-    solution's directories under the roots the challenge stands in for; it
-    is called once, inside the challenge load.
-    [under_challenge_root] says whether a library name lives under one of
-    those roots: those are the solution's own libraries. Every other library
-    the solution loaded, unless pre-checked, is a shared one, which the
-    challenge loads too, and the run is refused unless the file the loader
-    recorded for it, on either side, lies outside every place a solution's
-    file is found in: directly in the working directory, which the load
-    path binds implicitly, or anywhere under one of [bound_dirs], the
-    directories the command line binds (real paths, links resolved). That
-    is a statement about where the file is, not about who wrote it: a file
-    elsewhere belongs to the installation only as far as the launch keeps
-    the solution from writing the installed load path (above).
-    [open_roots] are the bound roots the challenge does NOT stand in for,
-    with the directory each is bound to; the run is refused when the
-    solution loaded a library from under one of them that the config does
-    not pre-check.
-    A pre-checked library records a digest for each library it depends on,
-    but that digest is the one the dependency's own file states, which
-    pins nothing; so every library a pre-checked one rests on, directly or
-    not, must be pre-checked too or shared.
-    [admitted] are the libraries the command line gives with [-admit]. A
+val run :
+  config -> dir:string -> out:string -> roots:(string * Names.DirPath.t) list ->
+  checked:Names.DirPath.t list -> admitted:Names.DirPath.t list ->
+  add_load_path:(unix_path:string -> rocq_root:Names.DirPath.t -> unit) ->
+  Environ.env -> Safe_typing.safe_environment -> unit
+(** [run cfg ~dir ~out ~roots ~checked ~admitted ~add_load_path env senv]
+    compares the solution with the challenge of the directory [dir] and
+    writes the verdict to the file [out]. [env] is the solution's
+    environment, as [rocqchk] checked it, whose opaque proofs are read from
+    the library tables in place ([CheckLibrary.indirect_accessor]); the
+    challenge is loaded into an environment of its own on top of [senv], an
+    empty safe environment.
+
+    [roots] are the [-Q] and [-R] roots, each [(directory, logical root)];
+    [checked] are the libraries the command line names for checking, with or
+    without [-norec], and [admitted] those it gives with [-admit], each by
+    the library name the loader gave it. The challenge stands in for each
+    root of [roots] that a library of [checked] lives under:
+    [add_load_path ~unix_path ~rocq_root] binds [unix_path] and its
+    subdirectories to [rocq_root], as [-Q] does, and is called with [dir]
+    for each such root, once, so that the challenge load finds [dir] in
+    front of the solution's directories. A library under such a root is the
+    solution's own. Every other library the solution loaded, unless
+    pre-checked, is a shared one, which the challenge loads too (above).
+
+    A library that a pre-checked one depends on, directly or not, must be
+    pre-checked too or shared: the digest a pre-checked library records for
+    it is the one the dependency's own file states, which pins nothing. A
     library the solution loaded without a check ([CheckLibrary.unchecked]:
     a dependency of a [-norec] or [-admit] library) is neither checked nor,
-    unless the challenge files Require it, compared; under a root the
-    challenge stands in for, it must be pre-checked or in [admitted].
-    @raise CErrors.UserError when a challenge file is missing or its sha256
-    differs, when the solution loaded a library from under one of
-    [open_roots] that the config does not pre-check, when a pre-checked
-    library's sha256 differs, when the solution loaded a library that is
-    neither under a root the challenge stands in for nor pre-checked from a
-    file in the working directory or under [bound_dirs], when a pre-checked
-    library rests on a library that is neither pre-checked nor shared, or
-    when the solution loaded a library under a root the challenge stands in
-    for without a check and that library is neither pre-checked nor in
-    [admitted]. *)
+    unless the challenge files Require it, compared, so under a root the
+    challenge stands in for it must be pre-checked or in [admitted].
 
-val run : t -> Environ.env -> Safe_typing.safe_environment -> unit
-(** Load the challenge into an environment of its own on top of the given
-    empty safe environment, compare, and write the verdict file. The
-    environment is the solution's, as [rocqchk] checked it; its opaque
-    proofs are read from the library tables in place
-    ([CheckLibrary.indirect_accessor]).
-    @raise CErrors.UserError when the challenge loaded a library that is
-    neither under its roots nor pre-checked from a file in the working
-    directory or under a bound directory; when the challenge loaded a
-    library that is under its roots and not pre-checked from a file that is
-    not under the challenge directory ([dir] of [prepare]; real paths, links
-    resolved), as when that directory lacks a library and the load path
-    finds the solution's; when a challenge library and its solution library
-    record different dependency digests for a pre-checked or shared
-    library; when the config names a theorem the challenge does not hold,
-    or one whose name two constants of the challenge print; or when a
-    theorem's axiom closure reaches an axiom or a flag's object whose
-    printed name is not made of identifiers, or an inductive type whose name
-    is not an identifier.
     A verdict is never an error: the file is written and the run exits 0.
     The verdict is written to a temporary file next to it and renamed, so a
-    write that fails leaves no verdict file and exits non-zero. *)
+    write that fails leaves no verdict file and exits non-zero.
+    @raise CErrors.UserError when a challenge file is missing or its sha256
+    differs; when the solution loaded a library from under a root of
+    [roots] that the challenge does not stand in for and the config does not
+    pre-check; when a pre-checked library's sha256 differs; when the
+    solution loaded a library that is neither under a root the challenge
+    stands in for nor pre-checked from a file directly in the working
+    directory, which the load path binds implicitly, or anywhere under a
+    directory of [roots] (real paths, links resolved); when a pre-checked
+    library rests on a library that is neither pre-checked nor shared; when
+    the solution loaded a library under a root the challenge stands in for
+    without a check and that library is neither pre-checked nor in
+    [admitted]; when the challenge loaded a library that is under its roots
+    and not pre-checked from a file that is not under [dir] (real paths,
+    links resolved), as when [dir] lacks a library and the load path finds
+    the solution's; when the challenge loaded a library that is neither
+    under its roots nor pre-checked from a file in the working directory or
+    under a directory of [roots]; when a challenge library and its solution
+    library record different dependency digests for a pre-checked or shared
+    library; when the config names a theorem the challenge does not hold, or
+    one whose name two constants of the challenge print; or when a theorem's
+    axiom closure reaches an axiom or a flag's object whose printed name is
+    not made of identifiers, or an inductive type whose name is not an
+    identifier. *)
 
 val sha256_of_file : string -> string
 (** The SHA-256 of a file's bytes as 64 lowercase hexadecimal digits

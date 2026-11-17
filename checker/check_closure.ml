@@ -35,7 +35,23 @@ open Mod_declarations
 
 type view = Public | Implementation
 
-type vref = view * GlobRef.t
+(* A reference and the view that typed it. [Public] comes first and, within
+   a view, hashes are compared before user names ([GlobRef.UserOrd]), as
+   [GlobRef.Set] does; the walk visits a declaration's references in this
+   order. *)
+module VRef = struct
+  type t = view * GlobRef.t
+  let compare (v1, o1) (v2, o2) =
+    match v1, v2 with
+    | Public, Implementation -> -1
+    | Implementation, Public -> 1
+    | Public, Public | Implementation, Implementation ->
+      let c = Int.compare (GlobRef.UserOrd.hash o1) (GlobRef.UserOrd.hash o2) in
+      if Int.equal c 0 then GlobRef.UserOrd.compare o1 o2 else c
+end
+
+module VRefSet = Stdlib.Set.Make (VRef)
+module VRefMap = Stdlib.Map.Make (VRef)
 
 type field_index = {
   constants : constant_body Id.Map.t;
@@ -68,9 +84,9 @@ let find_constant fields label = Id.Map.find_opt label fields.constants
 let find_mind fields label = Id.Map.find_opt label fields.minds
 
 type node = {
-  refs : vref list;
+  refs : VRef.t list;
   (* the objects the selected declaration mentions, with the view that
-     typed each reference *)
+     typed each reference, in [VRef]'s order *)
   axiom : bool;
   (* no body: a constant without one, an opaque constant whose body cannot be
      read, or an object neither the environment nor an implementation
@@ -85,15 +101,14 @@ type closure_state = {
   access : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm;
   mutable fields : field_index ModPath.Map.t;
   (* the indexed fields of the implementation of each module looked up so far *)
-  mutable public_nodes : node GlobRef.Map.t;
-  mutable implementation_nodes : node GlobRef.Map.t;
+  mutable nodes : node VRefMap.t;
   (* each object reached so far, keyed by its constant or by the first
-     inductive of its block, in the declaration view that typed its use.
-     [GlobRef.Map] and [GlobRef.Set] compare user names ([GlobRef.UserOrd]),
-     which the walk needs: a transparent alias and its target share a
-     canonical name, and each is resolved by its own user name
-     ([lookup_constant]), so a key by canonical name could let the alias's
-     node, which has a body, stand for its target, which may be an axiom. *)
+     inductive of its block, with the declaration view that typed its use.
+     [VRef] compares user names ([GlobRef.UserOrd]), which the walk needs: a
+     transparent alias and its target share a canonical name, and each is
+     resolved by its own user name ([lookup_constant]), so a key by
+     canonical name could let the alias's node, which has a body, stand for
+     its target, which may be an axiom. *)
   mutable gen : int;
   keys : Constr.t array;
   gens : int array;
@@ -294,22 +309,12 @@ let seen st gen c =
     false
   end
 
-let empty_refs = GlobRef.Set.empty, GlobRef.Set.empty
-
-let add_ref view obj (public, implementation) = match view with
-  | Public -> GlobRef.Set.add obj public, implementation
-  | Implementation -> public, GlobRef.Set.add obj implementation
-
-let add_mind view mind refs = add_ref view (GlobRef.IndRef (mind, 0)) refs
+let add_mind view mind refs = VRefSet.add (view, GlobRef.IndRef (mind, 0)) refs
 
 (* The primitive type a literal has, which the kernel looks up to type it. *)
 let add_prim view prim refs = match prim with
-  | Some c -> add_ref view (GlobRef.ConstRef c) refs
+  | Some c -> VRefSet.add (view, GlobRef.ConstRef c) refs
   | None -> refs
-
-let refs_to_list (public, implementation) =
-  List.map (fun obj -> Public, obj) (GlobRef.Set.elements public)
-  @ List.map (fun obj -> Implementation, obj) (GlobRef.Set.elements implementation)
 
 (* The walk keeps its own list of terms to visit, so its depth does not depend
    on the depth of the terms. A term retains the declaration view that typed
@@ -326,7 +331,7 @@ let rec walk st gen refs = function
     | Int _ -> walk st gen (add_prim view retro.Retroknowledge.retro_int63 refs) todo
     | Float _ -> walk st gen (add_prim view retro.Retroknowledge.retro_float64 refs) todo
     | String _ -> walk st gen (add_prim view retro.Retroknowledge.retro_string refs) todo
-    | Const (kn, _) -> walk st gen (add_ref view (GlobRef.ConstRef kn) refs) todo
+    | Const (kn, _) -> walk st gen (VRefSet.add (view, GlobRef.ConstRef kn) refs) todo
     | Ind ((mind, _), _) | Construct (((mind, _), _), _) ->
       walk st gen (add_mind view mind refs) todo
     | Cast _ | Prod _ | Lambda _ | LetIn _ | App _ | Proj _ | Case _ | Fix _ | CoFix _ | Array _ ->
@@ -401,8 +406,8 @@ let constant_node st view kn =
            [], true)
       | Undef _ | Primitive _ | Symbol _ -> [], true
     in
-    let refs = walk st (fresh_gen st) empty_refs ((declaration_view, cb.const_type) :: body) in
-    { refs = refs_to_list refs; axiom;
+    let refs = walk st (fresh_gen st) VRefSet.empty ((declaration_view, cb.const_type) :: body) in
+    { refs = VRefSet.elements refs; axiom;
       flags = typing_flags ~isind:None (GlobRef.ConstRef kn) cb.const_typing_flags }
 
 let mind_node st view mind =
@@ -415,7 +420,7 @@ let mind_node st view mind =
             (Array.fold_left (fun todo c -> (declaration_view, c) :: todo) todo mip.mind_user_lc))
         (push_context declaration_view mib.mind_params_ctxt []) mib.mind_packets
     in
-    let refs = walk st (fresh_gen st) empty_refs todo in
+    let refs = walk st (fresh_gen st) VRefSet.empty todo in
     (* A mutual block has one label but a name for each of its types, and
        the closure reports the block under its first inductive: the names of
        all its types are tested, for every block the closure resolves. *)
@@ -429,14 +434,10 @@ let mind_node st view mind =
     let name = GlobRef.IndRef (mind, 0) in
     let flags = typing_flags ~isind:(Some mib) name mib.mind_typing_flags in
     let flags = if uses_uip mib then (uip, name) :: flags else flags in
-    { refs = refs_to_list refs; axiom = false; flags }
+    { refs = VRefSet.elements refs; axiom = false; flags }
 
 let node st view obj =
-  let nodes = match view with
-    | Public -> st.public_nodes
-    | Implementation -> st.implementation_nodes
-  in
-  match GlobRef.Map.find_opt obj nodes with
+  match VRefMap.find_opt (view, obj) st.nodes with
   | Some n -> n
   | None ->
     let n = match obj with
@@ -444,10 +445,7 @@ let node st view obj =
       | GlobRef.IndRef (mind, _) | GlobRef.ConstructRef ((mind, _), _) -> mind_node st view mind
       | GlobRef.VarRef _ -> { refs = []; axiom = false; flags = [] }
     in
-    begin match view with
-    | Public -> st.public_nodes <- GlobRef.Map.add obj n st.public_nodes
-    | Implementation -> st.implementation_nodes <- GlobRef.Map.add obj n st.implementation_nodes
-    end;
+    st.nodes <- VRefMap.add (view, obj) n st.nodes;
     n
 
 let name_of = function
@@ -486,26 +484,19 @@ module FlagSet = Stdlib.Set.Make (struct
     comparator must tell them apart. A name that is not made of identifiers
     stops the walk ([check_printed_name]). *)
 let closure st root =
-  let rec loop public_seen implementation_seen axioms flags = function
+  let rec loop visited axioms flags = function
     | [] -> axioms, flags
-    | (view, obj) :: todo ->
-      let seen = match view with
-        | Public -> GlobRef.Set.mem obj public_seen
-        | Implementation -> GlobRef.Set.mem obj implementation_seen
-      in
-      if seen then loop public_seen implementation_seen axioms flags todo
+    | vref :: todo ->
+      if VRefSet.mem vref visited then loop visited axioms flags todo
       else
+        let view, obj = vref in
         let n = node st view obj in
         if n.axiom || not (List.is_empty n.flags) then check_printed_name obj;
         let axioms = if n.axiom then GlobRef.Set.add obj axioms else axioms in
         let flags = List.fold_left (fun flags f -> FlagSet.add f flags) flags n.flags in
-        let public_seen, implementation_seen = match view with
-          | Public -> GlobRef.Set.add obj public_seen, implementation_seen
-          | Implementation -> public_seen, GlobRef.Set.add obj implementation_seen
-        in
-        loop public_seen implementation_seen axioms flags (List.rev_append n.refs todo)
+        loop (VRefSet.add vref visited) axioms flags (List.append n.refs todo)
   in
-  loop GlobRef.Set.empty GlobRef.Set.empty GlobRef.Set.empty FlagSet.empty [Public, root]
+  loop VRefSet.empty GlobRef.Set.empty FlagSet.empty [Public, root]
 
 (** {6 Entry points} *)
 
@@ -513,7 +504,7 @@ let closure st root =
    are built once and kept. *)
 let closure_state env access = {
   env; access; fields = ModPath.Map.empty;
-  public_nodes = GlobRef.Map.empty; implementation_nodes = GlobRef.Map.empty; gen = 0;
+  nodes = VRefMap.empty; gen = 0;
   keys = Array.make cache_size Constr.mkProp; gens = Array.make cache_size (-1);
 }
 

@@ -96,10 +96,8 @@ let add_rec_path ~unix_path ~rocq_root =
 
 (* By the option -R/-Q of the command line *)
 let includes = ref []
-(* The same roots, kept past [init_with_argv]: a -compare run puts the
-   challenge directory on the load path in place of the physical directory
-   of each of these roots that the challenge stands in for, under the same
-   logical root ([run_compare]). *)
+(* The same roots, kept past [init_with_argv] for -compare
+   ([Check_compare.check_roots], [Check_compare.run]). *)
 let user_includes = ref []
 let push_include (s, alias) = includes := (s,alias) :: !includes
 
@@ -130,13 +128,9 @@ let sha256_printed = ref false
    the corelib root, and the subdirectories of every directory bound
    recursively under the empty root (user-contrib, the XDG directories and
    ROCQPATH). The working directory is bound non-recursively, so its
-   subdirectories serve no library and are not names here; its own
-   top-level .vo files are served under one-word names that this list does
-   not hold, which is why a -compare run starts in a working directory that
-   holds no .vo. A -compare run refuses a -Q that binds one of these names,
-   or the empty root, which would let the solution's directory shadow a
-   library that the challenge reads from the installation. Filled by
-   [init_load_path] in a -compare run; empty under -boot. *)
+   subdirectories serve no library and are not names here. A -compare run
+   refuses a -Q bound to one of them ([Check_compare.check_roots]). Filled
+   by [init_load_path] in a -compare run; empty under -boot. *)
 let installed_roots = ref []
 
 let note_installed_roots ~unix_path ~rocq_root =
@@ -523,7 +517,10 @@ let parse_args argv =
            library is loaded. A pre-checked library loads without a check,
            through the admit list. *)
         let cfg = Check_compare.read_config f in
-        List.iter add_admit (Check_compare.prechecked_libraries cfg);
+        List.iter (fun dp ->
+            let path = CheckLibrary.path_of_dirpath dp in
+            admit_list := CheckLibrary.LogicalFile path :: !admit_list)
+          (Check_compare.prechecked_libraries cfg);
         compare_config := Some cfg; parse rem
     | "-compare" :: [] -> usage 1
 
@@ -571,37 +568,6 @@ let init_profile ~file =
       NewProfile.finish ();
       close_out ch)
 
-(* A -compare run refuses a -Q that binds one of the installed load path's
-   own top-level names, or the empty root: it puts the solution's directory
-   where a library that the challenge reads from the installation is looked
-   up, so the two sides would read different files under one name, and the
-   one the solution wrote would decide. The empty root binds every name.
-   This is refused outright, because no config can make it safe, and a run
-   needs only one bound root, the solution's own. It needs only the load
-   path, so it runs as soon as that is set up, before any library is
-   checked. *)
-let check_compare_roots () =
-  List.iter (fun (unix_path, rocq_root) ->
-      let head = match List.rev (DirPath.repr rocq_root) with
-        | [] -> None
-        | id :: _ -> Some (Id.to_string id)
-      in
-      match head with
-      | None ->
-        fatal_error
-          (str ("The directory " ^ unix_path ^ " is bound to the empty root, which binds \
-                 every library name the installed load path serves. A -compare run \
-                 refuses it."))
-          1
-      | Some h when List.exists (String.equal h) !installed_roots ->
-        fatal_error
-          (str ("The directory " ^ unix_path ^ " is bound to " ^ DirPath.to_string rocq_root ^
-                ", a name the installed load path serves. A -compare run refuses it: the \
-                 two sides would read different files under one library name."))
-          1
-      | Some _ -> ())
-    !user_includes
-
 (* XXX: At some point we need to either port the checker to use the
    feedback system or to remove its use completely. *)
 let init_with_argv argv =
@@ -629,7 +595,10 @@ let init_with_argv argv =
           (List.rev !includes))
       ();
     includes := [];
-    if Option.has_some !compare_config then check_compare_roots ();
+    if Option.has_some !compare_config then
+      (* reported as the other errors of the command line are *)
+      (try Check_compare.check_roots ~installed_roots:!installed_roots !user_includes
+       with CErrors.UserError msg -> fatal_error msg 1);
     make_senv ()
   with e ->
     fatal_error (str "Error during initialization :" ++ (explain_exn e)) (CErrors.exit_code e)
@@ -646,74 +615,24 @@ let run senv =
     flush_all(); senv
   with e -> fatal_exn e
 
-(* A run that cannot complete the comparison (a challenge file whose sha256
-   differs, a pre-checked library the two sides disagree on, a theorem the
-   challenge does not hold) exits non-zero and writes no verdict file. A
-   verdict, whatever it says, leaves the exit status at 0. [empty_senv] is
-   the empty environment [init] made, which the challenge is loaded on. *)
+(* A run that cannot complete the comparison exits non-zero and writes no
+   verdict file; a verdict, whatever it says, leaves the exit status at 0
+   ([Check_compare.run]). [empty_senv] is the empty environment [init]
+   made, which the challenge is loaded on. *)
 let run_compare env empty_senv =
   match !compare_config with
   | None -> ()
   | Some cfg ->
     let dir = Option.get !compare_challenge and out = Option.get !compare_out in
-    (* The challenge directory stands in for the solution's directory under
-       each root that a solution library named on the command line lives
-       under. A root that only a pre-checked library or another shared tree
-       uses is left alone: the challenge directory does not hold it.
-
-       Both forms that name a library to check count: the positional names
-       ([compile_list], checked with their dependencies) and -norec
-       ([norec_list], checked alone), each by the library name the loader
-       gave it, so that a .vo file counts by its logical name. -admit names
-       a library to load without checking it and never selects a solution
-       library, so [admit_list] is left out: it also holds the config's
-       pre-checked libraries, which are exactly the ones the challenge does
-       not stand in for. *)
-    let checked_names =
-      List.map (fun f -> fst (CheckLibrary.try_locate_qualified_library f))
-        (!compile_list @ !norec_list)
-    in
-    let substitutes root = List.exists (CheckLibrary.under_root ~root) checked_names in
-    (* A library under one of those roots is the solution's own: the
-       challenge directory holds its counterpart. Every other library the
-       solution loaded is a shared one, from the installation, and the
-       challenge environment loads the same ones, so that a constraint one
-       of them carries is not read as a constraint the solution invented.
-
-       This rests on every library of the solution's own living under a root
-       that some checked name lives under, which is a root the challenge
-       stands in for; what is left is the installation's. A library under
-       such a root that the solution loaded without a check, as a dependency
-       of a -norec or -admit library, is refused unless the config pre-checks
-       it or -admit names it ([Check_compare.prepare]). *)
-    let under_challenge_root lib =
-      List.exists (fun (_, rocq_root) ->
-          substitutes rocq_root && CheckLibrary.under_root ~root:rocq_root lib)
-        !user_includes
-    in
-    (* The bound roots the challenge does not stand in for. The solution's
-       build can write under one of them, so the comparator refuses a run
-       that loaded a library from one unless the config pins it. *)
-    let open_roots =
-      List.map_filter (fun (unix_path, rocq_root) ->
-          if substitutes rocq_root then None else Some (rocq_root, unix_path))
-        !user_includes
-    in
-    (* The libraries -admit names, the config's pre-checked ones among
-       them, by the library name the loader gave each. *)
-    let admitted =
-      List.map (fun f -> fst (CheckLibrary.try_locate_qualified_library f)) !admit_list
-    in
+    let name f = fst (CheckLibrary.try_locate_qualified_library f) in
+    (* -admit names a library to load without a check, never one to check:
+       the admit list also holds the config's pre-checked libraries, which
+       the challenge does not stand in for. *)
+    let checked = List.map name (!compile_list @ !norec_list) in
+    let admitted = List.map name !admit_list in
     try
-      let t =
-        Check_compare.prepare cfg ~dir ~out ~under_challenge_root ~open_roots
-          ~bound_dirs:(List.map fst !user_includes) ~admitted
-          ~add_challenge_load_path:(fun () ->
-              List.iter (fun (_, rocq_root) ->
-                  if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)
-                !user_includes)
-      in
-      Check_compare.run t env empty_senv
+      Check_compare.run cfg ~dir ~out ~roots:!user_includes ~checked ~admitted
+        ~add_load_path:add_rec_path env empty_senv
     with e -> fatal_exn e
 
 let main () =
