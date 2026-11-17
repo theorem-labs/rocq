@@ -853,6 +853,18 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   and impredicative ``Set`` are accepted; ``-admit`` and ``-norec`` retain their trust
   assumptions. The default exit-status policy is unchanged.
 - :n:`-silent`: Do not write progress information to the standard output.
+- :n:`-compare config`: Compare the checked libraries with a challenge, as the
+  JSON file *config* describes. The options ``-compare``, ``-challenge`` and
+  ``-compare-out`` go together: give all three or none. See
+  :ref:`rocqchk-compare`.
+- :n:`-challenge dir`: The directory that holds the challenge's ``.vo`` files.
+  Goes together with ``-compare`` and ``-compare-out``. See
+  :ref:`rocqchk-compare`.
+- :n:`-compare-out file`: Write the verdict of ``-compare`` to *file*. Goes
+  together with ``-compare`` and ``-challenge``. See :ref:`rocqchk-compare`.
+- :n:`-sha256 file`: Print the SHA-256 of the bytes of *file*, as 64 lowercase
+  hexadecimal digits, and exit without checking anything. This is the digest
+  that the config of ``-compare`` takes.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
@@ -893,3 +905,102 @@ before it has been read by the second command.
       :cmd:`Require` handles ambiguity differently.
 
    .. weird warning, seems like it's not emitted when searching for dependencies
+
+.. _rocqchk-compare:
+
+Comparing a solution with a challenge
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``rocqchk -compare config -challenge dir -compare-out file`` compares the
+libraries it checks, the *solution*, with a *challenge*: ``.vo`` files compiled
+under the same library names. The solution is checked as without these options.
+The challenge files are then loaded into a second environment without a check,
+*dir* taking the place of the solution's directory under each ``-Q`` or ``-R``
+root that holds a library named on the command line for checking, by its
+logical name: the challenge's roots. Each declaration of the challenge files and
+of the libraries they depend on (except the pre-checked libraries and their
+dependencies) is compared with the solution's declaration of the same kernel
+name, structurally after a one-to-one renaming of universe levels, with no
+reduction. Then the axioms of each theorem the config names are computed, and
+the verdict is written to *file*.
+
+*config* is one JSON object with the keys ``theorems`` (each
+``{name, permitted_axioms?}``), ``permitted_axioms``, ``tolerated_flags`` (each
+``{kind, object?}``), ``rewrite_rules``, ``prechecked`` (each
+``{library, sha256}``) and ``challenge_files`` (each ``{path, sha256}``, with
+``path`` relative to *dir* unless it is absolute). Theorems, axioms and flag
+objects are named by the names they print, libraries by their logical names.
+``theorems`` and ``challenge_files`` are required and not empty; a theorem's
+``permitted_axioms`` replaces the top-level list, which is empty by default;
+``rewrite_rules`` is ``false`` by default. Any other key, a key given twice and
+anything but white space after the object are errors. For example:
+
+.. code-block:: json
+
+   {"theorems": [{"name": "P.Main.thm"}],
+    "permitted_axioms": [],
+    "challenge_files": [{"path": "Main.vo", "sha256": "<64 hexadecimal digits>"}]}
+
+An entry of ``tolerated_flags`` tolerates the relaxed typing conditions of its
+kind; with an ``object``, only on the challenge's declaration of that name (as
+defined below for axioms). ``assumed-positive``, ``unsafe-fixpoint`` and
+``type-in-type`` are errors, with an object or without: each is a way to prove
+``False``. ``uip`` and ``indices-not-mattering`` take either form,
+``answer-universe-constraints`` takes no object, and every other kind, such as
+``unchecked-eliminations``, needs one. ``answer-universe-constraints`` skips only
+the check of the universe constraints the solution adds; when that check would
+have failed, the ``flags`` of each theorem the solution holds list it, with a
+summary of those constraints as its object.
+
+*file* receives one JSON object with the keys ``format`` (``1``), ``theorems``
+and ``declarations``. Each entry of ``theorems`` has the keys ``name``,
+``verdict`` (``"pass"`` or ``"fail"``), ``reason`` (empty for a pass), ``axioms``
+(the printed names of the axioms the theorem's type and proof reach, such as
+constants without a body, admitted proofs among them, primitives and symbols)
+and ``flags`` (each ``{kind, object}``: the relaxed typing conditions they rest
+on, of the kinds named above). ``declarations`` lists, as ``{name, reason}``,
+each challenge declaration that is missing from the solution or differs from
+it, and ``<universes>`` or ``<qualities>`` for a failed constraint check. A
+theorem fails when:
+
+- the solution does not declare it, or declares two constants that print its
+  name;
+- a challenge declaration is missing from the solution or differs from it;
+- a universe or elimination constraint of the challenge does not hold in the
+  solution, or one that the solution adds on a level or sort of a library under
+  the challenge's roots does not hold in the challenge;
+- ``rewrite_rules`` is ``false`` and a library the solution loaded declares a
+  rewrite rule, unless that library is pre-checked, a dependency of a
+  pre-checked library, or from the installed load path;
+- its proof reaches an axiom whose name its permitted list does not hold;
+- its proof reaches, under a permitted name, an axiom that is not the
+  challenge's declaration of that name. The challenge's declaration of a name is
+  an axiom of a pre-checked library or of the installed load path, or one that
+  both the challenge and the solution declare and no module signature hides;
+- its proof rests on a relaxed typing condition that no entry of
+  ``tolerated_flags`` tolerates.
+
+The second, third and fourth cases fail every theorem.
+
+A run that writes the verdict exits with status 0 whatever the verdict says,
+unless ``-axiom-free`` then fails. ``rocqchk`` first removes the file that
+``-compare-out`` names, or empties it when it cannot be removed. A run that
+refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
+
+- an error in the config, only some of ``-compare``, ``-challenge`` and
+  ``-compare-out``, and ``-package`` with ``-compare``;
+- a challenge file that is missing, or a challenge file or pre-checked library
+  whose SHA-256 is not the one the config gives;
+- a theorem of the config that the challenge does not declare;
+- a ``-Q`` or ``-R`` that binds the empty root or a top-level name that the
+  installed load path serves;
+- a library outside the challenge's roots and not pre-checked that the solution
+  loads from another ``-Q`` or ``-R`` root, or that either side loads from a
+  file in the working directory or under a directory that ``-Q`` or ``-R``
+  binds.
+
+The comparison trusts the challenge files and the pre-checked libraries, which
+the config pins by their SHA-256 (``rocqchk -sha256 file`` prints the digest a
+config takes), and the installed load path, whose libraries both sides read
+from the same files. A pre-checked library is loaded without a check, as with
+``-admit``.

@@ -79,6 +79,30 @@ Return a non-zero exit code if the context analysis finds axioms or unsafe featu
 The trust assumptions of \-admit and \-norec still apply.
 .
 .TP
+.BI \-compare \ config
+Compare the checked libraries with a challenge, as the JSON file
+.I config
+describes. The options \-compare, \-challenge and \-compare\-out go together:
+give all three or none. See the
+.I Reference Manual
+for the config and the verdict.
+.
+.TP
+.BI \-challenge \ dir
+The directory that holds the challenge's .vo files (with \-compare).
+.
+.TP
+.BI \-compare\-out \ file
+Write the verdict of \-compare to
+.IR file .
+.
+.TP
+.BI \-sha256 \ file
+Print the SHA-256 of
+.I file
+and exit: the digest that the config of \-compare takes.
+.
+.TP
 .B \-impredicative\-set
 Allows the checker to accept libraries that have been compiled with
 this flag.
