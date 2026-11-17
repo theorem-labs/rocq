@@ -1019,11 +1019,11 @@ refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
 - a library outside the challenge's root and not pre-checked that the solution
   loads from another ``-Q`` or ``-R`` root, or that either side loads from a
   file in the working directory, under a directory that ``-Q`` or ``-R``
-  binds, or under none of the trusted directories (below), or that the
-  challenge loads from another file than the one the solution loaded for it;
-- a pre-checked library that the challenge loads from another file than the
-  one the solution loaded for it (compared by real path), unless that file has
-  the SHA-256 that the config gives for the library;
+  binds, or under none of the trusted directories (below);
+- a pre-checked library, or a library outside the challenge's root that both
+  sides load, that the challenge loads from another file than the one the
+  solution loaded for it (compared by real path), unless the library is
+  pre-checked and that file has the SHA-256 that the config gives for it;
 - a pre-checked library that depends, directly or not, on a library that is
   neither pre-checked, nor pinned by its SHA-256 (below), nor from the
   installed load path;
@@ -1060,8 +1060,8 @@ directory is not: a library found below such a link is refused unless the
 link's target lies under a trusted directory too.
 
 A pre-checked library is loaded without a check, as with ``-admit``; its SHA-256
-is compared before any library is read, and again on the file the solution
-loaded it from, another file when the command line names a file of that
+is compared before any library is read, and on the file the solution loaded it
+from when that is another file, as when the command line names a file of that
 library in a second directory bound to its logical path. The challenge side
 must read it from that same file (compared by real path) or from a file with
 that SHA-256, such as a copy in *dir*. The digest that a library records for
@@ -1077,8 +1077,10 @@ that the library's file has below the directory of its ``-Q`` or ``-R`` root
 
 A library given with ``-admit`` is loaded without a check too, and no digest
 pins it; the verdict lists it. Under the challenge's root it is still the
-solution's own, not a pre-checked one: its axioms are never the challenge's
-declarations, and it is compared with the challenge's library of the same name
+solution's own, not a pre-checked one: an axiom of it is the challenge's
+declaration only by the rule for every axiom (the challenge declares the same
+kernel name and the solution exports it), never as an axiom of a pre-checked
+library is, and it is compared with the challenge's library of the same name
 when the challenge has one. The libraries that a library given with ``-norec``
 or ``-admit`` depends on are loaded without a check as well, hence the refusal
 above that concerns them.

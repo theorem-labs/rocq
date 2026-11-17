@@ -1253,7 +1253,7 @@ let check_pin p file =
    their pins. The loader resolves each name to the same file, unless the
    command line names a file of that library in a second directory bound to
    its logical path, which it then reads instead: [prepare] checks the pin
-   on the file each was read from as well. *)
+   on that file as well. *)
 let check_prechecked cfg =
   List.iter (fun p -> check_pin p (CheckLibrary.library_file p.pc_library))
     cfg.cfg_prechecked;
@@ -1305,8 +1305,8 @@ let in_libs libs mp = match mp_root mp with
    solution wrote such a file rests on whoever starts the run keeping the
    trusted directories out of the solution's reach (check_compare.mli). The
    challenge load reads a pre-checked library from the solution's file or
-   from one of the pinned sha256 ([check_prechecked_files]), and a shared
-   library from the same file ([check_same_files]). *)
+   from a file of the pinned sha256, and a shared library from the
+   solution's file ([check_same_files]). *)
 let one_file t dp = match origin t dp with
   | Prechecked -> true
   | Own -> false
@@ -1424,7 +1424,7 @@ let check_unchecked t ~admitted =
    So a library the challenge loaded under that root must have been read
    from a file below the challenge directory (real paths, links resolved),
    unless it is pre-checked: a pre-checked library may resolve to the
-   solution's file, and [check_prechecked_files] tests that it is read from
+   solution's file, and [check_same_files] tests that it is read from
    pinned bytes. [libs] are the challenge's loaded libraries with the files
    the loader recorded. *)
 let check_challenge_place t libs =
@@ -1445,45 +1445,48 @@ let check_challenge_place t libs =
                       refuses it.")))
     libs
 
-(* A shared library is one file for both sides only if the challenge load
-   reads it from the file the solution read. The challenge's load path is
-   the solution's with the challenge directory bound in front under the
-   root it stands in for, but that binding can take a directory from
-   another logical path (a link in the challenge directory to a directory
-   the load path already binds), and a name the two sides share may then
-   resolve to another file. So each shared library the solution loaded too
-   must come from the same file, by real path. [libs] are the challenge's
-   loaded libraries with the files the loader recorded. *)
+(* The file the solution loaded the pre-checked library [dp] from. Every
+   pre-checked library is on the admit list ([check_prechecked]), which a
+   -compare run reads, so the solution loaded each one. A missing one is an
+   anomaly rather than a pass: a pin passed over in silence is a check that
+   did not run. *)
+let prechecked_solution_file t dp =
+  match DirPath.Map.find_opt dp t.solution_files with
+  | Some file -> file
+  | None ->
+    CErrors.anomaly
+      Pp.(str ("The solution did not load the pre-checked library " ^
+               DirPath.to_string dp ^ ", which is on the admit list that a -compare \
+                run reads."))
+
+(* A library that is one file for both sides ([one_file]) is so only if the
+   challenge load reads it from the file the solution read. The challenge's
+   load path is the solution's with the challenge directory bound in front
+   under the root it stands in for, but that binding can take a directory
+   from another logical path (a link in the challenge directory to a
+   directory the load path already binds), and a name the two sides share
+   may then resolve to another file. So each shared library the solution
+   loaded too, and each pre-checked library, must come from the solution's
+   file, by real path. A pre-checked library may also come from another
+   file of the pinned sha256, such as a copy in the challenge directory:
+   the solution's file has that sha256 as well ([check_prechecked] or
+   [prepare] compared it), so either way the bytes are pinned. [libs] are
+   the challenge's loaded libraries with the files the loader recorded. *)
 let check_same_files t libs =
   List.iter (fun (dp, file) ->
-      match origin t dp, DirPath.Map.find_opt dp t.solution_files with
-      | Shared, Some sol_file ->
-        if not (same_real_file file sol_file) then
-          CErrors.user_err
-            Pp.(str ("The challenge loaded the shared library " ^ DirPath.to_string dp ^
-                     " from " ^ file ^ ", and the solution loaded it from " ^ sol_file ^
-                     ": the two sides would read different files under one library \
-                      name. A -compare run refuses it."))
-      | (Prechecked | Own | Shared), _ -> ())
-    libs
-
-(* A pre-checked library loads without a check on both sides, so the
-   challenge load must read it from pinned bytes: from the file the solution
-   read (compared by real path), whose sha256 [prepare] compared with the
-   pin, or from a file of the pinned sha256, such as a copy in the challenge
-   directory. The challenge's binding can make its name resolve to another
-   file, as for a shared library ([check_same_files]). [libs] are the
-   challenge's loaded libraries with the files the loader recorded. *)
-let check_prechecked_files t libs =
-  List.iter (fun (dp, file) ->
       match origin t dp with
-      | Own | Shared -> ()
+      | Own -> ()
+      | Shared ->
+        (match DirPath.Map.find_opt dp t.solution_files with
+         | Some sol_file when not (same_real_file file sol_file) ->
+           CErrors.user_err
+             Pp.(str ("The challenge loaded the shared library " ^ DirPath.to_string dp ^
+                      " from " ^ file ^ ", and the solution loaded it from " ^ sol_file ^
+                      ": the two sides would read different files under one library \
+                       name. A -compare run refuses it."))
+         | Some _ | None -> ())
       | Prechecked ->
-        let same = match DirPath.Map.find_opt dp t.solution_files with
-          | Some sol_file -> same_real_file sol_file file
-          | None -> false
-        in
-        if not same then
+        if not (same_real_file (prechecked_solution_file t dp) file) then
           let got = sha256_of_file file in
           let pins p = DirPath.equal p.pc_library dp && String.equal p.pc_sha256 got in
           if not (List.exists pins t.cfg.cfg_prechecked) then
@@ -1500,7 +1503,10 @@ let check_prechecked_files t libs =
    loaded must pass [check_open_roots], [check_provenance],
    [check_prechecked_deps] and [check_unchecked], in that order.
    [check_prechecked] ran before any library was read, on the file each
-   pre-checked name resolved to then, which the loader may not have read. *)
+   pre-checked name resolved to then, which the loader may not have read:
+   only a file the loader read in its place is hashed here. The load path
+   has not changed since, so the name still resolves to the file hashed
+   then. *)
 let prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs ~trusted ~admitted =
   let files =
     List.map (fun f ->
@@ -1529,7 +1535,9 @@ let prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs ~trusted ~admitted 
       solution_files = DirPath.Map.of_list solution_files }
   in
   List.iter (fun p ->
-      Option.iter (check_pin p) (DirPath.Map.find_opt p.pc_library t.solution_files))
+      let file = prechecked_solution_file t p.pc_library in
+      if not (same_real_file (CheckLibrary.library_file p.pc_library) file) then
+        check_pin p file)
     cfg.cfg_prechecked;
   check_open_roots t;
   check_provenance t ~side:"solution" solution_files;
@@ -1576,13 +1584,13 @@ let check_dep_digests t ~challenge ~solution =
    that a constraint one of them carries is not read as one the solution
    added: what is left for the constraint checks is what the solution's own
    libraries add. A shared library that only the solution Requires is one
-   file for both sides because the challenge load reads it from the
-   solution's file ([check_same_files]), because every library naming it
-   records the same digest on both sides ([check_dep_digests]), and because
-   no bound root is left open ([check_open_roots]). A pre-checked library
-   the challenge files Require is read from pinned bytes
-   ([check_prechecked_files]), tested once the digests are compared, so that
-   two sides built against two libraries of one name are reported as such.
+   file for both sides because every library naming it records the same
+   digest on both sides ([check_dep_digests]), because the challenge load
+   reads it from the solution's file ([check_same_files]), and because no
+   bound root is left open ([check_open_roots]). [check_same_files] also
+   tests that each pre-checked library the challenge loads is read from
+   pinned bytes. It runs once the digests are compared, so that two sides
+   built against two libraries of one name are reported as such.
    Every refusal comes before the import. Returns the challenge environment
    and the dependency digests that each library of the files' closure
    records. *)
@@ -1602,10 +1610,9 @@ let load_challenge t ~add_load_path senv0 =
       let files = CheckLibrary.files_of all in
       check_challenge_place t files;
       check_provenance t ~side:"challenge" files;
-      check_same_files t files;
       let challenge_deps = DirPath.Map.of_list (CheckLibrary.deps_of needed) in
       check_dep_digests t ~challenge:(CheckLibrary.deps_of all) ~solution:t.solution_deps;
-      check_prechecked_files t files;
+      check_same_files t files;
       let senv = CheckLibrary.import_challenge senv0 all in
       Safe_typing.env_of_safe_env senv, challenge_deps)
 
