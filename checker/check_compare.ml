@@ -58,54 +58,8 @@ module Json = struct
   let error msg = CErrors.user_err Pp.(str ("The comparator config is not valid JSON: " ^ msg ^ "."))
 
   (* The whole input is UTF-8 or the file is refused. *)
-  let check_utf8 s =
-    let n = String.length s in
-    let byte i = Char.code s.[i] in
-    let cont i = i < n && byte i land 0xc0 = 0x80 in
-    let rec loop i =
-      if i >= n then ()
-      else
-        let c = byte i in
-        if c < 0x80 then loop (i + 1)
-        else if c land 0xe0 = 0xc0 then
-          if c < 0xc2 || not (cont (i + 1)) then error "invalid UTF-8"
-          else loop (i + 2)
-        else if c land 0xf0 = 0xe0 then
-          if not (cont (i + 1) && cont (i + 2)) then error "invalid UTF-8"
-          else
-            let cp = ((c land 0x0f) lsl 12) lor ((byte (i + 1) land 0x3f) lsl 6)
-                     lor (byte (i + 2) land 0x3f) in
-            if cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff) then error "invalid UTF-8"
-            else loop (i + 3)
-        else if c land 0xf8 = 0xf0 then
-          if not (cont (i + 1) && cont (i + 2) && cont (i + 3)) then error "invalid UTF-8"
-          else
-            let cp = ((c land 0x07) lsl 18) lor ((byte (i + 1) land 0x3f) lsl 12)
-                     lor ((byte (i + 2) land 0x3f) lsl 6) lor (byte (i + 3) land 0x3f) in
-            if cp < 0x10000 || cp > 0x10ffff then error "invalid UTF-8"
-            else loop (i + 4)
-        else error "invalid UTF-8"
-    in
-    loop 0
-
-  let add_utf8 b cp =
-    if cp < 0x80 then Buffer.add_char b (Char.chr cp)
-    else if cp < 0x800 then begin
-      Buffer.add_char b (Char.chr (0xc0 lor (cp lsr 6)));
-      Buffer.add_char b (Char.chr (0x80 lor (cp land 0x3f)))
-    end else if cp < 0x10000 then begin
-      Buffer.add_char b (Char.chr (0xe0 lor (cp lsr 12)));
-      Buffer.add_char b (Char.chr (0x80 lor ((cp lsr 6) land 0x3f)));
-      Buffer.add_char b (Char.chr (0x80 lor (cp land 0x3f)))
-    end else begin
-      Buffer.add_char b (Char.chr (0xf0 lor (cp lsr 18)));
-      Buffer.add_char b (Char.chr (0x80 lor ((cp lsr 12) land 0x3f)));
-      Buffer.add_char b (Char.chr (0x80 lor ((cp lsr 6) land 0x3f)));
-      Buffer.add_char b (Char.chr (0x80 lor (cp land 0x3f)))
-    end
-
   let parse s =
-    check_utf8 s;
+    if not (String.is_valid_utf_8 s) then error "invalid UTF-8";
     let n = String.length s in
     let pos = ref 0 in
     let peek () = if !pos < n then Some s.[!pos] else None in
@@ -172,7 +126,7 @@ module Json = struct
                   else if cp >= 0xdc00 && cp <= 0xdfff then error "lone surrogate"
                   else cp
                 in
-                add_utf8 b cp
+                Buffer.add_utf_8_uchar b (Uchar.of_int cp)
               | _ -> error "unknown escape");
              loop ())
         | Some c when Char.code c < 0x20 -> error "control character in a string"
@@ -201,8 +155,7 @@ module Json = struct
       | None -> error "the number does not fit"
     in
     let literal lit v =
-      let l = String.length lit in
-      if !pos + l <= n && String.sub s !pos l = lit then (pos := !pos + l; v)
+      if CString.is_sub lit s !pos then (pos := !pos + String.length lit; v)
       else error "unknown literal"
     in
     let rec value () =
@@ -265,13 +218,14 @@ module Json = struct
     in
     parse s
 
-  (* The writer. Every byte above 127 is written as a \u escape of the code
-     point it starts, and a byte that is not part of a valid UTF-8 sequence as
-     U+FFFD, so the output is valid JSON whatever a name holds. *)
+  (* The writer. Every character above 127 of a valid UTF-8 sequence is
+     written as a \u escape of its code point (a surrogate pair above
+     U+FFFF), and each byte that starts no valid sequence as U+FFFD, by the
+     reader's rules ([String.get_utf_8_uchar]: no overlong form, no
+     surrogate, nothing above U+10FFFF), so the output is valid JSON whatever
+     a name holds. *)
   let escape b s =
     let n = String.length s in
-    let byte i = Char.code s.[i] in
-    let cont i = i < n && byte i land 0xc0 = 0x80 in
     let unicode cp =
       if cp < 0x10000 then Buffer.add_string b (Printf.sprintf "\\u%04x" cp)
       else begin
@@ -283,7 +237,7 @@ module Json = struct
     let rec loop i =
       if i >= n then ()
       else
-        let c = byte i in
+        let c = Char.code s.[i] in
         if c = Char.code '"' then (Buffer.add_string b "\\\""; loop (i + 1))
         else if c = Char.code '\\' then (Buffer.add_string b "\\\\"; loop (i + 1))
         else if c = 8 then (Buffer.add_string b "\\b"; loop (i + 1))
@@ -293,17 +247,12 @@ module Json = struct
         else if c = 9 then (Buffer.add_string b "\\t"; loop (i + 1))
         else if c < 0x20 || c = 0x7f then (unicode c; loop (i + 1))
         else if c < 0x80 then (Buffer.add_char b s.[i]; loop (i + 1))
-        else if c land 0xe0 = 0xc0 && c >= 0xc2 && cont (i + 1) then
-          (unicode (((c land 0x1f) lsl 6) lor (byte (i + 1) land 0x3f)); loop (i + 2))
-        else if c land 0xf0 = 0xe0 && cont (i + 1) && cont (i + 2) then
-          (unicode (((c land 0x0f) lsl 12) lor ((byte (i + 1) land 0x3f) lsl 6)
-                    lor (byte (i + 2) land 0x3f));
-           loop (i + 3))
-        else if c land 0xf8 = 0xf0 && cont (i + 1) && cont (i + 2) && cont (i + 3) then
-          (unicode (((c land 0x07) lsl 18) lor ((byte (i + 1) land 0x3f) lsl 12)
-                    lor ((byte (i + 2) land 0x3f) lsl 6) lor (byte (i + 3) land 0x3f));
-           loop (i + 4))
-        else (unicode 0xfffd; loop (i + 1))
+        else
+          let d = String.get_utf_8_uchar s i in
+          if Uchar.utf_decode_is_valid d then
+            (unicode (Uchar.to_int (Uchar.utf_decode_uchar d));
+             loop (i + Uchar.utf_decode_length d))
+          else (unicode 0xfffd; loop (i + 1))
     in
     loop 0
 
@@ -336,7 +285,7 @@ type theorem = {
   th_axioms : string list option;  (** replaces the global list for this one *)
 }
 
-type prechecked = { pc_library : string; pc_sha256 : string }
+type prechecked = { pc_library : DirPath.t; pc_sha256 : string }
 
 type challenge_file = { cf_path : string; cf_sha256 : string }
 
@@ -355,8 +304,11 @@ type config = {
 let universe_constraints_flag = "answer-universe-constraints"
 
 (* A pre-checked library loads through the existing -admit path: the option
-   adds it to the admit list, so the config is the only place that names it. *)
-let prechecked_libraries cfg = List.map (fun p -> p.pc_library) cfg.cfg_prechecked
+   adds its name to the admit list, so the config is the only place that
+   names it. The admit list reads the name as the same library
+   ([logical_name]). *)
+let prechecked_libraries cfg =
+  List.map (fun p -> DirPath.to_string p.pc_library) cfg.cfg_prechecked
 
 let cfg_error msg = CErrors.user_err Pp.(str ("The comparator config is wrong: " ^ msg ^ "."))
 
@@ -385,6 +337,17 @@ let as_obj where = function
   | _ -> cfg_error (where ^ " must be an object")
 
 let string_list where v = List.map (as_string (where ^ "'s entries")) (as_list where v)
+
+(* A pre-checked library is named by its logical name, and the admit list
+   parses the same string (coqchk_main.ml): there, a name ending in [.vo] is
+   a file and an empty last component is dropped. So only identifiers
+   separated by dots are accepted, and both read the same library. *)
+let logical_name s =
+  let ids = String.split_on_char '.' s in
+  if Filename.check_suffix s ".vo" || not (List.for_all Id.is_valid ids) then
+    cfg_error ("the prechecked library " ^ s ^ " is not a logical name: identifiers \
+                separated by dots, with no .vo");
+  DirPath.make (List.rev_map Id.of_string ids)
 
 let read_config file =
   let top = as_obj "the config" (Json.parse_file file) in
@@ -450,9 +413,11 @@ let read_config file =
      it skips only the solution-to-challenge universe comparison. It names no
      declaration, so an object would not make the requested relaxation more
      precise, and an entry with one is refused. *)
-  let never_tolerated = ["assumed-positive"; "unsafe-fixpoint"; "type-in-type"] in
+  let never_tolerated =
+    [Check_closure.assumed_positive; Check_closure.unsafe_fixpoint; Check_closure.type_in_type]
+  in
   let kind_only_allowed =
-    ["indices-not-mattering"; "uip"; universe_constraints_flag]
+    [Check_closure.indices_not_mattering; Check_closure.uip; universe_constraints_flag]
   in
   let flags = match get top "tolerated_flags" with
     | None -> []
@@ -476,7 +441,8 @@ let read_config file =
           | None ->
             if not (List.exists (String.equal k) kind_only_allowed) then
               cfg_error ("the tolerated flag " ^ k ^ " needs an object: only " ^
-                         "indices-not-mattering and uip tolerate every object; " ^
+                         Check_closure.indices_not_mattering ^ " and " ^ Check_closure.uip ^
+                         " tolerate every object; " ^
                          universe_constraints_flag ^ " is a global check");
             k, None)
         (as_list "tolerated_flags" v)
@@ -492,7 +458,7 @@ let read_config file =
           fields "a prechecked entry" ["library"; "sha256"] e;
           match get e "library", get e "sha256" with
           | Some l, Some h ->
-            { pc_library = as_string "a prechecked library" l;
+            { pc_library = logical_name (as_string "a prechecked library" l);
               pc_sha256 = as_string "a prechecked sha256" h }
           | _ -> cfg_error "a prechecked entry needs a library and a sha256")
         (as_list "prechecked" v)
@@ -589,19 +555,16 @@ let map_level m u v =
    the map already fixes are matched by that level; the rest are matched by
    their increment, in order. *)
 let map_universe m u v =
+  let pr_u x = Pp.string_of_ppcmds (Univ.Universe.raw_pr x) in
   let lu = Univ.Universe.repr u and lv = Univ.Universe.repr v in
-  if List.length lu <> List.length lv then
-    diff "universe %s against %s"
-      (Pp.string_of_ppcmds (Univ.Universe.raw_pr u))
-      (Pp.string_of_ppcmds (Univ.Universe.raw_pr v));
+  if List.length lu <> List.length lv then diff "universe %s against %s" (pr_u u) (pr_u v);
   let m = ref m in
   let rest = ref lv in
   let fresh = ref [] in
   let take_level target n =
     let rec go seen = function
       | [] ->
-        diff "universe %s has no %s+%d" (Pp.string_of_ppcmds (Univ.Universe.raw_pr v))
-          (level_name target) n
+        diff "universe %s has no %s+%d" (pr_u v) (level_name target) n
       | (l2, n2) :: tl when Univ.Level.equal l2 target && Int.equal n2 n ->
         List.rev_append seen tl
       | e :: tl -> go (e :: seen) tl
@@ -629,35 +592,23 @@ let map_universe m u v =
     if CList.is_empty !fresh then ()
     else begin
       if not (List.length !fresh = List.length !rest) then
-        diff "universe %s against %s"
-          (Pp.string_of_ppcmds (Univ.Universe.raw_pr u))
-          (Pp.string_of_ppcmds (Univ.Universe.raw_pr v));
+        diff "universe %s against %s" (pr_u u) (pr_u v);
       let decided = ref false in
       let keep = ref [] in
       List.iter (fun (l, n) ->
           match Univ.Level.Map.find_opt l !m.fwd with
           | Some l' ->
             (* mapped since this entry was set aside: match it by level *)
-            let rec take seen = function
-              | [] ->
-                diff "universe %s has no %s+%d"
-                  (Pp.string_of_ppcmds (Univ.Universe.raw_pr v)) (level_name l') n
-              | (l2, n2) :: tl when Univ.Level.equal l2 l' && Int.equal n2 n ->
-                List.rev_append seen tl
-              | e :: tl -> take (e :: seen) tl
-            in
-            rest := take [] !rest;
+            take_level l' n;
             decided := true
           | None ->
             match List.filter (fun (_, n2) -> Int.equal n n2) !rest with
             | [ (l2, _) ] ->
               m := map_level !m l l2;
-              rest := List.filter (fun (l3, n3) ->
-                  not (Univ.Level.equal l3 l2 && Int.equal n3 n)) !rest;
+              take_level l2 n;
               decided := true
             | [] ->
-              diff "universe %s has no entry of increment %d"
-                (Pp.string_of_ppcmds (Univ.Universe.raw_pr v)) n
+              diff "universe %s has no entry of increment %d" (pr_u v) n
             | _ :: _ :: _ -> keep := (l, n) :: !keep)
         !fresh;
       let left = List.rev !keep in
@@ -665,8 +616,7 @@ let map_universe m u v =
         raise (Undecided (Printf.sprintf
           "universe %s against %s: which level of the solution each level of the \
            challenge stands for is not decided"
-          (Pp.string_of_ppcmds (Univ.Universe.raw_pr u))
-          (Pp.string_of_ppcmds (Univ.Universe.raw_pr v))));
+          (pr_u u) (pr_u v)));
       fresh := left;
       passes ()
     end
@@ -1147,11 +1097,15 @@ type t = {
   bound_dirs : string list;
       (** The real paths of the directories the command line binds, each
           with its subdirectories. *)
+  solution_deps : (DirPath.t * (DirPath.t * Safe_typing.vodigest) array) list;
+      (** Every library the solution loaded, with the dependency digests it
+          records. *)
   outside : DirPath.t list;
       (** The libraries the solution loaded whose recorded file lies in no
-          place a solution's file is found in ([solution_place]); filled by
-          [run]. *)
+          place a solution's file is found in ([solution_place]). *)
 }
+
+let is_prechecked t dp = List.exists (DirPath.equal dp) t.prechecked
 
 let realpath p =
   try Some (Unix.realpath p) with Unix.Unix_error _ | Invalid_argument _ | Sys_error _ -> None
@@ -1185,50 +1139,17 @@ let solution_place t file =
           else None)
         t.bound_dirs
 
-let dirpath_of_string s =
-  match String.split_on_char '.' s with
-  | [] -> cfg_error ("the library name " ^ s ^ " is empty")
-  | l -> DirPath.make (List.rev_map Id.of_string l)
-
-(* Before anything is loaded: the files the config pins must be there and have
-   the sha256 it gives. *)
-let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root ~open_roots
-    ~bound_dirs =
-  let files =
-    List.map (fun f ->
-        let p = if Filename.is_relative f.cf_path then Filename.concat dir f.cf_path
-          else f.cf_path in
-        if not (Sys.file_exists p) then
-          CErrors.user_err Pp.(str ("The challenge file " ^ p ^ " is not there."));
-        let got = sha256_of_file p in
-        if not (String.equal got f.cf_sha256) then
-          CErrors.user_err
-            (Pp.str ("The challenge file " ^ p ^ " has sha256 " ^ got ^
-                     ", and the config pins " ^ f.cf_sha256 ^ "."));
-        p)
-      cfg.cfg_challenge_files
-  in
-  (* The verdict file is already gone: rocqchk removes it before it parses
-     its command line (coqchk_main.ml), so no stop before the verdict, here
-     or earlier, leaves yesterday's verdict to be read as today's. *)
-  { cfg; out; files;
-    prechecked = List.map (fun p -> dirpath_of_string p.pc_library) cfg.cfg_prechecked;
-    add_challenge_load_path; under_challenge_root; open_roots;
-    cwd = realpath (Sys.getcwd ());
-    bound_dirs = List.filter_map realpath bound_dirs;
-    outside = [] }
-
 (* The pre-checked libraries are resolved on the solution's load path, which
    is the one in place when this runs. *)
 let check_prechecked t =
   List.iter (fun p ->
-      let dp = dirpath_of_string p.pc_library in
-      let file = CheckLibrary.library_file dp in
+      let file = CheckLibrary.library_file p.pc_library in
       let got = sha256_of_file file in
       if not (String.equal got p.pc_sha256) then
         CErrors.user_err
-          (Pp.str ("The pre-checked library " ^ p.pc_library ^ " is " ^ file ^
-                   ", whose sha256 is " ^ got ^ ", and the config pins " ^ p.pc_sha256 ^ ".")))
+          (Pp.str ("The pre-checked library " ^ DirPath.to_string p.pc_library ^ " is " ^
+                   file ^ ", whose sha256 is " ^ got ^ ", and the config pins " ^
+                   p.pc_sha256 ^ ".")))
     t.cfg.cfg_prechecked
 
 (* A root the command line binds that the challenge does not stand in for is
@@ -1245,14 +1166,10 @@ let check_prechecked t =
    challenge therefore stands in for, so the list is empty there. A test
    that binds a stand-in for installed libraries pre-checks them, as the
    config's pre-checked list is for. *)
-let check_open_roots t ~solution_deps =
-  let under root lib =
-    let r = DirPath.to_string root and l = DirPath.to_string lib in
-    String.equal l r || CString.is_prefix (r ^ ".") l
-  in
+let check_open_roots t =
   List.iter (fun (lib, _) ->
       List.iter (fun (root, path) ->
-          if under root lib && not (List.exists (DirPath.equal lib) t.prechecked) then
+          if CheckLibrary.under_root ~root lib && not (is_prechecked t lib) then
             CErrors.user_err
               Pp.(str ("The solution loaded the library " ^ DirPath.to_string lib ^
                        " from " ^ path ^ ", bound to " ^ DirPath.to_string root ^
@@ -1260,7 +1177,7 @@ let check_open_roots t ~solution_deps =
                         does not declare pre-checked. Every library of such a root \
                         must be pre-checked, so that its bytes are pinned.")))
         t.open_roots)
-    solution_deps
+    t.solution_deps
 
 let rec mp_root mp = match mp with
   | ModPath.MPfile dp -> Some dp
@@ -1285,7 +1202,7 @@ let in_libs libs mp = match mp_root mp with
    challenge load resolves a shared library to the same file
    ([load_challenge]). *)
 let one_file t dp =
-  List.exists (DirPath.equal dp) t.prechecked
+  is_prechecked t dp
   || (not (t.under_challenge_root dp) && List.exists (DirPath.equal dp) t.outside)
 
 let rooted_one_file t mp = match mp_root mp with
@@ -1300,7 +1217,7 @@ let rooted_one_file t mp = match mp_root mp with
    with the files the loader recorded. Returns those that pass. *)
 let check_provenance t ~side libs =
   CList.map_filter (fun (dp, file) ->
-      if t.under_challenge_root dp || List.exists (DirPath.equal dp) t.prechecked then None
+      if t.under_challenge_root dp || is_prechecked t dp then None
       else match solution_place t file with
         | None -> Some dp
         | Some place ->
@@ -1311,6 +1228,44 @@ let check_provenance t ~side libs =
                       does not pre-check it, so it would count as an installed one. A \
                       -compare run refuses it.")))
     libs
+
+(* Before the challenge is loaded: the files the config pins must be there
+   and have the sha256 it gives, and the libraries the solution loaded must
+   pass [check_open_roots], [check_prechecked] and [check_provenance], in
+   that order. *)
+let prepare cfg ~dir ~out ~add_challenge_load_path ~under_challenge_root ~open_roots
+    ~bound_dirs =
+  let files =
+    List.map (fun f ->
+        let p = if Filename.is_relative f.cf_path then Filename.concat dir f.cf_path
+          else f.cf_path in
+        if not (Sys.file_exists p) then
+          CErrors.user_err Pp.(str ("The challenge file " ^ p ^ " is not there."));
+        let got = sha256_of_file p in
+        if not (String.equal got f.cf_sha256) then
+          CErrors.user_err
+            (Pp.str ("The challenge file " ^ p ^ " has sha256 " ^ got ^
+                     ", and the config pins " ^ f.cf_sha256 ^ "."));
+        p)
+      cfg.cfg_challenge_files
+  in
+  (* The verdict file is already gone: rocqchk removes it before it parses
+     its command line (coqchk_main.ml), so no stop before the verdict, here
+     or earlier, leaves yesterday's verdict to be read as today's. *)
+  let loaded = CheckLibrary.loaded () in
+  let t =
+    { cfg; out; files;
+      prechecked = List.map (fun p -> p.pc_library) cfg.cfg_prechecked;
+      add_challenge_load_path; under_challenge_root; open_roots;
+      cwd = realpath (Sys.getcwd ());
+      bound_dirs = List.filter_map realpath bound_dirs;
+      solution_deps = CheckLibrary.deps_of loaded;
+      outside = [] }
+  in
+  check_open_roots t;
+  check_prechecked t;
+  (* [check_provenance] computes [outside] and does not read it. *)
+  { t with outside = check_provenance t ~side:"solution" (CheckLibrary.files_of loaded) }
 
 (* The dependency digests a challenge library and its solution library
    record for a library both sides load must be equal: otherwise the two
@@ -1323,16 +1278,16 @@ let check_dep_digests t ~challenge ~solution =
   let digest_of deps dp =
     Array.fold_left (fun acc (d, dg) -> if DirPath.equal d dp then Some dg else acc) None deps
   in
-  let same (Safe_typing.Dvo_or_vi x) (Safe_typing.Dvo_or_vi y) = String.equal x y in
   List.iter (fun (lib, ch_deps) ->
       match List.find_opt (fun (l, _) -> DirPath.equal l lib) solution with
       | None -> ()
       | Some (_, sol_deps) ->
         Array.iter (fun (dep, ch_digest) ->
             if one_file t dep then
-              let prechecked = List.exists (DirPath.equal dep) t.prechecked in
+              let prechecked = is_prechecked t dep in
               match digest_of sol_deps dep with
-              | Some sol_digest when not (same ch_digest sol_digest) ->
+              | Some sol_digest
+                when not (Safe_typing.digest_match ~actual:sol_digest ~required:ch_digest) ->
                 CErrors.user_err
                   Pp.(str ("The library " ^ DirPath.to_string lib ^
                            " depends on the " ^
@@ -1372,7 +1327,7 @@ let check_dep_digests t ~challenge ~solution =
    library that none of the three reaches does not exist: a library comes
    from a bound root or from the installed load path. Each of the three
    refuses the run rather than reporting a verdict. *)
-let load_challenge t senv0 ~solution_deps =
+let load_challenge t senv0 =
   let saved = CheckLibrary.swap_tables (CheckLibrary.fresh_tables ()) in
   let restore () = ignore (CheckLibrary.swap_tables saved) in
   Fun.protect ~finally:restore (fun () ->
@@ -1390,14 +1345,13 @@ let load_challenge t senv0 ~solution_deps =
          closure. *)
       let shared =
         CList.map_filter (fun (dp, _) ->
-            if t.under_challenge_root dp || List.exists (DirPath.equal dp) t.prechecked
-            then None else Some dp)
-          solution_deps
+            if t.under_challenge_root dp || is_prechecked t dp then None else Some dp)
+          t.solution_deps
       in
       let needed, all = CheckLibrary.intern_challenge t.files shared in
-      ignore (check_provenance t ~side:"challenge" (CheckLibrary.challenge_files all));
-      let challenge_deps = CheckLibrary.challenge_deps needed in
-      check_dep_digests t ~challenge:(CheckLibrary.challenge_deps all) ~solution:solution_deps;
+      ignore (check_provenance t ~side:"challenge" (CheckLibrary.files_of all));
+      let challenge_deps = CheckLibrary.deps_of needed in
+      check_dep_digests t ~challenge:(CheckLibrary.deps_of all) ~solution:t.solution_deps;
       let senv = CheckLibrary.import_challenge senv0 all in
       Safe_typing.env_of_safe_env senv, challenge_deps)
 
@@ -1503,9 +1457,9 @@ let check_constraints t ~challenge_env ~solution_env m =
         let u' = mapped map u and v' = mapped map v in
         if skip u' v' || UGraph.check_constraint graph (u', k, v') then acc
         else
-          Printf.sprintf "%s %s %s"
+          Printf.sprintf "%s%s%s"
             (Univ.Level.to_string u)
-            (match k with Univ.UnivConstraint.Lt -> "<" | Le -> "<=" | Eq -> "=")
+            (Pp.string_of_ppcmds (Univ.UnivConstraint.pr_kind k))
             (Univ.Level.to_string v) :: acc)
         cs [])
   in
@@ -1575,7 +1529,7 @@ let check_elim_constraints t ~challenge_env ~solution_env =
         then acc
         else
           Printf.sprintf "%s %s %s"
-            (name q1) (match k with Sorts.ElimConstraint.ElimTo -> "->") (name q2) :: acc)
+            (name q1) (Pp.string_of_ppcmds (Sorts.ElimConstraint.pr_kind k)) (name q2) :: acc)
         cs [])
   in
   let kept_ch = QGraph.domain gch in
@@ -1803,11 +1757,8 @@ let why_not_challenge ~challenge_env ~solution_env obj =
   in
   "the proof reaches " ^ describe_object obj ^ ": " ^ why
 
-let run t env access senv0 ~solution_deps =
-  check_open_roots t ~solution_deps;
-  check_prechecked t;
-  let t = { t with outside = check_provenance t ~side:"solution" (CheckLibrary.interned_files ()) } in
-  let challenge_env, all_deps = load_challenge t senv0 ~solution_deps in
+let run t env senv0 =
+  let challenge_env, challenge_deps = load_challenge t senv0 in
   (* A pre-checked library, and every library it rests on, is one file for
      both sides: its declarations are equal by construction, and walking
      them would read the whole standard library on every run. *)
@@ -1822,11 +1773,11 @@ let run t env access senv0 ~solution_deps =
         in
         closure deps_of (dp :: acc) (deps @ tl)
   in
-  let skip = closure all_deps [] t.prechecked in
+  let skip = closure challenge_deps [] t.prechecked in
   let libs =
     CList.map_filter (fun (dp, _) ->
         if List.exists (DirPath.equal dp) skip then None else Some dp)
-      all_deps
+      challenge_deps
   in
   let ch_index = constant_index challenge_env in
   (* A theorem the challenge does not state, or states twice under one
@@ -1843,7 +1794,7 @@ let run t env access senv0 ~solution_deps =
         Pp.(str ("The config names the theorem " ^ th.th_name ^
                  ", a name that two constants of the challenge print."))
   in
-  List.iter (fun th -> ignore (ch_theorem th)) t.cfg.cfg_theorems;
+  let named = List.map (fun th -> th, ch_theorem th) t.cfg.cfg_theorems in
   let theorems =
     List.fold_left (fun acc th -> CString.Set.add th.th_name acc) CString.Set.empty
       t.cfg.cfg_theorems
@@ -1873,23 +1824,23 @@ let run t env access senv0 ~solution_deps =
   let rewrite_rule =
     if t.cfg.cfg_rewrite_rules then None
     else
-      let solution_skip = closure solution_deps [] t.prechecked in
+      let solution_skip = closure t.solution_deps [] t.prechecked in
       solution_rewrite_rule env
         (CList.map_filter (fun (dp, _) ->
              if one_file t dp || List.exists (DirPath.equal dp) solution_skip then None
              else Some dp)
-            solution_deps)
+            t.solution_deps)
   in
-  let st = Check_closure.closure_state env access in
+  let st = Check_closure.closure_state env CheckLibrary.indirect_accessor in
   let records =
-    List.map (fun th ->
+    List.map (fun (th, ch_constant) ->
         let permitted = match th.th_axioms with
           | Some l -> l
           | None -> t.cfg.cfg_axioms
         in
         let verdict, reason, axioms, flags =
           let printing = Option.default [] (CString.Map.find_opt th.th_name sol_index) in
-          match KerName.Map.find_opt (Constant.user (ch_theorem th)) sol_kernel with
+          match KerName.Map.find_opt (Constant.user ch_constant) sol_kernel with
           | None -> "fail", "missing", [], []
           | Some kn ->
             let axioms, flags = Check_closure.axioms_and_flags st kn in
@@ -1900,16 +1851,17 @@ let run t env access senv0 ~solution_deps =
                 (universe_constraints_flag, constraints, None) :: flags
               | None -> flags
             in
-            let bad_axioms = List.filter (fun (a, _) -> not (List.mem a permitted)) axioms in
+            let permitted_axioms, bad_axioms =
+              List.partition (fun (a, _) -> List.mem a permitted) axioms
+            in
             (* A permitted name the proof reaches through an object the
                challenge did not declare: a forgery of that name. *)
             let forged_axioms =
-              List.filter (fun (a, obj) ->
-                  List.mem a permitted
-                  && not (match obj with
+              List.filter (fun (_, obj) ->
+                  not (match obj with
                       | GlobRef.ConstRef _ -> challenge_declares t ~challenge_env ~solution_env:env obj
                       | GlobRef.IndRef _ | GlobRef.ConstructRef _ | GlobRef.VarRef _ -> false))
-                axioms
+                permitted_axioms
             in
             let axioms = CString.Set.elements (CString.Set.of_list (List.map fst axioms)) in
             (* A config entry tolerates a flag when it names the same kind
@@ -1945,52 +1897,52 @@ let run t env access senv0 ~solution_deps =
                can pass. The theorem's own record names its own difference
                when it has one. *)
             let reason =
-              if List.length printing > 1 then
-                let objs =
-                  List.sort String.compare
-                    (List.map (fun c -> describe_object (GlobRef.ConstRef c)) printing)
-                in
-                Some ("the solution declares " ^ string_of_int (List.length printing) ^
-                      " constants that print the theorem's name: " ^ String.concat " and " objs)
-              else
-              match CString.Map.find_opt th.th_name failed_decl with
-              | Some d -> Some d
-              | None ->
-                match failures with
-                | f :: _ ->
-                  Some ("the challenge declaration " ^ f.f_name ^ " differs: " ^ f.f_reason)
-                | [] ->
-                  (* A failing graph comparison fails every theorem, the
-                     universe one first. *)
-                  match Option.append universes qualities with
-                  | Some u -> Some u
-                  | None ->
-                    match rewrite_rule with
-                    | Some c ->
-                      Some ("the solution declares a rewrite rule on " ^ Constant.to_string c)
-                    | None ->
-                    match bad_axioms with
-                      | (a, _) :: _ -> Some ("the axiom " ^ a ^ " is not permitted")
-                      | [] ->
-                      match forged_axioms with
-                      | (a, obj) :: _ ->
-                        Some ("the axiom " ^ a ^ " is not the challenge's declaration of that \
-                               name: " ^ why_not_challenge ~challenge_env ~solution_env:env obj)
-                      | [] ->
-                        match bad_flags with
-                        | ((k, o, obj) as f) :: _ ->
-                          let by_name =
-                            List.exists (fun ((_, e) as entry) -> Option.has_some e && names_it f entry)
-                              t.cfg.cfg_flags
-                          in
-                          Some ("the relaxed typing flag " ^ k ^ " on " ^ o ^ " is not tolerated" ^
-                                match by_name, obj with
-                                | true, Some obj ->
-                                  ": the config tolerates it on that name, but " ^ o ^
-                                  " is not the challenge's declaration of that name: " ^
-                                  why_not_challenge ~challenge_env ~solution_env:env obj
-                                | _ -> "")
-                        | [] -> None
+              List.find_map (fun reason -> reason ()) [
+                (fun () ->
+                   if List.length printing > 1 then
+                     let objs =
+                       List.sort String.compare
+                         (List.map (fun c -> describe_object (GlobRef.ConstRef c)) printing)
+                     in
+                     Some ("the solution declares " ^ string_of_int (List.length printing) ^
+                           " constants that print the theorem's name: " ^
+                           String.concat " and " objs)
+                   else None);
+                (fun () -> CString.Map.find_opt th.th_name failed_decl);
+                (fun () -> match failures with
+                   | f :: _ ->
+                     Some ("the challenge declaration " ^ f.f_name ^ " differs: " ^ f.f_reason)
+                   | [] -> None);
+                (* A failing graph comparison fails every theorem, the
+                   universe one first. *)
+                (fun () -> Option.append universes qualities);
+                (fun () ->
+                   Option.map (fun c ->
+                       "the solution declares a rewrite rule on " ^ Constant.to_string c)
+                     rewrite_rule);
+                (fun () -> match bad_axioms with
+                   | (a, _) :: _ -> Some ("the axiom " ^ a ^ " is not permitted")
+                   | [] -> None);
+                (fun () -> match forged_axioms with
+                   | (a, obj) :: _ ->
+                     Some ("the axiom " ^ a ^ " is not the challenge's declaration of that \
+                            name: " ^ why_not_challenge ~challenge_env ~solution_env:env obj)
+                   | [] -> None);
+                (fun () -> match bad_flags with
+                   | ((k, o, obj) as f) :: _ ->
+                     let by_name =
+                       List.exists (fun ((_, e) as entry) -> Option.has_some e && names_it f entry)
+                         t.cfg.cfg_flags
+                     in
+                     Some ("the relaxed typing flag " ^ k ^ " on " ^ o ^ " is not tolerated" ^
+                           match by_name, obj with
+                           | true, Some obj ->
+                             ": the config tolerates it on that name, but " ^ o ^
+                             " is not the challenge's declaration of that name: " ^
+                             why_not_challenge ~challenge_env ~solution_env:env obj
+                           | _ -> "")
+                   | [] -> None);
+              ]
             in
             (match reason with
              | Some r -> "fail", r, axioms, flags
@@ -2004,7 +1956,7 @@ let run t env access senv0 ~solution_deps =
           "flags", Json.List (List.map (fun (k, o) -> Json.Obj ["kind", Json.Str k;
                                                                 "object", Json.Str o]) flags);
         ])
-      t.cfg.cfg_theorems
+      named
   in
   let decls =
     List.map (fun f -> Json.Obj ["name", Json.Str f.f_name; "reason", Json.Str f.f_reason])

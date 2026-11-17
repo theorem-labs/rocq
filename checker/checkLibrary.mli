@@ -27,6 +27,12 @@ val default_root_prefix : DirPath.t
 
 val add_load_path : physical_path * logical_path -> unit
 
+val try_locate_qualified_library : object_file -> DirPath.t * physical_path
+(** The library name and the file the load path gives an object file, as
+    [recheck_library] resolves it: a [.vo] file is named after the logical
+    path its directory is bound to.
+    @raise CErrors.UserError when the library is not found. *)
+
 val recheck_library : ?output_context:bool -> ?intern_admit:bool ->
   safe_environment ->
   norec:object_file list ->
@@ -56,11 +62,11 @@ val fresh_tables : unit -> tables
 val swap_tables : tables -> tables
 (** [swap_tables t] installs [t] and returns what was there. *)
 
-type challenge_library
+type library
 
 val intern_challenge :
   physical_path list -> DirPath.t list ->
-  (DirPath.t * challenge_library) list * (DirPath.t * challenge_library) list
+  (DirPath.t * library) list * (DirPath.t * library) list
 (** [intern_challenge files shared] reads the challenge [files] and their
     dependencies, then the [shared] libraries and theirs, in dependency
     order, without validating them and without importing any of them into an
@@ -68,17 +74,8 @@ val intern_challenge :
     library read, the files' closure first. A library both reach is read
     once. *)
 
-val challenge_deps :
-  (DirPath.t * challenge_library) list -> (DirPath.t * (DirPath.t * vodigest) array) list
-(** The dependency digests each interned library records. *)
-
-val challenge_files :
-  (DirPath.t * challenge_library) list -> (DirPath.t * physical_path) list
-(** The file each interned library was read from, as the loader recorded
-    it. *)
-
 val import_challenge :
-  safe_environment -> (DirPath.t * challenge_library) list -> safe_environment
+  safe_environment -> (DirPath.t * library) list -> safe_environment
 (** Import the interned libraries without checking them: the challenge files
     are checked when the challenge is built, and the other libraries are
     pre-checked or shared with the solution. *)
@@ -86,9 +83,16 @@ val import_challenge :
 val library_file : DirPath.t -> physical_path
 (** The file the load path resolves a library name to. *)
 
-val interned_deps : unit -> (DirPath.t * (DirPath.t * vodigest) array) list
-(** The dependency digests every library interned so far records. *)
+val loaded : unit -> (DirPath.t * library) list
+(** The libraries loaded so far with the tables in place: after
+    [recheck_library], every library it read. *)
 
-val interned_files : unit -> (DirPath.t * physical_path) list
-(** The file each library loaded so far was read from, as the loader
-    recorded it. *)
+val deps_of : (DirPath.t * library) list -> (DirPath.t * (DirPath.t * vodigest) array) list
+(** The dependency digests each library records. *)
+
+val files_of : (DirPath.t * library) list -> (DirPath.t * physical_path) list
+(** The file each library was read from, as the loader recorded it. *)
+
+val under_root : root:DirPath.t -> DirPath.t -> bool
+(** [under_root ~root lib]: whether the library name [lib] is [root] or lies
+    below it, by the names they print. *)

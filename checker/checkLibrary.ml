@@ -514,7 +514,7 @@ let swap_tables t =
   load_paths := t.tb_load_paths;
   old
 
-type challenge_library = library_t
+type library = library_t
 
 (* The libraries the challenge files name, then the given shared libraries,
    each with its dependencies, in dependency order, with the dependency
@@ -539,9 +539,6 @@ let intern_challenge files shared =
   let all = List.fold_right intern (List.map try_locate_absolute_library shared) needed in
   List.rev needed, List.rev all
 
-let challenge_deps needed =
-  List.map (fun (dir, m) -> dir, m.library_deps) needed
-
 (* Import the interned libraries without a check: the challenge files are
    checked when the challenge is built, and a library they depend on is
    another challenge file, a pre-checked library or a shared one. *)
@@ -553,11 +550,16 @@ let import_challenge senv needed =
 
 let library_file dir = snd (try_locate_absolute_library dir)
 
-(* The dependency digests every library interned so far records. *)
-let interned_deps () = LibraryMap.bindings !depgraph
+(* The libraries loaded so far, from the tables in place. *)
+let loaded () = LibraryMap.bindings !libraries_table
 
-(* The file each loaded library was read from, as the loader recorded it. *)
-let interned_files () =
-  List.map (fun (dir, m) -> dir, m.library_filename) (LibraryMap.bindings !libraries_table)
+let deps_of libs = List.map (fun (dir, m) -> dir, m.library_deps) libs
 
-let challenge_files needed = List.map (fun (dir, m) -> dir, m.library_filename) needed
+let files_of libs = List.map (fun (dir, m) -> dir, m.library_filename) libs
+
+(* Whether the library [lib] is [root] or lies below it, by the names they
+   print: a name component holding a dot, which a [.vo] file can record
+   though no identifier holds one, is read as the dots print. *)
+let under_root ~root lib =
+  let r = DirPath.to_string root and l = DirPath.to_string lib in
+  String.equal l r || CString.is_prefix (r ^ ".") l

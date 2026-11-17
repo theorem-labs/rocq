@@ -929,7 +929,8 @@ the verdict is written to *file*.
 ``{kind, object?}``), ``rewrite_rules``, ``prechecked`` (each
 ``{library, sha256}``) and ``challenge_files`` (each ``{path, sha256}``, with
 ``path`` relative to *dir* unless it is absolute). Theorems, axioms and flag
-objects are named by the names they print, libraries by their logical names.
+objects are named by the names they print, libraries by their logical names
+(identifiers separated by dots; a name ending in ``.vo`` is an error).
 ``theorems`` and ``challenge_files`` are required and not empty; a theorem's
 ``permitted_axioms`` replaces the top-level list, which is empty by default;
 ``rewrite_rules`` is ``false`` by default. Any other key, a key given twice and
@@ -991,7 +992,14 @@ refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
   ``-compare-out``, and ``-package`` with ``-compare``;
 - a challenge file that is missing, or a challenge file or pre-checked library
   whose SHA-256 is not the one the config gives;
-- a theorem of the config that the challenge does not declare;
+- a challenge library and its solution library that record different digests
+  for a library they depend on that is pre-checked or from the installed load
+  path;
+- a theorem of the config that the challenge does not declare, or whose name
+  two constants of the challenge print;
+- an axiom or the object of a relaxed typing condition that a theorem's type
+  or proof reaches and whose printed name is not made of identifiers, or an
+  inductive type they reach whose name is not an identifier;
 - a ``-Q`` or ``-R`` that binds the empty root or a top-level name that the
   installed load path serves;
 - a library outside the challenge's roots and not pre-checked that the solution
@@ -1003,4 +1011,6 @@ The comparison trusts the challenge files and the pre-checked libraries, which
 the config pins by their SHA-256 (``rocqchk -sha256 file`` prints the digest a
 config takes), and the installed load path, whose libraries both sides read
 from the same files. A pre-checked library is loaded without a check, as with
-``-admit``.
+``-admit``. A library given with ``-admit`` is loaded without a check too, so
+the comparison trusts it as it trusts a pre-checked library, but no digest pins
+it.

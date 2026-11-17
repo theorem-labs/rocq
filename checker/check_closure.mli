@@ -11,6 +11,19 @@
 (** The axioms and the relaxed typing flags that a constant rests on, for
     [rocqchk -compare]. *)
 
+(** {6 The kinds of the relaxed typing flags}
+
+    As the config and the verdict name them. *)
+
+val type_in_type : string
+val unsafe_fixpoint : string
+val unchecked_eliminations : string
+val assumed_positive : string
+val uip : string
+val indices_not_mattering : string
+
+(** {6 The closure} *)
+
 type closure_state
 
 val closure_state :

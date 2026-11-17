@@ -35,7 +35,7 @@ let million = digest "clib-sha256-million"
 (* The padding is one 0x80 byte, then zeroes, then the length in eight bytes.
    At 55 bytes it ends the block exactly; at 56 and at every length up to 63
    the length needs a block of its own; at 64 the message ends a block and the
-   padding fills the next one. 119 and 120 are the same three cases one block
+   padding fills the next one. 119 and 120 are the first two cases one block
    further on: 119 pads to the end of its second block, 120 needs a third. *)
 
 let boundary (n, expected) =

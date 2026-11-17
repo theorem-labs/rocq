@@ -27,4 +27,4 @@ let valid_kername kn =
   let mp, label = KerName.repr kn in
   valid_modpath mp && valid_id label
 
-let quote s = "\"" ^ String.escaped s ^ "\""
+let quote s = Printf.sprintf "%S" s

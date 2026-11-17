@@ -207,19 +207,17 @@ let lookup_constant st view kn =
   let impl () = in_impl st find_constant (Constant.user kn) in
   match view with
   | Public ->
-    if Environ.mem_constant kn st.env then
-      let cb = Environ.lookup_constant kn st.env in
-      if Declareops.constant_has_body cb then Some (Public, cb)
-      else match impl () with
-        | Some cb -> Some (Implementation, cb)
-        | None -> Some (Public, cb)
-    else Option.map (fun cb -> (Implementation, cb)) (impl ())
+    (match Environ.lookup_constant_opt kn st.env with
+     | Some cb ->
+       if Declareops.constant_has_body cb then Some (Public, cb)
+       else (match impl () with
+           | Some cb -> Some (Implementation, cb)
+           | None -> Some (Public, cb))
+     | None -> Option.map (fun cb -> (Implementation, cb)) (impl ()))
   | Implementation ->
     match impl () with
     | Some cb -> Some (Implementation, cb)
-    | None ->
-      if Environ.mem_constant kn st.env then Some (Public, Environ.lookup_constant kn st.env)
-      else None
+    | None -> Option.map (fun cb -> (Public, cb)) (Environ.lookup_constant_opt kn st.env)
 
 let lookup_mind st view mind =
   let impl () = in_impl st find_mind (MutInd.user mind) in
@@ -347,12 +345,29 @@ let push_context view ctx todo =
       Context.Rel.Declaration.fold_constr (fun c todo -> (view, c) :: todo) d todo)
     todo ctx
 
-let typing_flags obj (tf : typing_flags) acc =
-  let add ok kind acc = if ok then acc else (kind, obj) :: acc in
-  acc
-  |> add tf.check_universes "type-in-type"
-  |> add tf.check_guarded "unsafe-fixpoint"
-  |> add tf.check_eliminations "unchecked-eliminations"
+(* The kinds of the relaxed typing flags, as the config and the verdict name
+   them. *)
+let type_in_type = "type-in-type"
+let unsafe_fixpoint = "unsafe-fixpoint"
+let unchecked_eliminations = "unchecked-eliminations"
+let assumed_positive = "assumed-positive"
+let uip = "uip"
+let indices_not_mattering = "indices-not-mattering"
+
+(* The relaxed conditions a declaration was typed under, by the test that
+   [-o] and [-axiom-free] use ([CheckFlags.flags_are_safe]): [isind] is the
+   inductive block, [None] for a constant. Its [uip] field says that UIP was
+   allowed, not that the block uses it, which [uses_uip] tests. *)
+let typing_flags ~isind obj tf =
+  match CheckFlags.flags_are_safe ~isind tf with
+  | None -> []
+  | Some u ->
+    List.filter_map (fun (relaxed, kind) -> if relaxed then Some (kind, obj) else None)
+      [ u.CheckFlags.typeintype, type_in_type;
+        u.CheckFlags.unguarded, unsafe_fixpoint;
+        u.CheckFlags.badelims, unchecked_eliminations;
+        u.CheckFlags.nonpositive, assumed_positive;
+        u.CheckFlags.indices_nomatter, indices_not_mattering ]
 
 (* The same test as vernac/assumptions.ml's [uses_uip]. *)
 let uses_uip mib =
@@ -388,7 +403,7 @@ let constant_node st view kn =
     in
     let refs = walk st (fresh_gen st) empty_refs ((declaration_view, cb.const_type) :: body) in
     { refs = refs_to_list refs; axiom;
-      flags = typing_flags (GlobRef.ConstRef kn) cb.const_typing_flags [] }
+      flags = typing_flags ~isind:None (GlobRef.ConstRef kn) cb.const_typing_flags }
 
 let mind_node st view mind =
   match lookup_mind st view mind with
@@ -412,17 +427,8 @@ let mind_node st view mind =
                      ", which is not an identifier.")))
       mib.mind_packets;
     let name = GlobRef.IndRef (mind, 0) in
-    let tf = mib.mind_typing_flags in
-    let flags = typing_flags name tf [] in
-    let add cond kind flags = if cond then (kind, name) :: flags else flags in
-    let flags =
-      flags
-      |> add (not tf.check_positive) "assumed-positive"
-      |> add (uses_uip mib) "uip"
-      |> add (not tf.indices_matter
-              && Array.exists (fun mip -> mip.mind_relies_on_indices_not_mattering) mib.mind_packets)
-        "indices-not-mattering"
-    in
+    let flags = typing_flags ~isind:(Some mib) name mib.mind_typing_flags in
+    let flags = if uses_uip mib then (uip, name) :: flags else flags in
     { refs = refs_to_list refs; axiom = false; flags }
 
 let node st view obj =

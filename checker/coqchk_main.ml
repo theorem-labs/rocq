@@ -97,8 +97,9 @@ let add_rec_path ~unix_path ~rocq_root =
 (* By the option -R/-Q of the command line *)
 let includes = ref []
 (* The same roots, kept past [init_with_argv]: a -compare run puts the
-   challenge directory on the load path in place of each of these physical
-   directories, under the same logical root. *)
+   challenge directory on the load path in place of the physical directory
+   of each of these roots that the challenge stands in for, under the same
+   logical root ([run_compare]). *)
 let user_includes = ref []
 let push_include (s, alias) = includes := (s,alias) :: !includes
 
@@ -603,13 +604,15 @@ let init_with_argv argv =
 
 let init() = init_with_argv Sys.argv
 
+let fatal_exn e =
+  if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
+  fatal_error (explain_exn e) (CErrors.exit_code e)
+
 let run senv =
   try
     let senv = compile_files senv in
     flush_all(); senv
-  with e ->
-    if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
-    fatal_error (explain_exn e) (CErrors.exit_code e)
+  with e -> fatal_exn e
 
 (* A run that cannot complete the comparison (a challenge file whose sha256
    differs, a pre-checked library the two sides disagree on, a theorem the
@@ -621,7 +624,6 @@ let run_compare env empty_senv =
   | None -> ()
   | Some cfg ->
     let dir = Option.get !compare_challenge and out = Option.get !compare_out in
-    let solution_deps = CheckLibrary.interned_deps () in
     (* The challenge directory stands in for the solution's directory under
        each root that a solution library named on the command line lives
        under. A root that only a pre-checked library or another shared tree
@@ -629,23 +631,17 @@ let run_compare env empty_senv =
 
        Both forms that name a library to check count: the positional names
        ([compile_list], checked with their dependencies) and -norec
-       ([norec_list], checked alone). -admit names a library to load
-       without checking it and never selects a solution library, so
-       [admit_list] is left out: it also holds the config's pre-checked
-       libraries, which are exactly the ones the challenge does not stand
-       in for. *)
-    let name_of = function
-      | CheckLibrary.LogicalFile p ->
-        String.concat "." (List.rev p.CheckLibrary.dirpath @ [p.CheckLibrary.basename])
-      | CheckLibrary.PhysicalFile f -> Filename.remove_extension (Filename.basename f)
-    in
+       ([norec_list], checked alone), each by the library name the loader
+       gave it, so that a .vo file counts by its logical name. -admit names
+       a library to load without checking it and never selects a solution
+       library, so [admit_list] is left out: it also holds the config's
+       pre-checked libraries, which are exactly the ones the challenge does
+       not stand in for. *)
     let checked_names =
-      List.map name_of !compile_list @ List.map name_of !norec_list
+      List.map (fun f -> fst (CheckLibrary.try_locate_qualified_library f))
+        (!compile_list @ !norec_list)
     in
-    let substitutes root =
-      let r = DirPath.to_string root in
-      List.exists (fun n -> String.equal n r || CString.is_prefix (r ^ ".") n) checked_names
-    in
+    let substitutes root = List.exists (CheckLibrary.under_root ~root) checked_names in
     (* A library under one of those roots is the solution's own: the
        challenge directory holds its counterpart. Every other library the
        solution loaded is a shared one, from the installation, and the
@@ -657,10 +653,8 @@ let run_compare env empty_senv =
        under a root that some checked name lives under, which is a root the
        challenge stands in for; what is left is the installation's. *)
     let under_challenge_root lib =
-      let l = DirPath.to_string lib in
       List.exists (fun (_, rocq_root) ->
-          let r = DirPath.to_string rocq_root in
-          substitutes rocq_root && (String.equal l r || CString.is_prefix (r ^ ".") l))
+          substitutes rocq_root && CheckLibrary.under_root ~root:rocq_root lib)
         !user_includes
     in
     (* The bound roots the challenge does not stand in for. The solution's
@@ -707,10 +701,8 @@ let run_compare env empty_senv =
                   if substitutes rocq_root then add_rec_path ~unix_path:dir ~rocq_root)
                 !user_includes)
       in
-      Check_compare.run t env CheckLibrary.indirect_accessor empty_senv ~solution_deps
-    with e ->
-      if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
-      fatal_error (explain_exn e) (CErrors.exit_code e)
+      Check_compare.run t env empty_senv
+    with e -> fatal_exn e
 
 let main () =
   let empty_senv = init() in

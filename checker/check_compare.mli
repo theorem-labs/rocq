@@ -41,13 +41,10 @@
     that is empty or is one of the installed load path's own top-level
     names, and, on either side, a library outside the challenge's roots and
     not pre-checked whose recorded file lies directly in the working
-    directory or under a bound directory ([prepare]). A library that passes
-    is shared by where its file is, not by who wrote it. What is left -- the
-    environment the process is started in, and so who can write the
-    installed load path -- is for whoever starts the run to get right.
-
-    The test suite stands in for the installation with [ROCQPATH], because
-    a test must not write into the installation it runs against. *)
+    directory or under a bound directory ([prepare], [run]). A library that
+    passes is shared by where its file is, not by who wrote it. What is left
+    -- the environment the process is started in, and so who can write the
+    installed load path -- is for whoever starts the run to get right. *)
 
 type config
 
@@ -57,7 +54,9 @@ val read_config : string -> config
     (each [{kind, object?}]), [rewrite_rules], [prechecked]
     ([{library, sha256}]) and [challenge_files] ([{path, sha256}]). Any
     other key, a duplicate key, a byte after the top-level value, a byte
-    sequence that is not UTF-8 or a name that is not a string is an error.
+    sequence that is not UTF-8, a name that is not a string, or a
+    pre-checked library that is not a logical name (identifiers separated
+    by dots, with no [.vo]) is an error.
 
     A permitted axiom is named by the name it prints, and is the challenge's
     declaration of that name: an axiom a theorem's proof reaches passes only
@@ -151,9 +150,11 @@ val prepare :
   config -> dir:string -> out:string -> add_challenge_load_path:(unit -> unit) ->
   under_challenge_root:(Names.DirPath.t -> bool) ->
   open_roots:(Names.DirPath.t * string) list -> bound_dirs:string list -> t
-(** Resolve the challenge files under [dir] and check the sha256 of each.
+(** Resolve the challenge files under [dir] and check the sha256 of each,
+    then check what the solution loaded, from the library tables in place.
     [add_challenge_load_path] puts [dir] on the load path in place of the
-    solution's directories; it is called once, inside the challenge load.
+    solution's directories under the roots the challenge stands in for; it
+    is called once, inside the challenge load.
     [under_challenge_root] says whether a library name lives under one of
     those roots: those are the solution's own libraries. Every other library
     the solution loaded, unless pre-checked, is a shared one, which the
@@ -169,21 +170,28 @@ val prepare :
     with the directory each is bound to; the run is refused when the
     solution loaded a library from under one of them that the config does
     not pre-check.
-    @raise CErrors.UserError when a file is missing or its sha256 differs. *)
+    @raise CErrors.UserError when a challenge file is missing or its sha256
+    differs, when the solution loaded a library from under one of
+    [open_roots] that the config does not pre-check, when a pre-checked
+    library's sha256 differs, or when the solution loaded a library that is
+    neither under a root the challenge stands in for nor pre-checked from a
+    file in the working directory or under [bound_dirs]. *)
 
-val run :
-  t -> Environ.env ->
-  (Opaqueproof.opaque -> Opaqueproof.opaque_proofterm) ->
-  Safe_typing.safe_environment ->
-  solution_deps:(Names.DirPath.t * (Names.DirPath.t * Safe_typing.vodigest) array) list ->
-  unit
+val run : t -> Environ.env -> Safe_typing.safe_environment -> unit
 (** Load the challenge into an environment of its own on top of the given
     empty safe environment, compare, and write the verdict file. The
-    environment is the solution's, as [rocqchk] checked it, and the accessor
-    reads its opaque proofs.
-    @raise CErrors.UserError when a pre-checked library's sha256 differs,
-    when the two sides record different dependency digests for a pre-checked
-    library, or when the config names a theorem the challenge does not hold.
+    environment is the solution's, as [rocqchk] checked it; its opaque
+    proofs are read from the library tables in place
+    ([CheckLibrary.indirect_accessor]).
+    @raise CErrors.UserError when the challenge loaded a library that is
+    neither under its roots nor pre-checked from a file in the working
+    directory or under a bound directory; when a challenge library and its
+    solution library record different dependency digests for a pre-checked
+    or shared library; when the config names a theorem the challenge does
+    not hold, or one whose name two constants of the challenge print; or
+    when a theorem's axiom closure reaches an axiom or a flag's object whose
+    printed name is not made of identifiers, or an inductive type whose name
+    is not an identifier.
     A verdict is never an error: the file is written and the run exits 0. *)
 
 val sha256_of_file : string -> string
