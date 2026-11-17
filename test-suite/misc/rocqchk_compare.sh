@@ -161,6 +161,11 @@ EOF
 verdict main/honest main.json \
   '{"format":1,"theorems":[{"name":"Top.A.thm","verdict":"pass","reason":"","axioms":[],"flags":[]},' \
   '{"name":"Top.A.other","verdict":"pass","reason":"","axioms":[],"flags":[]}],"declarations":[],"admitted":[]}'
+# A run as one that checks with the bytecode compiler on, which compiles the
+# VM code of each constant it checks, gives the same verdict.
+ran 'main/honest with -bytecode-compiler yes' compare main/honest main.json -bytecode-compiler yes
+holds 'main/honest with -bytecode-compiler yes' \
+  '"name":"Top.A.thm","verdict":"pass"' '"name":"Top.A.other","verdict":"pass"'
 
 # Another statement of thm. A challenge declaration that differs fails every
 # theorem.
@@ -313,6 +318,119 @@ sed 's/^Inductive t : Set := c : t\./Inductive t : Set := c : t | d : t./' "$d/o
 verdict open/ctor open.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.t differs' \
   '{"name":"Top.A.t","reason":'
+# A theorem the config names may be given a body whatever its sort: as a
+# theorem, P may be defined.
+cat > "$d/open-p.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}, {"name": "Top.A.P"}],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest open/ch/A.vo)"}]}
+EOF
+verdict open/data open-p.json '"name":"Top.A.thm","verdict":"pass"' '"name":"Top.A.P","verdict":"pass"'
+
+# The statement of thm names the proof L, which the challenge leaves without
+# a body: L does not unfold there, and thm is not provable. A solution that
+# proves L by Defined proves thm by conversion, which changes what thm
+# states, so L must be opaque. The config names both, so that the verdict
+# of L shows that a proof of L by Qed is accepted; thm stays admitted then.
+compile named/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive nat : Set := O : nat | S : forall _ : nat, nat.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Inductive ex (A : Type) (P : forall _ : A, Prop) : Prop :=
+  ex_intro : forall x : A, forall _ : P x, ex A P.
+Lemma L : ex nat (fun n => eq nat n O).
+Proof. Admitted.
+Theorem thm : eq (ex nat (fun n => eq nat n O)) L (ex_intro nat (fun n => eq nat n O) O (eq_refl nat O)).
+Proof. Admitted.
+EOF
+cat > "$d/named.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}, {"name": "Top.A.L"}],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest named/ch/A.vo)"}]}
+EOF
+compile named/defined A.v <<'EOF'
+Require Import Corelib.Init.Ltac.
+Unset Elimination Schemes.
+Inductive nat : Set := O : nat | S : forall _ : nat, nat.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Inductive ex (A : Type) (P : forall _ : A, Prop) : Prop :=
+  ex_intro : forall x : A, forall _ : P x, ex A P.
+Lemma L : ex nat (fun n => eq nat n O).
+Proof. exact (ex_intro nat (fun n => eq nat n O) O (eq_refl nat O)). Defined.
+Theorem thm : eq (ex nat (fun n => eq nat n O)) L (ex_intro nat (fun n => eq nat n O) O (eq_refl nat O)).
+Proof. exact (eq_refl (ex nat (fun n => eq nat n O)) L). Qed.
+EOF
+verdict named/defined named.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this proof without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this proof without a body'
+sed -e 's/ Defined\.$/ Qed./' -e 's/^Proof\. exact (eq_refl .*/Proof. Admitted./' \
+  "$d/named/defined/A.v" | compile named/qed A.v
+verdict named/qed named.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the axiom Top.A.thm is not permitted"' \
+  '"name":"Top.A.L","verdict":"pass"' '"declarations":[]'
+
+# A functor module type. A functor parameter is named by a counter of the
+# process that compiled it, so a solution that declares one more functor
+# before FT numbers the parameters of FT otherwise: the comparison renames
+# them, by position.
+compile functor/ch A.v <<'EOF'
+Module Type SIG.
+  Parameter P : Prop.
+End SIG.
+Module Type FT (X : SIG) (Y : SIG).
+  Parameter q : X.P.
+End FT.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config functor > "$d/functor.json"
+compile functor/honest A.v <<'EOF'
+Module Type SIG.
+  Parameter P : Prop.
+End SIG.
+Module Type G (Z : SIG).
+End G.
+Module Type FT (X : SIG) (Y : SIG).
+  Parameter q : X.P.
+End FT.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict functor/honest functor.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+sed 's/^  Parameter q : X\.P\./  Parameter q : Y.P./' "$d/functor/honest/A.v" |
+  compile functor/swapped A.v
+verdict functor/swapped functor.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.FT differs'
+
+# A template-polymorphic inductive type. An application of Box is typed by
+# its template data, which says which parameters bind a universe.
+compile template/ch A.v <<'EOF'
+Unset Elimination Schemes.
+#[universes(template)]
+Inductive Box@{i j} (A : Type@{i}) (B : Type@{j}) : Type@{max(i,j)} :=
+  box : forall _ : A, forall _ : B, Box A B.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config template > "$d/template.json"
+compile template/honest A.v <<'EOF'
+Unset Elimination Schemes.
+#[universes(template)]
+Inductive Box@{i j} (A : Type@{i}) (B : Type@{j}) : Type@{max(i,j)} :=
+  box : forall _ : A, forall _ : B, Box A B.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict template/honest template.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+# The level of B is the global level u: B binds nothing. At the default
+# levels, which the level map pairs, every other field of Box is the
+# challenge's.
+compile template/global A.v <<'EOF'
+Unset Elimination Schemes.
+Universe u.
+#[universes(template)]
+Inductive Box@{i} (A : Type@{i}) (B : Type@{u}) : Type@{max(i,u)} :=
+  box : forall _ : A, forall _ : B, Box A B.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict template/global template.json '"name":"Top.A.thm","verdict":"fail"' \
+  '{"name":"Top.A.Box","reason":"the template-polymorphic parameters"}'
 
 #### Runs that rocqchk refuses.
 
@@ -393,6 +511,14 @@ XDG_DATA_HOME=$d/xdg $coqc -noinit -native-compiler no "$d/xdg/coq/X.v"
 { echo 'Require X.'; cat "$d/main/honest/A.v"; } | XDG_DATA_HOME=$d/xdg solution main/xdg
 XDG_DATA_HOME=$d/xdg refused 'which is under none of the directories a -compare run trusts' \
   compare main/xdg main.json
+# The same with HOME and XDG_DATA_HOME unset: the load path then takes
+# ./.local/share/coq, below the working directory, for the XDG directory.
+mkdir -p "$d/nohome/.local/share/coq"
+echo 'Definition y := Prop.' > "$d/nohome/.local/share/coq/Y.v"
+XDG_DATA_HOME=$d/nohome/.local/share $coqc -noinit -native-compiler no "$d/nohome/.local/share/coq/Y.v"
+{ echo 'Require Y.'; cat "$d/main/honest/A.v"; } | XDG_DATA_HOME=$d/nohome/.local/share solution main/nohome
+no_home() { (unset HOME XDG_DATA_HOME HOMEDRIVE HOMEPATH USERPROFILE; cd "$d/nohome" && "$@"); }
+refused 'which is under none of the directories a -compare run trusts' no_home compare main/nohome main.json
 
 # The libraries named for checking lie under two roots, Top and Vendor, and
 # the challenge directory stands in for one root only. Two -Q of one root
@@ -457,6 +583,23 @@ config shared "\"prechecked\": [{\"library\": \"Lib.X\", \"sha256\": \"$(digest 
 ROCQPATH=$d/rp:$d/rp2 verdict shared/sol shared-pre.json '"name":"Top.A.thm","verdict":"pass"'
 ROCQPATH=$d/rp:$d/rp3 refused 'The challenge loaded the pre-checked library Lib.X from' \
   compare shared/sol shared-pre.json
+
+#### The trusted directories: a shared library from user-contrib, here of a
+#### -coqlib that stands in for an installation, and one from COQPATH.
+
+lib=$("$BIN"rocqchk -where)
+mkdir -p "$d/coqlib/plugins" "$d/coqlib/user-contrib/Uc" "$d/cp/Cp"
+ln -s "$lib/theories" "$d/coqlib/theories"
+echo 'Definition u := Prop.' > "$d/coqlib/user-contrib/Uc/U.v"
+$coqc -noinit -native-compiler no -Q "$d/coqlib/user-contrib/Uc" Uc "$d/coqlib/user-contrib/Uc/U.v"
+{ echo 'Require Uc.U.'; cat "$d/main/honest/A.v"; } | solution main/uc -Q "$d/coqlib/user-contrib/Uc" Uc
+ran 'main/uc with -coqlib' compare main/uc main.json -coqlib "$d/coqlib"
+holds 'main/uc with -coqlib' '"name":"Top.A.thm","verdict":"pass"' '"name":"Top.A.other","verdict":"pass"'
+echo 'Definition c := Prop.' > "$d/cp/Cp/C.v"
+$coqc -noinit -native-compiler no -Q "$d/cp/Cp" Cp "$d/cp/Cp/C.v"
+{ echo 'Require Cp.C.'; cat "$d/main/honest/A.v"; } | solution main/cp -Q "$d/cp/Cp" Cp
+COQPATH=$d/cp ran 'main/cp with COQPATH' compare main/cp main.json
+holds 'main/cp with COQPATH' '"name":"Top.A.thm","verdict":"pass"' '"name":"Top.A.other","verdict":"pass"'
 
 #### -norec checks the libraries it names, and loads the libraries they
 #### depend on without a check.
@@ -668,9 +811,10 @@ holds 'Top.A with predep-pin.json' '"name":"Top.A.thm","verdict":"pass"'
 # data after it, then that data, then the data's MD5. od may end its output
 # with an empty line (BSD od does), so awk folds every byte it reads into one
 # number.
-seg_len() { # <file>: the length of the data of its first segment
-  od -An -tu1 -j20 -N4 "$1" | awk '{ for (i = 1; i <= NF; i++) n = n * 256 + $i } END { print n }'
+number_at() { # <file> <offset> <count>: the big-endian number of <count> bytes at <offset>
+  od -An -tu1 -j"$2" -N"$3" "$1" | awk '{ for (i = 1; i <= NF; i++) n = n * 256 + $i } END { print n }'
 }
+seg_len() { number_at "$1" 20 4; } # <file>: the length of the data of its first segment
 overwrite() { # <file> <offset>: 16 bytes 0xff from <offset> on
   printf '\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377' |
     dd of="$1" bs=1 seek="$2" conv=notrunc 2> /dev/null
@@ -727,6 +871,55 @@ cp "$d/main/ch/Defs.vo" "$d/nodefs/md5/"
 overwrite "$d/nodefs/md5/Defs.vo" $((36 + $(seg_len "$d/nodefs/md5/Defs.vo")))
 refused 'Corrupted file' chk -Q "$d/nodefs/md5" Top -compare "$d/nodefs.json" \
   -challenge "$d/nodefs/ch" -compare-out "$out" Top.A
+
+# The last 8 bytes of the header give the position of the summary, which
+# lists each segment: the length of its name (4 bytes), the name, the
+# segment's position (8 bytes), its length (8 bytes) and its MD5, which also
+# follows its data. The MD5 of the segment named library is the library's
+# digest, the one a library records for each library it depends on.
+segment_md5() { # <file> <segment>: sets summary_md5 and data_md5, the offsets of its MD5
+  local f=$1 at n nlen pos len
+  at=$(number_at "$f" 8 8)
+  n=$(number_at "$f" "$at" 4)
+  at=$((at + 4))
+  while [ "$n" -gt 0 ]; do
+    nlen=$(number_at "$f" "$at" 4)
+    if [ "$(dd if="$f" bs=1 skip=$((at + 4)) count="$nlen" 2> /dev/null)" = "$2" ]; then
+      pos=$(number_at "$f" $((at + 4 + nlen)) 8)
+      len=$(number_at "$f" $((at + 12 + nlen)) 8)
+      summary_md5=$((at + 20 + nlen))
+      data_md5=$((pos + len))
+      return
+    fi
+    at=$((at + 36 + nlen))
+    n=$((n - 1))
+  done
+  fail "$f has no segment $2"
+}
+copy_md5() { # <from> <offset> <to> <offset>: 16 bytes
+  dd if="$1" bs=1 skip="$2" count=16 2> /dev/null | dd of="$3" bs=1 seek="$4" conv=notrunc 2> /dev/null
+}
+
+# A Top.D of other bytes, made to state the digest of the challenge's: the
+# MD5 of its library segment, in the summary and after the data, is the
+# challenge's Top.D's, which Top.P.Q records. A read that validates compares
+# those two copies with each other, and the digest Top.P.Q records with the
+# first, so the kernel checks this Top.D and takes it for the library that
+# Top.P.Q was built against. Only the pin of Top.D by its sha256 tells the
+# two files apart, and the run is refused.
+compile predep/fake D.v <<'EOF'
+Definition d := forall A : Prop, A.
+EOF
+mkdir -p "$d/predep/forged/P"
+cp "$d/predep/sol/A.vo" "$d/predep/fake/D.vo" "$d/predep/forged/"
+cp "$d/predep/ch/P/Q.vo" "$d/predep/forged/P/"
+segment_md5 "$d/predep/ch/D.vo" library
+from=$summary_md5
+segment_md5 "$d/predep/forged/D.vo" library
+copy_md5 "$d/predep/ch/D.vo" "$from" "$d/predep/forged/D.vo" "$summary_md5"
+copy_md5 "$d/predep/ch/D.vo" "$from" "$d/predep/forged/D.vo" "$data_md5"
+refused 'The pre-checked library Top.P.Q depends on the library Top.D' \
+  compare predep/forged predep-pin.json
 
 #### A -vos build holds no proof.
 
@@ -1018,7 +1211,7 @@ EOF
 config elimc > "$d/elimc.json"
 compile elimc/drop A.v < "$d/elim/honest/A.v"
 verdict elimc/drop elimc.json '"name":"Top.A.thm","verdict":"fail"' \
-  '{"name":"<qualities>","reason":"the challenge has an elimination constraint the solution does not:'
+  '{"name":"<qualities>","reason":"the challenge has an elimination constraint the solution does not: the constraint Top.A.0 -> Prop'
 
 # The sort s and box in a pre-checked library outside the challenge's root,
 # Vendor.S: a constraint that the solution adds on that sort is compared as
@@ -1044,7 +1237,7 @@ Definition thm : forall A : Prop, forall _ : A, A := fun A a => unbox A (Vendor.
 EOF
 ran elimv/bad compare elimv/bad elimv.json -Q "$d/elimlib" Vendor
 holds elimv/bad '"name":"Top.A.thm","verdict":"fail"' \
-  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not:'
+  '{"name":"<qualities>","reason":"the solution has an elimination constraint the challenge does not: the constraint Vendor.S.0 -> Prop'
 
 #### Relaxed typing conditions: the challenge declares seq under
 #### definitional UIP, which lets a match on seq return a Prop.

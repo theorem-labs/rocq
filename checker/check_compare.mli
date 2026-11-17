@@ -19,12 +19,19 @@
     and writes a JSON verdict.
 
     The comparison is structural after a one-to-one renaming of universe
-    levels and of global sort qualities, which each side numbers in the
-    order it declares them: no conversion, no reduction, and no constant is
-    unfolded. A global level or quality that only the constraints of a
-    polymorphic context name is renamed by the one solution constraint that
-    fits it; when several fit and nothing else decides, by the one of the
-    same library and number.
+    levels, of global sort qualities and of functor parameters, which each
+    side numbers in the order it declares them: no conversion, no
+    reduction, and no constant is unfolded. A global level or quality that
+    only the constraints of a polymorphic context name is renamed by the
+    one solution constraint that fits it; when several fit and nothing else
+    decides, by the one of the same library and number.
+
+    A challenge constant without a body (an axiom, a parameter or an
+    admitted proof, which a [.vo] file does not tell apart) may be given one
+    by the solution only when its type is a proposition or the config names
+    it as a theorem, and only an opaque one when another compared challenge
+    declaration names it in its type or its transparent body: a transparent
+    proof would unfold there and change what that declaration states.
 
     {2 Where a shared library may come from}
 

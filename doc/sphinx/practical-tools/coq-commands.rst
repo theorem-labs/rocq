@@ -926,9 +926,18 @@ declaration of the challenge files and of the libraries they depend on (except
 the pre-checked libraries, and those of their dependencies that are pre-checked
 too or from the installed load path) is compared with the solution's
 declaration of the same kernel name, structurally after a one-to-one renaming
-of universe levels and of global sorts (each side numbers them in the order it
-declares them), with no reduction. Then the axioms of each theorem the
-config names are computed, and the verdict is written to *file*.
+of universe levels, of global sorts and of functor parameters (each side
+numbers them in the order it declares them), with no reduction. Then the
+axioms of each theorem the config names are computed, and the verdict is
+written to *file*.
+
+A challenge constant without a body (an :cmd:`Axiom`, a :cmd:`Parameter` or an
+admitted proof, which a ``.vo`` file does not tell apart) differs from a
+solution constant with one, unless its type is a proposition or the config
+names it as a theorem: the solution may then prove it. The proof must be
+opaque, as with :cmd:`Qed`, when another compared challenge declaration names
+the constant in its type or in its transparent body, since a transparent proof
+would unfold there and change what that declaration states.
 
 *config* is one JSON object with the keys ``theorems`` (each
 ``{name, permitted_axioms?}``), ``permitted_axioms``, ``tolerated_flags`` (each
