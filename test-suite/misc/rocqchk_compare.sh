@@ -331,6 +331,8 @@ verdict open/data open-p.json '"name":"Top.A.thm","verdict":"pass"' '"name":"Top
 # proves L by Defined proves thm by conversion, which changes what thm
 # states, so L must be opaque. The config names both, so that the verdict
 # of L shows that a proof of L by Qed is accepted; thm stays admitted then.
+# eq has an index, so a proof through it rests on indices not mattering,
+# which the config tolerates on every object, as uip.json does.
 compile named/ch A.v <<'EOF'
 Unset Elimination Schemes.
 Inductive nat : Set := O : nat | S : forall _ : nat, nat.
@@ -344,6 +346,7 @@ Proof. Admitted.
 EOF
 cat > "$d/named.json" <<EOF
 {"theorems": [{"name": "Top.A.thm"}, {"name": "Top.A.L"}],
+ "tolerated_flags": [{"kind": "indices-not-mattering"}],
  "challenge_files": [{"path": "A.vo", "sha256": "$(digest named/ch/A.vo)"}]}
 EOF
 compile named/defined A.v <<'EOF'
@@ -587,9 +590,12 @@ ROCQPATH=$d/rp:$d/rp3 refused 'The challenge loaded the pre-checked library Lib.
 #### The trusted directories: a shared library from user-contrib, here of a
 #### -coqlib that stands in for an installation, and one from COQPATH.
 
-lib=$("$BIN"rocqchk -where)
+# The -coqlib directory holds the corelib of the installation in use (the
+# one ROCQLIB selects), linked by its absolute path, and an empty plugins
+# directory, which an installation must have.
+rocqlib=$(cd "$("$BIN"rocqchk -where)" && pwd)
 mkdir -p "$d/coqlib/plugins" "$d/coqlib/user-contrib/Uc" "$d/cp/Cp"
-ln -s "$lib/theories" "$d/coqlib/theories"
+ln -s "$rocqlib/theories" "$d/coqlib/theories"
 echo 'Definition u := Prop.' > "$d/coqlib/user-contrib/Uc/U.v"
 $coqc -noinit -native-compiler no -Q "$d/coqlib/user-contrib/Uc" Uc "$d/coqlib/user-contrib/Uc/U.v"
 { echo 'Require Uc.U.'; cat "$d/main/honest/A.v"; } | solution main/uc -Q "$d/coqlib/user-contrib/Uc" Uc
