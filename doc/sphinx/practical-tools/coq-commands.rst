@@ -961,7 +961,8 @@ the universe graphs, each with the reason of that comparison. With
 solution and ``pick@{i j | j < x, j < x2, x < y, i < y, i < y2}`` on both
 sides, the tie on ``i < y`` renames the challenge's ``y`` to the solution's
 ``y2``, and ``x < y`` then stands for ``x < y2``, which the solution does not
-hold.
+hold: the reason says that the universe context has other constraints and names
+no level.
 
 A challenge constant without a body (an :cmd:`Axiom`, a :cmd:`Parameter` or an
 admitted proof, which a ``.vo`` file does not tell apart) differs from a
