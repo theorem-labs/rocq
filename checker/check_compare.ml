@@ -859,8 +859,8 @@ let eq_rel_context m c1 c2 =
    of one kind a global level sorts before a bound one, so such a
    constraint can come before the constraints on bound levels, and a tie
    on both ends taken first could pair two levels that a tie on one end
-   and the passes after it pair otherwise. What is still unmapped once no tie decides anything more is
-   the caller's to report.
+   and the passes after it pair otherwise. What is still unmapped once no
+   tie decides anything more is the caller's to report.
 
    Any pairing is sound, since everything compared after it -- the rest of
    the context, the other declarations and both graphs -- is compared
@@ -881,10 +881,9 @@ let eq_rel_context m c1 c2 =
    When one of them has the number of the challenge's level but is not the
    level that stands for it, the tie pairs the wrong level, and the
    solution fails where that level is compared next: in this context when
-   its constraints tell the two apart (the reason then says the context
-   has other constraints, naming no level), otherwise in a later field or
-   declaration or in the universe graphs, with the reason of that
-   comparison. [check_compare.mli] gives an example of each.
+   its constraints tell the two apart, otherwise in a later field or
+   declaration or in the universe graphs, each with the reason of that
+   comparison. [check_compare.mli] gives an example of both forms.
 
    The universe constraints and the elimination constraints of a context
    have the same shape: [mapped] reads a challenge end through the map,

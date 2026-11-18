@@ -945,20 +945,18 @@ first tie of a declaration waits for the other declarations to decide what
 they can; its later ties do not, which can make an honest solution differ,
 never a wrong one pass. Nothing is searched beyond the tie, so a solution that
 numbers such levels otherwise, as when it declares more universes before them
-or declares them in another order, can make it fail though it is honest. When
-several of its constraints fit and none of them
-has the number of the challenge's level, the declaration is undecided, and the
-reason names the challenge's level by its library and number: with
-``Universe u w.`` in the challenge, ``Universe spare1 spare2 u w.`` in the
-solution and ``small@{i | i < u, i < w}`` on both sides, each constraint of
-``small`` fits two of the solution's, and neither of them has the number of the
-challenge's level. When one that fits has that number but is not the level
+or declares them in another order, can fail though it is honest. When several
+of its constraints fit and none of them has the number of the challenge's
+level, the declaration is undecided, and the reason names the challenge's level
+by its library and number: with ``Universe u w.`` in the challenge,
+``Universe spare1 spare2 u w.`` in the solution and
+``small@{i | i < u, i < w}`` on both sides, each constraint of ``small`` fits
+two of the solution's, and neither of them has the number of the challenge's
+level. When one that fits has that number but is not the level
 that stands for the challenge's, the tie pairs the wrong level, and the
 solution fails where that level is compared next: in this declaration when its
-constraints tell the two apart, the reason then saying that the universe
-context has other constraints and naming no level, otherwise in a later field
-or declaration or in the universe graphs, with the reason of that comparison.
-With
+constraints tell the two apart, otherwise in a later field or declaration or in
+the universe graphs, each with the reason of that comparison. With
 ``Universe x x2 y y2.`` in the challenge, ``Universe x x2 y2 y.`` in the
 solution and ``pick@{i j | j < x, j < x2, x < y, i < y, i < y2}`` on both
 sides, the tie on ``i < y`` renames the challenge's ``y`` to the solution's
