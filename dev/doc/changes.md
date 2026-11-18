@@ -1,3 +1,11 @@
+## Changes between Rocq 9.3 and Rocq 9.4
+
+### ML API
+
+- New module `CSha256` in `clib`: `CSha256.string` and `CSha256.file`
+  return the SHA-256 digest (FIPS 180-4) of a string and of the bytes of a
+  file, as 64 lowercase hexadecimal characters.
+
 ## Changes between Coq 8.17 and Coq 8.18
 
 ### XML protocol

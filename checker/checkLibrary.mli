@@ -21,13 +21,106 @@ type object_file =
 | PhysicalFile of physical_path
 | LogicalFile of section_path
 
+val path_of_dirpath : DirPath.t -> section_path
+(** A library name, in the form that a [LogicalFile] names it in.
+    @raise Failure on the empty name. *)
+
 type logical_path = DirPath.t
 
 val default_root_prefix : DirPath.t
 
 val add_load_path : physical_path * logical_path -> unit
 
-val recheck_library : ?output_context:bool -> safe_environment ->
+val try_locate_qualified_library : object_file -> DirPath.t * physical_path
+(** The library name and the file the load path gives an object file, as
+    [recheck_library] resolves it: a [.vo] file is named after the logical
+    path its directory is bound to.
+    @raise CErrors.UserError when the library is not found. *)
+
+val recheck_library : ?output_context:bool -> ?intern_admit:bool -> ?validate_all:bool ->
+  safe_environment ->
   norec:object_file list ->
   admit:object_file list ->
   check:object_file list -> safe_environment * Mod_checking.axioms
+(** With [~intern_admit:true] (default [false]), the [admit] libraries and
+    their dependencies are read too, so that an admitted library that no
+    other library given here depends on is loaded as well.
+
+    With [~validate_all:true] (default [false]), every library read is
+    validated as a library given with [check] is, the [admit] libraries and
+    the dependencies of the [norec] ones included. Otherwise those are read
+    without validation: their bytes are unmarshalled as they are, which is
+    safe only on a file that is trusted. *)
+
+val unchecked : unit -> DirPath.t list
+(** The libraries the last [recheck_library] call imported without checking
+    them. Those are the [admit] libraries with their dependencies, and the
+    dependencies of the [norec] libraries that no [check] library depends
+    on; the libraries given with [norec] or [check] themselves are always
+    checked. *)
+
+val indirect_accessor : Opaqueproof.opaque -> Opaqueproof.opaque_proofterm
+(** The body of an opaque constant of a loaded library, from the table of
+    opaque proofs that the tables in place hold for that library. *)
+
+(** {6 The challenge side of [rocqchk -compare]} *)
+
+type tables
+(** This module's per-library tables: the loaded libraries, their tables of
+    opaque proofs, the dependency graph and the load path. They are keyed by
+    library name, and the challenge libraries have the solution's names, so
+    the two sides each need a set of their own: the challenge is loaded
+    between two [swap_tables] calls, which set the solution's tables aside
+    and put them back. *)
+
+val fresh_tables : unit -> tables
+(** Empty library tables, with the load path as it is. *)
+
+val swap_tables : tables -> tables
+(** [swap_tables t] installs [t] and returns what was there. *)
+
+type library
+
+val intern_challenge :
+  physical_path list -> DirPath.t list ->
+  (DirPath.t * library) list * (DirPath.t * library) list
+(** [intern_challenge files shared] reads the challenge [files] and their
+    dependencies, then the [shared] libraries and theirs, in dependency
+    order, validating each as it is read and importing none of them into an
+    environment: the load path may find a file of the solution's side for a
+    library the challenge directory lacks. The first result is the files'
+    closure, the second every library read, the files' closure first. A
+    library both reach is read once. *)
+
+val import_challenge :
+  safe_environment -> (DirPath.t * library) list -> safe_environment
+(** Import the interned libraries without checking them: the challenge files
+    are checked when the challenge is built, and the other libraries are
+    pre-checked or shared with the solution. *)
+
+val library_file : DirPath.t -> physical_path
+(** The file the load path resolves a library name to. *)
+
+val loaded : unit -> (DirPath.t * library) list
+(** The libraries loaded so far with the tables in place: after
+    [recheck_library], every library it read. *)
+
+val deps_of : (DirPath.t * library) list -> (DirPath.t * (DirPath.t * vodigest) array) list
+(** The dependency digests each library records. *)
+
+val files_of : (DirPath.t * library) list -> (DirPath.t * physical_path) list
+(** The file each library was read from, as the loader recorded it. *)
+
+val vo_path_below : root:DirPath.t -> DirPath.t -> string option
+(** [vo_path_below ~root lib]: when the library name [lib] lies strictly
+    below [root], by the names they print, the path of its [.vo] file
+    relative to the directory [root] is bound to, one directory per name
+    component ([Some "X/Y.vo"] for [root.X.Y]); [None] otherwise. *)
+
+val under_root : root:DirPath.t -> DirPath.t -> bool
+(** [under_root ~root lib]: whether the library name [lib] is [root] or lies
+    below it, by the names they print. *)
+
+val bound_roots : unit -> Id.t list
+(** The first component of each logical path that the load path binds, each
+    once. *)

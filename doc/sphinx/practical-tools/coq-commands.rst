@@ -853,6 +853,18 @@ relative paths in object files ``-Q`` and ``-R`` have exactly the same meaning.
   and impredicative ``Set`` are accepted; ``-admit`` and ``-norec`` retain their trust
   assumptions. The default exit-status policy is unchanged.
 - :n:`-silent`: Do not write progress information to the standard output.
+- :n:`-compare config`: Compare the checked libraries with a challenge, as the
+  JSON file *config* describes. The options ``-compare``, ``-challenge`` and
+  ``-compare-out`` go together: give all three or none. See
+  :ref:`rocqchk-compare`.
+- :n:`-challenge dir`: The directory that holds the challenge's ``.vo`` files.
+  Goes together with ``-compare`` and ``-compare-out``. See
+  :ref:`rocqchk-compare`.
+- :n:`-compare-out file`: Write the verdict of ``-compare`` to *file*. Goes
+  together with ``-compare`` and ``-challenge``. See :ref:`rocqchk-compare`.
+- :n:`-sha256 file`: Print the SHA-256 of the bytes of *file*, as 64 lowercase
+  hexadecimal digits, and exit without checking anything. This is the digest
+  that the config of ``-compare`` takes.
 
 Environment variable ``$ROCQLIB`` can be set to override the location of
 the standard library.
@@ -893,3 +905,251 @@ before it has been read by the second command.
       :cmd:`Require` handles ambiguity differently.
 
    .. weird warning, seems like it's not emitted when searching for dependencies
+
+.. _rocqchk-compare:
+
+Comparing a solution with a challenge
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``rocqchk -compare config -challenge dir -compare-out file`` compares the
+libraries it checks, the *solution*, with a *challenge*: ``.vo`` files compiled
+under the same library names. The solution is checked as without these options,
+except that every library is validated as it is read, those given with
+``-admit`` and the dependencies of those given with ``-norec`` included. The
+challenge files are then loaded into a second environment without a check,
+each library validated as it is read there too, *dir* being searched before
+the solution's directory under the ``-Q`` or ``-R`` root that holds the
+libraries named on the command line for checking, by its logical name: the
+challenge's root. Every library that the challenge loads under that root,
+except a pre-checked one, must be read from *dir*. Each
+declaration of the challenge files and of the libraries they depend on (except
+the pre-checked libraries, and those of their dependencies that are pre-checked
+too or from the installed load path) is compared with the solution's
+declaration of the same kernel name, structurally after a one-to-one renaming
+of universe levels, of global sorts and of functor parameters (each side
+numbers them in the order it declares them), with no reduction. A level or sort
+of a pre-checked library, of one from the installed load path or of one that a
+pre-checked library depends on, directly or not, is renamed to itself. Then the
+axioms of each theorem the config names are computed, and the verdict is
+written to *file*.
+
+A global level or sort that only the constraints of a polymorphic declaration
+name (as ``u`` in ``Polymorphic Definition small@{i | i < u}``) is renamed to
+the one that the solution's declaration names in its only constraint of the
+same shape. When nothing else decides, a tie renames it to the solution's level
+or sort of the same library and number: first the one among several solution
+constraints that fit, and only when no constraint takes such a tie, for a
+constraint between two such levels or sorts (``u < w`` in ``foo@{i | u < w}``),
+both at once when the solution's declaration holds that same constraint. The
+first tie of a declaration waits for the other declarations to decide what
+they can; its later ties do not, which can make an honest solution differ,
+never a wrong one pass. Nothing is searched beyond the tie, so a solution that
+numbers such levels otherwise, as when it declares more universes before them
+or declares them in another order, can fail though it is honest. When several
+of its constraints fit and none of them has the number of the challenge's
+level, the declaration is undecided, and the reason names the challenge's level
+by its library and number: with ``Universe u w.`` in the challenge,
+``Universe spare1 spare2 u w.`` in the solution and
+``small@{i | i < u, i < w}`` on both sides, each constraint of ``small`` fits
+two of the solution's, and neither of them has the number of the challenge's
+level. When one that fits has that number but is not the level
+that stands for the challenge's, the tie pairs the wrong level, and the
+solution fails where that level is compared next: in this declaration when its
+constraints tell the two apart, otherwise in a later field or declaration or in
+the universe graphs, each with the reason of that comparison. With
+``Universe x x2 y y2.`` in the challenge, ``Universe x x2 y2 y.`` in the
+solution and ``pick@{i j | j < x, j < x2, x < y, i < y, i < y2}`` on both
+sides, the tie on ``i < y`` renames the challenge's ``y`` to the solution's
+``y2``, and ``x < y`` then stands for ``x < y2``, which the solution does not
+hold: the reason says that the universe context has other constraints and names
+no level.
+
+A challenge constant without a body (an :cmd:`Axiom`, a :cmd:`Parameter` or an
+admitted proof, which a ``.vo`` file does not tell apart) differs from a
+solution constant with one, unless the challenge states it as a proposition or
+the config names it as a theorem: the solution may then give it one. That body
+must be opaque, as with :cmd:`Qed`, when another compared challenge declaration
+names the constant in what the comparison reads of it (the type or transparent
+body of a constant, the parameters, arities, constructor types or projection
+types of an inductive type, or any field of a module type, the types of its
+functor parameters included), unless the challenge states it as data, since a
+transparent proof would unfold there and change what that declaration states.
+The reason names a declaration that names it. So a function that the config
+names and that a lemma of the challenge specifies may be transparent: the lemma
+is stated about the function the solution chooses. What the challenge states a
+constant to be is read from the sort of the type it states for it, typed in the
+challenge environment and not reduced. In ``Prop`` or ``SProp``, the constant
+is a proposition. In ``Set`` or ``Type``, it is data, even when its type
+unfolds to a proposition: a challenge that wants a lemma kept opaque states it
+in ``Prop``. In a sort variable or a global sort, or when the type cannot be
+typed there, the run cannot tell, and each rule refuses: such a constant may be
+given a body only when the config names it, and only an opaque one when another
+declaration names it. A sort-polymorphic constant is a proof at an instance in
+``Prop``, and a global sort, which a library declares, may be meant for
+propositions. The type of a field of a module type may name the other fields of
+the module type and the functor parameters, which no environment holds, so such
+a field that the challenge leaves without a body may not be given one, whatever
+its type. A difference in a module type names the fields and functor
+parameters it lies in.
+
+A challenge constant that the kernel registers as a primitive type (as
+``Primitive int := #int63_type.`` does) differs from a solution constant that
+it registers as another one or as none, and the other way round: the literals
+of a primitive type have its constant for type, so a parameter that the
+solution registered as one would be inhabited.
+
+*config* is one JSON object with the keys ``theorems`` (each
+``{name, permitted_axioms?}``), ``permitted_axioms``, ``tolerated_flags`` (each
+``{kind, object?}``), ``rewrite_rules``, ``prechecked`` (each
+``{library, sha256}``) and ``challenge_files`` (each ``{path, sha256}``, with
+``path`` relative to *dir* unless it is absolute; it may use ``/`` as the
+directory separator on every platform). Theorems, axioms and flag objects are
+named by the names they print, libraries by their logical names (identifiers
+separated by dots; a name ending in ``.vo`` is an error).
+``theorems`` and ``challenge_files`` are required and not empty; a theorem's
+``permitted_axioms`` replaces the top-level list, which is empty by default;
+``rewrite_rules`` is ``false`` by default. Any other key, a key given twice and
+anything but white space after the object are errors. For example:
+
+.. code-block:: json
+
+   {"theorems": [{"name": "P.Main.thm"}],
+    "permitted_axioms": [],
+    "challenge_files": [{"path": "Main.vo", "sha256": "<64 hexadecimal digits>"}]}
+
+An entry of ``tolerated_flags`` tolerates the relaxed typing conditions of its
+kind; with an ``object``, only on the challenge's declaration of that name (as
+defined below for axioms). ``assumed-positive``, ``unsafe-fixpoint`` and
+``type-in-type`` are errors, with an object or without: each is a way to prove
+``False``. ``uip`` and ``indices-not-mattering`` take either form,
+``answer-universe-constraints`` takes no object, and every other kind, such as
+``unchecked-eliminations``, needs one. ``answer-universe-constraints`` skips only
+the check of the universe constraints the solution adds; when that check would
+have failed, the ``flags`` of each theorem the solution holds list it, with a
+summary of those constraints as its object.
+
+*file* receives one JSON object with the keys ``format`` (``1``),
+``theorems``, ``declarations`` and ``admitted``. Each entry of ``theorems`` has
+the keys ``name``, ``verdict`` (``"pass"`` or ``"fail"``), ``reason`` (empty
+for a pass), ``axioms`` (the printed names of the axioms the theorem's type
+and proof reach, such as constants without a body, admitted proofs among them,
+primitives and symbols) and ``flags`` (each ``{kind, object}``: the relaxed
+typing conditions they rest on, of the kinds named above). ``declarations``
+lists, as ``{name, reason}``, each challenge declaration that is missing from
+the solution or differs from it, and ``<universes>`` or ``<qualities>`` for a
+failed constraint check. ``admitted``, the last key, lists the libraries given
+with ``-admit``, by logical name, in the order of the command line and each
+once; the pre-checked libraries, which the option admits itself, are not among
+them. A theorem fails when:
+
+- the solution does not declare it, or declares two constants that print its
+  name;
+- a challenge declaration is missing from the solution or differs from it;
+- a universe or elimination constraint of the challenge does not hold in the
+  solution, a universe constraint that the solution adds on a level of a library
+  under the challenge's root does not hold in the challenge, or an elimination
+  constraint that the solution adds between two sorts that the renaming pairs
+  with the challenge's (or ``Prop``, ``SProp`` and ``Type``), whichever library
+  declares them, does not hold in the challenge;
+- ``rewrite_rules`` is ``false`` and a library the solution loaded declares a
+  rewrite rule, unless that library is pre-checked or from the installed load
+  path;
+- its proof reaches an axiom whose name its permitted list does not hold;
+- its proof reaches, under a permitted name, an axiom that is not the
+  challenge's declaration of that name. The challenge's declaration of a name is
+  an axiom of a pre-checked library or of the installed load path, or one that
+  both the challenge and the solution declare and no module signature hides;
+- its proof rests on a relaxed typing condition that no entry of
+  ``tolerated_flags`` tolerates.
+
+The second, third and fourth cases fail every theorem.
+
+A run that writes the verdict exits with status 0 whatever the verdict says,
+unless ``-axiom-free`` then fails. ``rocqchk`` first removes the file that
+``-compare-out`` names, or empties it when it cannot be removed. A run that
+refuses exits with a non-zero status and writes no verdict. ``rocqchk`` refuses:
+
+- an error in the config, only some of ``-compare``, ``-challenge`` and
+  ``-compare-out``, and ``-package`` with ``-compare``;
+- a challenge file that is missing, or a challenge file or pre-checked library
+  whose SHA-256 is not the one the config gives;
+- libraries named for checking that lie under no ``-Q`` or ``-R`` root, or
+  under more than one;
+- a challenge library and its solution library that record different digests
+  for a library they depend on that is pre-checked or from the installed load
+  path;
+- a theorem of the config that the challenge does not declare, or whose name
+  two constants of the challenge print;
+- an axiom or the object of a relaxed typing condition that a theorem's type
+  or proof reaches and whose printed name is not made of identifiers, or an
+  inductive type they reach whose name is not an identifier;
+- a ``-Q`` or ``-R`` that binds the empty root or a top-level name that the
+  default load path (the corelib directory, ``user-contrib``, the XDG
+  directories and ``$ROCQPATH``) serves;
+- a library outside the challenge's root and not pre-checked that the solution
+  loads from another ``-Q`` or ``-R`` root, or that either side loads from a
+  file in the working directory, under a directory that ``-Q`` or ``-R``
+  binds, or under none of the trusted directories (below);
+- a pre-checked library, or a library outside the challenge's root that both
+  sides load, that the challenge loads from another file than the one the
+  solution loaded for it (compared by real path), unless the library is
+  pre-checked and that file has the SHA-256 that the config gives for it;
+- a pre-checked library that depends, directly or not, on a library that is
+  neither pre-checked, nor pinned by its SHA-256 (below), nor from the
+  installed load path;
+- a library under the challenge's root that the solution loads without a check,
+  as a dependency of a library given with ``-norec`` or ``-admit``, and that is
+  neither pre-checked, nor pinned by its SHA-256, nor itself given with
+  ``-admit``;
+- a library under the challenge's root and not pre-checked that the challenge
+  loads from a file that is not under *dir*, as when *dir* lacks a library that
+  a challenge file depends on and the solution's directory holds it.
+
+The comparison trusts the challenge directory: the challenge files, which the
+config pins by their SHA-256 (``rocqchk -sha256 file`` prints the digest a
+config takes), and every other library that the challenge files load from
+*dir*, which is read as it is. It trusts the pre-checked libraries, which the
+config pins by their SHA-256 as well, and the installed load path: a library
+outside the challenge's root that is not pre-checked is accepted only when the
+directory that its file is found in lies, by real path, under one of the
+trusted directories, and both sides then read it from that one file.
+
+The trusted directories are the corelib directory and ``user-contrib`` of the
+installation that ``-coqlib`` or ``$ROCQLIB`` selects, and the directories
+that ``$ROCQPATH`` (or ``$COQPATH``) lists. With ``-boot`` there are none.
+Whoever starts ``rocqchk`` chooses them, and must keep the solution's side
+from writing there. A library outside the challenge's root that is not
+pre-checked is refused from anywhere else: from ``$XDG_DATA_HOME/coq`` (by
+default ``$HOME/.local/share/coq``) and the ``coq`` directory of each directory
+of ``$XDG_DATA_DIRS``, which the load path searches before the corelib
+directory and ``user-contrib``, unless a trusted directory holds them, and from
+the working directory or a directory that ``-Q`` or ``-R`` binds in every case.
+The load path records each directory with its links resolved, so a link to a
+file in a trusted directory is taken as that directory's, and a link to a
+directory is not: a library found below such a link is refused unless the
+link's target lies under a trusted directory too.
+
+A pre-checked library is loaded without a check, as with ``-admit``; its SHA-256
+is compared before any library is read, and on the file the solution loaded it
+from when that is another file, as when the command line names a file of that
+library in a second directory bound to its logical path. The challenge side
+must read it from that same file (compared by real path) or from a file with
+that SHA-256, such as a copy in *dir*. The digest that a library records for
+each library it depends on is the one stated in the file of that dependency,
+and is not computed from its bytes, so it pins nothing, and a kernel check of a
+library that a pre-checked library depends on is not enough either, since the
+pre-checked library was not checked against it: hence the refusal above that
+concerns the dependencies of a pre-checked library. A library is pinned by its
+SHA-256 when its file has the SHA-256 that the config gives for that library:
+in ``prechecked``, or in ``challenge_files`` for the file of *dir* at the path
+that the library's file has below the directory of its ``-Q`` or ``-R`` root
+(compared by real path).
+
+A library given with ``-admit`` is loaded without a check too, and no digest
+pins it; the verdict lists it. Under the challenge's root it is still the
+solution's own, not a pre-checked one: an axiom of it is the challenge's
+declaration only as an axiom that both sides declare is (above), never as an
+axiom of a pre-checked library is, and it is compared with the challenge's
+library of the same name when the challenge has one. The libraries that a
+library given with ``-norec`` or ``-admit`` depends on are loaded without a
+check as well, hence the refusal above that concerns them.

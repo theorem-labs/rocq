@@ -96,6 +96,9 @@ let add_rec_path ~unix_path ~rocq_root =
 
 (* By the option -R/-Q of the command line *)
 let includes = ref []
+(* The same roots, kept past [init_with_argv] for -compare
+   ([Check_compare.check_roots], [Check_compare.run]). *)
+let user_includes = ref []
 let push_include (s, alias) = includes := (s,alias) :: !includes
 
 let set_include d p =
@@ -111,6 +114,18 @@ let resolve_packages () =
   let ps = Rocq_package.resolve !packages in
   packages := [];
   List.iter (fun p -> set_include p.Rocq_package.dir p.Rocq_package.logpath) ps
+
+(* Used by options -compare, -challenge and -compare-out
+   ([rocqchk -compare CONFIG -challenge DIR -compare-out FILE]). *)
+let compare_config = ref None
+let compare_challenge = ref None
+let compare_out = ref None
+(* The directories whose libraries -compare takes for the installation's
+   ([Check_compare.run]), set by [init_with_argv]. *)
+let compare_trusted = ref []
+
+(* Used by option -sha256. *)
+let sha256_printed = ref false
 
 (* Initializes the LoadPath *)
 let init_load_path rocqenv =
@@ -199,10 +214,24 @@ let add_compile s =
     We no longer use [Arg.parse], in order to use share [Usage.print_usage]
     between coqtop and coqc. *)
 
+(* With -compare, the sha256 of each of the config's pre-checked libraries is
+   checked first, before any library is read, and every library is
+   validated as it is read. The pre-checked libraries join the admit list
+   here, so that [admit_list] holds only the libraries given with -admit
+   ([run_compare]), and the admitted libraries are read too: a pre-checked
+   one that no checked library depends on must be loaded as well. *)
 let compile_files senv =
-  CheckLibrary.recheck_library ~output_context:(!output_context || !CheckFlags.axiom_free) senv
+  let compare, prechecked = match !compare_config with
+    | None -> false, []
+    | Some cfg ->
+      true,
+      List.map (fun dp -> CheckLibrary.LogicalFile (CheckLibrary.path_of_dirpath dp))
+        (Check_compare.check_prechecked cfg)
+  in
+  CheckLibrary.recheck_library ~output_context:(!output_context || !CheckFlags.axiom_free)
+    ~intern_admit:compare ~validate_all:compare senv
     ~norec:(List.rev !norec_list)
-    ~admit:(List.rev !admit_list)
+    ~admit:(List.rev_append !admit_list prechecked)
     ~check:(List.rev !compile_list)
 
 let version () =
@@ -233,6 +262,10 @@ let print_usage_channel co command =
 \n  -axiom-free                 fail if axioms or unsafe features are used\
 \n  -m, --memory                print the maximum heap size\
 \n  -silent                     disable trace of constants being checked\
+\n  -compare config             compare the checked solution with a challenge\
+\n  -challenge dir              the challenge's directory (with -compare)\
+\n  -compare-out file           write the verdict of -compare to file\
+\n  -sha256 file                print the SHA-256 of file and exit\
 \n\
 \n  -impredicative-set          set sort Set impredicative\
 \n  -indices-matter             levels of indices (and nonuniform parameters)\
@@ -380,6 +413,24 @@ let explain_exn = function
 
 let profile = ref None
 
+(* The verdict file of a -compare run is removed first, before the command
+   line is parsed or anything is checked, so that a run that stops early (a
+   usage error, a malformed config, a challenge file's sha256, a solution
+   that fails its check) leaves no earlier run's verdict where a reader
+   would take it for this run's. The file is the argument after any
+   "-compare-out" token. One that cannot be removed is emptied, which no
+   reader takes for a verdict. *)
+let remove_stale_verdicts args =
+  let rec scan = function
+    | "-compare-out" :: f :: rem ->
+      (try Sys.remove f with Sys_error _ ->
+         try close_out (open_out_gen [Open_wronly; Open_trunc] 0 f) with Sys_error _ -> ());
+      scan rem
+    | _ :: rem -> scan rem
+    | [] -> ()
+  in
+  scan args
+
 let parse_args argv =
   let rec parse = function
     | [] -> ()
@@ -445,11 +496,48 @@ let parse_args argv =
     | "-silent" :: rem ->
         Flags.quiet := true; parse rem
 
+    | "-compare" :: f :: rem ->
+        (* Read now, so that a malformed config stops the run before any
+           library is loaded. A pre-checked library loads without a check,
+           through the admit list ([compile_files]). *)
+        compare_config := Some (Check_compare.read_config f); parse rem
+    | "-compare" :: [] -> usage 1
+
+    | "-challenge" :: d :: rem ->
+        if not (exists_dir d) then
+          fatal_error (str "Directory '" ++ str d ++ str "' does not exist") 1;
+        compare_challenge := Some d; parse rem
+    | "-challenge" :: [] -> usage 1
+
+    | "-compare-out" :: f :: rem -> compare_out := Some f; parse rem
+    | "-compare-out" :: [] -> usage 1
+
+    | "-sha256" :: f :: rem ->
+        print_endline (Check_compare.sha256_of_file f);
+        sha256_printed := true; parse rem
+    | "-sha256" :: [] -> usage 1
+
     | s :: _ when s<>"" && s.[0]='-' ->
         fatal_error (str "Unknown option " ++ str s) 1
     | s :: rem ->  add_compile s; parse rem
   in
-  parse (List.tl (Array.to_list argv))
+  let args = List.tl (Array.to_list argv) in
+  remove_stale_verdicts args;
+  parse args;
+  (* -sha256 prints the digest a config gives, and does nothing else. *)
+  if !sha256_printed then exit 0;
+  begin match !compare_config, !compare_challenge, !compare_out with
+  | None, None, None | Some _, Some _, Some _ -> ()
+  | _ ->
+    fatal_error
+      (str "Options -compare, -challenge and -compare-out go together.") 1
+  end;
+  (* A package's directory would be a load path that the config does not
+     pin and that the challenge does not stand in for. *)
+  if Option.has_some !compare_config && not (List.is_empty !packages) then
+    fatal_error
+      (str "Option -package cannot be used with -compare: a package's directory \
+            is a load path that the config does not pin.") 1
 
 let init_profile ~file =
   let ch = open_out file in
@@ -475,6 +563,13 @@ let init_with_argv argv =
       | Boot -> ()
       | Env coqenv -> init_load_path coqenv
     in
+    (* the top-level names that the default load path (the corelib
+       directory, user-contrib, the XDG directories and ROCQPATH) serves,
+       before -package and -R/-Q add theirs, for -compare *)
+    let default_roots = CheckLibrary.bound_roots () in
+    (* the -R/-Q roots alone, taken before -package adds its roots, which
+       -compare refuses *)
+    user_includes := List.rev !includes;
     (* additional loadpath, given with -R/-Q options *)
     resolve_packages ();
     NewProfile.profile "add_load_paths" (fun () ->
@@ -483,24 +578,64 @@ let init_with_argv argv =
           (List.rev !includes))
       ();
     includes := [];
+    if Option.has_some !compare_config then begin
+      (* reported as the other errors of the command line are *)
+      (try Check_compare.check_roots ~default_roots !user_includes
+       with CErrors.UserError msg -> fatal_error msg 1);
+      (* The corelib directory and user-contrib, as -coqlib or ROCQLIB
+         select them, and the directories of ROCQPATH and COQPATH, which
+         [init_load_path] binds; not the plugins directory, which it binds
+         under Corelib, nor the XDG directories nor the working directory,
+         which it binds too. With -boot it binds none of them.
+         [init_load_path] has warned about COQPATH already. *)
+      compare_trusted := (match coqenv with
+        | Boot -> []
+        | Env coqenv ->
+          (Boot.Env.corelib coqenv |> Boot.Path.to_string) ::
+          (Boot.Env.user_contrib coqenv |> Boot.Path.to_string) ::
+          CWarnings.with_warn "-deprecated-coq-env-var" Envars.coqpath ())
+    end;
     make_senv ()
   with e ->
     fatal_error (str "Error during initialization :" ++ (explain_exn e)) (CErrors.exit_code e)
 
 let init() = init_with_argv Sys.argv
 
+let fatal_exn e =
+  if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
+  fatal_error (explain_exn e) (CErrors.exit_code e)
+
 let run senv =
   try
     let senv = compile_files senv in
     flush_all(); senv
-  with e ->
-    if CDebug.(get_flag misc) then Printexc.print_backtrace stderr;
-    fatal_error (explain_exn e) (CErrors.exit_code e)
+  with e -> fatal_exn e
+
+(* A run that cannot complete the comparison exits non-zero and writes no
+   verdict file; a verdict, whatever it says, leaves the exit status at 0
+   ([Check_compare.run]). [empty_senv] is the empty environment [init]
+   made, which the challenge is loaded on. *)
+let run_compare env empty_senv =
+  match !compare_config with
+  | None -> ()
+  | Some cfg ->
+    let dir = Option.get !compare_challenge and out = Option.get !compare_out in
+    let name f = fst (CheckLibrary.try_locate_qualified_library f) in
+    (* -admit names a library to load without a check, never one to check.
+       [admit_list] holds the libraries given with -admit, and not the
+       pre-checked ones ([compile_files]). *)
+    let checked = List.map name (!compile_list @ !norec_list) in
+    let admitted = List.map name (List.rev !admit_list) in
+    try
+      Check_compare.run cfg ~dir ~out ~roots:!user_includes ~trusted:!compare_trusted
+        ~checked ~admitted ~add_load_path:add_rec_path env empty_senv
+    with e -> fatal_exn e
 
 let main () =
-  let senv = init() in
-  let senv, axioms = run senv in
+  let empty_senv = init() in
+  let senv, axioms = run empty_senv in
   let env = Safe_typing.env_of_safe_env senv in
+  run_compare env empty_senv;
   Check_stat.stats env (if !output_context then Some axioms else None);
   if !CheckFlags.axiom_free && not (Mod_checking.is_axiom_free env axioms) then
     fatal_error (str "Axioms or unsafe features found (-axiom-free).") 1;

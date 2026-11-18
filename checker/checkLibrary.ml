@@ -344,11 +344,12 @@ let opaques_seg : seg_proofs ObjFile.id = ObjFile.make_id "opaques"
 (* The [vmlibrary] segment is deliberately not read: the checker compiles the VM
    bytecode itself from the declarations it checks (see [Safe_checking]), so the
    serialized bytecode is neither trusted nor needed. *)
-(* [validated] is the set of libraries which must be validated when read even
-   if they are interned as a dependency, namely those named on the command
-   line and not admitted. *)
+(* [validated dir] says whether the library [dir] must be validated when read
+   even if it is interned as a dependency: with [recheck_library
+   ~validate_all:true] every library, and otherwise those named on the
+   command line and not admitted. *)
 let intern_from_file ~intern_mode ~validated (dir, f) =
-  let validate = intern_mode <> Dep || LibrarySet.mem dir validated in
+  let validate = intern_mode <> Dep || validated dir in
   Flags.if_verbose chk_pp (str"[intern "++str f++str" ...");
   let (sd,md,table,digest) =
     try
@@ -425,7 +426,13 @@ and fold_deps_list seen ff modl needed =
 let fold_deps_list ff modl acc =
   snd (fold_deps_list LibrarySet.empty ff modl (LibrarySet.empty,acc))
 
-let recheck_library ?(output_context=false) senv ~norec ~admit ~check =
+(* The libraries the last [recheck_library] imported without a check. *)
+let unchecked_libraries = ref []
+
+let unchecked () = !unchecked_libraries
+
+let recheck_library ?(output_context=false) ?(intern_admit=false) ?(validate_all=false)
+    senv ~norec ~admit ~check =
   let ml = List.map try_locate_qualified_library check in
   let nrl = List.map try_locate_qualified_library norec in
   let al =  List.map try_locate_qualified_library admit in
@@ -438,8 +445,19 @@ let recheck_library ?(output_context=false) senv ~norec ~admit ~check =
     fold LibrarySet.remove al
       (fold LibrarySet.add nrl (fold LibrarySet.add ml LibrarySet.empty))
   in
+  let validated dir = validate_all || LibrarySet.mem dir validated in
   let needed = List.fold_right (intern_library ~intern_mode:Rec ~validated LibrarySet.empty) ml [] in
   let needed = List.fold_right (intern_library ~intern_mode:Root ~validated LibrarySet.empty) nrl needed in
+  (* With [intern_admit], read the admitted libraries too, in [Dep] mode so
+     that they are validated only with [validate_all] ([validated] excludes
+     [al] otherwise). Without this, an admitted library that no other library
+     given here depends on is never read, so it is missing from [depgraph] and
+     the closure of [al] below raises an anomaly. *)
+  let needed =
+    if intern_admit then
+      List.fold_right (intern_library ~intern_mode:Dep ~validated LibrarySet.empty) al needed
+    else needed
+  in
   let needed = List.rev needed in
   (* first compute the closure of norec, remove closure of check,
      add closure of admit, and finally remove norec and check *)
@@ -449,10 +467,128 @@ let recheck_library ?(output_context=false) senv ~norec ~admit ~check =
   (* explicitly required modules cannot be skipped... *)
   let nochk =
     List.fold_right LibrarySet.remove (List.map fst (nrl@ml)) nochk in
-  (* *)
+  unchecked_libraries :=
+    List.filter_map (fun (dir, _) -> if LibrarySet.mem dir nochk then Some dir else None) needed;
   Flags.if_verbose Feedback.msg_notice (fnl()++hv 2 (str "Ordered list:" ++ fnl() ++
     prlist
     (fun (dir,_) -> pr_dirpath dir ++ fnl()) needed));
   let senv = List.fold_left (check_one_lib ~output_context nochk) (senv, Mod_checking.empty_axioms) needed in
   Flags.if_verbose Feedback.msg_notice (str"Modules were successfully checked");
   senv
+
+(************************************************************************)
+(*s The challenge side of [rocqchk -compare].
+
+    The challenge libraries carry the same names as the solution's, so they
+    cannot share this module's per-library tables: [libraries_table] would
+    make [intern_library] skip a library of one side because the other
+    side's library of that name is already there, and [opaque_tables], keyed
+    by library name as well, would let a challenge proof body stand in for a
+    solution one. So the challenge is loaded between [swap_tables] calls: the
+    solution's tables are set aside, the challenge is loaded with tables of
+    its own, and the solution's are put back. The challenge environment is a
+    value and survives the swap. Its opaque proofs stay in the challenge's
+    tables, not in those [indirect_accessor] reads once the solution's are
+    back, which is sound because the comparison never looks into an opaque
+    body of the challenge. *)
+
+type tables = {
+  tb_libraries : library_t LibraryMap.t;
+  tb_opaques : seg_proofs LibraryMap.t;
+  tb_depgraph : (compilation_unit_name * Safe_typing.vodigest) array LibraryMap.t;
+  tb_load_paths : CUnix.physical_path list * logical_path list;
+}
+
+(* Empty library tables, with the load path as it is: the challenge load adds
+   its own directories in front of the solution's, so that a library name the
+   two sides share resolves to the challenge's copy, while a pre-checked
+   library, which is one file for both sides, still resolves. *)
+let fresh_tables () = {
+  tb_libraries = LibraryMap.empty;
+  tb_opaques = LibraryMap.empty;
+  tb_depgraph = LibraryMap.empty;
+  tb_load_paths = !load_paths;
+}
+
+let swap_tables t =
+  let old = {
+    tb_libraries = !libraries_table;
+    tb_opaques = !opaque_tables;
+    tb_depgraph = !depgraph;
+    tb_load_paths = !load_paths;
+  } in
+  libraries_table := t.tb_libraries;
+  opaque_tables := t.tb_opaques;
+  depgraph := t.tb_depgraph;
+  load_paths := t.tb_load_paths;
+  old
+
+type library = library_t
+
+(* The libraries the challenge files name, then the given shared libraries,
+   each with its dependencies, in dependency order, with the dependency
+   digests each of them records. Each is validated as it is read, and none
+   is imported: the caller checks those digests against the solution's
+   before any of it reaches an environment. The challenge directory is
+   trusted, but the load path may find another file for a library, one the
+   solution's side wrote when the challenge directory lacks that library,
+   and the caller refuses such a file only once it is read.
+
+   A shared library is one the solution loaded from outside the root the
+   challenge stands in for: a library of the installed load path. The
+   challenge files' own closure reaches only the ones their Require lines
+   name, and the solution may load more; a universe constraint one of those
+   carries between two levels the challenge does know would otherwise look
+   like a constraint the solution added. They are read into the same
+   tables, so a library both lists reach is read once.
+
+   The two results are the files' closure, which is what the comparison
+   walks, and every library to import, the files' closure first. *)
+let intern_challenge files shared =
+  let intern = intern_library ~intern_mode:Dep ~validated:(fun _ -> true) LibrarySet.empty in
+  let locs = List.map (fun f -> try_locate_qualified_library (PhysicalFile f)) files in
+  let needed = List.fold_right intern locs [] in
+  let all = List.fold_right intern (List.map try_locate_absolute_library shared) needed in
+  List.rev needed, List.rev all
+
+(* Import the interned libraries without a check: the challenge files are
+   checked when the challenge is built, and a library they depend on is
+   another challenge file, a pre-checked library or a shared one. *)
+let import_challenge senv needed =
+  List.fold_left
+    (fun senv (_, m) ->
+       Safe_checking.unsafe_import senv m.library_compiled m.library_digest)
+    senv needed
+
+let library_file dir = snd (try_locate_absolute_library dir)
+
+(* The libraries loaded so far, from the tables in place. *)
+let loaded () = LibraryMap.bindings !libraries_table
+
+let deps_of libs = List.map (fun (dir, m) -> dir, m.library_deps) libs
+
+let files_of libs = List.map (fun (dir, m) -> dir, m.library_filename) libs
+
+(* The path of the [.vo] file of the library [lib] below the directory that
+   [root] is bound to, when [lib] lies strictly below [root], by the names
+   they print: a name component holding a dot, which a [.vo] file can record
+   though no identifier holds one, is read as the dots print. The load path
+   binds one directory per name component below a root. *)
+let vo_path_below ~root lib =
+  let r = DirPath.to_string root ^ "." and l = DirPath.to_string lib in
+  if CString.is_prefix r l then
+    let below = String.sub l (String.length r) (String.length l - String.length r) in
+    Some (String.concat "/" (String.split_on_char '.' below) ^ ".vo")
+  else None
+
+let under_root ~root lib =
+  String.equal (DirPath.to_string lib) (DirPath.to_string root)
+  || Option.has_some (vo_path_below ~root lib)
+
+(* The first component of each logical path the load path binds, each once. *)
+let bound_roots () =
+  List.sort_uniquize Id.compare
+    (List.map_filter (fun dp -> match List.rev (DirPath.repr dp) with
+         | id :: _ -> Some id
+         | [] -> None)
+        (snd !load_paths))
