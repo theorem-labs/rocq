@@ -23,32 +23,47 @@
     side numbers in the order it declares them: no conversion, no
     reduction, and no constant is unfolded. A global level or quality that
     only the constraints of a polymorphic context name is renamed by the
-    one solution constraint that fits it; when several fit and nothing else
-    decides, by the one of the same library and number.
+    one solution constraint that fits it. When nothing else decides, it is
+    renamed to the one of the same library and number: the one among
+    several solution constraints that fit, or, for a constraint between two
+    such levels or qualities, both ends at once when the solution holds that
+    same constraint. Nothing is searched beyond that: when the solution
+    numbers such a level otherwise, as when it declares more global levels
+    before it, and several of its constraints fit, the declaration differs
+    as undecided, though the solution may be honest. With [Universe u w.] in
+    the challenge, [Universe spare1 spare2 u w.] in the solution and
+    [small@{i | i < u, i < w}] on both sides, each constraint of [small]
+    fits two of the solution's, and neither of them has the number of the
+    challenge's level.
 
     A challenge constant without a body (an axiom, a parameter or an
     admitted proof, which a [.vo] file does not tell apart) may be given one
     by the solution only when the challenge states it as a proposition or
     the config names it as a theorem. That body must be opaque when another
-    compared challenge declaration names the constant in its type or its
-    transparent body, unless the challenge states it as data: a transparent
-    proof would unfold there and change what that declaration states. So a
-    function that the config names and that a lemma of the challenge
-    specifies may be transparent: the lemma is stated about the function the
-    solution chooses. What the challenge states a constant to be is read
-    from the sort of the type it states for it, typed in the challenge
-    environment and not reduced. In [Prop] or [SProp], the constant is a
-    proposition. In [Set] or [Type], it is data, even when its type unfolds
-    to a proposition: a challenge that wants a lemma kept opaque states it
-    in [Prop]. In a sort variable or a global sort, or when the type cannot
-    be typed there, the run cannot tell, and each rule refuses: such a
-    constant may be given a body only when the config names it, and only an
-    opaque one when another declaration names it. A sort-polymorphic
-    constant is a proof at an instance in [Prop], and a global sort, which a
-    library declares, may be meant for propositions. The type of a field of
-    a module type may name the other fields of the module type and the
-    functor parameters, which no environment holds, so such a field that
-    the challenge leaves without a body may not be given one.
+    compared challenge declaration names the constant in what the
+    comparison reads of it (the type or transparent body of a constant, the
+    parameters, arities, constructor types or projection types of an
+    inductive block, or any field of a module type, the types of its
+    functor parameters included), unless the challenge states it as data: a
+    transparent proof would unfold there and change what that declaration
+    states. So a function that the config names and that a lemma of the
+    challenge specifies may be transparent: the lemma is stated about the
+    function the solution chooses. What the challenge states a constant to
+    be is read from the sort of the type it states for it, typed in the
+    challenge environment and not reduced. In [Prop] or [SProp], the
+    constant is a proposition. In [Set] or [Type], it is data, even when
+    its type unfolds to a proposition: a challenge that wants a lemma kept
+    opaque states it in [Prop]. In a sort variable or a global sort, or
+    when the type cannot be typed there, the run cannot tell, and each rule
+    refuses: such a constant may be given a body only when the config names
+    it, and only an opaque one when another declaration names it. A
+    sort-polymorphic constant is a proof at an instance in [Prop], and a
+    global sort, which a library declares, may be meant for propositions.
+    The type of a field of a module type may name the other fields of the
+    module type and the functor parameters, which no environment holds, so
+    such a field that the challenge leaves without a body may not be given
+    one, whatever its type. A difference in a module type names the field
+    it lies in.
 
     A challenge constant that the kernel registers as a primitive type
     ([Primitive int := #int63_type]) differs from a solution constant that

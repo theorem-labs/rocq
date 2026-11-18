@@ -489,10 +489,12 @@ type umap = {
       (** challenge to solution, on global qualities ([QGlobal]) only *)
   qbwd : Sorts.Quality.t Sorts.Quality.Map.t;  (** solution to challenge *)
   ties : bool;
-      (** whether the constraints of a polymorphic context may decide
-          between several solution levels or qualities that fit by taking
-          the challenge's own ([map_through_constraints]); only the last
-          resort of [compare_declarations] sets it *)
+      (** whether the constraints of a polymorphic context may take a tie
+          once nothing else decides them: the challenge's own level or
+          quality among several solution ones that fit, or both ends of a
+          constraint that the solution holds as it is
+          ([map_through_constraints]); only the last resort of
+          [compare_declarations] sets it *)
   params : Mod_subst.substitution option;
       (** the challenge's parameters of the functors whose signatures are
           being compared, each to the solution's; [None] outside them *)
@@ -524,6 +526,13 @@ let diff fmt = Printf.ksprintf (fun s -> raise (Diff s)) fmt
    a later declaration -- the one that introduced those levels -- may map
    them. *)
 exception Undecided of diff
+
+(* [f ()], with [what] in front of the reason of a difference that it
+   finds or leaves undecided: the part of a declaration that differs. *)
+let within what f =
+  try f () with
+  | Diff d -> raise (Diff (what ^ ": " ^ d))
+  | Undecided d -> raise (Undecided (what ^ ": " ^ d))
 
 let level_name u = Univ.Level.to_string u
 
@@ -833,53 +842,91 @@ let eq_rel_context m c1 c2 =
    one solution constraint has that shape, [u] maps to its [v] ([add] keeps
    the map one-to-one), and the same holds the other way round for
    [(u, k, x)]. Each such mapping can decide another constraint, so the
-   passes run until one maps nothing; what is still unmapped then is the
-   caller's to report.
+   passes run until one maps nothing.
 
-   When several solution constraints have that shape, none of them is
-   taken, unless [m.ties] is set and one of them is [u] itself: the same
-   library and number, which the two sides share when the solution declares
-   [u] where the challenge does. Any pairing is sound, since everything
-   compared after it -- the rest of the context, the other declarations and
-   both graphs -- is compared through the map it leaves, so a wrong one can
-   only fail a solution. [compare_declarations] sets [m.ties] only once
-   nothing else decides, so a comparison that maps [u] by a term comes
-   first.
+   Then, and only when [m.ties] is set, the first constraint still pending
+   that a tie decides takes it, and the passes resume: a tie is taken only
+   once the passes without one have settled, so it never pairs a level
+   that they would pair otherwise. A tie takes the challenge's own level or
+   quality: the same library and number, which the two sides share when
+   the solution declares it where the challenge does. For [(x, k, u)] that
+   several solution constraints fit, it is the one of their ends that is
+   [u]; for [(u, k, w)] with neither end mapped, a constraint between two
+   global ones, it is [u] and [w] both, when the solution holds
+   [(u, k, w)] itself. What is still unmapped once no tie decides anything
+   more is the caller's to report.
+
+   Any pairing is sound, since everything compared after it -- the rest of
+   the context, the other declarations and both graphs -- is compared
+   through the map it leaves, so a wrong one can only fail a solution.
+   [compare_declarations] sets [m.ties] only once no declaration decides
+   anything more without it, so a comparison that maps [u] by a term comes
+   first. Nothing is searched beyond the tie: when several solution
+   constraints fit and none of them has the challenge's own end, as when
+   the solution declares more global levels before the challenge's and so
+   numbers them otherwise, the level stays unmapped and the declaration
+   fails as undecided, though some pairing might fit.
 
    The universe constraints and the elimination constraints of a context
    have the same shape: [mapped] reads a challenge end through the map,
    [free] tells whether a solution end may still be mapped to, [same] and
    [same_kind] compare ends and kinds, and [add] maps an end. *)
 let map_through_constraints ~mapped ~free ~same ~same_kind ~add m challenge solution =
-  (* The end that the unmapped end [u] may map to: [ends] reads a solution
-     constraint as its end opposite [u]'s place, then its end at [u]'s
-     place. *)
-  let target m k x' u ends =
-    let fits ((_, k2, _) as c) =
-      let x2, v = ends c in
-      if same_kind k k2 && same x2 x' && free m v then Some v else None
-    in
-    match List.filter_map fits solution with
-    | [ v ] -> Some v
-    | [] -> None
-    | _ :: _ :: _ as l -> if m.ties && List.exists (same u) l then Some u else None
+  (* The solution ends that the unmapped end of a challenge constraint of
+     kind [k] may map to, its other end standing for [x']: [ends] reads a
+     solution constraint as its end opposite the unmapped one's place, then
+     its end at that place. *)
+  let fits m k x' ends =
+    List.filter_map (fun ((_, k2, _) as c) ->
+        let x2, v = ends c in
+        if same_kind k k2 && same x2 x' && free m v then Some v else None)
+      solution
   in
+  let forward (a, _, b) = a, b and backward (a, _, b) = b, a in
   let step (m, rest) ((u, k, v) as c) =
     match mapped m u, mapped m v with
     | Some _, Some _ -> m, rest
     | Some u', None ->
-      (match target m k u' v (fun (a, _, b) -> a, b) with
-       | Some v' -> add m v v', rest
-       | None -> m, c :: rest)
+      (match fits m k u' forward with
+       | [ v' ] -> add m v v', rest
+       | [] | _ :: _ :: _ -> m, c :: rest)
     | None, Some v' ->
-      (match target m k v' u (fun (a, _, b) -> b, a) with
-       | Some u' -> add m u u', rest
-       | None -> m, c :: rest)
+      (match fits m k v' backward with
+       | [ u' ] -> add m u u', rest
+       | [] | _ :: _ :: _ -> m, c :: rest)
     | None, None -> m, c :: rest
+  in
+  (* The map that a tie leaves for the pending constraint [(u, k, v)], when
+     one decides it. *)
+  let tie m (u, k, v) =
+    match mapped m u, mapped m v with
+    | Some _, Some _ -> None
+    | Some u', None ->
+      if List.exists (same v) (fits m k u' forward) then Some (add m v v) else None
+    | None, Some v' ->
+      if List.exists (same u) (fits m k v' backward) then Some (add m u u) else None
+    | None, None ->
+      if free m u && free m v
+         && List.exists (fun (u2, k2, v2) -> same_kind k k2 && same u u2 && same v v2) solution
+      then Some (add (add m u u) v v)
+      else None
+  in
+  let rec take_tie m seen = function
+    | [] -> None
+    | c :: rest ->
+      match tie m c with
+      | Some m -> Some (m, List.rev_append seen rest)
+      | None -> take_tie m (c :: seen) rest
   in
   let rec passes m pending =
     let m, rest = List.fold_left step (m, []) pending in
-    if List.length rest < List.length pending then passes m (List.rev rest) else m
+    let rest = List.rev rest in
+    if List.length rest < List.length pending then passes m rest
+    else if not m.ties then m
+    else
+      match take_tie m [] rest with
+      | Some (m, rest) -> passes m rest
+      | None -> m
   in
   passes m challenge
 
@@ -979,19 +1026,22 @@ let eq_universes u1 u2 = match u1, u2 with
    challenge then asks the solution to choose it, as for a function [f]
    left open with a lemma [f_spec] about it.
 
-   A constant that another compared challenge declaration names in its type
-   or its transparent body ([named], from [declaration_names]) must be
-   opaque, whether the config names it or not, unless the challenge states
-   it as data. The challenge states that declaration about a constant that
-   does not unfold, and a transparent body would let conversion unfold it
-   there, which changes what the declaration states: with
-   [L : exists n, n = 0] left without a body, [L = ex_intro _ 0 eq_refl] is
-   not provable, and once [L] is defined as that term it is proved by
-   reflexivity. A constant that no other declaration names changes no
-   statement but its own, so it may be transparent. A function
-   [f : nat -> nat] that the config names is not held to this: [f_spec] is
-   stated about the function the solution chooses and is provable only if
-   [f] unfolds.
+   A constant that another compared challenge declaration names in what the
+   comparison reads of it ([declaration_names]: the type or transparent
+   body of a constant, the parameters, arities, constructor types or
+   projection types of a block, or any field of a module type, the types of
+   its functor parameters included) must be opaque, whether the config
+   names it or not, unless the challenge states it as data. The challenge
+   states that declaration about a constant that does not unfold, and a
+   transparent body would let conversion unfold it there, which changes
+   what the declaration states: with [L : exists n, n = 0] left without a
+   body, [L = ex_intro _ 0 eq_refl] is not provable, and once [L] is
+   defined as that term it is proved by reflexivity. The refusal names the
+   first such declaration in the order of the comparison. A constant that
+   no other declaration names changes no statement but its own, so it may
+   be transparent. A function [f : nat -> nat] that the config names is not
+   held to this: [f_spec] is stated about the function the solution chooses
+   and is provable only if [f] unfolds.
 
    Both rules read only what the challenge's author wrote: the sort of the
    type the challenge states for the constant ([stated_sort]). In [Prop] or
@@ -1033,8 +1083,11 @@ let stated_sort env (cb : constant_body) =
     | exception e when CErrors.noncritical e -> Undetermined
 
 (* [env]: the challenge environment that [stated_sort] reads, [None] for a
-   field of a module type. *)
-let eq_const_body ~env ~is_theorem ~named m (cb1 : constant_body) (cb2 : constant_body) =
+   field of a module type. [named_by]: the first challenge declaration that
+   names the constant ([declaration_names]), if one does; a field of a
+   module type has none given, since with no environment the first rule
+   below refuses it any body. *)
+let eq_const_body ~env ~is_theorem ?named_by m (cb1 : constant_body) (cb2 : constant_body) =
   let[@warning "+9"] {
     const_relevance; const_universes; const_type; const_body;
     const_hyps = _;
@@ -1070,10 +1123,12 @@ let eq_const_body ~env ~is_theorem ~named m (cb1 : constant_body) (cb2 : constan
            && (match Lazy.force sort with Proposition -> false | Data | Undetermined -> true) ->
       diff "the challenge leaves this declaration open and the solution defines it"
     | Undef _, Def _
-      when (match Lazy.force sort with Data -> false | Proposition | Undetermined -> true)
-           && Lazy.force named ->
-      diff "the challenge leaves this constant without a body, another challenge \
-            declaration names it, and the solution gives it a transparent body"
+      when (match Lazy.force sort with Data -> false | Proposition | Undetermined -> true) ->
+      (match Option.bind named_by Lazy.force with
+       | Some by ->
+         diff "the challenge leaves this constant without a body, the challenge declaration \
+               %s names it, and the solution gives it a transparent body" by
+       | None -> m)
     | Undef _, (Def _ | OpaqueDef _) -> m
     | Undef _, _ -> diff "an assumption is a primitive or a symbol in the solution"
     (* An opaque body is never compared, but a proof stays a proof: a Qed in
@@ -1298,9 +1353,12 @@ let[@warning "+9"] rule_symbols { rewrules_rules } =
    user name and its canonical one, so a reference through an alias
    counts. An opaque body is not read: it is not compared, and what it
    names unfolds into no statement. Nor is a rewrite rule, of which the
-   comparison reads the symbols only. When the challenge leaves a constant
-   that this set holds without a body, [eq_const_body] requires the
-   solution's to be opaque unless the challenge states it as data. *)
+   comparison reads the symbols only. Each name maps to the first
+   declaration that names it, in the order of the lists given, which is
+   the order of the comparison. When the challenge leaves a constant that
+   this map holds without a body, [eq_const_body] requires the solution's
+   body to be opaque unless the challenge states it as data, and its
+   refusal names that declaration. *)
 let rec constr_names acc c = match Constr.kind c with
   | Constr.Const (k, _) ->
     KerName.Set.add (Constant.user k) (KerName.Set.add (Constant.canonical k) acc)
@@ -1340,9 +1398,21 @@ let rec signature_names acc = function
     signature_names (signature_names acc (Mod_declarations.mod_type mtb)) sign
 
 let declaration_names ~constants ~inductives ~modtypes =
-  let acc = List.fold_left (fun acc (_, _, cb) -> const_names acc cb) KerName.Set.empty constants in
-  let acc = List.fold_left (fun acc (_, _, mib) -> mind_names acc mib) acc inductives in
-  List.fold_left (fun acc (_, _, mtb) -> signature_names acc (Mod_declarations.mod_type mtb))
+  let add name names acc =
+    KerName.Set.fold (fun kn acc ->
+        if KerName.Map.mem kn acc then acc else KerName.Map.add kn name acc)
+      names acc
+  in
+  let acc =
+    List.fold_left (fun acc (name, _, cb) -> add name (const_names KerName.Set.empty cb) acc)
+      KerName.Map.empty constants
+  in
+  let acc =
+    List.fold_left (fun acc (name, _, mib) -> add name (mind_names KerName.Set.empty mib) acc)
+      acc inductives
+  in
+  List.fold_left (fun acc (name, _, mtb) ->
+      add name (signature_names KerName.Set.empty (Mod_declarations.mod_type mtb)) acc)
     acc modtypes
 
 (************************************************************************)
@@ -1367,7 +1437,9 @@ let declaration_names ~constants ~inductives ~modtypes =
     is compared parameter by parameter, under the renaming of [umap.params].
     No environment holds the fields of a module type or the functor
     parameters, which a field's type may name, so a field is compared with
-    no environment to type it in ([stated_sort]). *)
+    no environment to type it in ([stated_sort]). The reason of a
+    difference names the functor parameters and the fields it lies in,
+    from the outermost ([within]). *)
 
 let rec eq_signature m s1 s2 =
   match s1, s2 with
@@ -1378,7 +1450,8 @@ let rec eq_signature m s1 s2 =
        another under it. The solution's parameters in scope stay one-to-one
        with the challenge's: were [p2] bound again inside, a name under
        either binding would stand for both. *)
-    if MBId.Set.mem p2 m.bound then diff "the solution binds one functor parameter twice";
+    if MBId.Set.mem p2 m.bound then
+      diff "the solution binds its functor parameter %s twice" (MBId.to_string p2);
     let mp2 = ModPath.MPbound p2 in
     (* [add_mbid], not [join]: each challenge parameter is renamed once, so
        one that has the name of a solution parameter is not renamed again. *)
@@ -1387,7 +1460,10 @@ let rec eq_signature m s1 s2 =
         (Option.default Mod_subst.empty_subst m.params)
     in
     let inner = { m with params = Some params; bound = MBId.Set.add p2 m.bound } in
-    let inner = eq_modtype inner t1 t2 in
+    let inner =
+      within ("the functor parameter " ^ Id.to_string (MBId.to_id p1)) (fun () ->
+          eq_modtype inner t1 t2)
+    in
     let inner = eq_signature inner s1 s2 in
     { inner with params = m.params; bound = m.bound }
   | NoFunctor _, MoreFunctor _ -> diff "a module type is a functor in the solution"
@@ -1398,21 +1474,22 @@ and eq_structure m b1 b2 =
       match List.assoc_opt l b2 with
       | None -> diff "the field %s is missing from the solution" (Id.to_string l)
       | Some f2 ->
+        let in_field cmp = within ("the field " ^ Id.to_string l) cmp in
         match f1, f2 with
         (* A field of a module type is never a config-named theorem: the
            config names a constant of the environment. *)
         | SFBconst c1, SFBconst c2 ->
-          (* never forced: with no environment, the first rule refuses a body *)
-          eq_const_body ~env:None ~is_theorem:false ~named:(lazy true) m c1 c2
-        | SFBmind i1, SFBmind i2 -> eq_mib_body m i1 i2
+          in_field (fun () -> eq_const_body ~env:None ~is_theorem:false m c1 c2)
+        | SFBmind i1, SFBmind i2 -> in_field (fun () -> eq_mib_body m i1 i2)
         | SFBrules r1, SFBrules r2 ->
           let symbols1 = List.map (rename m Mod_subst.subst_constant) (rule_symbols r1) in
           if not (CList.equal Constant.CanOrd.equal symbols1 (rule_symbols r2)) then
             diff "the field %s rewrites other symbols in the solution" (Id.to_string l);
           m
         | SFBmodule mb1, SFBmodule mb2 ->
-          eq_signature m (Mod_declarations.mod_type mb1) (Mod_declarations.mod_type mb2)
-        | SFBmodtype t1, SFBmodtype t2 -> eq_modtype m t1 t2
+          in_field (fun () ->
+              eq_signature m (Mod_declarations.mod_type mb1) (Mod_declarations.mod_type mb2))
+        | SFBmodtype t1, SFBmodtype t2 -> in_field (fun () -> eq_modtype m t1 t2)
         | (SFBconst _ | SFBmind _ | SFBrules _ | SFBmodule _ | SFBmodtype _), _ ->
           diff "the field %s is of another kind in the solution" (Id.to_string l))
     m b1
@@ -2243,27 +2320,30 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
       l
   in
   let constants =
-    Environ.fold_constants (fun c cb acc ->
-        if in_libs libs (Constant.modpath c) then (Constant.to_string c, c, cb) :: acc
-        else acc)
-      challenge_env []
+    by_name Constant.UserOrd.compare
+      (Environ.fold_constants (fun c cb acc ->
+           if in_libs libs (Constant.modpath c) then (Constant.to_string c, c, cb) :: acc
+           else acc)
+          challenge_env [])
   in
   let inductives =
-    Environ.fold_inductives (fun i mib acc ->
-        if in_libs libs (MutInd.modpath i) then (MutInd.to_string i, i, mib) :: acc
-        else acc)
-      challenge_env []
+    by_name MutInd.UserOrd.compare
+      (Environ.fold_inductives (fun i mib acc ->
+           if in_libs libs (MutInd.modpath i) then (MutInd.to_string i, i, mib) :: acc
+           else acc)
+          challenge_env [])
   in
   let modtypes =
-    DirPath.Set.fold (fun dp acc ->
-        let mp = ModPath.MPfile dp in
-        match Environ.lookup_module mp challenge_env with
-        | mb -> signature_modtypes mp acc (Mod_declarations.mod_type mb)
-        | exception Not_found ->
-          CErrors.anomaly
-            Pp.(str ("The challenge environment does not hold the library " ^
-                     DirPath.to_string dp ^ ", which the challenge loaded.")))
-      libs []
+    by_name ModPath.compare
+      (DirPath.Set.fold (fun dp acc ->
+           let mp = ModPath.MPfile dp in
+           match Environ.lookup_module mp challenge_env with
+           | mb -> signature_modtypes mp acc (Mod_declarations.mod_type mb)
+           | exception Not_found ->
+             CErrors.anomaly
+               Pp.(str ("The challenge environment does not hold the library " ^
+                        DirPath.to_string dp ^ ", which the challenge loaded.")))
+          libs [])
   in
   (* forced only by a challenge constant without a body, which the challenge
      does not state as data, that the solution gives a transparent one *)
@@ -2272,26 +2352,27 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
       match Environ.lookup_constant_opt c solution_env with
       | None -> fail name "missing"
       | Some cb' ->
-        let named = lazy (let names = Lazy.force names in
-                          KerName.Set.mem (Constant.user c) names
-                          || KerName.Set.mem (Constant.canonical c) names)
+        let named_by = lazy (let names = Lazy.force names in
+                             match KerName.Map.find_opt (Constant.user c) names with
+                             | Some _ as by -> by
+                             | None -> KerName.Map.find_opt (Constant.canonical c) names)
         in
         step name (fun m ->
             eq_primitive_type ~challenge_env ~solution_env c;
             eq_const_body ~env:(Some challenge_env)
-              ~is_theorem:(CString.Set.mem name theorems) ~named m cb cb'))
-    (by_name Constant.UserOrd.compare constants);
+              ~is_theorem:(CString.Set.mem name theorems) ~named_by m cb cb'))
+    constants;
   List.iter (fun (name, i, mib) ->
       if not (Environ.mem_mind i solution_env) then fail name "missing"
       else
         let mib' = Environ.lookup_mind i solution_env in
         step name (fun m -> eq_mib_body m mib mib'))
-    (by_name MutInd.UserOrd.compare inductives);
+    inductives;
   List.iter (fun (name, mp, mt) ->
       match Environ.lookup_modtype mp solution_env with
       | mt' -> step name (fun m -> eq_modtype m mt mt')
       | exception Not_found -> fail name "missing")
-    (by_name ModPath.compare modtypes);
+    modtypes;
   (* The declarations set aside as undecided, again, until a pass decides
      none of them. Then the first of them that a tie decides
      ([map_through_constraints]) is compared with ties allowed, and the

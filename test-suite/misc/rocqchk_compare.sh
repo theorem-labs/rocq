@@ -235,12 +235,13 @@ verdict main/name main.json '"name":"Top.A.thm","verdict":"fail"' '"name":"Top.A
   '{"name":"Top.Defs.th\u00e9or\u00e8me_\u00ff","reason":'
 
 # The field P of the module type SIG is given a body. A module type is no
-# constant of the environment, and is compared all the same.
+# constant of the environment, and is compared all the same. The reason
+# names the field.
 sed 's/^  Parameter P : Prop\./  Definition P := prop_id./' "$d/main/ch/Defs.v" |
   compile main/modtype Defs.v
 compile main/modtype A.v < "$d/main/honest/A.v"
 verdict main/modtype main.json '"name":"Top.A.thm","verdict":"fail"' \
-  '{"name":"Top.Defs.SIG","reason":"the challenge leaves this declaration open and the solution defines it"}'
+  '{"name":"Top.Defs.SIG","reason":"the field P: the challenge leaves this declaration open and the solution defines it"}'
 
 # An axiom that the proof reaches through a module whose signature hides it.
 solution main/sealed <<'EOF'
@@ -353,7 +354,8 @@ EOF
 # The statement of thm names the proof L, which the challenge leaves without
 # a body: L does not unfold there, and thm is not provable. The challenge
 # states the type of L in Prop. A solution that proves L by Defined proves
-# thm by conversion, which changes what thm states, so L must be opaque.
+# thm by conversion, which changes what thm states, so L must be opaque. The
+# reason names thm, the declaration that names L.
 compile named/ch A.v <<'EOF'
 Unset Elimination Schemes.
 Inductive nat : Set := O : nat | S : forall _ : nat, nat.
@@ -378,7 +380,7 @@ Theorem thm : eq (ex nat (fun n => eq nat n O)) L (ex_intro nat (fun n => eq nat
 Proof. exact (eq_refl (ex nat (fun n => eq nat n O)) L). Qed.
 EOF
 open_lemma named \
-  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, the challenge declaration Top.A.thm names it, and the solution gives it a transparent body"' \
   '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this constant without a body'
 
 # The same with L sort-polymorphic: the challenge states the type of L in
@@ -409,7 +411,36 @@ Theorem thm : eq sbool@{Prop;} L@{Prop;} strue@{Prop;}.
 Proof. exact (eq_refl sbool@{Prop;} L@{Prop;}). Qed.
 EOF
 open_lemma poly \
-  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, the challenge declaration Top.A.thm names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this constant without a body'
+
+# The same with the type of L in a global sort: B lives in the sort s that a
+# Sort command declares, and L is an element of B. The run cannot tell
+# whether s is meant for propositions, so L must be opaque: a transparent L
+# proves thm by conversion as in named. eq is stated over B.
+compile gsort/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Sort s.
+Inductive B : Univ@{s;Set} := b : B.
+Inductive eq (x : B) : forall _ : B, Prop := eq_refl : eq x x.
+Lemma L : B.
+Proof. Admitted.
+Theorem thm : eq L b.
+Proof. Admitted.
+EOF
+compile gsort/defined A.v <<'EOF'
+Require Import Corelib.Init.Ltac.
+Unset Elimination Schemes.
+Sort s.
+Inductive B : Univ@{s;Set} := b : B.
+Inductive eq (x : B) : forall _ : B, Prop := eq_refl : eq x x.
+Lemma L : B.
+Proof. exact b. Defined.
+Theorem thm : eq L b.
+Proof. exact (eq_refl L). Qed.
+EOF
+open_lemma gsort \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, the challenge declaration Top.A.thm names it, and the solution gives it a transparent body"' \
   '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this constant without a body'
 
 # The same with the type of L written through Spec, a definition typed Type
@@ -578,10 +609,12 @@ verdict prim/defined prim.json '"name":"Top.A.f","verdict":"pass"' \
 
 # A parameter T that the solution declares as a primitive type, of the same
 # type Set: both are constants without a body, but the literals of a
-# primitive type have it for type. max_length, the primitive constant
-# #array_max_length, is a literal of type T, so the solution proves T
-# inhabited, which the challenge's T is not known to be. The config permits
-# T as an axiom, so that only the comparison of primitive types refuses it.
+# primitive type have it for type, so the solution proves T inhabited, which
+# the challenge's T is not known to be. Its proof of thm holds a literal of
+# T, which Eval compute gives for max_length (the primitive constant
+# #array_max_length, a definition whose body is that literal), so it reaches
+# no constant but T. The config permits T as an axiom, so that only the
+# comparison of primitive types refuses it.
 compile primtype/ch A.v <<'EOF'
 Unset Elimination Schemes.
 Inductive True : Prop := I : True.
@@ -599,7 +632,8 @@ Inductive ex (A : Type) (P : forall _ : A, Prop) : Prop :=
   ex_intro : forall x : A, forall _ : P x, ex A P.
 Primitive T := #int63_type.
 Primitive max_length := #array_max_length.
-Definition thm : ex T (fun _ => True) := ex_intro T (fun _ => True) max_length I.
+Definition thm : ex T (fun _ => True) :=
+  Eval compute in ex_intro T (fun _ => True) max_length I.
 EOF
 verdict primtype/literal primtype.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.T differs: this constant is no primitive type in the challenge and the primitive type #int63_type in the solution"' \
@@ -752,7 +786,7 @@ verdict functorg/clash-swapped functorg.json \
 # A field of a module type whose type names another field. No environment
 # holds the fields of a module type, so the comparison does not type the
 # field x, and x, which the challenge leaves without a body, may not be
-# given one: the run writes a verdict that says so.
+# given one: the run writes a verdict that says so, and names the field.
 compile field/ch A.v <<'EOF'
 Module Type T.
   Parameter t : Set.
@@ -772,8 +806,33 @@ End T.
 Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
 EOF
 verdict field/defined field.json \
-  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.T differs: the challenge leaves this declaration open and the solution defines it"' \
-  '{"name":"Top.A.T","reason":"the challenge leaves this declaration open and the solution defines it"}'
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.T differs: the field x: the challenge leaves this declaration open and the solution defines it"' \
+  '{"name":"Top.A.T","reason":"the field x: the challenge leaves this declaration open and the solution defines it"}'
+
+# The same with a field whose type, True, is a proposition, which typed in
+# the environment would let the solution prove it. The comparison does not
+# type a field, so x may not be given a body either.
+compile fieldprop/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive True : Prop := I : True.
+Module Type T.
+  Parameter x : True.
+End T.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config fieldprop > "$d/fieldprop.json"
+compile fieldprop/defined A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive True : Prop := I : True.
+Module Type T.
+  Definition x : True := I.
+End T.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict fieldprop/defined fieldprop.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.T differs: the field x: the challenge leaves this declaration open and the solution defines it"' \
+  '{"name":"Top.A.T","reason":"the field x: the challenge leaves this declaration open and the solution defines it"}'
 
 # A template-polymorphic inductive type. An application of Box is typed by
 # its template data, which says which parameters bind a universe.
@@ -808,6 +867,40 @@ Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
 EOF
 verdict template/global template.json '"name":"Top.A.thm","verdict":"fail"' \
   '{"name":"Top.A.Box","reason":"the template-polymorphic parameters"}'
+
+# The template context of Box constrains the level that it binds below u,
+# which U names, so an application of Box takes a type of a level below u.
+# helper declares a level before the challenge's: the two sides number the
+# levels differently. A copy whose Box binds a level below w, which W names,
+# differs in its template context alone: the other fields of Box are the
+# challenge's.
+compile templatec/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Universe u w.
+Definition U := Type@{u}.
+Definition W := Type@{w}.
+#[universes(template)]
+Inductive Box@{i | i <= u} (A : Type@{i}) : Type@{i} := box : forall _ : A, Box A.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config templatec > "$d/templatec.json"
+compile templatec/honest A.v <<'EOF'
+Definition helper := Type.
+Unset Elimination Schemes.
+Universe u w.
+Definition U := Type@{u}.
+Definition W := Type@{w}.
+#[universes(template)]
+Inductive Box@{i | i <= u} (A : Type@{i}) : Type@{i} := box : forall _ : A, Box A.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict templatec/honest templatec.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+sed 's/^Inductive Box@{i | i <= u}/Inductive Box@{i | i <= w}/' "$d/templatec/honest/A.v" |
+  compile templatec/other A.v
+verdict templatec/other templatec.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.Box differs: the universe context has other constraints"' \
+  '{"name":"Top.A.Box","reason":"the universe context has other constraints"}'
 
 #### Runs that rocqchk refuses.
 
@@ -1508,6 +1601,75 @@ verdict univs2/other univs2.json \
 { cat "$d/univs2/honest/A.v"; echo 'Constraint w < u.'; } | compile univs2/related A.v
 verdict univs2/related univs2.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the solution has a universe constraint the challenge does not:'
+
+# The limit of a tie: the solution declares two levels before u and w, so it
+# numbers them otherwise. Each constraint of small then fits two of the
+# solution's, neither of which has the number of the challenge's level, and
+# nothing else decides: the declaration is undecided, though the solution
+# is honest, and the reason names a level of the challenge that it leaves
+# unmapped. The copy that numbers u and w as the challenge does passes.
+compile spare/ch A.v <<'EOF'
+Universe u w.
+Polymorphic Definition small@{i | i < u, i < w} : Type@{i+1} := Type@{i}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config spare > "$d/spare.json"
+compile spare/same A.v <<'EOF'
+Universe u w.
+Polymorphic Definition small@{i | i < u, i < w} : Type@{i+1} := Type@{i}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict spare/same spare.json '"name":"Top.A.thm","verdict":"pass"'
+sed 's/^Universe u w\./Universe spare1 spare2 u w./' "$d/spare/same/A.v" | compile spare/shifted A.v
+verdict spare/shifted spare.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.small differs: the universe context constrains the universe Top.A:' \
+  ', which no comparison has mapped"'
+
+# The context of foo constrains the global level u below the global level w,
+# and no term names either: the constraint maps both, when the solution's
+# foo holds the same constraint between its levels of the same library and
+# number. A copy whose foo puts w below u fails.
+compile glob2/ch A.v <<'EOF'
+Universe u w.
+Polymorphic Definition foo@{i | u < w} : Type@{i+1} := Type@{i}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config glob2 > "$d/glob2.json"
+compile glob2/honest A.v <<'EOF'
+Universe u w.
+Polymorphic Definition foo@{i | u < w} : Type@{i+1} := Type@{i}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict glob2/honest glob2.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+sed 's/^Polymorphic Definition foo@{i | u < w}/Polymorphic Definition foo@{i | w < u}/' \
+  "$d/glob2/honest/A.v" | compile glob2/swapped A.v
+verdict glob2/swapped glob2.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.foo differs'
+
+# A tie is taken only once the constraints decide nothing more without one.
+# The context of pick holds x < y, and the solution declares y2 before y, so
+# the challenge's y has the number of the solution's y2, which j < y2 bounds
+# as j < y bounds y. The first tie pairs x with x, among the levels that
+# i < x and i < x2 bound; x < y then pairs y with the solution's y, and the
+# rest follows. A tie on j < y, taken in the same pass as the one on x,
+# would pair y with the solution's y2 and fail this honest copy.
+compile tie/ch A.v <<'EOF'
+Universe x x2 y y2.
+Polymorphic Definition pick@{i j | i < x, i < x2, x < y, j < y, j < y2} :
+  Type@{max(i+1,j+1)} := forall _ : Type@{i}, Type@{j}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config tie > "$d/tie.json"
+compile tie/honest A.v <<'EOF'
+Universe x x2 y2 y.
+Polymorphic Definition pick@{i j | i < x, i < x2, x < y, j < y, j < y2} :
+  Type@{max(i+1,j+1)} := forall _ : Type@{i}, Type@{j}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict tie/honest tie.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
 
 #### The type of a is the universe max(u+1, v+1), whose two levels no
 #### comparison has paired yet and have the same increment: which level of
