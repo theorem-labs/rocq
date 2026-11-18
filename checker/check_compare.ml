@@ -967,50 +967,90 @@ let eq_universes u1 u2 = match u1, u2 with
   | Polymorphic _, Monomorphic -> diff "a polymorphic declaration is monomorphic in the solution"
 
 (* What the challenge leaves without a body, the solution may fill only when
-   it is a proof. [Admitted], [Axiom] and [Parameter] give the same .vo
-   content, so the kind of the declaration cannot tell them apart; its type
-   can. A constant whose type is a proposition is a lemma, and proving it
-   is the point. A constant whose type is data -- an open definition --
-   must stay without a body, or the solution could choose the function the
-   statements are about, unless the config names it as a theorem: the
-   challenge then asks the solution to choose it, as for a function [f]
-   left open with a lemma [f_spec] about it.
+   the constant's type is a proposition ([proposition]: in [Prop] or
+   [SProp]) or the config names it as a theorem. [Admitted], [Axiom] and
+   [Parameter] give the same .vo content, so the kind of the declaration
+   cannot tell them apart; its type can. Proving a lemma is the point. A
+   constant of any other type -- an open definition -- must stay without a
+   body, or the solution could choose the function the statements are
+   about, unless the config names it: the challenge then asks the solution
+   to choose it, as for a function [f] left open with a lemma [f_spec]
+   about it.
 
-   A proof that another compared challenge declaration names in its type
+   A constant that another compared challenge declaration names in its type
    or its transparent body ([named], from [declaration_names]) must be
-   opaque, whether the config names it or not. The challenge states that
-   declaration about a constant that does not unfold, and a transparent
-   body would let conversion unfold it there, which changes what the
-   declaration states: with [L : exists n, n = 0] left without a body,
+   opaque, whether the config names it or not, unless its type is surely
+   data ([surely_data]). The challenge states that declaration about a
+   constant that does not unfold, and a transparent body would let
+   conversion unfold it there, which changes what the declaration states:
+   with [L : exists n, n = 0] left without a body,
    [L = ex_intro _ 0 eq_refl] is not provable, and once [L] is defined as
-   that term it is proved by reflexivity. A proof that no other declaration
-   names changes no statement but its own, so it may be transparent. Data
-   that the config names is not held to this: [f_spec] is stated about the
-   function the solution chooses and is provable only if [f] unfolds, so
-   [f] may be transparent.
+   that term it is proved by reflexivity. A constant that no other
+   declaration names changes no statement but its own, so it may be
+   transparent. A function [f : nat -> nat] that the config names is not
+   held to this: [f_spec] is stated about the function the solution
+   chooses and is provable only if [f] unfolds.
 
-   The sort is the one the solution environment gives the solution's own
-   type ([type_sort]), which [eq_const_body] has already found equal to the
-   challenge's; [None] when the solution environment cannot type it, which
-   the kernel check of the solution would have refused. Each rule reads it
-   on the side that fails closed. The first lets the solution fill a
-   constant that the config does not name only when the sort is [Prop] or
-   [SProp] ([proposition]). The second lets a constant that another
-   declaration names be transparent only when the sort is [Set] or [Type]
-   ([surely_data]). A sort variable ([VSort]), a global quality ([GSort])
-   and a type that cannot be typed are neither: such a constant is filled
-   only when the config names it, and only by an opaque proof when another
-   declaration names it. A sort-polymorphic [L] is a proof at an instance
-   in [Prop], at which another declaration may name it. *)
-let type_sort env (cb : constant_body) =
-  let env = match cb.const_universes with
-    | Monomorphic -> env
-    | Polymorphic ctx ->
-      Environ.push_context ~strict:false (UVars.AbstractContext.repr ctx) env
-  in
-  match Typeops.infer_type env cb.const_type with
-  | j -> Some j.Environ.utj_type
-  | exception e when CErrors.noncritical e -> None
+   Each predicate reads the solution's type, which [eq_const_body] has
+   already found equal to the challenge's, on the side that fails closed.
+   [proposition] reads its principal sort ([principal_sort]), the highest
+   sort a reduct of the type can have. [surely_data] reads its head normal
+   form under products ([type_is_data]), which must be a sort, an inductive
+   type or a variable the products bind (a type the constant takes as an
+   argument), in [Set] or [Type]. A definition typed [Type] may unfold to a
+   proposition: with [Spec : Type := exists n, n = 0], the principal sort
+   of [Spec] is [Type], and [L : Spec] is a proof all the same. Any other
+   head may stand for a proposition: a match stuck on a variable, as in
+   [L : forall b, T b] with [T true] a proposition, a projection, a
+   fixpoint, or a constant that does not unfold. A sort variable, a global
+   sort and an untyped type are in neither set, so both rules refuse them
+   unless their own condition is met: a sort-polymorphic [L] is a proof at
+   an instance in [Prop], and a global sort, which a library declares, may
+   be meant for propositions (it may eliminate into [Prop]), so the run
+   refuses on doubt. Both predicates are false for a field of a module
+   type, which [eq_structure] compares with no environment ([read_type]),
+   and for a type that the solution environment cannot type. *)
+let principal_sort env c = (Typeops.infer_type env c).Environ.utj_type
+
+(* Whether the type [c] is surely data: the codomain the products of [c]
+   reduce to, in head normal form, has a sort, an inductive type or a
+   variable the products bind for head, and is in [Set] or [Type]. A
+   product has the quality of its codomain's sort
+   ([Typeops.sort_of_product]). *)
+let rec type_is_data env c =
+  let c = Reduction.whd_all env c in
+  let open Constr in
+  match kind c with
+  | Prod (na, a, b) ->
+    type_is_data (Environ.push_rel (Context.Rel.Declaration.LocalAssum (na, a)) env) b
+  | _ ->
+    let head, _ = decompose_app c in
+    (match kind head with
+     | Sort _ | Ind _ | Rel _ -> true
+     | Var _ | Meta _ | Evar _ | Cast _ | Prod _ | Lambda _ | LetIn _ | App _ | Const _
+     | Construct _ | Case _ | Fix _ | CoFix _ | Proj _ | Int _ | Float _ | String _
+     | Array _ -> false)
+    && (match principal_sort env c with
+        | Sorts.Set | Sorts.Type _ -> true
+        | Sorts.Prop | Sorts.SProp | Sorts.GSort _ | Sorts.VSort _ -> false)
+
+(* [read_type read env cb]: [read] applied to the type of the solution's
+   constant [cb] in [env], under the constant's own typing flags and
+   universe context, as the kernel check types it (mod_checking.ml); [None]
+   without an environment or when [read] fails. *)
+let read_type read env (cb : constant_body) =
+  match env with
+  | None -> None
+  | Some env ->
+    let env = CheckFlags.set_local_flags cb.const_typing_flags env in
+    let env = match cb.const_universes with
+      | Monomorphic -> env
+      | Polymorphic ctx ->
+        Environ.push_context ~strict:false (UVars.AbstractContext.repr ctx) env
+    in
+    match read env cb.const_type with
+    | r -> Some r
+    | exception e when CErrors.noncritical e -> None
 
 let eq_const_body ~env ~is_theorem ~named m (cb1 : constant_body) (cb2 : constant_body) =
   let[@warning "+9"] {
@@ -1038,21 +1078,20 @@ let eq_const_body ~env ~is_theorem ~named m (cb1 : constant_body) (cb2 : constan
   map_relevance const_relevance cb2.const_relevance;
   let context_constraints = eq_universes const_universes cb2.const_universes in
   let m = eq_constr m const_type cb2.const_type in
-  let sort = lazy (type_sort env cb2) in
-  let proposition = lazy (match Lazy.force sort with
+  let proposition = lazy (match read_type principal_sort env cb2 with
       | Some (Sorts.Prop | Sorts.SProp) -> true
       | Some (Sorts.Set | Sorts.Type _ | Sorts.GSort _ | Sorts.VSort _) | None -> false)
   in
-  let surely_data = lazy (match Lazy.force sort with
-      | Some (Sorts.Set | Sorts.Type _) -> true
-      | Some (Sorts.Prop | Sorts.SProp | Sorts.GSort _ | Sorts.VSort _) | None -> false)
+  let surely_data = lazy (match read_type type_is_data env cb2 with
+      | Some data -> data
+      | None -> false)
   in
   let m = match const_body, cb2.const_body with
     | Undef _, Undef _ -> m
     | Undef _, (Def _ | OpaqueDef _) when not (is_theorem || Lazy.force proposition) ->
       diff "the challenge leaves this declaration open and the solution defines it"
-    | Undef _, Def _ when Lazy.force named && not (Lazy.force surely_data) ->
-      diff "the challenge leaves this proof without a body, another challenge \
+    | Undef _, Def _ when not (Lazy.force surely_data) && Lazy.force named ->
+      diff "the challenge leaves this constant without a body, another challenge \
             declaration names it, and the solution gives it a transparent body"
     | Undef _, (Def _ | OpaqueDef _) -> m
     | Undef _, _ -> diff "an assumption is a primitive or a symbol in the solution"
@@ -1347,11 +1386,13 @@ let declaration_names ~constants ~inductives ~modtypes =
     is compared parameter by parameter, under the renaming of [umap.params].
     [mp] is the challenge's path of the signature compared, which names its
     fields, and [names] is [declaration_names] of the challenge's compared
-    declarations. *)
+    declarations. No environment holds the fields of a module type or the
+    functor parameters, which a field's type may name, so a field is
+    compared with no environment to type it in ([read_type]). *)
 
-let rec eq_signature ~env ~names mp m s1 s2 =
+let rec eq_signature ~names mp m s1 s2 =
   match s1, s2 with
-  | NoFunctor b1, NoFunctor b2 -> eq_structure ~env ~names mp m b1 b2
+  | NoFunctor b1, NoFunctor b2 -> eq_structure ~names mp m b1 b2
   | MoreFunctor (p1, t1, s1), MoreFunctor (p2, t2, s2) ->
     (* The challenge's parameter [p1] stands for the solution's [p2] in the
        rest of the signature and in its own type, whose fields name one
@@ -1367,13 +1408,13 @@ let rec eq_signature ~env ~names mp m s1 s2 =
         (Option.default Mod_subst.empty_subst m.params)
     in
     let inner = { m with params = Some params; bound = MBId.Set.add p2 m.bound } in
-    let inner = eq_modtype ~env ~names (ModPath.MPbound p1) inner t1 t2 in
-    let inner = eq_signature ~env ~names mp inner s1 s2 in
+    let inner = eq_modtype ~names (ModPath.MPbound p1) inner t1 t2 in
+    let inner = eq_signature ~names mp inner s1 s2 in
     { inner with params = m.params; bound = m.bound }
   | NoFunctor _, MoreFunctor _ -> diff "a module type is a functor in the solution"
   | MoreFunctor _, NoFunctor _ -> diff "a functor is not a functor in the solution"
 
-and eq_structure ~env ~names mp m b1 b2 =
+and eq_structure ~names mp m b1 b2 =
   List.fold_left (fun m (l, f1) ->
       match List.assoc_opt l b2 with
       | None -> diff "the field %s is missing from the solution" (Id.to_string l)
@@ -1383,7 +1424,7 @@ and eq_structure ~env ~names mp m b1 b2 =
            config names a constant of the environment. *)
         | SFBconst c1, SFBconst c2 ->
           let named = lazy (KerName.Set.mem (KerName.make mp l) (Lazy.force names)) in
-          eq_const_body ~env ~is_theorem:false ~named m c1 c2
+          eq_const_body ~env:None ~is_theorem:false ~named m c1 c2
         | SFBmind i1, SFBmind i2 -> eq_mib_body m i1 i2
         | SFBrules r1, SFBrules r2 ->
           let symbols1 = List.map (rename m Mod_subst.subst_constant) (rule_symbols r1) in
@@ -1391,15 +1432,15 @@ and eq_structure ~env ~names mp m b1 b2 =
             diff "the field %s rewrites other symbols in the solution" (Id.to_string l);
           m
         | SFBmodule mb1, SFBmodule mb2 ->
-          eq_signature ~env ~names (ModPath.MPdot (mp, l)) m
+          eq_signature ~names (ModPath.MPdot (mp, l)) m
             (Mod_declarations.mod_type mb1) (Mod_declarations.mod_type mb2)
-        | SFBmodtype t1, SFBmodtype t2 -> eq_modtype ~env ~names (ModPath.MPdot (mp, l)) m t1 t2
+        | SFBmodtype t1, SFBmodtype t2 -> eq_modtype ~names (ModPath.MPdot (mp, l)) m t1 t2
         | (SFBconst _ | SFBmind _ | SFBrules _ | SFBmodule _ | SFBmodtype _), _ ->
           diff "the field %s is of another kind in the solution" (Id.to_string l))
     m b1
 
-and eq_modtype ~env ~names mp m t1 t2 =
-  eq_signature ~env ~names mp m (Mod_declarations.mod_type t1) (Mod_declarations.mod_type t2)
+and eq_modtype ~names mp m t1 t2 =
+  eq_signature ~names mp m (Mod_declarations.mod_type t1) (Mod_declarations.mod_type t2)
 
 (************************************************************************)
 (** {6 The run} *)
@@ -1670,22 +1711,28 @@ let pinned t dp =
     List.exists (fun (f, h) -> same f && String.equal h (Lazy.force sha256)) t.files
 
 (* The rule of [run] for the libraries a pre-checked one rests on
-   (check_compare.mli), on the closure the solution loaded. *)
+   (check_compare.mli), on [prechecked_closure]. When several libraries
+   fail, the one refused is the first in the set's order; the message names
+   the first pre-checked library, in the config's order, that rests on it,
+   which exists since the closure of the list is the union of each
+   library's. *)
 let check_prechecked_deps t =
-  List.iter (fun p ->
-      DirPath.Set.iter (fun dep ->
-          if not (one_file t dep || pinned t dep) then
-            CErrors.user_err
-              Pp.(str ("The pre-checked library " ^ DirPath.to_string p ^
-                       " depends on the library " ^ DirPath.to_string dep ^
-                       ", which is neither pre-checked by the config, nor pinned by its \
-                        sha256 as a challenge file, nor from the installed load path. The \
-                        digest the pre-checked library records for it pins nothing: a \
-                        library's digest is the one its own file states. A kernel check \
-                        of it is not enough either, since the pre-checked library was not \
-                        checked against it. A -compare run refuses it.")))
-        (deps_closure t.solution_deps [p]))
-    (prechecked_libraries t.cfg)
+  DirPath.Set.iter (fun dep ->
+      if not (one_file t dep || pinned t dep) then
+        let p =
+          List.find (fun p -> DirPath.Set.mem dep (deps_closure t.solution_deps [p]))
+            (prechecked_libraries t.cfg)
+        in
+        CErrors.user_err
+          Pp.(str ("The pre-checked library " ^ DirPath.to_string p ^
+                   " depends on the library " ^ DirPath.to_string dep ^
+                   ", which is neither pre-checked by the config, nor pinned by its \
+                    sha256 as a challenge file, nor from the installed load path. The \
+                    digest the pre-checked library records for it pins nothing: a \
+                    library's digest is the one its own file states. A kernel check \
+                    of it is not enough either, since the pre-checked library was not \
+                    checked against it. A -compare run refuses it.")))
+    t.prechecked_closure
 
 (* The rule of [run] for the libraries the solution loaded without a check
    (check_compare.mli). *)
@@ -1910,10 +1957,8 @@ type failure = { f_name : string; f_reason : string }
 
 (* The identity seed: a level or a global quality of a library that is one
    file for both sides ([one_file]), or a library a pre-checked one rests
-   on ([prechecked_closure]), when both environments hold it.
-   [check_prechecked_deps] has required each library a pre-checked one
-   rests on to be one file for both sides or pinned by its sha256 as a
-   challenge file, so the two sides read the same bytes of it.
+   on ([prechecked_closure], whose doc says why both sides read the same
+   bytes of it), when both environments hold it.
 
    A level no compared declaration names is in the map only through this:
    the body of an opaque proof is never compared, so a challenge proof's
@@ -2208,8 +2253,8 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
                      DirPath.to_string dp ^ ", which the challenge loaded.")))
       libs []
   in
-  (* forced only by a challenge proof without a body that the solution gives
-     a transparent one *)
+  (* forced only by a challenge constant without a body, whose type is not
+     surely data, that the solution gives a transparent one *)
   let names = lazy (declaration_names ~constants ~inductives ~modtypes) in
   List.iter (fun (name, c, cb) ->
       match Environ.lookup_constant_opt c solution_env with
@@ -2220,8 +2265,8 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
                           || KerName.Set.mem (Constant.canonical c) names)
         in
         step name (fun m ->
-            eq_const_body ~env:solution_env ~is_theorem:(CString.Set.mem name theorems) ~named
-              m cb cb'))
+            eq_const_body ~env:(Some solution_env)
+              ~is_theorem:(CString.Set.mem name theorems) ~named m cb cb'))
     (by_name Constant.UserOrd.compare constants);
   List.iter (fun (name, i, mib) ->
       if not (Environ.mem_mind i solution_env) then fail name "missing"
@@ -2231,7 +2276,7 @@ let compare_declarations t ~challenge_env ~solution_env ~libs ~theorems =
     (by_name MutInd.UserOrd.compare inductives);
   List.iter (fun (name, mp, mt) ->
       match Environ.lookup_modtype mp solution_env with
-      | mt' -> step name (fun m -> eq_modtype ~env:solution_env ~names mp m mt mt')
+      | mt' -> step name (fun m -> eq_modtype ~names mp m mt mt')
       | exception Not_found -> fail name "missing")
     (by_name ModPath.compare modtypes);
   (* The declarations set aside as undecided, again, until a pass decides

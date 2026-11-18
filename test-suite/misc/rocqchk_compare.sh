@@ -362,8 +362,8 @@ Theorem thm : eq (ex nat (fun n => eq nat n O)) L (ex_intro nat (fun n => eq nat
 Proof. exact (eq_refl (ex nat (fun n => eq nat n O)) L). Qed.
 EOF
 verdict named/defined named.json \
-  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this proof without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
-  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this proof without a body'
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this constant without a body'
 sed -e 's/ Defined\.$/ Qed./' -e 's/^Proof\. exact (eq_refl .*/Proof. Admitted./' \
   "$d/named/defined/A.v" | compile named/qed A.v
 verdict named/qed named.json \
@@ -404,20 +404,120 @@ Theorem thm : eq sbool@{Prop;} L@{Prop;} strue@{Prop;}.
 Proof. exact (eq_refl sbool@{Prop;} L@{Prop;}). Qed.
 EOF
 verdict poly/defined poly.json \
-  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this proof without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
-  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this proof without a body'
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this constant without a body'
 sed -e 's/ Defined\.$/ Qed./' -e 's/^Proof\. exact (eq_refl .*/Proof. Admitted./' \
   "$d/poly/defined/A.v" | compile poly/qed A.v
 verdict poly/qed poly.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the axiom Top.A.thm is not permitted"' \
   '"name":"Top.A.L","verdict":"pass"' '"declarations":[]'
 
+# The same with the type of L written through Spec, a definition typed Type:
+# the principal sort of the type of L is Type, and L is a proof all the same,
+# since Spec unfolds to a proposition. A transparent L proves thm by
+# conversion as in named/defined, so L must be opaque: the sort this rule
+# reads is that of the type of L once reduced. Spec is typed Type@{u}, a
+# named level, so that its type stays in Type whatever universe minimization
+# does. A proof of L by Qed is accepted.
+compile alias/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive nat : Set := O : nat | S : forall _ : nat, nat.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Inductive ex (A : Type) (P : forall _ : A, Prop) : Prop :=
+  ex_intro : forall x : A, forall _ : P x, ex A P.
+Universe u.
+Definition Spec : Type@{u} := ex nat (fun n => eq nat n O).
+Lemma L : Spec.
+Proof. Admitted.
+Theorem thm : eq Spec L (ex_intro nat (fun n => eq nat n O) O (eq_refl nat O)).
+Proof. Admitted.
+EOF
+cat > "$d/alias.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}, {"name": "Top.A.L"}],
+ "tolerated_flags": [{"kind": "indices-not-mattering"}],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest alias/ch/A.vo)"}]}
+EOF
+compile alias/defined A.v <<'EOF'
+Require Import Corelib.Init.Ltac.
+Unset Elimination Schemes.
+Inductive nat : Set := O : nat | S : forall _ : nat, nat.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Inductive ex (A : Type) (P : forall _ : A, Prop) : Prop :=
+  ex_intro : forall x : A, forall _ : P x, ex A P.
+Universe u.
+Definition Spec : Type@{u} := ex nat (fun n => eq nat n O).
+Lemma L : Spec.
+Proof. exact (ex_intro nat (fun n => eq nat n O) O (eq_refl nat O)). Defined.
+Theorem thm : eq Spec L (ex_intro nat (fun n => eq nat n O) O (eq_refl nat O)).
+Proof. exact (eq_refl Spec L). Qed.
+EOF
+verdict alias/defined alias.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this constant without a body'
+sed -e 's/ Defined\.$/ Qed./' -e 's/^Proof\. exact (eq_refl .*/Proof. Admitted./' \
+  "$d/alias/defined/A.v" | compile alias/qed A.v
+verdict alias/qed alias.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the axiom Top.A.thm is not permitted"' \
+  '"name":"Top.A.L","verdict":"pass"' '"declarations":[]'
+
+# The same with the type of L a match stuck on a variable: T b is a match on
+# b, a proposition when b is true and nat when it is false, so T b is not in
+# Prop, and L true is a proof all the same. A transparent L proves thm by
+# conversion as in named/defined, so L must be opaque: a type whose head
+# normal form under products has another head than a sort, an inductive type
+# or a bound variable may stand for a proposition, and is not surely data. A
+# proof of L by Qed is accepted.
+compile stuck/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive bool : Set := true : bool | false : bool.
+Inductive nat : Set := O : nat | S : forall _ : nat, nat.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Inductive ex (A : Type) (P : forall _ : A, Prop) : Prop :=
+  ex_intro : forall x : A, forall _ : P x, ex A P.
+Definition T (b : bool) : Type :=
+  match b with true => ex nat (fun n => eq nat n O) | false => nat end.
+Lemma L : forall b : bool, T b.
+Proof. Admitted.
+Theorem thm : eq (T true) (L true) (ex_intro nat (fun n => eq nat n O) O (eq_refl nat O)).
+Proof. Admitted.
+EOF
+cat > "$d/stuck.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}, {"name": "Top.A.L"}],
+ "tolerated_flags": [{"kind": "indices-not-mattering"}],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest stuck/ch/A.vo)"}]}
+EOF
+compile stuck/defined A.v <<'EOF'
+Require Import Corelib.Init.Ltac.
+Unset Elimination Schemes.
+Inductive bool : Set := true : bool | false : bool.
+Inductive nat : Set := O : nat | S : forall _ : nat, nat.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Inductive ex (A : Type) (P : forall _ : A, Prop) : Prop :=
+  ex_intro : forall x : A, forall _ : P x, ex A P.
+Definition T (b : bool) : Type :=
+  match b with true => ex nat (fun n => eq nat n O) | false => nat end.
+Lemma L : forall b : bool, T b.
+Proof. exact (fun b => match b return T b with true => ex_intro nat (fun n => eq nat n O) O (eq_refl nat O) | false => O end). Defined.
+Theorem thm : eq (T true) (L true) (ex_intro nat (fun n => eq nat n O) O (eq_refl nat O)).
+Proof. exact (eq_refl (T true) (L true)). Qed.
+EOF
+verdict stuck/defined stuck.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this constant without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this constant without a body'
+sed -e 's/ Defined\.$/ Qed./' -e 's/^Proof\. exact (eq_refl .*/Proof. Admitted./' \
+  "$d/stuck/defined/A.v" | compile stuck/qed A.v
+verdict stuck/qed stuck.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the axiom Top.A.thm is not permitted"' \
+  '"name":"Top.A.L","verdict":"pass"' '"declarations":[]'
+
 # A function f that the challenge leaves open and a lemma f_spec about it,
 # both named by the config: the challenge asks the solution to choose f, and
 # f_spec is provable only if f unfolds, so f may be transparent though
-# f_spec names it. Only a constant whose type is in Set or Type, as the type
-# of f is, may be transparent when another declaration names it. eq has an
-# index, which the config tolerates as named.json does.
+# f_spec names it. Only a constant whose type, once reduced under its
+# products, has a sort, an inductive type or a bound variable for head and is
+# in Set or Type, as the type of f does (nat), may be transparent when another
+# declaration names it. eq has an index, which the config tolerates as
+# named.json does.
 compile spec/ch A.v <<'EOF'
 Unset Elimination Schemes.
 Inductive nat : Set := O : nat | S : forall _ : nat, nat.
@@ -528,6 +628,32 @@ sed 's/^  Parameter q : X\.P\./  Parameter q : V.P./' "$d/functorg/clash/A.v" |
   compile functorg/clash-swapped A.v
 verdict functorg/clash-swapped functorg.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.FT differs'
+
+# A field of a module type whose type names another field. No environment
+# holds the fields of a module type, so the comparison does not type the
+# field x, and x, which the challenge leaves without a body, may not be
+# given one: the run writes a verdict that says so.
+compile field/ch A.v <<'EOF'
+Module Type T.
+  Parameter t : Set.
+  Parameter y : t.
+  Parameter x : t.
+End T.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config field > "$d/field.json"
+compile field/defined A.v <<'EOF'
+Module Type T.
+  Parameter t : Set.
+  Parameter y : t.
+  Definition x : t := y.
+End T.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict field/defined field.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.T differs: the challenge leaves this declaration open and the solution defines it"' \
+  '{"name":"Top.A.T","reason":"the challenge leaves this declaration open and the solution defines it"}'
 
 # A template-polymorphic inductive type. An application of Box is typed by
 # its template data, which says which parameters bind a universe.
