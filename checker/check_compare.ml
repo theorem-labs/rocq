@@ -855,31 +855,36 @@ let eq_rel_context m c1 c2 =
    [u]. Only when no pending constraint takes a tie on one end does the
    first that takes a tie on both ends take it: for [(u, k, w)] with
    neither end mapped, a constraint between two global ones, it is [u] and
-   [w] both, when the solution holds [(u, k, w)] itself. A global level
-   sorts before a bound one, so such a constraint comes before the
-   constraints on bound levels, and a tie on both ends taken first could
-   pair two levels that a tie on one end and the passes after it pair
-   otherwise. What is still unmapped once no tie decides anything more is
+   [w] both, when the solution holds [(u, k, w)] itself. Among constraints
+   of one kind a global level sorts before a bound one, so such a
+   constraint can come before the constraints on bound levels, and a tie
+   on both ends taken first could pair two levels that a tie on one end
+   and the passes after it pair otherwise. What is still unmapped once no tie decides anything more is
    the caller's to report.
 
    Any pairing is sound, since everything compared after it -- the rest of
    the context, the other declarations and both graphs -- is compared
    through the map it leaves, so a wrong one can only fail a solution.
    [compare_declarations] sets [m.ties] only once no declaration decides
-   anything more without it, so a comparison that maps [u] by a term comes
-   before the first tie of the declaration. The later ties of that
-   declaration do not wait for the other declarations: one of them may
-   pair a level that another declaration would pair otherwise, which can
-   refuse an honest solution, never pass a wrong one. Nothing is searched
-   beyond the tie either, so a solution that numbers its global levels
-   otherwise than the challenge, as when it declares more of them before
-   the challenge's or declares them in another order, can fail in two ways
+   anything more without it, so a comparison of another declaration that
+   maps [u] by a term comes before the first tie of the declaration; a
+   field compared after it in the same module type does not. The later
+   ties of that declaration do not wait for the other declarations either:
+   one of them may pair a level that another declaration would pair
+   otherwise, which can refuse an honest solution, never pass a wrong one.
+   Nothing is searched beyond the tie, so a solution that numbers its
+   global levels otherwise than the challenge, as when it declares more of
+   them before the challenge's or declares them in another order, can fail
    though some pairing might fit. When several solution constraints fit
    and none of them has the challenge's own end, the level stays unmapped
    and the declaration fails as undecided, the reason naming that level.
    When one of them has the number of the challenge's level but is not the
-   level that stands for it, the tie pairs the wrong level, and the context
-   then fails as having other constraints, the reason naming no level.
+   level that stands for it, the tie pairs the wrong level, and the
+   solution fails where that level is compared next: in this context when
+   its constraints tell the two apart (the reason then says the context
+   has other constraints, naming no level), otherwise in a later field or
+   declaration or in the universe graphs, with the reason of that
+   comparison. [check_compare.mli] gives an example of each.
 
    The universe constraints and the elimination constraints of a context
    have the same shape: [mapped] reads a challenge end through the map,

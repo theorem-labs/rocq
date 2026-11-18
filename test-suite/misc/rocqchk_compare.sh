@@ -1691,7 +1691,8 @@ verdict glob2/swapped glob2.json \
 # rest follows. A tie on j < y, taken in the same pass as the one on x,
 # would pair y with the solution's y2 and fail this honest copy. The first
 # tie is on x only because the constraints on i, the first bound level,
-# sort before those on j: mirror below swaps i and j, and fails.
+# sort before those on j: in mirror below, which swaps i and j, the copy
+# that declares y2 before y fails.
 compile tie/ch A.v <<'EOF'
 Universe x x2 y y2.
 Polymorphic Definition pick@{i j | i < x, i < x2, x < y, j < y, j < y2} :
