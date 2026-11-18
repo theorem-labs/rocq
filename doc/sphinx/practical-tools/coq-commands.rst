@@ -935,28 +935,32 @@ written to *file*.
 
 A challenge constant without a body (an :cmd:`Axiom`, a :cmd:`Parameter` or an
 admitted proof, which a ``.vo`` file does not tell apart) differs from a
-solution constant with one, unless its type is a proposition (in ``Prop`` or
-``SProp``) or the config names it as a theorem: the solution may then give it
-one. That body must be opaque, as with :cmd:`Qed`, when another compared
-challenge declaration names the constant in its type or in its transparent
-body, since a transparent proof would unfold there and change what that
-declaration states. Only a constant whose type is surely data may still be
-transparent then, such as a function that the config names and that a lemma of
-the challenge specifies: the lemma is stated about the function the solution
-chooses. A type is surely data when its head normal form under products is a
-sort, an inductive type or a bound variable, in ``Set`` or ``Type``: a
-definition typed ``Type`` may unfold to a proposition, and any other head, such
-as a match stuck on a variable, may stand for one. Whether a type is a
-proposition is read from its sort before any reduction, which reduction can
-only lower: each rule takes the side that refuses. A constant whose type is in
-a sort variable or a global sort may be given a body only when the config names
-it, and only an opaque one when another declaration names it: a
-sort-polymorphic constant is a proof at an instance in ``Prop``, and a global
-sort, which a library declares, may be meant for propositions, so the run
-refuses on doubt. A field of a module type that the challenge leaves without a
-body may not be given one: its type may name the other fields of the module
-type and the functor parameters, which no environment holds, so the comparison
-cannot tell whether it is a proposition.
+solution constant with one, unless the challenge states it as a proposition or
+the config names it as a theorem: the solution may then give it one. That body
+must be opaque, as with :cmd:`Qed`, when another compared challenge declaration
+names the constant in its type or in its transparent body, unless the challenge
+states it as data, since a transparent proof would unfold there and change what
+that declaration states. So a function that the config names and that a lemma
+of the challenge specifies may be transparent: the lemma is stated about the
+function the solution chooses. What the challenge states a constant to be is
+read from the sort of the type it states for it, typed in the challenge
+environment and not reduced. In ``Prop`` or ``SProp``, the constant is a
+proposition. In ``Set`` or ``Type``, it is data, even when its type unfolds to
+a proposition: a challenge that wants a lemma kept opaque states it in
+``Prop``. In a sort variable or a global sort, or when the type cannot be typed
+there, the run cannot tell, and each rule refuses: such a constant may be given
+a body only when the config names it, and only an opaque one when another
+declaration names it. A sort-polymorphic constant is a proof at an instance in
+``Prop``, and a global sort, which a library declares, may be meant for
+propositions. The type of a field of a module type may name the other fields of
+the module type and the functor parameters, which no environment holds, so such
+a field that the challenge leaves without a body may not be given one.
+
+A challenge constant that the kernel registers as a primitive type (as
+``Primitive int := #int63_type.`` does) differs from a solution constant that
+it registers as another one or as none, and the other way round: the literals
+of a primitive type have its constant for type, so a parameter that the
+solution registered as one would be inhabited.
 
 *config* is one JSON object with the keys ``theorems`` (each
 ``{name, permitted_axioms?}``), ``permitted_axioms``, ``tolerated_flags`` (each
