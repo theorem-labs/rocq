@@ -23,18 +23,31 @@
     side numbers in the order it declares them: no conversion, no
     reduction, and no constant is unfolded. A global level or quality that
     only the constraints of a polymorphic context name is renamed by the
-    one solution constraint that fits it. When nothing else decides, it is
-    renamed to the one of the same library and number: the one among
-    several solution constraints that fit, or, for a constraint between two
-    such levels or qualities, both ends at once when the solution holds that
-    same constraint. Nothing is searched beyond that: when the solution
-    numbers such a level otherwise, as when it declares more global levels
-    before it, and several of its constraints fit, the declaration differs
-    as undecided, though the solution may be honest. With [Universe u w.] in
-    the challenge, [Universe spare1 spare2 u w.] in the solution and
+    one solution constraint that fits it. When nothing else decides, a tie
+    renames it to the solution's level or quality of the same library and
+    number: first the one among several solution constraints that fit, and
+    only when no constraint takes such a tie, for a constraint between two
+    such levels or qualities, both ends at once when the solution holds
+    that same constraint. The first tie of a declaration waits for the other
+    declarations to decide what they can; its later ties do not, which can
+    refuse an honest solution, never pass a wrong one. Nothing is searched
+    beyond the tie, so a solution that numbers such levels otherwise, as
+    when it declares more global levels before them or declares them in
+    another order, can make the declaration differ though it is honest, in
+    two ways. When several of its constraints fit and none of them has the
+    number of the challenge's level, the declaration differs as undecided,
+    the reason naming that level: with [Universe u w.] in the challenge,
+    [Universe spare1 spare2 u w.] in the solution and
     [small@{i | i < u, i < w}] on both sides, each constraint of [small]
     fits two of the solution's, and neither of them has the number of the
-    challenge's level.
+    challenge's level. When one that fits has that number but is not the
+    level that stands for the challenge's, the tie pairs the wrong level,
+    and the declaration differs as having other constraints, with no level
+    named: with [Universe x x2 y y2.] in the challenge,
+    [Universe x x2 y2 y.] in the solution and
+    [pick@{i j | j < x, j < x2, x < y, i < y, i < y2}] on both sides, the
+    tie on [i < y] renames the challenge's [y] to the solution's [y2], and
+    [x < y] then stands for [x < y2], which the solution does not hold.
 
     A challenge constant without a body (an axiom, a parameter or an
     admitted proof, which a [.vo] file does not tell apart) may be given one
@@ -62,8 +75,8 @@
     The type of a field of a module type may name the other fields of the
     module type and the functor parameters, which no environment holds, so
     such a field that the challenge leaves without a body may not be given
-    one, whatever its type. A difference in a module type names the field
-    it lies in.
+    one, whatever its type. A difference in a module type names the fields
+    and functor parameters it lies in.
 
     A challenge constant that the kernel registers as a primitive type
     ([Primitive int := #int63_type]) differs from a solution constant that

@@ -783,6 +783,40 @@ sed 's/^  Parameter q : X\.P\./  Parameter q : V.P./' "$d/functorg/clash/A.v" |
 verdict functorg/clash-swapped functorg.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.FT differs'
 
+# A functor parameter whose type differs: the solution's FT takes X : SIG2,
+# whose P is defined, where the challenge's takes X : SIG. The reason names
+# the functor parameter by its identifier, and the field of its type that
+# differs.
+compile paramtype/ch A.v <<'EOF'
+Module Type SIG.
+  Parameter P : Prop.
+End SIG.
+Module Type SIG2.
+  Definition P : Prop := forall A : Prop, A.
+End SIG2.
+Module Type FT (X : SIG).
+  Parameter q : X.P.
+End FT.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config paramtype > "$d/paramtype.json"
+compile paramtype/other A.v <<'EOF'
+Module Type SIG.
+  Parameter P : Prop.
+End SIG.
+Module Type SIG2.
+  Definition P : Prop := forall A : Prop, A.
+End SIG2.
+Module Type FT (X : SIG2).
+  Parameter q : X.P.
+End FT.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict paramtype/other paramtype.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.FT differs: the functor parameter X: the field P: the challenge leaves this declaration open and the solution defines it"' \
+  '{"name":"Top.A.FT","reason":"the functor parameter X: the field P: the challenge leaves this declaration open and the solution defines it"}'
+
 # A field of a module type whose type names another field. No environment
 # holds the fields of a module type, so the comparison does not type the
 # field x, and x, which the challenge leaves without a body, may not be
@@ -1602,12 +1636,13 @@ verdict univs2/other univs2.json \
 verdict univs2/related univs2.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the solution has a universe constraint the challenge does not:'
 
-# The limit of a tie: the solution declares two levels before u and w, so it
-# numbers them otherwise. Each constraint of small then fits two of the
-# solution's, neither of which has the number of the challenge's level, and
-# nothing else decides: the declaration is undecided, though the solution
-# is honest, and the reason names a level of the challenge that it leaves
-# unmapped. The copy that numbers u and w as the challenge does passes.
+# The first form of the limit of a tie (mirror below shows the second): the
+# solution declares two levels before u and w, so it numbers them otherwise.
+# Each constraint of small then fits two of the solution's, neither of which
+# has the number of the challenge's level, and nothing else decides: the
+# declaration is undecided, though the solution is honest, and the reason
+# names a level of the challenge that it leaves unmapped. The copy that
+# numbers u and w as the challenge does passes.
 compile spare/ch A.v <<'EOF'
 Universe u w.
 Polymorphic Definition small@{i | i < u, i < w} : Type@{i+1} := Type@{i}.
@@ -1654,7 +1689,9 @@ verdict glob2/swapped glob2.json \
 # as j < y bounds y. The first tie pairs x with x, among the levels that
 # i < x and i < x2 bound; x < y then pairs y with the solution's y, and the
 # rest follows. A tie on j < y, taken in the same pass as the one on x,
-# would pair y with the solution's y2 and fail this honest copy.
+# would pair y with the solution's y2 and fail this honest copy. The first
+# tie is on x only because the constraints on i, the first bound level,
+# sort before those on j: mirror below swaps i and j, and fails.
 compile tie/ch A.v <<'EOF'
 Universe x x2 y y2.
 Polymorphic Definition pick@{i j | i < x, i < x2, x < y, j < y, j < y2} :
@@ -1670,6 +1707,57 @@ Polymorphic Definition pick@{i j | i < x, i < x2, x < y, j < y, j < y2} :
 Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
 EOF
 verdict tie/honest tie.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+
+# A tie on one end comes before a tie on two ends. The solution declares d
+# before a, b and c, so it numbers each of them one higher than the
+# challenge does, and its a < b has the numbers of the challenge's b < c.
+# j < d pairs d, and then nothing decides anything without a tie. The tie on
+# i < e pairs e with e; e < a, a < b and b < c then pair a, b and c, and
+# i < f pairs f. A tie on two ends on b < c, which sorts before the
+# constraints on i, would pair b and c with the solution's a and b, and fail
+# this honest copy.
+compile oneend/ch A.v <<'EOF'
+Universe a b c d e f.
+Polymorphic Definition foo@{i j | a < b, b < c, e < a, i < e, i < f, j < d} :
+  Type@{max(i+1,j+1)} := forall _ : Type@{i}, Type@{j}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config oneend > "$d/oneend.json"
+compile oneend/honest A.v <<'EOF'
+Universe d a b c e f.
+Polymorphic Definition foo@{i j | a < b, b < c, e < a, i < e, i < f, j < d} :
+  Type@{max(i+1,j+1)} := forall _ : Type@{i}, Type@{j}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict oneend/honest oneend.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+
+# The second form of the limit of a tie: pick is the context of tie with i
+# and j swapped, so in the copy that declares y2 before y the first tie is on
+# i < y, whose two fits are the solution's y2 and y. It pairs y with the
+# solution's y2, which has the number of the challenge's y; x < y then
+# stands for x < y2, which the solution's pick does not hold, and the reason
+# names no level, though the solution is honest. The copy that numbers y and
+# y2 as the challenge does passes.
+compile mirror/ch A.v <<'EOF'
+Universe x x2 y y2.
+Polymorphic Definition pick@{i j | j < x, j < x2, x < y, i < y, i < y2} :
+  Type@{max(i+1,j+1)} := forall _ : Type@{i}, Type@{j}.
+Theorem thm : forall A : Prop, forall _ : A, A.
+Proof. Admitted.
+EOF
+config mirror > "$d/mirror.json"
+compile mirror/same A.v <<'EOF'
+Universe x x2 y y2.
+Polymorphic Definition pick@{i j | j < x, j < x2, x < y, i < y, i < y2} :
+  Type@{max(i+1,j+1)} := forall _ : Type@{i}, Type@{j}.
+Definition thm : forall A : Prop, forall _ : A, A := fun A a => a.
+EOF
+verdict mirror/same mirror.json '"name":"Top.A.thm","verdict":"pass"' '"declarations":[]'
+sed 's/^Universe x x2 y y2\./Universe x x2 y2 y./' "$d/mirror/same/A.v" | compile mirror/shifted A.v
+verdict mirror/shifted mirror.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.pick differs: the universe context has other constraints"' \
+  '{"name":"Top.A.pick","reason":"the universe context has other constraints"}'
 
 #### The type of a is the universe max(u+1, v+1), whose two levels no
 #### comparison has paired yet and have the same increment: which level of

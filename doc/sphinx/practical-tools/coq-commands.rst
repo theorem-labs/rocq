@@ -936,18 +936,30 @@ written to *file*.
 A global level or sort that only the constraints of a polymorphic declaration
 name (as ``u`` in ``Polymorphic Definition small@{i | i < u}``) is renamed to
 the one that the solution's declaration names in its only constraint of the
-same shape. When nothing else decides, it is renamed to the solution's level or
-sort of the same library and number: the one among several solution
-constraints that fit, or, for a constraint between two such levels or sorts
-(``u < w`` in ``foo@{i | u < w}``), both at once when the solution's
-declaration holds that same constraint. Nothing is searched beyond that, so a
-solution that numbers such a level otherwise, as when it declares more
-universes before it, makes the declaration differ when several of its
-constraints fit, though it may be honest: with ``Universe u w.`` in the
-challenge, ``Universe spare1 spare2 u w.`` in the solution and
-``small@{i | i < u, i < w}`` on both sides, each constraint of ``small`` fits
-two of the solution's, and neither of them has the number of the challenge's
-level. The reason then names the challenge's level by its library and number.
+same shape. When nothing else decides, a tie renames it to the solution's level
+or sort of the same library and number: first the one among several solution
+constraints that fit, and only when no constraint takes such a tie, for a
+constraint between two such levels or sorts (``u < w`` in ``foo@{i | u < w}``),
+both at once when the solution's declaration holds that same constraint. The
+first tie of a declaration waits for the other declarations to decide what
+they can; its later ties do not, which can make an honest solution differ,
+never a wrong one pass. Nothing is searched beyond the tie, so a solution that
+numbers such levels otherwise, as when it declares more universes before them
+or declares them in another order, can make the declaration differ though it
+is honest, in two ways. When several of its constraints fit and none of them
+has the number of the challenge's level, the declaration is undecided, and the
+reason names the challenge's level by its library and number: with
+``Universe u w.`` in the challenge, ``Universe spare1 spare2 u w.`` in the
+solution and ``small@{i | i < u, i < w}`` on both sides, each constraint of
+``small`` fits two of the solution's, and neither of them has the number of the
+challenge's level. When one that fits has that number but is not the level
+that stands for the challenge's, the tie pairs the wrong level, and the reason
+says that the universe context has other constraints, naming no level: with
+``Universe x x2 y y2.`` in the challenge, ``Universe x x2 y2 y.`` in the
+solution and ``pick@{i j | j < x, j < x2, x < y, i < y, i < y2}`` on both
+sides, the tie on ``i < y`` renames the challenge's ``y`` to the solution's
+``y2``, and ``x < y`` then stands for ``x < y2``, which the solution does not
+hold.
 
 A challenge constant without a body (an :cmd:`Axiom`, a :cmd:`Parameter` or an
 admitted proof, which a ``.vo`` file does not tell apart) differs from a
@@ -959,7 +971,7 @@ body of a constant, the parameters, arities, constructor types or projection
 types of an inductive type, or any field of a module type, the types of its
 functor parameters included), unless the challenge states it as data, since a
 transparent proof would unfold there and change what that declaration states.
-The reason names the first such declaration. So a function that the config
+The reason names a declaration that names it. So a function that the config
 names and that a lemma of the challenge specifies may be transparent: the lemma
 is stated about the function the solution chooses. What the challenge states a
 constant to be is read from the sort of the type it states for it, typed in the
@@ -974,7 +986,8 @@ declaration names it. A sort-polymorphic constant is a proof at an instance in
 propositions. The type of a field of a module type may name the other fields of
 the module type and the functor parameters, which no environment holds, so such
 a field that the challenge leaves without a body may not be given one, whatever
-its type. A difference in a module type names the field it lies in.
+its type. A difference in a module type names the fields and functor
+parameters it lies in.
 
 A challenge constant that the kernel registers as a primitive type (as
 ``Primitive int := #int63_type.`` does) differs from a solution constant that
