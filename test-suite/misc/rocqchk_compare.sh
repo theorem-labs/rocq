@@ -605,6 +605,63 @@ verdict primtype/literal primtype.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.T differs: this constant is no primitive type in the challenge and the primitive type #int63_type in the solution"' \
   '{"name":"Top.A.T","reason":"this constant is no primitive type in the challenge and the primitive type #int63_type in the solution"}'
 
+# The other way round: the challenge declares T as a primitive type, and
+# the solution as a parameter of the same type Set. The solution's T has no
+# literals, so it is not the challenge's T either. The config permits T as
+# an axiom, as primtype.json does.
+compile primrev/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive True : Prop := I : True.
+Primitive T := #int63_type.
+Theorem thm : forall _ : T, True.
+Proof. Admitted.
+EOF
+config primrev '"permitted_axioms": ["Top.A.T"],' > "$d/primrev.json"
+compile primrev/parameter A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive True : Prop := I : True.
+Parameter T : Set.
+Definition thm : forall _ : T, True := fun _ => I.
+EOF
+verdict primrev/parameter primrev.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.T differs: this constant is the primitive type #int63_type in the challenge and no primitive type in the solution"' \
+  '{"name":"Top.A.T","reason":"this constant is the primitive type #int63_type in the challenge and no primitive type in the solution"}'
+
+# A primitive type registered inside a module M that the signature S seals.
+# S declares T as a parameter, and so does the challenge's M, sealed by the
+# same S: through S, both sides declare M.T alike. The kernel keeps the
+# registration once M is closed, whatever S declares, so the literals of
+# #int63_type have the type M.T in the solution, and only the comparison of
+# primitive types tells the two M.T apart. The config permits M.T as an
+# axiom, as primtype.json does T.
+compile primmod/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive True : Prop := I : True.
+Module Type S.
+  Parameter T : Set.
+End S.
+Module M : S.
+  Parameter T : Set.
+End M.
+Theorem thm : forall _ : M.T, True.
+Proof. Admitted.
+EOF
+config primmod '"permitted_axioms": ["Top.A.M.T"],' > "$d/primmod.json"
+compile primmod/sealed A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive True : Prop := I : True.
+Module Type S.
+  Parameter T : Set.
+End S.
+Module M : S.
+  Primitive T := #int63_type.
+End M.
+Definition thm : forall _ : M.T, True := fun _ => I.
+EOF
+verdict primmod/sealed primmod.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.M.T differs: this constant is no primitive type in the challenge and the primitive type #int63_type in the solution"' \
+  '{"name":"Top.A.M.T","reason":"this constant is no primitive type in the challenge and the primitive type #int63_type in the solution"}'
+
 # A functor module type. A functor parameter is named by a counter of the
 # process that compiled it, so a solution that declares one more functor
 # before FT numbers the parameters of FT otherwise: the comparison renames
