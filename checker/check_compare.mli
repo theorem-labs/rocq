@@ -28,14 +28,18 @@
 
     A challenge constant without a body (an axiom, a parameter or an
     admitted proof, which a [.vo] file does not tell apart) may be given one
-    by the solution only when its type is a proposition or the config names
-    it as a theorem. A proof of a proposition must be opaque when another
-    compared challenge declaration names it in its type or its transparent
-    body: a transparent proof would unfold there and change what that
-    declaration states. A constant of another type that the config names,
-    such as a function that a lemma of the challenge specifies, may be
-    transparent: the lemma is stated about the function the solution
-    chooses.
+    by the solution only when its type is a proposition (in [Prop] or
+    [SProp]) or the config names it as a theorem. That body must be opaque
+    when another compared challenge declaration names the constant in its
+    type or its transparent body: a transparent proof would unfold there
+    and change what that declaration states. Only a constant whose type is
+    in [Set] or [Type] may still be transparent then, such as a function
+    that the config names and that a lemma of the challenge specifies: the
+    lemma is stated about the function the solution chooses. A constant
+    whose type is in a sort variable or a global sort may be given a body
+    only when the config names it, and only an opaque one when another
+    declaration names it: each rule takes the side that fails closed, and a
+    sort-polymorphic constant is a proof at an instance in [Prop].
 
     {2 Where a shared library may come from}
 

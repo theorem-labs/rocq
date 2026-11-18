@@ -370,12 +370,54 @@ verdict named/qed named.json \
   '"name":"Top.A.thm","verdict":"fail","reason":"the axiom Top.A.thm is not permitted"' \
   '"name":"Top.A.L","verdict":"pass"' '"declarations":[]'
 
+# The same with L sort-polymorphic: the type of L is in the sort variable s,
+# and thm names L at the instance Prop, where L is a proof. A transparent L
+# proves thm by conversion as in named/defined, so L must be opaque: a
+# constant whose type is in a sort variable counts as a proof here. A proof
+# of L by Qed is accepted.
+compile poly/ch A.v <<'EOF'
+Unset Elimination Schemes.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Set Universe Polymorphism.
+Inductive sbool@{s;|} : Univ@{s;Set} := strue | sfalse.
+Lemma L@{s;|} : sbool@{s;}.
+Proof. Admitted.
+Unset Universe Polymorphism.
+Theorem thm : eq sbool@{Prop;} L@{Prop;} strue@{Prop;}.
+Proof. Admitted.
+EOF
+cat > "$d/poly.json" <<EOF
+{"theorems": [{"name": "Top.A.thm"}, {"name": "Top.A.L"}],
+ "tolerated_flags": [{"kind": "indices-not-mattering"}],
+ "challenge_files": [{"path": "A.vo", "sha256": "$(digest poly/ch/A.vo)"}]}
+EOF
+compile poly/defined A.v <<'EOF'
+Require Import Corelib.Init.Ltac.
+Unset Elimination Schemes.
+Inductive eq (A : Type) (x : A) : forall _ : A, Prop := eq_refl : eq A x x.
+Set Universe Polymorphism.
+Inductive sbool@{s;|} : Univ@{s;Set} := strue | sfalse.
+Lemma L@{s;|} : sbool@{s;}.
+Proof. exact strue@{s;}. Defined.
+Unset Universe Polymorphism.
+Theorem thm : eq sbool@{Prop;} L@{Prop;} strue@{Prop;}.
+Proof. exact (eq_refl sbool@{Prop;} L@{Prop;}). Qed.
+EOF
+verdict poly/defined poly.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the challenge declaration Top.A.L differs: the challenge leaves this proof without a body, another challenge declaration names it, and the solution gives it a transparent body"' \
+  '"name":"Top.A.L","verdict":"fail","reason":"the challenge leaves this proof without a body'
+sed -e 's/ Defined\.$/ Qed./' -e 's/^Proof\. exact (eq_refl .*/Proof. Admitted./' \
+  "$d/poly/defined/A.v" | compile poly/qed A.v
+verdict poly/qed poly.json \
+  '"name":"Top.A.thm","verdict":"fail","reason":"the axiom Top.A.thm is not permitted"' \
+  '"name":"Top.A.L","verdict":"pass"' '"declarations":[]'
+
 # A function f that the challenge leaves open and a lemma f_spec about it,
 # both named by the config: the challenge asks the solution to choose f, and
 # f_spec is provable only if f unfolds, so f may be transparent though
-# f_spec names it. Only the proof of a proposition must be opaque when
-# another declaration names it. eq has an index, which the config tolerates
-# as named.json does.
+# f_spec names it. Only a constant whose type is in Set or Type, as the type
+# of f is, may be transparent when another declaration names it. eq has an
+# index, which the config tolerates as named.json does.
 compile spec/ch A.v <<'EOF'
 Unset Elimination Schemes.
 Inductive nat : Set := O : nat | S : forall _ : nat, nat.

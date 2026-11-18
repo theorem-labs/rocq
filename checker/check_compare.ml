@@ -460,9 +460,10 @@ let read_config file =
     declares ([Sort s.]), is named by its library and a number given in the
     order of declaration and nothing else, so a solution that declares one
     more before the challenge's numbers them differently. Each map is
-    seeded with the identity on every level and quality of a library whose
-    bytes the two sides share ([seed_umap]), and the rest of it is built
-    while the declarations are compared.
+    seeded with the identity on every level and quality of a library that
+    is one file for both sides, or a library a pre-checked one rests on
+    ([seed_umap]), and the rest of it is built while the declarations are
+    compared.
 
     A level or a quality of a polymorphic context is a variable bound by
     position, so it is compared by its index and never enters the map.
@@ -975,41 +976,41 @@ let eq_universes u1 u2 = match u1, u2 with
    challenge then asks the solution to choose it, as for a function [f]
    left open with a lemma [f_spec] about it.
 
-   A proof of a proposition that another compared challenge declaration
-   names in its type or its transparent body ([named], from
-   [declaration_names]) must be opaque, whether the config names it or not.
-   The challenge states that declaration about a constant that does not
-   unfold, and a transparent body would let conversion unfold it there,
-   which changes what the declaration states: with [L : exists n, n = 0]
-   left without a body, [L = ex_intro _ 0 eq_refl] is not provable, and
-   once [L] is defined as that term it is proved by reflexivity. A proof
-   that no other declaration names changes no statement but its own, so it
-   may be transparent. Data that the config names is not held to this:
-   [f_spec] is stated about the function the solution chooses and is
-   provable only if [f] unfolds, so [f] may be transparent.
+   A proof that another compared challenge declaration names in its type
+   or its transparent body ([named], from [declaration_names]) must be
+   opaque, whether the config names it or not. The challenge states that
+   declaration about a constant that does not unfold, and a transparent
+   body would let conversion unfold it there, which changes what the
+   declaration states: with [L : exists n, n = 0] left without a body,
+   [L = ex_intro _ 0 eq_refl] is not provable, and once [L] is defined as
+   that term it is proved by reflexivity. A proof that no other declaration
+   names changes no statement but its own, so it may be transparent. Data
+   that the config names is not held to this: [f_spec] is stated about the
+   function the solution chooses and is provable only if [f] unfolds, so
+   [f] may be transparent.
 
    The sort is the one the solution environment gives the solution's own
-   type, which [eq_const_body] has already found equal to the challenge's.
-   A type the solution environment cannot type is treated as data: the
-   kernel check of the solution would have refused it.
-
-   A sort of a global quality ([GSort]) is data. [Sorts] gives a global
-   quality the behaviour of [Type], not of [Prop] or [SProp]: it is relevant
-   ([relevance_of_sort], [relevance_subst_fn]) and not impredicative
-   ([Quality.is_impredicative]). Data is also the side that fails closed:
-   such a declaration is filled only when the config names it. *)
-let is_proposition env (cb : constant_body) =
+   type ([type_sort]), which [eq_const_body] has already found equal to the
+   challenge's; [None] when the solution environment cannot type it, which
+   the kernel check of the solution would have refused. Each rule reads it
+   on the side that fails closed. The first lets the solution fill a
+   constant that the config does not name only when the sort is [Prop] or
+   [SProp] ([proposition]). The second lets a constant that another
+   declaration names be transparent only when the sort is [Set] or [Type]
+   ([surely_data]). A sort variable ([VSort]), a global quality ([GSort])
+   and a type that cannot be typed are neither: such a constant is filled
+   only when the config names it, and only by an opaque proof when another
+   declaration names it. A sort-polymorphic [L] is a proof at an instance
+   in [Prop], at which another declaration may name it. *)
+let type_sort env (cb : constant_body) =
   let env = match cb.const_universes with
     | Monomorphic -> env
     | Polymorphic ctx ->
       Environ.push_context ~strict:false (UVars.AbstractContext.repr ctx) env
   in
   match Typeops.infer_type env cb.const_type with
-  | j ->
-    (match j.Environ.utj_type with
-     | Sorts.Prop | Sorts.SProp -> true
-     | Sorts.Set | Sorts.Type _ | Sorts.GSort _ | Sorts.VSort _ -> false)
-  | exception e when CErrors.noncritical e -> false
+  | j -> Some j.Environ.utj_type
+  | exception e when CErrors.noncritical e -> None
 
 let eq_const_body ~env ~is_theorem ~named m (cb1 : constant_body) (cb2 : constant_body) =
   let[@warning "+9"] {
@@ -1037,12 +1038,20 @@ let eq_const_body ~env ~is_theorem ~named m (cb1 : constant_body) (cb2 : constan
   map_relevance const_relevance cb2.const_relevance;
   let context_constraints = eq_universes const_universes cb2.const_universes in
   let m = eq_constr m const_type cb2.const_type in
-  let proposition = lazy (is_proposition env cb2) in
+  let sort = lazy (type_sort env cb2) in
+  let proposition = lazy (match Lazy.force sort with
+      | Some (Sorts.Prop | Sorts.SProp) -> true
+      | Some (Sorts.Set | Sorts.Type _ | Sorts.GSort _ | Sorts.VSort _) | None -> false)
+  in
+  let surely_data = lazy (match Lazy.force sort with
+      | Some (Sorts.Set | Sorts.Type _) -> true
+      | Some (Sorts.Prop | Sorts.SProp | Sorts.GSort _ | Sorts.VSort _) | None -> false)
+  in
   let m = match const_body, cb2.const_body with
     | Undef _, Undef _ -> m
     | Undef _, (Def _ | OpaqueDef _) when not (is_theorem || Lazy.force proposition) ->
       diff "the challenge leaves this declaration open and the solution defines it"
-    | Undef _, Def _ when Lazy.force proposition && Lazy.force named ->
+    | Undef _, Def _ when Lazy.force named && not (Lazy.force surely_data) ->
       diff "the challenge leaves this proof without a body, another challenge \
             declaration names it, and the solution gives it a transparent body"
     | Undef _, (Def _ | OpaqueDef _) -> m
@@ -1269,8 +1278,9 @@ let[@warning "+9"] rule_symbols { rewrules_rules } =
    user name and its canonical one, so a reference through an alias
    counts. An opaque body is not read: it is not compared, and what it
    names unfolds into no statement. Nor is a rewrite rule, of which the
-   comparison reads the symbols only. [eq_const_body] requires an opaque
-   proof of a proposition that this set holds. *)
+   comparison reads the symbols only. When the challenge leaves a constant
+   that this set holds without a body, [eq_const_body] requires the
+   solution's to be opaque unless the constant's type is surely data. *)
 let rec constr_names acc c = match Constr.kind c with
   | Constr.Const (k, _) ->
     KerName.Set.add (Constant.user k) (KerName.Set.add (Constant.canonical k) acc)
@@ -1431,6 +1441,12 @@ type t = {
       (** Every library the solution loaded, sorted by name. *)
   solution_deps : (DirPath.t * Safe_typing.vodigest) array DirPath.Map.t;
       (** The dependency digests each library the solution loaded records. *)
+  prechecked_closure : DirPath.Set.t;
+      (** The pre-checked libraries and every library they rest on, by the
+          dependencies that [solution_deps] records ([deps_closure]): the
+          closure [check_prechecked_deps] checks, so each of its libraries is
+          one file for both sides or pinned by its sha256 as a challenge
+          file. *)
   solution_files : string DirPath.Map.t;
       (** The file the loader recorded for each library the solution
           loaded. *)
@@ -1794,6 +1810,7 @@ let prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs ~trusted ~admitted 
   in
   let loaded = CheckLibrary.loaded () in
   let solution_files = CheckLibrary.files_of loaded in
+  let solution_deps = DirPath.Map.of_list (CheckLibrary.deps_of loaded) in
   let t =
     { cfg; dir; files; challenge_dir = realpath dir;
       prechecked = DirPath.Set.of_list (prechecked_libraries cfg);
@@ -1802,7 +1819,8 @@ let prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs ~trusted ~admitted 
       bound_dirs = List.filter_map realpath bound_dirs;
       trusted_dirs = List.filter_map realpath trusted;
       solution_libs = List.map fst loaded;
-      solution_deps = DirPath.Map.of_list (CheckLibrary.deps_of loaded);
+      solution_deps;
+      prechecked_closure = deps_closure solution_deps (prechecked_libraries cfg);
       solution_files = DirPath.Map.of_list solution_files }
   in
   List.iter (fun p ->
@@ -1863,8 +1881,7 @@ let check_dep_digests t ~challenge ~solution =
    pinned bytes. It runs once the digests are compared, so that two sides
    built against two libraries of one name are reported as such.
    Every refusal comes before the import. Returns the challenge environment
-   and the dependency digests that each library of the files' closure
-   records. *)
+   and the libraries of the files' closure. *)
 let load_challenge t ~add_load_path senv0 =
   let saved = CheckLibrary.swap_tables (CheckLibrary.fresh_tables ()) in
   let restore () = ignore (CheckLibrary.swap_tables saved) in
@@ -1881,22 +1898,22 @@ let load_challenge t ~add_load_path senv0 =
       let files = CheckLibrary.files_of all in
       check_challenge_place t files;
       check_provenance t ~side:"challenge" files;
-      let challenge_deps = DirPath.Map.of_list (CheckLibrary.deps_of needed) in
       check_dep_digests t ~challenge:(CheckLibrary.deps_of all) ~solution:t.solution_deps;
       check_same_files t files;
       let senv = CheckLibrary.import_challenge senv0 all in
-      Safe_typing.env_of_safe_env senv, challenge_deps)
+      Safe_typing.env_of_safe_env senv, DirPath.Set.of_list (List.map fst needed))
 
 (************************************************************************)
 (** {6 Comparing the two environments} *)
 
 type failure = { f_name : string; f_reason : string }
 
-(* The identity seed: a level or a global quality of a library whose bytes
-   the two sides share, when both environments hold it. Such a library is
-   one file for both sides ([one_file]), or one that a pre-checked library
-   rests on, which [check_prechecked_deps] has required to be one file for
-   both sides or pinned by its sha256 as a challenge file.
+(* The identity seed: a level or a global quality of a library that is one
+   file for both sides ([one_file]), or a library a pre-checked one rests
+   on ([prechecked_closure]), when both environments hold it.
+   [check_prechecked_deps] has required each library a pre-checked one
+   rests on to be one file for both sides or pinned by its sha256 as a
+   challenge file, so the two sides read the same bytes of it.
 
    A level no compared declaration names is in the map only through this:
    the body of an opaque proof is never compared, so a challenge proof's
@@ -1909,18 +1926,14 @@ type failure = { f_name : string; f_reason : string }
    quality that a compared statement stands on. A compared declaration
    names declarations of the challenge files' closure only. Each of those
    is compared, which maps the qualities it names, unless [run] skips its
-   library: a pre-checked library, or one it rests on that is one file for
-   both sides. A skipped library names its own qualities and those of the
-   libraries it rests on, all of which a pre-checked library rests on. So
-   a sort that a challenge library declares and only a pre-checked library
-   names, as the sort of one of its inductive types, is in the map, and a
-   constraint that the solution adds on it is compared.
-
-   The closure is read from the solution's libraries: each of them has the
-   bytes of the challenge's, so it records the same dependencies. *)
+   library, which [prechecked_closure] then holds. A skipped library names
+   its own qualities and those of the libraries it rests on, which
+   [prechecked_closure] holds too. So a sort that a challenge library
+   declares and only a pre-checked library names, as the sort of one of
+   its inductive types, is in the map, and a constraint that the solution
+   adds on it is compared. *)
 let seed_umap t ~challenge_env ~solution_env =
-  let rests_on = deps_closure t.solution_deps (prechecked_libraries t.cfg) in
-  let same_bytes dp = one_file t dp || DirPath.Set.mem dp rests_on in
+  let seeded dp = one_file t dp || DirPath.Set.mem dp t.prechecked_closure in
   let gch = Environ.universes challenge_env and gsol = Environ.universes solution_env in
   let sol = UGraph.domain gsol in
   let m =
@@ -1929,7 +1942,7 @@ let seed_umap t ~challenge_env ~solution_env =
         | None -> m
         | Some ug ->
           let dp, _, _ = Univ.UGlobal.repr ug in
-          if same_bytes dp && Univ.Level.Set.mem u sol then add_level m u u else m)
+          if seeded dp && Univ.Level.Set.mem u sol then add_level m u u else m)
       (UGraph.domain gch) empty_umap
   in
   let qsol = QGraph.domain (Environ.qualities solution_env) in
@@ -1937,7 +1950,7 @@ let seed_umap t ~challenge_env ~solution_env =
       match q with
       | Sorts.Quality.QGlobal g ->
         let dp, _ = Sorts.QGlobal.repr g in
-        if same_bytes dp && Sorts.Quality.Set.mem q qsol then add_quality m q q else m
+        if seeded dp && Sorts.Quality.Set.mem q qsol then add_quality m q q else m
       | Sorts.Quality.QConstant _ | Sorts.Quality.QVar _ -> m)
     (QGraph.domain (Environ.qualities challenge_env)) m
 
@@ -2622,15 +2635,14 @@ let run cfg ~dir ~out ~roots ~trusted ~checked ~admitted ~add_load_path env senv
     prepare cfg ~dir ~challenge_root ~open_roots ~bound_dirs:(List.map fst roots) ~trusted
       ~admitted
   in
-  let challenge_env, challenge_deps = load_challenge t ~add_load_path senv0 in
+  let challenge_env, challenge_libs = load_challenge t ~add_load_path senv0 in
   (* A pre-checked library, and each library it rests on that is one file
-     for both sides, is not compared: their declarations are equal by
-     construction, and walking them would read the whole standard library on
-     every run. Every other library of the challenge files' closure is. *)
-  let skip =
-    DirPath.Set.filter (one_file t) (deps_closure challenge_deps (prechecked_libraries t.cfg))
-  in
-  let libs = DirPath.Set.diff (DirPath.Map.domain challenge_deps) skip in
+     for both sides ([prechecked_closure]), is not compared: their
+     declarations are equal by construction, and walking them would read
+     the whole standard library on every run. Every other library of the
+     challenge files' closure is. *)
+  let skip = DirPath.Set.filter (one_file t) t.prechecked_closure in
+  let libs = DirPath.Set.diff challenge_libs skip in
   let ch_index = constant_index challenge_env in
   (* A theorem the challenge does not state, or states twice under one
      printed name, is a config error, not a verdict. *)
